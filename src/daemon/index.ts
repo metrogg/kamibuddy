@@ -20,7 +20,7 @@ import {
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
-import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
+import { estimateComposition, estimateTokens, ObservabilityStore } from "../core/observability.ts";
 import { readPreferences, writePreferences } from "../core/preferences.ts";
 import {
 	composePrompt,
@@ -35,6 +35,7 @@ import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
+import { buildContextUsage } from "../shared/context-usage.ts";
 import {
 	conversationReducer,
 	type ConversationView,
@@ -216,12 +217,38 @@ const observability = new ObservabilityStore();
 /** 最近一次组装的系统提示词 token 估算（compose 时更新），供上下文成分统计。 */
 let lastSystemPromptTokens = 0;
 
+/** 最近一次组装的技能段 token 估算（compose 时更新），供上下文用量明细拆分类。 */
+let lastSkillsTokens = 0;
+
 /** 事件出口：折叠进本地历史、推给渲染进程、喂给统计与日志。四件事都必须做。 */
 function emitSessionEvent(event: SessionEvent): void {
 	conversation = conversationReducer(conversation, { type: "event", event });
 	observability.record(event);
 	eventLog.append({ kind: "session_event", event: sanitizeForLog(event) });
 	post({ kind: "push", channel: PUSH.sessionEvent, payload: event });
+
+	// 带用量的 session_state 到达后补发明细：used/total 是 pi 的精确值（刚折叠进
+	// conversation.state），分类所需的系统提示词/技能段 token 只有这里知道。
+	// context_usage 自身不会再触发本分支，无递归。
+	if (event.type === "session_state" && event.state.contextUsage !== undefined) {
+		emitContextUsageDetail(event.state.contextUsage);
+	}
+}
+
+/** 组装并发出上下文用量明细（分类是估算值，UI 必须标注，见 shared/context-usage.ts）。 */
+function emitContextUsageDetail(contextUsage: { usedTokens: number; maxTokens: number }): void {
+	const composition = estimateComposition(conversation.entries, lastSystemPromptTokens);
+	if (composition === undefined) return;
+	emitSessionEvent({
+		type: "context_usage",
+		usage: buildContextUsage({
+			used: contextUsage.usedTokens,
+			total: contextUsage.maxTokens,
+			systemPromptTokens: lastSystemPromptTokens,
+			skillsTokens: lastSkillsTokens,
+			composition,
+		}),
+	});
 }
 
 /**
@@ -352,15 +379,18 @@ async function createHost(): Promise<SessionHost> {
 						description: s.description,
 						filePath: s.filePath,
 					}));
+					const skillsSection = formatSkillsSection(skills);
 					const prompt = composePrompt({
 						sceneBody: scene.body,
 						modeBody: mode.body,
-						skillsSection: formatSkillsSection(skills),
+						skillsSection,
 						// playground 无工作目录，提示词里如实说明，免得模型去找一个不存在的路径。
 						cwd: cwd ?? "（未选择工作空间，无本地文件目录）",
 					});
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
+					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					lastSystemPromptTokens = estimateTokens(prompt);
+					lastSkillsTokens = estimateTokens(skillsSection);
 					return prompt;
 				},
 			}),

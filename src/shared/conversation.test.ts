@@ -59,6 +59,31 @@ describe("snapshot", () => {
 	});
 });
 
+describe("context_usage", () => {
+	const usage = {
+		used: 5200,
+		total: 128000,
+		byCategory: { systemPrompt: 3500, skills: 500, conversation: 350, toolResults: 800 },
+	};
+
+	it("context_usage 事件折叠进视图", () => {
+		const view = apply([{ type: "context_usage", usage }]);
+		expect(view.usageDetail).toEqual(usage);
+	});
+
+	it("snapshot 携带时一并恢复（渲染进程重挂载拿回完整状态）", () => {
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [],
+			availableScenes: [],
+			availableModes: [],
+			usageDetail: usage,
+		};
+		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
+		expect(view.usageDetail).toEqual(usage);
+	});
+});
+
 describe("流式增量", () => {
 	it("正文增量按序累积，不互相覆盖", () => {
 		const view = apply([

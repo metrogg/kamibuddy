@@ -21,6 +21,7 @@ import type {
 	ModeDescriptor,
 	ToolCard,
 } from "./session-events.ts";
+import type { ContextUsageDetail } from "./context-usage.ts";
 
 export interface ConversationView {
 	readonly state: SessionState;
@@ -29,6 +30,8 @@ export interface ConversationView {
 	readonly availableScenes: readonly ModeDescriptor[];
 	/** 交互轴选项（对话页切换器）。 */
 	readonly availableModes: readonly ModeDescriptor[];
+	/** 最近的上下文用量明细（context_usage 事件折叠而来）。 */
+	readonly usageDetail?: ContextUsageDetail;
 }
 
 export type ConversationAction =
@@ -72,6 +75,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			entries: action.snapshot.entries,
 			availableScenes: action.snapshot.availableScenes,
 			availableModes: action.snapshot.availableModes,
+			usageDetail: action.snapshot.usageDetail,
 		};
 	}
 
@@ -148,5 +152,8 @@ export function conversationReducer(view: ConversationView, action: Conversation
 
 		case "session_state":
 			return { ...view, state: event.state };
+
+		case "context_usage":
+			return { ...view, usageDetail: event.usage };
 	}
 }

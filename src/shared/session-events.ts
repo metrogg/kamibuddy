@@ -12,6 +12,7 @@
  */
 
 import type { TokenUsage } from "./observability.ts";
+import type { ContextUsageDetail } from "./context-usage.ts";
 
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
@@ -90,7 +91,12 @@ export type SessionEvent =
 	 */
 	| { readonly type: "run_error"; readonly runId: RunId; readonly message: string }
 	/** 会话元信息变化（模型切换、模式切换、token 用量）。 */
-	| { readonly type: "session_state"; readonly state: SessionState };
+	| { readonly type: "session_state"; readonly state: SessionState }
+	/**
+	 * 上下文用量明细（used/total 精确 + 分类估算）。在带用量的 session_state 之后
+	 * 由 daemon 组装发出 —— 分类所需的系统提示词/技能段 token 只有 daemon 知道。
+	 */
+	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail };
 
 /**
  * 会话的当前状态。变化时整体重发——字段少，不值得做差量。
@@ -136,6 +142,8 @@ export interface SessionSnapshot {
 	readonly availableScenes: readonly ModeDescriptor[];
 	/** 可选交互模式，供对话页切换器渲染。 */
 	readonly availableModes: readonly ModeDescriptor[];
+	/** 最近的上下文用量明细。还没有过带用量的响应时为 undefined。 */
+	readonly usageDetail?: ContextUsageDetail;
 }
 
 /**
