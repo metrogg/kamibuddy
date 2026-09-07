@@ -62,8 +62,11 @@ WebFetch / WebSearch / **权限系统** / MCP 均需自研。
 
 三条设计结论由 `scripts/probe-custom-provider.ts` 实测得出，非推测：
 
-1. 密钥一律存 pi 的 `auth.json`（pi 以 0600 创建），经 `setRuntimeApiKey()` 写入。
-   我们从不自己读写该文件 —— 密钥不经过我们的代码路径。
+1. 密钥存 pi 的 `auth.json`（0600）。注意 `setRuntimeApiKey()` 是 **non-persistent** 的
+   （pi 的 RuntimeCredentials 自述 "overlay for non-persistent runtime API keys"），
+   只同步本进程；持久化由我们按 pi 的文件格式写入（`core/api-keys.ts`，
+   pi 包根未导出凭据写入 API）。曾只用 runtime 方法导致 key 重启即丢
+   （用户实测踩到，已修，`scripts/probe-key-persistence.ts` 可复验）。
 2. 自建服务商的 `models.json` **不留明文密钥**（`apiKey` 可省略，凭据同样走 `auth.json`）。
 3. **未配凭据的服务商，其模型照样出现在目录里**，所以模型卡片必须显式禁用，
    否则用户会选到一个点了才报错的模型。

@@ -5,9 +5,10 @@
  * **pi 的 Provider / Model / AuthStatus 类型止步于本文件**，
  * 出口只有 shared/settings.ts 里的形状。pi 改字段名只塌这里。
  *
- * 凭据处理原则：我们从不自己读写 auth.json，一律经 ModelRuntime 的
- * setRuntimeApiKey / removeRuntimeApiKey。密钥不经过我们的代码路径，
- * 文件权限（0600）也由 pi 保证。
+ * 凭据处理原则：持久化由我们写 auth.json（core/api-keys.ts，pi 的文件格式），
+ * `runtime.setRuntimeApiKey` 只负责同步本进程 —— 它是 non-persistent overlay，
+ * 单独用它会在 daemon 重启后丢 key（用户实测踩到过）。文件权限 0600 由我们的
+ * 写入侧保证，与 pi 的 AUTH_FILE_WRITE_OPTIONS 一致。
  */
 
 import { mkdirSync } from "node:fs";
@@ -20,6 +21,7 @@ import type {
 	SettingsSnapshot,
 } from "../shared/settings.ts";
 import { validateCustomProvider } from "../shared/settings.ts";
+import { removeApiKey as removeApiKeyFromFile, writeApiKey } from "./api-keys.ts";
 import { getAuthPath, getConfigDir, getModelsPath, getModelsStorePath } from "./config-paths.ts";
 import { deleteCustomProvider, listOwnedProviderIds, readCustomProvider, upsertCustomProvider } from "./custom-providers.ts";
 
@@ -86,16 +88,28 @@ export class ModelCatalog {
 		};
 	}
 
-	/** 存入某家服务商的 API Key。写进 auth.json（pi 以 0600 创建）。 */
+	/**
+	 * 存入某家服务商的 API Key。
+	 *
+	 * 先落盘（api-keys.ts，pi 的 auth.json 格式）再同步本进程 ——
+	 * 只调 runtime.setRuntimeApiKey 是不够的：那是 non-persistent overlay
+	 * （RuntimeCredentials 自述），daemon 一重启 key 就丢（用户实测踩到过）。
+	 */
 	async setApiKey(providerId: string, apiKey: string): Promise<void> {
 		const trimmed = apiKey.trim();
 		if (trimmed === "") throw new Error("API Key 不能为空");
+		writeApiKey(getAuthPath(), providerId, trimmed);
 		await this.runtime.setRuntimeApiKey(providerId, trimmed);
 	}
 
-	/** 删除某家服务商的 API Key。只能删 auth.json 里的，环境变量删不掉。 */
+	/**
+	 * 删除某家服务商的 API Key。
+	 * 只能删 auth.json 里的；环境变量来源的删不掉（设置页会如实说明）。
+	 */
 	async removeApiKey(providerId: string): Promise<void> {
-		await this.runtime.removeRuntimeApiKey(providerId);
+		removeApiKeyFromFile(getAuthPath(), providerId);
+		// 本来就没存过运行时覆盖是正常情况，不该让删除整体失败。
+		await this.runtime.removeRuntimeApiKey(providerId).catch(() => {});
 	}
 
 	/**

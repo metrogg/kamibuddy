@@ -21,11 +21,11 @@ export function getConfigDir(): string {
 }
 
 /**
- * pi 凭据库。由 pi 以 0600 权限创建（仅当前用户可读写）。
+ * pi 凭据库，0600 权限（仅当前用户可读写）。
  *
- * 我们**从不自己读写这个文件**——一律经 ModelRuntime 的
- * setRuntimeApiKey / removeRuntimeApiKey 操作，避免格式漂移，
- * 也避免密钥经过我们的代码路径。
+ * 文件格式与读写策略见 core/api-keys.ts —— 注意 `ModelRuntime.setRuntimeApiKey()`
+ * 是 **non-persistent** 的（pi 的 RuntimeCredentials 自述），持久化必须走写文件，
+ * runtime 方法只用来同步本进程状态。
  */
 export function getAuthPath(): string {
 	return join(getConfigDir(), "auth.json");
