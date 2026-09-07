@@ -18,6 +18,8 @@ import {
 import { Sidebar, type LinkState } from "./sidebar.tsx";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
+import { ArtifactPanel } from "./artifact-panel.tsx";
+import { collectArtifacts } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
@@ -78,6 +80,15 @@ export function App(): React.JSX.Element {
 					if (!disposed) dispatch({ type: "snapshot", snapshot });
 				})
 				.catch(fail);
+			// 预览服务 baseUrl 的初值（playground 启动时为 undefined）。
+			window.kami
+				.workspaceSnapshot()
+				.then((snap) => {
+					if (!disposed) setPreviewBaseUrl(snap.previewBaseUrl);
+				})
+				.catch(() => {
+					// 拿不到就是不可预览，面板会显示引导文案，不需要额外报错。
+				});
 		};
 
 		// 先注册监听，再主动查状态：顺序反了会漏掉两者之间到达的事件。
@@ -172,7 +183,7 @@ export function App(): React.JSX.Element {
 		});
 	}, []);
 
-	/** 产物卡片点击：外部打开（系统关联程序）。预览面板接入后「预览」会改走面板。 */
+	/** 产物卡片点击：外部打开（系统关联程序）。面板里的「外部打开」也走这里。 */
 	const openArtifact = useCallback(
 		(path: string) => {
 			window.kami.openArtifact(path).catch((error: unknown) => {
@@ -181,6 +192,11 @@ export function App(): React.JSX.Element {
 		},
 		[showToast],
 	);
+
+	/** 预览面板状态：undefined = 关闭。 */
+	const [previewPath, setPreviewPath] = useState<string | undefined>(undefined);
+	/** 静态服务 baseUrl，随工作空间快照刷新（playground 为 undefined）。 */
+	const [previewBaseUrl, setPreviewBaseUrl] = useState<string | undefined>(undefined);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
 	const changeInteraction = useCallback(
@@ -226,6 +242,12 @@ export function App(): React.JSX.Element {
 			.catch((error: unknown) => {
 				showToast(error instanceof Error ? error.message : String(error));
 			});
+		// 预览服务的根随工作区变了：baseUrl 与面板里开着的文件都要刷新。
+		window.kami
+			.workspaceSnapshot()
+			.then((snap) => setPreviewBaseUrl(snap.previewBaseUrl))
+			.catch(() => setPreviewBaseUrl(undefined));
+		setPreviewPath(undefined);
 		// showToast 是稳定的 useCallback（空依赖），不需列入依赖数组。
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
@@ -312,7 +334,7 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
-					onOpenArtifact={openArtifact}
+					onPreviewArtifact={setPreviewPath}
 					onTodo={showTodo}
 				/>
 			)}
@@ -329,6 +351,19 @@ export function App(): React.JSX.Element {
 			)}
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />
+			)}
+			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。 */}
+			{previewPath !== undefined && (
+				<ArtifactPanel
+					artifacts={collectArtifacts(conversation.entries)}
+					cwd={conversation.state.cwd}
+					previewBaseUrl={previewBaseUrl}
+					path={previewPath}
+					onSelect={setPreviewPath}
+					onClose={() => setPreviewPath(undefined)}
+					onOpenExternal={openArtifact}
+					onError={showToast}
+				/>
 			)}
 			{/*
 				一次只展示队首那条：并行工具可能同时来好几条，

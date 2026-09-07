@@ -44,6 +44,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.permissionResponse, response),
 
 	openArtifact: (path) => ipcRenderer.invoke(INVOKE.openArtifact, path),
+	readArtifact: (path) => ipcRenderer.invoke(INVOKE.readArtifact, path),
 	saveArtifactAs: (request) =>
 		ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
 

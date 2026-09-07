@@ -24,8 +24,8 @@ interface ChatViewProps {
 	readonly onSubmit: (text: string) => void;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
-	/** 点击产物卡片（v1：外部打开；预览面板接入后改成打开面板）。 */
-	readonly onOpenArtifact: (path: string) => void;
+	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
+	readonly onPreviewArtifact: (path: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -154,7 +154,7 @@ export function ChatView({
 	onSubmit,
 	onAbort,
 	onInteractionChange,
-	onOpenArtifact,
+	onPreviewArtifact,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
@@ -227,8 +227,8 @@ export function ChatView({
 								key={a.path}
 								type="button"
 								className="artifact-card"
-								title={`${a.path}（点击外部打开）`}
-								onClick={() => onOpenArtifact(a.path)}
+								title={`${a.path}（点击预览）`}
+								onClick={() => onPreviewArtifact(a.path)}
 							>
 								<IconDoc size={16} />
 								<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>

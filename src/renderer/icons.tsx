@@ -205,3 +205,12 @@ export const IconFolder = (p: IconProps): React.JSX.Element => (
 		<path d="M4 9h16" />
 	</Svg>
 );
+
+export const IconOpenExternal = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 方框 + 右上箭头：系统外部打开（浏览器/关联程序）。 */}
+		<path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
+		<path d="M14 4h6v6" />
+		<path d="M20 4 11 13" />
+	</Svg>
+);

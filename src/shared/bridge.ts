@@ -7,6 +7,7 @@
 
 import type {
 	DaemonStatus,
+	ArtifactContent,
 	CompletionData,
 	PermissionRequest,
 	PermissionResponse,
@@ -55,6 +56,8 @@ export interface KamiBridge {
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;
 
 	readonly openArtifact: (path: string) => Promise<void>;
+	/** 读产物文件内容（预览面板用）。 */
+	readonly readArtifact: (path: string) => Promise<ArtifactContent>;
 	readonly saveArtifactAs: (
 		request: SaveArtifactRequest,
 	) => Promise<string | undefined>;

@@ -10,8 +10,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
 	getConfigDir,
@@ -22,6 +22,7 @@ import { EventLog } from "../core/event-log.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
 import { estimateComposition, estimateTokens, ObservabilityStore } from "../core/observability.ts";
 import { readPreferences, writePreferences } from "../core/preferences.ts";
+import { PreviewServer } from "../core/preview-server.ts";
 import {
 	composePrompt,
 	formatSkillsSection,
@@ -51,6 +52,7 @@ import {
 	PUSH,
 	type PermissionRequest,
 	type PermissionResponse,
+	type ArtifactContent,
 	type PromptRequest,
 } from "../shared/ipc.ts";
 import type {
@@ -214,6 +216,37 @@ let conversation: ConversationView = {
  */
 const eventLog = new EventLog(join(getConfigDir(), "logs"));
 const observability = new ObservabilityStore();
+
+/**
+ * 产物预览静态服务（根 = 当前工作区，core/preview-server.ts 的注释是安全契约）。
+ * playground 不起服务；换工作空间时随 applyWorkspace 换根。
+ */
+const previewServer = new PreviewServer();
+
+/** 预览文本的上限：超过按二进制处理（面板只读展示，不做大文件）。 */
+const ARTIFACT_TEXT_MAX = 512 * 1024;
+
+/**
+ * 读产物文件内容（readArtifact 通道）。路径限当前工作区内：
+ * 相对路径对工作区 resolve；绝对路径必须落在工作区里——
+ * 预览面板能看的文件与权限门放行的写范围必须同界（配置目录里的密钥
+ * 绝不能经这条通道被读出来）。
+ */
+function readArtifactContent(path: string): ArtifactContent {
+	if (workspaceDir === undefined) {
+		throw new Error("playground 没有工作区，无可读取的产物");
+	}
+	const abs = resolve(workspaceDir, path);
+	if (abs !== workspaceDir && !abs.startsWith(workspaceDir + sep)) {
+		throw new Error("路径超出当前工作区");
+	}
+	const stat = statSync(abs); // 不存在让 ENOENT 直接抛给调用方（响亮失败）
+	const size = stat.size;
+	if (size > ARTIFACT_TEXT_MAX) return { size, text: undefined };
+	const buf = readFileSync(abs);
+	if (buf.includes(0)) return { size, text: undefined }; // NUL = 二进制
+	return { size, text: buf.toString("utf8") };
+}
 
 /** 最近一次组装的系统提示词 token 估算（compose 时更新），供上下文成分统计。 */
 let lastSystemPromptTokens = 0;
@@ -448,6 +481,10 @@ async function applyWorkspace(dir: string): Promise<string | undefined> {
 	if (next !== undefined) mkdirSync(next, { recursive: true });
 	workspaceDir = next;
 
+	// 预览服务随工作区换根（playground 时停掉）。先于 resetSession：
+	// 服务换根失败（如端口异常）时工作区切换应该响亮失败，而不是带病继续。
+	await previewServer.setRoot(next);
+
 	await resetSession();
 	updateStateLocally({ cwd: next, isPlayground: next === undefined });
 	return next;
@@ -638,12 +675,18 @@ const handlers: Record<string, Handler> = {
 		current: workspaceDir,
 		defaultRoot: getWorkspaceDir(),
 		workspaces: listWorkspaces(getWorkspaceDir()),
+		previewBaseUrl: previewServer.baseUrl,
 	}),
 
 	[INVOKE.createWorkspace]: async ([name]) =>
 		applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
 
 	[INVOKE.setWorkspace]: async ([path]) => applyWorkspace(path as string),
+
+	/* ── 产物 ─────────────────────────────────────────────────────── */
+
+	// 预览面板的文本读取。HTML 预览不走这里（走静态服务），这里管文本类。
+	[INVOKE.readArtifact]: async ([path]) => readArtifactContent(path as string),
 
 	/* ── 权限审批回程 ─────────────────────────────────────────────── */
 

@@ -73,6 +73,11 @@ export const INVOKE = {
 	openArtifact: "artifact:open",
 	/** 另存为。返回用户选择的路径，取消则返回 undefined。 */
 	saveArtifactAs: "artifact:save-as",
+	/**
+	 * 读产物文件内容（预览面板用）。路径限当前工作区内，
+	 * 返回大小与文本（二进制/超大不给文本）。
+	 */
+	readArtifact: "artifact:read",
 
 	/* ── 设置 ─────────────────────────────────────────────────────── */
 
@@ -173,6 +178,18 @@ export interface WorkspaceSnapshot {
 	readonly defaultRoot: string;
 	/** 默认根下已有的工作空间目录列表。 */
 	readonly workspaces: readonly string[];
+	/**
+	 * 产物预览静态服务的 baseUrl（http://127.0.0.1:端口，根=当前工作区）。
+	 * playground 为 undefined —— 没有目录就没有可预览的东西。
+	 */
+	readonly previewBaseUrl: string | undefined;
+}
+
+/** readArtifact 的返回：文件大小 + 文本内容（二进制或超大时不给）。 */
+export interface ArtifactContent {
+	readonly size: number;
+	/** UTF-8 文本。二进制（含 NUL）或超过 512KB 时为 undefined。 */
+	readonly text: string | undefined;
 }
 
 /** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
@@ -211,6 +228,7 @@ export interface InvokeMap {
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
 	[INVOKE.saveArtifactAs]: { args: [SaveArtifactRequest]; result: string | undefined };
+	[INVOKE.readArtifact]: { args: [path: string]; result: ArtifactContent };
 
 	[INVOKE.settingsSnapshot]: { args: []; result: SettingsSnapshot };
 	[INVOKE.setApiKey]: { args: [providerId: string, apiKey: string]; result: void };

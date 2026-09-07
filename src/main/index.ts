@@ -120,9 +120,10 @@ function callDaemon(channel: string, args: readonly unknown[]): Promise<unknown>
 function installCsp(isDev: boolean): void {
 	const policy = isDev
 		? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob:; connect-src 'self' ws://localhost:* http://localhost:*"
+			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' ws://localhost:* http://localhost:*; " +
+			"frame-src http://127.0.0.1:*"
 		: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob:; connect-src 'self'";
+			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self'; frame-src http://127.0.0.1:*";
 
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
 		callback({
