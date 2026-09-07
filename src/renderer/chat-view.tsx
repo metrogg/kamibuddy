@@ -10,6 +10,8 @@ import type { ConversationView } from "@shared/conversation.ts";
 import type { ModeDescriptor, ToolCard } from "@shared/session-events.ts";
 import { IconBack, IconChevronDown, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
+import { ContextUsageRing } from "./context-usage.tsx";
+import { Markdown } from "./markdown.tsx";
 
 interface ChatViewProps {
 	readonly conversation: ConversationView;
@@ -22,6 +24,27 @@ interface ChatViewProps {
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
 	readonly onTodo: (feature: string) => void;
+}
+
+/* ── 思考块 ────────────────────────────────────────────────────── */
+
+/**
+ * 思考内容块。对标 WorkBuddy 的「深度思考」形态：默认折叠成一行标题，
+ * 点击展开全文 —— 模型长推导过程平铺在正文里会冲掉最终回答。
+ * 流式期间 thinking 还在累积，先展开让用户看到过程；完成后收起。
+ */
+function ThinkingBlock({ text }: { readonly text: string }): React.JSX.Element {
+	const [open, setOpen] = useState(false);
+
+	return (
+		<div className="thinking-block">
+			<button type="button" className="thinking-head" onClick={() => setOpen((v) => !v)}>
+				<IconChevronDown size={11} className={open ? "thinking-caret open" : "thinking-caret"} />
+				深度思考
+			</button>
+			{open && <pre className="thinking-body">{text}</pre>}
+		</div>
+	);
 }
 
 /* ── 工具卡片 ────────────────────────────────────────────────────── */
@@ -166,9 +189,14 @@ export function ChatView({
 					return (
 						<div key={entry.id} className={`entry ${entry.role}`}>
 							{entry.role === "assistant" && entry.thinking !== undefined && (
-								<pre className="thinking">{entry.thinking}</pre>
+								<ThinkingBlock text={entry.thinking} />
 							)}
-							<div className="text">{entry.text}</div>
+							{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
+							{entry.role === "assistant" ? (
+								<Markdown text={entry.text} />
+							) : (
+								<div className="text">{entry.text}</div>
+							)}
 						</div>
 					);
 				})}
@@ -208,6 +236,8 @@ export function ChatView({
 						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 							<IconMic size={16} />
 						</button>
+						{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
+						{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						{/*
 							流式期间发送键变中断键。
 							没有中断入口时，模型跑偏或长任务只能干等，甚至杀进程 —— 这是必须有的逃生门。
