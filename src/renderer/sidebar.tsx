@@ -32,6 +32,8 @@ interface SidebarProps {
 	readonly onOpenTask: () => void;
 	readonly onOpenSettings: () => void;
 	readonly onOpenDiagnostics: () => void;
+	/** 「专家·技能·连接器」是真实页面（技能页已可用），不走 onTodo。 */
+	readonly onOpenSkills: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -51,6 +53,7 @@ export function Sidebar({
 	onOpenTask,
 	onOpenSettings,
 	onOpenDiagnostics,
+	onOpenSkills,
 	onTodo,
 }: SidebarProps): React.JSX.Element {
 	return (
@@ -71,7 +74,7 @@ export function Sidebar({
 						key={label}
 						type="button"
 						className="nav-item"
-						onClick={() => onTodo(label)}
+						onClick={() => (label === "专家·技能·连接器" ? onOpenSkills() : onTodo(label))}
 					>
 						<Icon size={16} />
 						{label}

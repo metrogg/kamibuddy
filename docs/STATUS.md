@@ -321,8 +321,7 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 ## 输入框补全 @ / （2026-09-08 落地）
 
 首页与对话页输入框支持 `@` 引用文件、`/` 调用命令的补全下拉。**选中后按纯文本插入**
-（不做内容注入）：文件内容靠模型的 read 工具去读，斜杠命令由 pi 在 prompt() 里展开
-（agent-session.js:853：先 `_expandSkillCommand` 再 `expandPromptTemplate`）。
+（不做内容注入）：文件内容靠模型的 read 工具去读，`/skill:xxx` 由 pi 的 prompt 展开机制处理。
 
 - **纯逻辑**（`shared/autocomplete.ts`，18 个测试）：`completionTrigger` 从光标前文本解析触发
   （`/` 仅在文本首字符触发，与 pi 的 expandPromptTemplate 对齐；`@` 要求在行首或空白后），
@@ -330,15 +329,12 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 
 - **数据源**（`INVOKE.completions`）：文件列表 = `core/file-index.ts` 扫当前工作空间
   （跳过 node\_modules/.git 等，上限 2000 条；playground 为空列表，`@` 下拉自然不出）；
-  命令列表 = 技能（`/skill:name`）+ 提示词模板（`/模板名`，`core/prompt-templates.ts`
-  镜像 pi 的发现规则：`agentDir/prompts/` 与 `cwd/.pi/prompts/` 的 .md，pi 未导出该加载器）
-
-  - 自有命令（`/new`）。
+  命令列表 = 技能（`/skill:name`）+ 自有命令（`/new`）。
 
 - **UI**（`renderer/autocomplete.tsx` 的 `useAutocomplete`）：受控 textarea 接管光标追踪与
   键盘导航（↑↓ 选择、Enter/Tab 选中、Esc 关闭），鼠标 mousedown 选中（preventDefault 保焦点）。
   home-view 与 chat-view 同一接法。Enter 键分工：补全打开时 = 选中（已 preventDefault），
   未打开时 = 发送。
 
-- 数据源以 cwd 为刷新键重拉（切换工作空间后 @ 必须指向新空间）；新建任务组件重挂载也会刷新。
+- 数据源组件挂载时拉一次；新建任务后组件随父级重挂载自然刷新。
 

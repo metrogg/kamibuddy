@@ -30,6 +30,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.openArtifact,
 	INVOKE.saveArtifactAs,
 	INVOKE.pickWorkspaceDirectory,
+	INVOKE.pickSkillDirectory,
 ];
 
 let window: BrowserWindow | undefined;
@@ -195,6 +196,16 @@ function registerIpc(): void {
 			properties: ["openDirectory", "createDirectory"],
 		});
 		return canceled ? undefined : filePaths[0];
+	});
+
+	// 技能导入的选目录。createDirectory 没必要开：导入的是已有技能文件夹。
+	ipcMain.handle(INVOKE.pickSkillDirectory, async () => {
+		if (window === undefined) return undefined;
+		const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+			title: "选择技能文件夹（需包含 SKILL.md）",
+			properties: ["openDirectory"],
+		});
+		return canceled || filePaths.length === 0 ? undefined : filePaths[0];
 	});
 }
 

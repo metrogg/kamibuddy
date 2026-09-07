@@ -82,9 +82,6 @@ export class ModelCatalog {
 		return {
 			providers: sorted,
 			models,
-			// 技能不属于模型目录的职责：daemon 会展开此对象并补 skills 字段
-			// （宿主懒建，设置页要在第一次发消息前就能看到技能）。
-			skills: [],
 			activeModelId: activeModelKey,
 			configDir: getConfigDir(),
 			error: this.runtime.getError(),

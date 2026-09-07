@@ -18,7 +18,7 @@ import type {
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
-import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
+import type { CustomProviderInput, SettingsSnapshot, SkillsSnapshot, SkillInfo } from "./settings.ts";
 
 /** 订阅函数统一返回取消订阅的闭包，配合 React useEffect 的清理约定。 */
 export type Unsubscribe = () => void;
@@ -74,6 +74,12 @@ export interface KamiBridge {
 		providerId: string,
 	) => Promise<CustomProviderInput | undefined>;
 	readonly refreshCatalog: () => Promise<void>;
+
+	/* ── 技能 ─────────────────────────────────────────────────────── */
+
+	readonly skillsSnapshot: () => Promise<SkillsSnapshot>;
+	readonly importSkill: (sourcePath: string) => Promise<SkillInfo>;
+	readonly pickSkillDirectory: () => Promise<string | undefined>;
 
 	/* ── 诊断 ─────────────────────────────────────────────────────── */
 

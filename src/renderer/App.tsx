@@ -20,10 +20,11 @@ import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
+import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
 import { Toast, type ToastMessage } from "./toast.tsx";
 
-type View = "home" | "chat" | "settings" | "diagnostics";
+type View = "home" | "chat" | "settings" | "skills" | "diagnostics";
 
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
@@ -274,6 +275,7 @@ export function App(): React.JSX.Element {
 				onOpenTask={() => setView("chat")}
 				onOpenSettings={openSettings}
 				onOpenDiagnostics={openDiagnostics}
+				onOpenSkills={() => setView("skills")}
 				onTodo={showTodo}
 			/>
 			{view === "home" && (
@@ -305,6 +307,13 @@ export function App(): React.JSX.Element {
 				/>
 			)}
 			{/* 设置页自持滚动与返回按钮，不复用对话页的框架。 */}
+			{view === "skills" && (
+				<SkillsView
+					onClose={() => setView(returnView)}
+					onTodo={showTodo}
+					onToast={showToast}
+				/>
+			)}
 			{view === "settings" && (
 				<SettingsView onClose={() => setView(returnView)} />
 			)}

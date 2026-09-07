@@ -68,7 +68,21 @@ export interface ModelInfo {
 	readonly available: boolean;
 }
 
-/** 技能在设置界面的一行。 */
+/** 技能页一次性拉取的内容。 */
+export interface SkillsSnapshot {
+	readonly skills: readonly SkillInfo[];
+	/** 用户自装技能目录（导入落点）。「打开技能目录」直接 openArtifact 它。 */
+	readonly userSkillsDir: string;
+}
+
+/** 技能页一次性拉取的完整内容。 */
+export interface SkillsSnapshot {
+	readonly skills: readonly SkillInfo[];
+	/** 用户自装技能的落盘目录（导入的默认目标）。 */
+	readonly userSkillsDir: string;
+}
+
+/** 技能在技能页面的一行。 */
 export interface SkillInfo {
 	readonly name: string;
 	readonly description: string;
@@ -84,8 +98,6 @@ export interface SkillInfo {
 export interface SettingsSnapshot {
 	readonly providers: readonly ProviderInfo[];
 	readonly models: readonly ModelInfo[];
-	/** 已发现的技能。加载失败时为空数组、原因进 error。 */
-	readonly skills: readonly SkillInfo[];
 	/** 当前选中的模型，形如 `provider/model`。未选则为 undefined。 */
 	readonly activeModelId: string | undefined;
 	/** 凭据与自定义配置的落盘目录，显示给用户便于排障。 */

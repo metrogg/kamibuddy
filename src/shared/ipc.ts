@@ -15,7 +15,7 @@
 
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
-import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
+import type { CustomProviderInput, SettingsSnapshot, SkillsSnapshot, SkillInfo } from "./settings.ts";
 
 /* ────────────────────────────────────────────────────────────────
  * 通道名
@@ -96,6 +96,21 @@ export const INVOKE = {
 	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
 	refreshCatalog: "settings:refresh-catalog",
 
+	/* ── 技能 ─────────────────────────────────────────────────────── */
+
+	/** 已安装技能清单（独立页面用，不再借道设置快照）。 */
+	skillsSnapshot: "skills:snapshot",
+	/**
+	 * 导入技能：把含 SKILL.md 的文件夹（或单个 .md）复制进用户技能目录。
+	 * 返回安装后的技能信息；同名已存在、缺 SKILL.md、frontmatter 不全都会报错。
+	 */
+	importSkill: "skills:import",
+	/**
+	 * 弹出系统目录选择框，供导入流程选技能文件夹。由 main 本地应答
+	 * （要用 Electron dialog），用户取消返回 undefined。
+	 */
+	pickSkillDirectory: "skills:pick-directory",
+
 	/* ── 诊断 ─────────────────────────────────────────────────────── */
 
 	/**
@@ -160,7 +175,7 @@ export interface WorkspaceSnapshot {
 	readonly workspaces: readonly string[];
 }
 
-/** 一条 `/` 命令的展示信息（技能 / 模板 / 自有命令）。 */
+/** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
 export interface CommandItem {
 	/** 命令名（不含 /）。技能形如 `skill:docx`，模板形如 `weekly`。 */
 	readonly name: string;
@@ -205,6 +220,10 @@ export interface InvokeMap {
 	[INVOKE.deleteCustomProvider]: { args: [providerId: string]; result: void };
 	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
+
+	[INVOKE.skillsSnapshot]: { args: []; result: SkillsSnapshot };
+	[INVOKE.importSkill]: { args: [sourcePath: string]; result: SkillInfo };
+	[INVOKE.pickSkillDirectory]: { args: []; result: string | undefined };
 
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
 }

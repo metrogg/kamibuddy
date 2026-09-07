@@ -198,3 +198,10 @@ export const IconStop = (p: IconProps): React.JSX.Element => (
 		<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />
 	</Svg>
 );
+
+export const IconFolder = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="M4 5a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" />
+		<path d="M4 9h16" />
+	</Svg>
+);

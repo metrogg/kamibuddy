@@ -28,12 +28,9 @@ import {
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
 import { loadResources, toDescriptors } from "../core/resources.ts";
+import { importSkill, userSkillsDir } from "../core/skill-install.ts";
 import { SessionHost } from "../core/session-host.ts";
-import {
-	createWorkspace,
-	listWorkspaces,
-	validateWorkspacePath,
-} from "../core/workspace.ts";
+import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
@@ -144,12 +141,13 @@ let activeModelKey: string | undefined = readPreferences().activeModelKey;
 const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
 
 /**
- * 供设置页展示的技能清单。
+ * 技能清单。技能页展示与提示词组装共用这一个来源，且**每次现读** ——
+ * 导入新技能后下一轮对话即生效，无需重启应用。
  *
- * 独立于 SessionHost 的加载（宿主是懒建的，设置页要在第一次发消息前就能看）。
- * 加载失败不抛：设置页不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
+ * 独立于 SessionHost 的加载（宿主懒建，技能页要在第一次发消息前就能看）。
+ * 加载失败不抛：页面不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
  */
-function listSkillsForSettings(): SkillInfo[] {
+function listSkills(): SkillInfo[] {
 	try {
 		const { skills } = loadSkills({
 			cwd: getWorkspaceDir(),
@@ -348,9 +346,12 @@ async function createHost(): Promise<SessionHost> {
 							`场景或交互模式不存在：${sceneId} / ${interactionId}`,
 						);
 					}
-					let skills: SkillDescriptor[] = [];
-					if (hostPromise !== undefined)
-						skills = [...(await hostPromise).skillDescriptors];
+					// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
+					const skills: SkillDescriptor[] = listSkills().map((s) => ({
+						name: s.name,
+						description: s.description,
+						filePath: s.filePath,
+					}));
 					const prompt = composePrompt({
 						sceneBody: scene.body,
 						modeBody: mode.body,
@@ -429,10 +430,13 @@ const handlers: Record<string, Handler> = {
 
 	/* ── 设置：已可用 ─────────────────────────────────────────────── */
 
-	[INVOKE.settingsSnapshot]: async () => {
-		const snapshot = await (await getCatalog()).snapshot(activeModelKey);
-		return { ...snapshot, skills: listSkillsForSettings() };
-	},
+	[INVOKE.settingsSnapshot]: async () => (await getCatalog()).snapshot(activeModelKey),
+
+	/* ── 技能 ─────────────────────────────────────────────────────── */
+
+	[INVOKE.skillsSnapshot]: async () => ({ skills: listSkills(), userSkillsDir: userSkillsDir() }),
+
+	[INVOKE.importSkill]: async ([sourcePath]) => importSkill(sourcePath as string),
 
 	[INVOKE.setApiKey]: async ([providerId, apiKey]) => {
 		await (
@@ -551,7 +555,7 @@ const handlers: Record<string, Handler> = {
 		commands: [
 			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
 			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
-			...listSkillsForSettings().map((s) => ({
+			...listSkills().map((s) => ({
 				name: `skill:${s.name}`,
 				description: s.description,
 				source: "skill" as const,

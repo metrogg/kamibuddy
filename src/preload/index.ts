@@ -60,6 +60,10 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
 	refreshCatalog: () => ipcRenderer.invoke(INVOKE.refreshCatalog),
 
+	skillsSnapshot: () => ipcRenderer.invoke(INVOKE.skillsSnapshot),
+	importSkill: (sourcePath) => ipcRenderer.invoke(INVOKE.importSkill, sourcePath),
+	pickSkillDirectory: () => ipcRenderer.invoke(INVOKE.pickSkillDirectory),
+
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
 
 	onSessionEvent: (listener) => subscribe(PUSH.sessionEvent, listener),

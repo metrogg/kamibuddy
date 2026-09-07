@@ -580,35 +580,6 @@ export function SettingsView({ onClose }: { readonly onClose: () => void }): Rea
 							</div>
 						</section>
 
-						<section className="settings-section">
-							<header className="settings-section-head">
-								<h2>技能</h2>
-								<span className="settings-hint">
-									任务匹配描述时模型会自动读取并遵循；也可在对话里用 /skill:名称 强制触发
-								</span>
-							</header>
-
-							{snapshot.skills.length === 0 ? (
-								<p className="settings-empty">
-									还没有技能。把含 SKILL.md 的目录放进配置目录的 skills/ 文件夹即可。
-								</p>
-							) : (
-								<div className="provider-list">
-									{snapshot.skills.map((skill) => (
-										<div key={skill.filePath} className="provider-main skill-row">
-											<span className={`provider-dot${skill.disableModelInvocation ? "" : " on"}`} />
-											<span className="provider-name">{skill.name}</span>
-											<span className="provider-tag">{skill.origin === "builtin" ? "内置" : "自装"}</span>
-											<span className="provider-meta" title={skill.filePath}>
-												{skill.description}
-											</span>
-											{skill.disableModelInvocation && <span className="provider-hint">仅手动触发</span>}
-										</div>
-									))}
-								</div>
-							)}
-						</section>
-
 						<p className="settings-foot">配置目录：{snapshot.configDir}</p>
 					</>
 				)}
