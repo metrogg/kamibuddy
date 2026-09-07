@@ -151,7 +151,13 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		}
 
 		case "session_state":
-			return { ...view, state: event.state };
+			// 压缩后 pi 的 getContextUsage() 会有一段 tokens=null 的空窗，
+			// 此时 state.contextUsage 缺省 —— 明细一并清掉，否则圆环停在压缩前的旧值。
+			return {
+				...view,
+				state: event.state,
+				usageDetail: event.state.contextUsage === undefined ? undefined : view.usageDetail,
+			};
 
 		case "context_usage":
 			return { ...view, usageDetail: event.usage };

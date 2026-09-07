@@ -36,6 +36,7 @@ import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { buildContextUsage } from "../shared/context-usage.ts";
+import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
 import {
 	conversationReducer,
 	type ConversationView,
@@ -415,6 +416,8 @@ async function resetSession(): Promise<void> {
 		...conversation,
 		state: { ...conversation.state, sessionId: "", isStreaming: false },
 		entries: [],
+		// 用量明细属于旧会话，不清掉新任务的圆环会停在旧值。
+		usageDetail: undefined,
 	};
 }
 
@@ -453,6 +456,14 @@ async function applyWorkspace(dir: string): Promise<string | undefined> {
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
 
 type Handler = (args: readonly unknown[]) => Promise<unknown>;
+
+/** 新建任务：作废旧会话。INVOKE.newTask 与内置命令 /new 共用。 */
+async function newTask(): Promise<void> {
+	if (conversation.state.isStreaming)
+		throw new Error("任务进行中，请先停止当前任务");
+	await resetSession();
+	updateStateLocally({});
+}
 
 const handlers: Record<string, Handler> = {
 	// 返回折叠后的真实历史。ConversationView 与 SessionSnapshot 结构一致。
@@ -512,6 +523,24 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.prompt]: async ([request]) => {
 		const { text, whileStreaming } = request as PromptRequest;
+
+		// 内置命令（/new、/compact）是操作不是消息：发给模型没有意义，
+		// 在进会话之前拦下来执行（解析规则见 shared/builtin-commands.ts）。
+		const command = parseBuiltinCommand(text.trim());
+		if (command !== undefined) {
+			if (command.name === "new") {
+				await newTask();
+				return;
+			}
+			// compact：pi 会先中断当前操作且不续跑，流式期间明确拒绝比被中断好。
+			if (conversation.state.isStreaming)
+				throw new Error("任务进行中，请先停止当前任务再压缩上下文");
+			if (hostPromise === undefined)
+				throw new Error("还没有会话，没有可压缩的上下文");
+			await (await hostPromise).compact(command.args === "" ? undefined : command.args);
+			return;
+		}
+
 		const host = await getHost();
 		await host.prompt(text, whileStreaming);
 	},
@@ -532,12 +561,7 @@ const handlers: Record<string, Handler> = {
 	 * 但会话上下文清零——这是「任务干扰」的根治：两个任务不再共享 pi 的消息历史。
 	 * 会话本体是懒建的（getHost），这里只需作废 + 清空，下次 prompt 自然建新的。
 	 */
-	[INVOKE.newTask]: async () => {
-		if (conversation.state.isStreaming)
-			throw new Error("任务进行中，请先停止当前任务");
-		await resetSession();
-		updateStateLocally({});
-	},
+	[INVOKE.newTask]: async () => newTask(),
 
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");
@@ -601,8 +625,10 @@ const handlers: Record<string, Handler> = {
 				description: t.description,
 				source: "template" as const,
 			})),
-			// 自有命令：对应已有的 INVOKE 能力，UI 层拦截处理（不经 pi）。
+			// 自有命令：daemon 在 INVOKE.prompt 里拦截执行（不经 pi），
+			// 解析规则见 shared/builtin-commands.ts —— 两边必须一致。
 			{ name: "new", description: "新建任务", source: "builtin" as const },
+			{ name: "compact", description: "压缩上下文：总结历史，释放窗口", source: "builtin" as const },
 		],
 	}),
 

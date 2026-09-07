@@ -82,6 +82,29 @@ describe("context_usage", () => {
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 		expect(view.usageDetail).toEqual(usage);
 	});
+
+	it("session_state 不带 contextUsage 时清空明细（压缩后的空窗期，圆环不该停在旧值）", () => {
+		const withUsage = apply([{ type: "context_usage", usage }]);
+		const cleared = apply(
+			[{ type: "session_state", state: { ...initialConversation.state, sessionId: "s1" } }],
+			withUsage,
+		);
+		expect(cleared.usageDetail).toBeUndefined();
+	});
+
+	it("session_state 带 contextUsage 时保留明细（新明细随后由 context_usage 事件覆盖）", () => {
+		const withUsage = apply([{ type: "context_usage", usage }]);
+		const kept = apply(
+			[
+				{
+					type: "session_state",
+					state: { ...initialConversation.state, contextUsage: { usedTokens: 1, maxTokens: 100 } },
+				},
+			],
+			withUsage,
+		);
+		expect(kept.usageDetail).toEqual(usage);
+	});
 });
 
 describe("流式增量", () => {

@@ -282,6 +282,24 @@ export class SessionHost {
 
 	async abort(): Promise<void> {
 		await this.session.abort();
+		// 压缩是独立的模型调用，abort() 管不到它；停止键在压缩期间也必须有效。
+		// 无压缩进行时这是 no-op。
+		this.session.abortCompaction();
+	}
+
+	/**
+	 * 手动压缩上下文（pi TUI 的 /compact 等价物）。
+	 *
+	 * pi 的 compact() 会先中断当前 agent 操作且**不续跑**（agent-session.d.ts:510），
+	 * 所以调用方（daemon）在流式期间直接拒绝，而不是依赖 pi 的中断语义。
+	 * 压缩本身要调模型写摘要，耗时与一轮对话相当 —— 期间的流式态与停止键
+	 * 由 translate 的 compaction_start/end 分支维持（复用 run 记账）。
+	 *
+	 * @param customInstructions 用户对摘要的侧重要求（/compact 的参数文本）。
+	 */
+	async compact(customInstructions?: string): Promise<void> {
+		await this.session.compact(customInstructions);
+		this.emitState();
 	}
 
 	/**
@@ -380,14 +398,46 @@ export class SessionHost {
 	 * 会照样编译通过，然后工具卡片静默不再渲染 —— 那是最难查的失败方式
 	 * （AGENTS.md §7：不写防御性兜底掩盖上游问题）。
 	 *
-	 * 只处理 UI 真正需要的那几类；turn_start / turn_end / queue_update /
-	 * compaction_* 等一概吞掉（UI 不呈现「轮」与压缩细节）。
+	 * 只处理 UI 真正需要的那几类；turn_start / turn_end / queue_update
+	 * 等一概吞掉（UI 不呈现「轮」）。
 	 * 不写 default 分支抛错：pi 会持续新增事件类型，未知类型忽略才是正确行为。
 	 */
 	private translate(event: AgentSessionEvent): void {
 		const emit = this.options.emit;
 
 		switch (event.type) {
+			case "compaction_start": {
+				// run 内的自动压缩（threshold/overflow）：流式态由原 run 覆盖，不动记账。
+				if (this.currentRunId !== undefined) return;
+				// 空闲时的压缩（手动）：压缩要调模型写摘要，复用 run 记账让 UI
+				// 进入流式态（禁输入、出停止键），否则用户以为卡死了。
+				const runId = this.nextId("run");
+				this.currentRunId = runId;
+				emit({ type: "run_started", runId });
+				this.emitState();
+				return;
+			}
+
+			case "compaction_end": {
+				// willRetry 表示压缩后自动续跑被中断的那轮：流式态归原 run 与后续
+				// agent 事件管，这里不动（同 agent_end 的 willRetry 处理）。
+				if (event.willRetry) return;
+				const runId = this.currentRunId;
+				if (runId === undefined) return;
+				this.currentRunId = undefined;
+				if (!event.aborted && event.errorMessage === undefined) {
+					emit({ type: "run_finished", runId });
+				} else {
+					emit({
+						type: "run_error",
+						runId,
+						message: event.errorMessage ?? "上下文压缩已中断",
+					});
+				}
+				this.emitState();
+				return;
+			}
+
 			case "agent_start": {
 				const runId = this.nextId("run");
 				this.currentRunId = runId;
