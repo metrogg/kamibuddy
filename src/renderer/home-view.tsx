@@ -1,0 +1,214 @@
+/**
+ * 首页（新建任务页），布局对标 WorkBuddy 首屏：
+ * 大标题 → 模式页签 → 能力入口 → 输入卡 → 工作空间/权限 → 最佳实践案例。
+ *
+ * 文案是独立撰写的（AGENTS.md §6：机制可学，文字必须自己写）。
+ * 案例封面用 CSS 渐变 + 内联图标，不引入位图 —— CSP 的 img-src 不放外部源，
+ * 远程封面图会被拦掉，渐变方案零依赖也够看。
+ */
+
+import { useState } from "react";
+import {
+	IconChart,
+	IconChevronDown,
+	IconClose,
+	IconDoc,
+	IconMic,
+	IconPlus,
+	IconRefresh,
+	IconResearch,
+	IconSend,
+	IconSlide,
+	IconWeb,
+	IconWorkspace,
+} from "./icons.tsx";
+
+interface HomeViewProps {
+	/** daemon 未就绪时输入禁用，避免消息发出去才报错。 */
+	readonly ready: boolean;
+	readonly onSubmit: (text: string) => void;
+	readonly onTodo: (feature: string) => void;
+}
+
+/* ── 模式页签 ────────────────────────────────────────────────────── */
+
+const MODES = ["日常办公", "代码开发", "设计创意"] as const;
+
+/* ── 能力入口 ────────────────────────────────────────────────────── */
+
+const CAPABILITIES = [
+	{ icon: IconDoc, label: "文档处理" },
+	{ icon: IconChart, label: "数据分析可视化" },
+	{ icon: IconSlide, label: "幻灯片" },
+	{ icon: IconResearch, label: "深度研究" },
+	{ icon: IconWeb, label: "网页开发" },
+	{ icon: IconWorkspace, label: "个人工作台" },
+] as const;
+
+/* ── 案例卡片 ────────────────────────────────────────────────────── */
+
+interface PracticeCase {
+	readonly title: string;
+	readonly prompt: string;
+	/** 封面渐变，对应 CSS 类 case-cover-N。 */
+	readonly cover: number;
+}
+
+const PRACTICE_CASES: readonly PracticeCase[] = [
+	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", cover: 0 },
+	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", cover: 1 },
+	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", cover: 2 },
+	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", cover: 3 },
+	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", cover: 4 },
+	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", cover: 5 },
+];
+
+const PAGE_SIZE = 4;
+
+/** 首页右侧的吉祥物。原创 SVG（WorkBuddy 的机器人形象不能拿，§6）。 */
+function Mascot(): React.JSX.Element {
+	return (
+		<svg className="mascot" viewBox="0 0 96 96" fill="none" aria-hidden="true">
+			<rect x="20" y="26" width="56" height="48" rx="16" fill="#23262b" />
+			<rect x="30" y="40" width="12" height="14" rx="6" fill="#7ef0c4" />
+			<rect x="54" y="40" width="12" height="14" rx="6" fill="#7ef0c4" />
+			<path d="M40 62h16" stroke="#7ef0c4" strokeWidth="3" strokeLinecap="round" />
+			<path d="M48 26v-8" stroke="#23262b" strokeWidth="4" strokeLinecap="round" />
+			<circle cx="48" cy="14" r="4" fill="#7ef0c4" />
+			<rect x="10" y="40" width="8" height="18" rx="4" fill="#23262b" />
+			<rect x="78" y="40" width="8" height="18" rx="4" fill="#23262b" />
+		</svg>
+	);
+}
+
+export function HomeView({ ready, onSubmit, onTodo }: HomeViewProps): React.JSX.Element {
+	const [draft, setDraft] = useState("");
+	const [mode, setMode] = useState<(typeof MODES)[number]>("日常办公");
+	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
+	const [caseOffset, setCaseOffset] = useState(0);
+	const [casesVisible, setCasesVisible] = useState(true);
+
+	const submit = (): void => {
+		const text = draft.trim();
+		if (text === "" || !ready) return;
+		setDraft("");
+		onSubmit(text);
+	};
+
+	const visibleCases = Array.from(
+		{ length: Math.min(PAGE_SIZE, PRACTICE_CASES.length) },
+		(_, i) => PRACTICE_CASES[(caseOffset + i) % PRACTICE_CASES.length],
+		// noUncheckedIndexedAccess 下取模索引仍返回 T|undefined，filter 收窄。
+	).filter((c): c is PracticeCase => c !== undefined);
+
+	return (
+		<main className="home">
+			<div className="home-inner">
+				<h1 className="home-title">KamiBuddy，开工吧</h1>
+
+				<div className="mode-tabs">
+					{MODES.map((m) => (
+						<button
+							key={m}
+							type="button"
+							className={`mode-tab${m === mode ? " active" : ""}`}
+							onClick={() => {
+								if (m === "日常办公") setMode(m);
+								// 三模式能力排在 D4-5，先给入口一个明确反馈。
+								else onTodo(`「${m}」模式`);
+							}}
+						>
+							{m}
+						</button>
+					))}
+				</div>
+
+				<div className="capability-row">
+					{CAPABILITIES.map(({ icon: Icon, label }) => (
+						<button key={label} type="button" className="capability-chip" onClick={() => onTodo(label)}>
+							<Icon size={15} />
+							{label}
+						</button>
+					))}
+				</div>
+
+				<div className="composer-zone">
+					<div className="composer-card">
+						<textarea
+							value={draft}
+							onChange={(e) => setDraft(e.target.value)}
+							onKeyDown={(e) => {
+								// Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
+								if (e.key === "Enter" && !e.shiftKey) {
+									e.preventDefault();
+									submit();
+								}
+							}}
+							placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
+							disabled={!ready}
+							rows={3}
+						/>
+						<div className="composer-bar">
+							<button type="button" className="bar-btn" aria-label="添加附件" onClick={() => onTodo("附件引用")}>
+								<IconPlus size={17} />
+							</button>
+							<span className="bar-spacer" />
+							<button type="button" className="bar-btn bar-btn-text" onClick={() => onTodo("模型选择")}>
+								均衡
+								<IconChevronDown size={13} />
+							</button>
+							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+								<IconMic size={16} />
+							</button>
+							<button
+								type="button"
+								className="send-btn"
+								aria-label="发送"
+								onClick={submit}
+								disabled={!ready || draft.trim() === ""}
+							>
+								<IconSend size={16} />
+							</button>
+						</div>
+					</div>
+					<Mascot />
+				</div>
+
+				<div className="context-row">
+					<button type="button" className="context-chip" onClick={() => onTodo("工作空间")}>
+						<IconWorkspace size={14} />
+						选择工作空间
+						<IconChevronDown size={12} />
+					</button>
+					<button type="button" className="context-chip" onClick={() => onTodo("权限策略")}>
+						默认权限
+						<IconChevronDown size={12} />
+					</button>
+				</div>
+
+				{casesVisible && (
+					<section className="cases">
+						<header className="cases-header">
+							<span>不知道做什么，试试这些</span>
+							<button type="button" className="cases-action" onClick={() => setCaseOffset((o) => o + PAGE_SIZE)}>
+								<IconRefresh size={13} />
+								换一批
+							</button>
+							<button type="button" className="cases-action" aria-label="关闭" onClick={() => setCasesVisible(false)}>
+								<IconClose size={14} />
+							</button>
+						</header>
+						<div className="case-grid">
+							{visibleCases.map((c) => (
+								<button key={c.title} type="button" className="case-card" onClick={() => setDraft(c.prompt)}>
+									<span className={`case-cover case-cover-${c.cover}`} />
+									<span className="case-title">{c.title}</span>
+								</button>
+							))}
+						</div>
+					</section>
+				)}
+			</div>
+		</main>
+	);
+}

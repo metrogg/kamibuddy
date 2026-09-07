@@ -1,17 +1,36 @@
+/**
+ * 应用壳：持有 daemon 连接、会话状态与视图路由。
+ *
+ * 视图只有「首页 / 对话页」两种 —— 布局对标 WorkBuddy，
+ * 但能力按纵切片逐步点亮：未实现的入口统一 toast「待做」，
+ * 已实现的（发消息、收事件）直接可用。
+ */
+
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { SessionEvent, SessionSnapshot } from "@shared/session-events.ts";
 import { conversationReducer, initialConversation } from "./conversation.ts";
+import { Sidebar, type LinkState } from "./sidebar.tsx";
+import { HomeView } from "./home-view.tsx";
+import { ChatView } from "./chat-view.tsx";
+import { Toast, type ToastMessage } from "./toast.tsx";
 
-/** daemon 连接状态。UI 据此决定输入框可用性与提示文案。 */
-type Link = { readonly kind: "connecting" } | { readonly kind: "ready" } | { readonly kind: "down"; readonly reason: string };
+type View = "home" | "chat";
+
+/** 侧栏任务历史与对话页标题共用的截断长度。 */
+const TITLE_MAX = 24;
+
+function taskTitle(text: string): string {
+	const oneLine = text.replace(/\s+/g, " ").trim();
+	return oneLine.length > TITLE_MAX ? `${oneLine.slice(0, TITLE_MAX)}…` : oneLine;
+}
 
 export function App(): React.JSX.Element {
-	const [link, setLink] = useState<Link>({ kind: "connecting" });
+	const [link, setLink] = useState<LinkState>({ kind: "connecting" });
 	const [conversation, dispatch] = useReducer(conversationReducer, initialConversation);
-	const [draft, setDraft] = useState("");
-	/** 最近一次操作失败的原因。D2 阶段 prompt 必然失败，把它显示出来才能确认桥路通了。 */
+	const [view, setView] = useState<View>("home");
 	const [lastError, setLastError] = useState<string | undefined>(undefined);
-	const scrollRef = useRef<HTMLDivElement>(null);
+	const [toast, setToast] = useState<ToastMessage | undefined>(undefined);
+	const toastTimer = useRef<number | undefined>(undefined);
 
 	useEffect(() => {
 		// StrictMode 下 effect 会跑两遍，卸载后的异步回调必须能被丢弃。
@@ -60,79 +79,58 @@ export function App(): React.JSX.Element {
 		};
 	}, []);
 
-	// 新内容到达时贴底。用 scrollHeight 而非 scrollIntoView，避免流式增量时抖动。
+	// 新 toast 顶掉旧的，计时器也重置 —— 连续点不同入口时提示不会闪没。
 	useEffect(() => {
-		const node = scrollRef.current;
-		if (node !== null) node.scrollTop = node.scrollHeight;
-	}, [conversation.entries]);
+		if (toast === undefined) return;
+		window.clearTimeout(toastTimer.current);
+		toastTimer.current = window.setTimeout(() => setToast(undefined), 2200);
+		return () => window.clearTimeout(toastTimer.current);
+	}, [toast]);
 
-	const submit = useCallback(() => {
-		const text = draft.trim();
-		if (text === "" || link.kind !== "ready") return;
-		setDraft("");
-		setLastError(undefined);
-		window.kami.prompt({ text }).catch((error: unknown) => {
-			setLastError(error instanceof Error ? error.message : String(error));
-		});
-	}, [draft, link.kind]);
+	const showTodo = useCallback((feature: string) => {
+		setToast({ id: Date.now(), text: `「${feature}」待做，随版本迭代开放` });
+	}, []);
 
+	const submit = useCallback(
+		(text: string) => {
+			if (link.kind !== "ready") return;
+			setLastError(undefined);
+			setView("chat");
+			window.kami.prompt({ text }).catch((error: unknown) => {
+				setLastError(error instanceof Error ? error.message : String(error));
+			});
+		},
+		[link.kind],
+	);
+
+	const firstUserText = conversation.entries.find((e) => e.role === "user")?.text;
+	const title = firstUserText === undefined ? undefined : taskTitle(firstUserText);
 	const currentMode = conversation.availableModes.find((m) => m.id === conversation.state.modeId);
 
 	return (
 		<div className="app">
-			<header className="bar">
-				<span className="brand">KamiBuddy</span>
-				<span className={`link link-${link.kind}`}>
-					{link.kind === "connecting" && "正在启动…"}
-					{link.kind === "ready" && (currentMode?.label ?? conversation.state.modeId)}
-					{link.kind === "down" && `已断开：${link.reason}`}
-				</span>
-			</header>
-
-			<div className="stream" ref={scrollRef}>
-				{conversation.entries.length === 0 && link.kind === "ready" && (
-					<p className="hint">骨架已就绪。会话接入在 D3。</p>
-				)}
-				{conversation.entries.map((entry) => {
-					if (entry.role === "tool") {
-						return (
-							<div key={entry.id} className="entry tool">
-								<span className="tool-label">{entry.label}</span>
-								<span className="tool-summary">{entry.summary}</span>
-							</div>
-						);
-					}
-					return (
-						<div key={entry.id} className={`entry ${entry.role}`}>
-							{entry.role === "assistant" && entry.thinking !== undefined && (
-								<pre className="thinking">{entry.thinking}</pre>
-							)}
-							<div className="text">{entry.text}</div>
-						</div>
-					);
-				})}
-				{lastError !== undefined && <div className="entry error">{lastError}</div>}
-			</div>
-
-			<footer className="composer">
-				<textarea
-					value={draft}
-					onChange={(e) => setDraft(e.target.value)}
-					onKeyDown={(e) => {
-						// Enter 发送，Shift+Enter 换行 —— 与聊天类应用的通行约定一致。
-						if (e.key === "Enter" && !e.shiftKey) {
-							e.preventDefault();
-							submit();
-						}
-					}}
-					placeholder={link.kind === "ready" ? "说点什么…" : "等待 daemon…"}
-					disabled={link.kind !== "ready"}
-					rows={3}
+			<Sidebar
+				link={link}
+				currentTaskTitle={title}
+				onNewTask={() => setView("home")}
+				onOpenTask={() => setView("chat")}
+				onTodo={showTodo}
+			/>
+			{view === "home" ? (
+				<HomeView ready={link.kind === "ready"} onSubmit={submit} onTodo={showTodo} />
+			) : (
+				<ChatView
+					conversation={conversation}
+					ready={link.kind === "ready"}
+					lastError={lastError}
+					title={title ?? "新任务"}
+					modeLabel={currentMode?.label ?? conversation.state.modeId}
+					onBack={() => setView("home")}
+					onSubmit={submit}
+					onTodo={showTodo}
 				/>
-				<button type="button" onClick={submit} disabled={link.kind !== "ready" || draft.trim() === ""}>
-					发送
-				</button>
-			</footer>
+			)}
+			<Toast message={toast} />
 		</div>
 	);
 }
