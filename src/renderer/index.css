@@ -864,7 +864,8 @@ button {
 	padding: 0;
 	overflow: hidden;
 	background: var(--bg-raised);
-	border-left: 2px solid var(--primary);
+	/* 一侧细线标识「工具」而非「消息」，颜色用边界灰而非主色 —— 黑色标签太重。 */
+	border-left: 2px solid var(--border);
 	font-size: 13px;
 	white-space: normal;
 }
@@ -929,6 +930,9 @@ button {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	/* flex 子项默认 min-width: auto（绝不允许收缩），长路径摘要把卡片撑宽、
+	   箭头挤出视野 —— 设为 0 才能让 ellipsis 真正生效。 */
+	min-width: 0;
 }
 
 .tool-caret {
