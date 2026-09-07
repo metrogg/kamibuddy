@@ -40,6 +40,11 @@ export const INVOKE = {
 	abort: "session:abort",
 	/** 新建任务：作废旧会话、开全新会话。 */
 	newTask: "session:new-task",
+	/**
+	 * 拉取输入框补全数据源：`@` 的文件列表（当前工作空间内）与 `/` 的命令列表。
+	 * 返回相对路径/命令名，renderer 自己做过滤与下拉。
+	 */
+	completions: "session:completions",
 	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
 	setScene: "session:set-scene",
 	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
@@ -155,6 +160,23 @@ export interface WorkspaceSnapshot {
 	readonly workspaces: readonly string[];
 }
 
+/** 一条 `/` 命令的展示信息（技能 / 模板 / 自有命令）。 */
+export interface CommandItem {
+	/** 命令名（不含 /）。技能形如 `skill:docx`，模板形如 `weekly`。 */
+	readonly name: string;
+	readonly description: string;
+	/** 来源，供 renderer 分组显示。 */
+	readonly source: "skill" | "template" | "builtin";
+}
+
+/** 输入框补全数据源。 */
+export interface CompletionData {
+	/** `@` 可选文件：当前工作空间内的相对路径（posix 分隔）。playground 时为空。 */
+	readonly files: readonly string[];
+	/** `/` 可选命令。 */
+	readonly commands: readonly CommandItem[];
+}
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -162,6 +184,7 @@ export interface InvokeMap {
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
 	[INVOKE.newTask]: { args: []; result: void };
+	[INVOKE.completions]: { args: []; result: CompletionData };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };

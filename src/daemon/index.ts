@@ -34,6 +34,8 @@ import {
 	listWorkspaces,
 	validateWorkspacePath,
 } from "../core/workspace.ts";
+import { indexFiles } from "../core/file-index.ts";
+import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import {
@@ -540,6 +542,35 @@ const handlers: Record<string, Handler> = {
 		if (hostPromise !== undefined) await (await hostPromise).setModel(key);
 		else updateStateLocally({ modelId: key });
 	},
+
+	/* ── 输入框补全数据源（@ 文件 + / 命令） ────────────────────────── */
+
+	[INVOKE.completions]: async () => ({
+		// playground（workspaceDir 为 undefined）没有可引用的目录，文件列表为空。
+		files: workspaceDir === undefined ? [] : indexFiles(workspaceDir),
+		commands: [
+			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
+			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
+			...listSkillsForSettings().map((s) => ({
+				name: `skill:${s.name}`,
+				description: s.description,
+				source: "skill" as const,
+			})),
+			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
+			// 发现目录必须与会话实际生效的一致 —— cwd 镜像 SessionHost 的取值
+			//（playground 时用配置目录下的 playground/ 占位，见 session-host.ts）。
+			...listPromptTemplates(
+				workspaceDir ?? join(getConfigDir(), "playground"),
+				getConfigDir(),
+			).map((t) => ({
+				name: t.name,
+				description: t.description,
+				source: "template" as const,
+			})),
+			// 自有命令：对应已有的 INVOKE 能力，UI 层拦截处理（不经 pi）。
+			{ name: "new", description: "新建任务", source: "builtin" as const },
+		],
+	}),
 
 	/* ── 工作空间 ───────────────────────────────────────────────────── */
 

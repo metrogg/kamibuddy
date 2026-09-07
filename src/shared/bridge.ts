@@ -7,6 +7,7 @@
 
 import type {
 	DaemonStatus,
+	CompletionData,
 	PermissionRequest,
 	PermissionResponse,
 	PromptRequest,
@@ -33,6 +34,8 @@ export interface KamiBridge {
 	readonly abort: () => Promise<void>;
 	/** 新建任务：作废旧会话、开一个全新会话（在当前工作空间语义下）。 */
 	readonly newTask: () => Promise<void>;
+	/** 输入框补全数据源（@ 文件 + / 命令）。 */
+	readonly completions: () => Promise<CompletionData>;
 	/** 切换场景（work / code / design）。 */
 	readonly setScene: (sceneId: string) => Promise<void>;
 	/** 切换交互模式（ask / craft / plan / expert）。 */

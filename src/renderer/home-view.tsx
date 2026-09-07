@@ -7,8 +7,9 @@
  * 远程封面图会被拦掉，渐变方案零依赖也够看。
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ModeDescriptor } from "@shared/session-events.ts";
+import { useAutocomplete } from "./autocomplete.tsx";
 import { ModelMenu } from "./model-menu.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
@@ -110,6 +111,10 @@ export function HomeView({
 	onTodo,
 }: HomeViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值。
+	// cwd 作为刷新键：切换工作空间后重拉文件列表，否则 @ 停留在旧空间（或 playground 空列表）。
+	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd);
 	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
 	const [caseOffset, setCaseOffset] = useState(0);
 	const [casesVisible, setCasesVisible] = useState(true);
@@ -159,20 +164,28 @@ export function HomeView({
 
 				<div className="composer-zone">
 					<div className="composer-card">
-						<textarea
-							value={draft}
-							onChange={(e) => setDraft(e.target.value)}
-							onKeyDown={(e) => {
-								// Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
-								if (e.key === "Enter" && !e.shiftKey) {
-									e.preventDefault();
-									submit();
-								}
-							}}
-							placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
-							disabled={!ready}
-							rows={3}
-						/>
+						<div className="composer-input">
+							{ac.menu}
+							<textarea
+								ref={textareaRef}
+								value={draft}
+								onChange={ac.bind.onChange}
+								onSelect={ac.bind.onSelect}
+								onBlur={ac.bind.onBlur}
+								onKeyDown={(e) => {
+									ac.bind.onKeyDown(e);
+									// Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
+									// ac 打开时 Enter=选中（已 preventDefault），这里只对未被消费的 Enter 发送。
+									if (e.key === "Enter" && !e.shiftKey && !e.defaultPrevented) {
+										e.preventDefault();
+										submit();
+									}
+								}}
+								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
+								disabled={!ready}
+								rows={3}
+							/>
+						</div>
 						<div className="composer-bar">
 							<button type="button" className="bar-btn" aria-label="添加附件" onClick={() => onTodo("附件引用")}>
 								<IconPlus size={17} />

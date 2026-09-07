@@ -287,8 +287,10 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 机制对标 WorkBuddy（空间 = 目录，会话 cwd 终身绑定，换空间 = 新任务）：
 
 - 首页「选择工作空间」可选：**不使用工作空间（playground）** / 默认根（`~/KamiBuddy`）/ 根下已有子目录 / 新建（同名子目录，不可改名）/ 打开本地文件夹。
+
 - **安全守卫**（`core/workspace.ts`，14 个测试）：配置目录（含密钥）、应用目录及其祖先一律拒绝设为工作空间——
   工作空间内写操作权限门直接放行，「设为哪个目录」就是安全边界本身。
+
 - 切换即作废旧会话（cwd 在建会话时一次性注入 pi 工具集），daemon 清空历史、renderer 重拉快照。
 
 ## 会话隔离 + playground（2026-09-07 落地）
@@ -298,15 +300,45 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 
 - **工作空间 ≠ 会话**：工作空间决定「在哪工作（cwd + 权限边界）」，会话决定「对话上下文」。
   同一空间下多个任务的文件可共享，但聊天上下文相互隔离。
+
 - **新建任务 = 真新建会话**：sidebar「新建任务」调 `session:new-task`，daemon 作废旧 SessionHost、
   清空本地历史（`resetSession`），工作空间选择保留。不再只是切页面。
+
 - **playground（不使用工作空间）是新建任务的默认状态**：`SessionState.isPlayground=true`、`cwd=undefined`。
+
   - 安全边界是**工具集为空**（`PLAYGROUND_TOOLS=[]`），而非「没有目录」——
     pi 的内置工具支持绝对路径，只置空 cwd 挡不住，所以根本不注册文件工具。
+
   - pi 侧技术 cwd 用配置目录下的 `playground/` 占位（资源发现需要真实目录），该目录在配置目录内本就禁写。
+
   - playground 不装权限门扩展（无文件工具可拦）。
+
 - 会话仍是懒建（首次 prompt 才建 SessionHost），新建任务只作废 + 清空，下次 prompt 自然建新会话。
 
 待做（归 T4 多会话）：会话列表持久化与恢复（`SessionManager` 已写 JSONL，但 UI 还没有
 历史任务列表/切换/重命名/删除）；「保存到工作空间」（playground 任务事后落为正式空间）。
+
+## 输入框补全 @ / （2026-09-08 落地）
+
+首页与对话页输入框支持 `@` 引用文件、`/` 调用命令的补全下拉。**选中后按纯文本插入**
+（不做内容注入）：文件内容靠模型的 read 工具去读，斜杠命令由 pi 在 prompt() 里展开
+（agent-session.js:853：先 `_expandSkillCommand` 再 `expandPromptTemplate`）。
+
+- **纯逻辑**（`shared/autocomplete.ts`，18 个测试）：`completionTrigger` 从光标前文本解析触发
+  （`/` 仅在文本首字符触发，与 pi 的 expandPromptTemplate 对齐；`@` 要求在行首或空白后），
+  `filterItems` 子序列打分过滤，`applyCompletion` 计算替换后的文本与光标位置。
+
+- **数据源**（`INVOKE.completions`）：文件列表 = `core/file-index.ts` 扫当前工作空间
+  （跳过 node\_modules/.git 等，上限 2000 条；playground 为空列表，`@` 下拉自然不出）；
+  命令列表 = 技能（`/skill:name`）+ 提示词模板（`/模板名`，`core/prompt-templates.ts`
+  镜像 pi 的发现规则：`agentDir/prompts/` 与 `cwd/.pi/prompts/` 的 .md，pi 未导出该加载器）
+
+  - 自有命令（`/new`）。
+
+- **UI**（`renderer/autocomplete.tsx` 的 `useAutocomplete`）：受控 textarea 接管光标追踪与
+  键盘导航（↑↓ 选择、Enter/Tab 选中、Esc 关闭），鼠标 mousedown 选中（preventDefault 保焦点）。
+  home-view 与 chat-view 同一接法。Enter 键分工：补全打开时 = 选中（已 preventDefault），
+  未打开时 = 发送。
+
+- 数据源以 cwd 为刷新键重拉（切换工作空间后 @ 必须指向新空间）；新建任务组件重挂载也会刷新。
 

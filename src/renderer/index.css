@@ -288,6 +288,59 @@ button {
 	color: var(--text-dim);
 }
 
+/* ── 输入框补全下拉（@ 文件 + / 命令） ──────────────────────────── */
+
+/* 下拉的定位上下文：菜单相对输入区上浮，不挤压布局。 */
+.composer-input {
+	position: relative;
+}
+
+.ac-menu {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + 6px);
+	z-index: 30;
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-card);
+	padding: 4px;
+}
+
+.ac-item {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 10px;
+	border-radius: 8px;
+	text-align: left;
+}
+
+.ac-item.active {
+	background: var(--bg-hover);
+}
+
+.ac-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ac-hint {
+	flex: 0 0 auto;
+	margin-left: auto;
+	color: var(--text-dim);
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 50%;
+}
+
 .composer-bar {
 	display: flex;
 	align-items: center;

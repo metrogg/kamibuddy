@@ -27,6 +27,7 @@ const bridge: KamiBridge = {
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
 	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
+	completions: () => ipcRenderer.invoke(INVOKE.completions),
 	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
 	setInteraction: (interactionId) =>
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),

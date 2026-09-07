@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import type { ModeDescriptor, ToolCard } from "@shared/session-events.ts";
 import { IconBack, IconChevronDown, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
+import { useAutocomplete } from "./autocomplete.tsx";
 
 interface ChatViewProps {
 	readonly conversation: ConversationView;
@@ -124,7 +125,10 @@ export function ChatView({
 }: ChatViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const streaming = conversation.state.isStreaming;
+	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
+	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
 	// 新内容到达时贴底。用 scrollHeight 而非 scrollIntoView，避免流式增量时抖动。
 	useEffect(() => {
@@ -174,20 +178,28 @@ export function ChatView({
 
 			<footer className="chat-composer">
 				<div className="composer-card">
-					<textarea
-						value={draft}
-						onChange={(e) => setDraft(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								submit();
-							}
-						}}
-						// 流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
-						placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
-						disabled={!ready}
-						rows={2}
-					/>
+					<div className="composer-input">
+						{ac.menu}
+						<textarea
+							ref={textareaRef}
+							value={draft}
+							onChange={ac.bind.onChange}
+							onSelect={ac.bind.onSelect}
+							onBlur={ac.bind.onBlur}
+							onKeyDown={(e) => {
+								ac.bind.onKeyDown(e);
+								// ac 打开时已 preventDefault（Enter=选中），这里只对未被消费的 Enter 发送。
+								if (e.key === "Enter" && !e.shiftKey && !e.defaultPrevented) {
+									e.preventDefault();
+									submit();
+								}
+							}}
+							// 流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
+							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
+							disabled={!ready}
+							rows={2}
+						/>
+					</div>
 					<div className="composer-bar">
 						<button type="button" className="bar-btn" aria-label="添加附件" onClick={() => onTodo("附件引用")}>
 							<IconPlus size={17} />
