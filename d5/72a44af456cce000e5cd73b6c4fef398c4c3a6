@@ -1,0 +1,39 @@
+src/core/model-catalog.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 8-11,24,91-97,101,105-108,110-112
+src/core/config-paths.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 24,26-28
+scripts/probe-key-persistence.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-51
+src/core/api-keys.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-82
+src/core/api-keys.test.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "d572a44af456cce000e5cd73b6c4fef398c4c3a6",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "tool_name": "RunCommand",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "display_model_name": "Kimi-K3",
+        "operation_id": "6a9e710a4d41cfbf4a20f128",
+        "edit_kind": "bash",
+        "runtime_client": "trae-tob-git-ai",
+        "client_type": "ide",
+        "source_scene": "agent",
+        "tool_use_id": "6a9e710a4d41cfbf4a20f128"
+      }
+    }
+  }
+}
