@@ -11,12 +11,15 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { getConfigDir, getWorkspaceDir } from "../core/config-paths.ts";
+import { getConfigDir, getResourcesDir, getWorkspaceDir } from "../core/config-paths.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
 import { readPreferences, writePreferences } from "../core/preferences.ts";
+import { composePrompt, formatSkillsSection, type SkillDescriptor } from "../core/prompt-composer.ts";
+import { loadResources, toDescriptors } from "../core/resources.ts";
 import { SessionHost } from "../core/session-host.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
+import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { conversationReducer, type ConversationView } from "../shared/conversation.ts";
 import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
 import { isDaemonRequest } from "../shared/daemon-protocol.ts";
@@ -64,34 +67,18 @@ function post(frame: DaemonOutbound): void {
 /* ── 会话状态 ─────────────────────────────────────────────────────── */
 
 /**
- * 场景轴：对标 WorkBuddy 的 welcomemode/{work,code,design}
- * （其内置插件 plugin.json 的 `category: "welcomeMode"` 即证据）。
- * 决定根代理与能力面。
+ * 两轴资源：场景骨架 + 交互模式，全部来自 resources/（AGENTS.md §3 能力即数据）。
  *
- * 未实现的项仍然列出（对齐 WorkBuddy 的能力面，也让产品同事看得到路线），
- * 靠 ready:false 让 UI 给明确反馈，而不是假装能用。
+ * **顶层加载、失败即崩**：这是 daemon 里唯一一个「起不来比起来好」的失败——
+ * 资源缺失意味着提示词退回 pi 的「coding assistant」默认值，产品身份整个错了，
+ * 静默运行比崩溃难排查得多。
  *
- * D4-5 迁到 resources/scenes/<id>/ 由文件驱动（AGENTS.md §3 能力即数据）。
+ * 加场景 / 加模式 = 在 resources/ 下加目录或文件，零行代码改动。
  */
-const SCENES: readonly ModeDescriptor[] = [
-	{ id: "work", label: "日常办公", description: "文档、表格、汇报、调研", ready: true },
-	{ id: "code", label: "代码开发", description: "读写代码、跑命令、查问题", ready: false },
-	{ id: "design", label: "设计创意", description: "视觉稿、海报、幻灯片", ready: false },
-];
+const RESOURCES = loadResources(getResourcesDir());
 
-/**
- * 交互轴：对标 WorkBuddy 的 interactionmode/{ask,craft,plan,expert}
- * （`category: "interaction"`，各带 fragments/*.md 提示片段）。
- * 决定工具白名单与行为片段。
- *
- * 与场景轴正交：系统提示词是两轴共同的函数（场景模板 include 交互片段）。
- */
-const INTERACTIONS: readonly ModeDescriptor[] = [
-	{ id: "craft", label: "创作", description: "完整工具集，可读写与执行", ready: true },
-	{ id: "ask", label: "问答", description: "只读，不改文件不跑命令", ready: false },
-	{ id: "plan", label: "规划", description: "先出方案，确认后再动手", ready: false },
-	{ id: "expert", label: "专家", description: "载入专家人格处理垂类任务", ready: false },
-];
+const SCENES: readonly ModeDescriptor[] = toDescriptors(RESOURCES).scenes;
+const INTERACTIONS: readonly ModeDescriptor[] = toDescriptors(RESOURCES).modes;
 
 /* ── 模型目录 ─────────────────────────────────────────────────────── */
 
@@ -126,12 +113,14 @@ let activeModelKey: string | undefined = readPreferences().activeModelKey;
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
- * 当前工作空间。默认 ~/KamiBuddy（getWorkspaceDir），用户在首页可换。
+ * 当前工作空间。undefined = playground（WorkBuddy 的「不使用工作空间」）：
+ * 不绑定任何本地目录、不注册文件工具。这是新建任务的默认状态——
+ * 不选空间时不该默认写进某个公共目录。
  *
  * 会话与 cwd 终身绑定（cwd 在建会话时一次性注入 pi 的工具集），
  * 所以换空间 = 作废当前会话重开，见 applyWorkspace。
  */
-let workspaceDir: string = getWorkspaceDir();
+let workspaceDir: string | undefined = undefined;
 
 /**
  * 会话历史。用 shared 的 reducer 折叠，与渲染进程**同一份实现** ——
@@ -142,7 +131,8 @@ let workspaceDir: string = getWorkspaceDir();
 let conversation: ConversationView = {
 	state: {
 		sessionId: "",
-		cwd: workspaceDir,
+		cwd: undefined,
+		isPlayground: true,
 		sceneId: "work",
 		interactionId: "craft",
 		modelId: activeModelKey,
@@ -210,20 +200,53 @@ async function createHost(): Promise<SessionHost> {
 		throw new Error("选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型。");
 	}
 
-	// AI 要往这里读写文件，目录必须先存在。
+	// playground 的 cwd 为 undefined；正式空间才需要在建会话前确保目录存在
+	//（SessionHost.create 里也会 mkdir，但权限门要先拿到一个已确定存在的目录）。
 	const cwd = workspaceDir;
-	mkdirSync(cwd, { recursive: true });
+	if (cwd !== undefined) mkdirSync(cwd, { recursive: true });
 
 	const host = await SessionHost.create({
 		catalog,
 		modelKey: activeModelKey,
 		cwd,
+		isPlayground: cwd === undefined,
 		sceneId: conversation.state.sceneId,
 		interactionId: conversation.state.interactionId,
 		emit: emitSessionEvent,
-		// 权限门由 daemon 组装：它需要向渲染进程发问，而 core/ 不认识 IPC
+		resources: RESOURCES,
+		// 扩展由 daemon 组装：core/ 不许 import extensions/
 		// （依赖方向是 extensions → core，见 AGENTS.md §1）。
-		extensions: [createPermissionGate({ paths: { workspaceDir: cwd, configDir: getConfigDir() }, cwd, requestApproval })],
+		// playground（workspaceDir 为 undefined）不装权限门 —— 文件工具根本没注册，
+		// 没有可拦的调用；装了反而要用一个假 cwd 做路径解析，徒增歧义。
+		extensions: [
+			...(cwd === undefined
+				? []
+				: [createPermissionGate({ paths: { workspaceDir: cwd, configDir: getConfigDir() }, cwd, requestApproval })]),
+			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
+			// 两轴的权威状态经 conversation 折叠镜像读取；技能段取自宿主的 loader 发现结果。
+			createPromptSwitch({
+				getCurrent: () => ({
+					sceneId: conversation.state.sceneId,
+					interactionId: conversation.state.interactionId,
+				}),
+				compose: async (sceneId, interactionId) => {
+					const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
+					const mode = RESOURCES.modes.find((m) => m.id === interactionId);
+					if (scene === undefined || mode === undefined) {
+						throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
+					}
+					let skills: SkillDescriptor[] = [];
+					if (hostPromise !== undefined) skills = [...(await hostPromise).skillDescriptors];
+					return composePrompt({
+						sceneBody: scene.body,
+						modeBody: mode.body,
+						skillsSection: formatSkillsSection(skills),
+						// playground 无工作目录，提示词里如实说明，免得模型去找一个不存在的路径。
+						cwd: cwd ?? "（未选择工作空间，无本地文件目录）",
+					});
+				},
+			}),
+		],
 	});
 
 	// 会话建好后 sessionId / cwd 才有真值，推一次让 UI 同步。
@@ -232,7 +255,23 @@ async function createHost(): Promise<SessionHost> {
 }
 
 /**
- * 切换工作空间。
+ * 作废当前会话并清空本地历史。换空间与新建任务共用这一步：
+ * 会话与 cwd 终身绑定，不存在「换目录/换任务继续聊」。
+ */
+async function resetSession(): Promise<void> {
+	if (hostPromise !== undefined) {
+		(await hostPromise).dispose();
+		hostPromise = undefined;
+	}
+	conversation = {
+		...conversation,
+		state: { ...conversation.state, sessionId: "", isStreaming: false },
+		entries: [],
+	};
+}
+
+/**
+ * 切换工作空间。空串表示「不使用工作空间」（playground）。
  *
  * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
  * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
@@ -241,26 +280,22 @@ async function createHost(): Promise<SessionHost> {
  * 不存在「换目录继续聊」（WorkBuddy 同样如此，它的 cwd 在 session.create 时绑定）。
  * 旧会话的本地历史一并清掉——它属于上一个空间，留着会让 UI 显示别处的对话。
  */
-async function applyWorkspace(dir: string): Promise<string> {
-	const error = validateWorkspacePath(dir, { configDir: getConfigDir(), appDir: process.cwd() });
-	if (error !== undefined) throw new Error(error);
-	if (dir === workspaceDir) return workspaceDir;
+async function applyWorkspace(dir: string): Promise<string | undefined> {
+	// 空串 = playground，无需路径校验（本就不绑定任何目录）。
+	const next = dir === "" ? undefined : dir;
+	if (next !== undefined) {
+		const error = validateWorkspacePath(next, { configDir: getConfigDir(), appDir: process.cwd() });
+		if (error !== undefined) throw new Error(error);
+	}
+	if (next === workspaceDir) return workspaceDir;
 	if (conversation.state.isStreaming) throw new Error("任务进行中，请先停止当前任务再切换工作空间");
 
-	mkdirSync(dir, { recursive: true });
-	workspaceDir = dir;
+	if (next !== undefined) mkdirSync(next, { recursive: true });
+	workspaceDir = next;
 
-	if (hostPromise !== undefined) {
-		(await hostPromise).dispose();
-		hostPromise = undefined;
-		conversation = {
-			...conversation,
-			state: { ...conversation.state, sessionId: "", isStreaming: false },
-			entries: [],
-		};
-	}
-	updateStateLocally({ cwd: dir });
-	return dir;
+	await resetSession();
+	updateStateLocally({ cwd: next, isPlayground: next === undefined });
+	return next;
 }
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
@@ -312,6 +347,19 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.abort]: async () => {
 		if (hostPromise === undefined) return;
 		await (await hostPromise).abort();
+	},
+
+	/**
+	 * 新建任务：作废旧会话、在当前工作空间语义下开一个全新会话。
+	 *
+	 * 关键点：工作空间选择**保留**（用户在哪个空间就在哪个空间开新任务），
+	 * 但会话上下文清零——这是「任务干扰」的根治：两个任务不再共享 pi 的消息历史。
+	 * 会话本体是懒建的（getHost），这里只需作废 + 清空，下次 prompt 自然建新的。
+	 */
+	[INVOKE.newTask]: async () => {
+		if (conversation.state.isStreaming) throw new Error("任务进行中，请先停止当前任务");
+		await resetSession();
+		updateStateLocally({});
 	},
 
 	[INVOKE.setScene]: async ([sceneId]) => {

@@ -14,14 +14,14 @@
 
 ## 项目背景
 
-| 项 | 内容 |
-|---|---|
-| 目标 | 基于 [pi agent harness](https://pi.dev) 做办公 AI Agent 桌面端，对标腾讯 WorkBuddy |
-| 交付形式 | 直接给部门同事试用评价 |
-| 期限 | 两周（约 2026-09-21） |
-| 范围策略 | **深度优先**：WorkBuddy 功能清单当规格书，深度优先只决定做的顺序，不缩小最终范围 |
-| 首个纵切片 | 文档生成（职场文档 + 联网调研报告） |
-| 参考物 | WorkBuddy 安装目录 `C:\Program Files\WorkBuddy\`，逆向素材在 `_analysis\`；分析笔记在 `docs/workbuddy分析/` |
+| 项     | 内容                                                                                        |
+| ----- | ----------------------------------------------------------------------------------------- |
+| 目标    | 基于 [pi agent harness](https://pi.dev) 做办公 AI Agent 桌面端，对标腾讯 WorkBuddy                     |
+| 交付形式  | 直接给部门同事试用评价                                                                               |
+| 期限    | 两周（约 2026-09-21）                                                                          |
+| 范围策略  | **深度优先**：WorkBuddy 功能清单当规格书，深度优先只决定做的顺序，不缩小最终范围                                           |
+| 首个纵切片 | 文档生成（职场文档 + 联网调研报告）                                                                       |
+| 参考物   | WorkBuddy 安装目录 `C:\Program Files\WorkBuddy\`，逆向素材在 `_analysis\`；分析笔记在 `docs/workbuddy分析/` |
 
 范围取舍见 ARCHITECTURE.md §1，合规红线见 AGENTS.md §6（**机制可学，文字必须自己写**）。
 
@@ -48,9 +48,9 @@ WebFetch / WebSearch / **权限系统** / MCP 均需自研。
 
 原先把模式压成一个 `modeId`，与 WorkBuddy 实际结构不符。已按其内置插件目录改正：
 
-| 轴 | WorkBuddy 目录（`category`） | 取值 | 界面位置 |
-|---|---|---|---|
-| 场景 | `welcomemode/`（`welcomeMode`） | work / code / design | 首页页签 |
+| 轴  | WorkBuddy 目录（`category`）          | 取值                          | 界面位置   |
+| -- | --------------------------------- | --------------------------- | ------ |
+| 场景 | `welcomemode/`（`welcomeMode`）     | work / code / design        | 首页页签   |
 | 交互 | `interactionmode/`（`interaction`） | ask / craft / plan / expert | 对话页切换器 |
 
 两轴正交，提示词是二者共同的函数。**必须在写提示词之前改**，否则 D4-5 返工。
@@ -83,6 +83,7 @@ WebFetch / WebSearch / **权限系统** / MCP 均需自研。
 
 - **pi 的消息没有稳定 id**（只有 timestamp），而 UI 流式增量要靠 id 定位气泡，
   所以 id 由适配层生成。工具卡片例外：`toolCallId` 本身稳定。
+
 - turn 级事件对 UI 无意义（用户看到的是消息与卡片，不是「轮」），一概吞掉。
 
 **工具卡片**默认折叠，点击展开正文，状态点区分执行中 / 成功 / 失败。
@@ -96,7 +97,7 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 审批队列而非单槽 —— pi 默认并行执行工具，同批可能来多条请求，覆盖会让工具永久挂住。
 
-**会话历史的 reducer 移到 `shared/`**：daemon 与 renderer 都需要它
+**会话历史的 reducer 移到** **`shared/`**：daemon 与 renderer 都需要它
 （daemon 供 snapshot、renderer 折叠增量），各写一份必然漂移，
 症状是「重开界面后内容变了」。
 
@@ -186,12 +187,12 @@ npm run smoke:session  # 会话构造冒烟（不联网、不耗额度）
 npm run smoke:sdk      # pi SDK 冒烟
 ```
 
-**必须用 `npm run dev` / `npm start`，不要直接 `npx electron .`** —— 原因见下。
+**必须用** **`npm run dev`** **/** **`npm start`，不要直接** **`npx electron .`** —— 原因见下。
 
-| 目录 | 内容 |
-|---|---|
+| 目录              | 内容                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------- |
 | `~/.kamibuddy/` | `auth.json`（密钥，0600）、`models.json`（自建服务商）、`models-store.json`、`preferences.json`、`sessions/` |
-| `~/KamiBuddy/` | **会话工作目录**，AI 生成的文档落在这里。刻意与配置分开，免得用户误删配置 |
+| `~/KamiBuddy/`  | **会话工作目录**，AI 生成的文档落在这里。刻意与配置分开，免得用户误删配置                                                     |
 
 ## 已知坑
 
@@ -202,7 +203,7 @@ npm run smoke:sdk      # pi SDK 冒烟
 pi README 自述 "does not include a built-in permission system"，它的思路是靠容器隔离整个进程。
 
 我们的对策是 `src/extensions/` 那一层（ARCHITECTURE.md §4.57）。
-**改动那两个文件时务必跑 `npm test`** —— 那 39 个测试是这条安全边界的唯一护栏。
+**改动那两个文件时务必跑** **`npm test`** —— 那 39 个测试是这条安全边界的唯一护栏。
 
 ### IDE 注入 `ELECTRON_RUN_AS_NODE=1`
 
@@ -272,7 +273,40 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 
 - **模式切换目前只改状态，不改提示词与工具集** —— 两轴已存进 `SessionState` 并回推 UI，
   但 `SessionHost.setScene/setInteraction` 还没重组 systemPrompt。这是 D4-5 的正题。
+
 - 未实现的场景 / 模式（code、design、ask、plan、expert）点击给 toast，不会静默切换。
-- 附件引用、语音输入、工作空间选择、侧栏各导航项仍是 `onTodo` 占位。
+
+- 附件引用、语音输入、侧栏各导航项仍是 `onTodo` 占位。
+
 - 打包分发（electron-builder）未配置。
+
 - git 有大量未提交改动（上次提交是「侧边栏导航与首页/对话页基础布局」）。
+
+## 工作空间（2026-09-07 落地）
+
+机制对标 WorkBuddy（空间 = 目录，会话 cwd 终身绑定，换空间 = 新任务）：
+
+- 首页「选择工作空间」可选：**不使用工作空间（playground）** / 默认根（`~/KamiBuddy`）/ 根下已有子目录 / 新建（同名子目录，不可改名）/ 打开本地文件夹。
+- **安全守卫**（`core/workspace.ts`，14 个测试）：配置目录（含密钥）、应用目录及其祖先一律拒绝设为工作空间——
+  工作空间内写操作权限门直接放行，「设为哪个目录」就是安全边界本身。
+- 切换即作废旧会话（cwd 在建会话时一次性注入 pi 工具集），daemon 清空历史、renderer 重拉快照。
+
+## 会话隔离 + playground（2026-09-07 落地）
+
+根治「任务干扰」：此前未选空间会用 `~/KamiBuddy` 兜底，且所有消息复用同一个 AgentSession，
+导致不同任务共享上下文与文件目录。现对齐 WorkBuddy 模型：
+
+- **工作空间 ≠ 会话**：工作空间决定「在哪工作（cwd + 权限边界）」，会话决定「对话上下文」。
+  同一空间下多个任务的文件可共享，但聊天上下文相互隔离。
+- **新建任务 = 真新建会话**：sidebar「新建任务」调 `session:new-task`，daemon 作废旧 SessionHost、
+  清空本地历史（`resetSession`），工作空间选择保留。不再只是切页面。
+- **playground（不使用工作空间）是新建任务的默认状态**：`SessionState.isPlayground=true`、`cwd=undefined`。
+  - 安全边界是**工具集为空**（`PLAYGROUND_TOOLS=[]`），而非「没有目录」——
+    pi 的内置工具支持绝对路径，只置空 cwd 挡不住，所以根本不注册文件工具。
+  - pi 侧技术 cwd 用配置目录下的 `playground/` 占位（资源发现需要真实目录），该目录在配置目录内本就禁写。
+  - playground 不装权限门扩展（无文件工具可拦）。
+- 会话仍是懒建（首次 prompt 才建 SessionHost），新建任务只作废 + 清空，下次 prompt 自然建新会话。
+
+待做（归 T4 多会话）：会话列表持久化与恢复（`SessionManager` 已写 JSONL，但 UI 还没有
+历史任务列表/切换/重命名/删除）；「保存到工作空间」（playground 任务事后落为正式空间）。
+

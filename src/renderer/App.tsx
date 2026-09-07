@@ -182,15 +182,6 @@ export function App(): React.JSX.Element {
 	}, []);
 
 	/**
-	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
-	 * —— 否则用户配完模型回来发现对话没了。
-	 */
-	const openSettings = useCallback(() => {
-		setReturnView(view === "chat" ? "chat" : "home");
-		setView("settings");
-	}, [view]);
-
-	/**
 	 * 工作空间切换后重拉快照。
 	 *
 	 * 换空间会让 daemon 作废旧会话并清空历史（cwd 与会话终身绑定），
@@ -203,7 +194,42 @@ export function App(): React.JSX.Element {
 			.catch((error: unknown) => {
 				showToast(error instanceof Error ? error.message : String(error));
 			});
+		// showToast 是稳定的 useCallback（空依赖），不需列入依赖数组。
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
+	/**
+	 * 新建任务：让 daemon 作废旧会话、开全新会话，然后回首页 + 重拉快照。
+	 *
+	 * 不只是切页面 —— 旧会话的消息历史必须由 daemon 真正作废，
+	 * 否则两个任务共享 pi 的上下文，正是要根治的「任务干扰」。
+	 * 工作空间选择保留（在哪个空间就在哪个空间开新任务）。
+	 */
+	const newTask = useCallback(() => {
+		if (link.kind !== "ready") {
+			setView("home");
+			return;
+		}
+		window.kami
+			.newTask()
+			.then(() => {
+				resyncSnapshot();
+				setView("home");
+			})
+			.catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [link.kind, resyncSnapshot]);
+
+	/**
+	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
+	 * —— 否则用户配完模型回来发现对话没了。
+	 */
+	const openSettings = useCallback(() => {
+		setReturnView(view === "chat" ? "chat" : "home");
+		setView("settings");
+	}, [view]);
 
 	const firstUserText = conversation.entries.find((e) => e.role === "user")?.text;
 	const title = firstUserText === undefined ? undefined : taskTitle(firstUserText);
@@ -213,7 +239,7 @@ export function App(): React.JSX.Element {
 			<Sidebar
 				link={link}
 				currentTaskTitle={title}
-				onNewTask={() => setView("home")}
+				onNewTask={newTask}
 				onOpenTask={() => setView("chat")}
 				onOpenSettings={openSettings}
 				onTodo={showTodo}

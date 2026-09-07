@@ -37,8 +37,8 @@ interface HomeViewProps {
 	readonly sceneId: string;
 	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
 	readonly modelId: string | undefined;
-	/** 当前工作空间目录（session_state.cwd），工作空间选择器要用。 */
-	readonly cwd: string;
+	/** 当前工作空间目录（session_state.cwd）。playground 会话为 undefined。 */
+	readonly cwd: string | undefined;
 	readonly onSceneChange: (sceneId: string) => void;
 	readonly onOpenSettings: () => void;
 	/** 主页就地操作（切模型等）失败时的提示出口。 */

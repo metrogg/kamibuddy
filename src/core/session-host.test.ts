@@ -41,14 +41,17 @@ function createHost(session: unknown, emit: (event: SessionEvent) => void): Sess
 		sceneId: "work",
 		interactionId: "craft",
 		emit,
+		// 本测试不触达两轴资源；空列表即可（构造器不校验）。
+		resources: { scenes: [], modes: [] },
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
 		options: SessionHostOptions,
 		sceneId: string,
 		interactionId: string,
+		skills: readonly unknown[],
 	) => SessionHost;
-	return new Ctor(session, options, "work", "craft");
+	return new Ctor(session, options, "work", "craft", []);
 }
 
 /** translate 是私有的；测试经事件入口驱动，而不是戳内部状态。 */

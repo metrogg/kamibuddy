@@ -12,7 +12,7 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** 配置根目录。可用 KAMIBUDDY_CONFIG_DIR 覆盖（多环境并存、自动化测试用）。 */
 export function getConfigDir(): string {
@@ -50,6 +50,19 @@ export function getModelsStorePath(): string {
 /** 会话历史（JSONL）。 */
 export function getSessionsDir(): string {
 	return join(getConfigDir(), "sessions");
+}
+
+/**
+ * 提示词与模式资源目录（仓库根的 resources/）。
+ *
+ * 定位用 import.meta 相对路径而不是 process.cwd()：
+ * 本文件既被 tsx 直接跑（src/core/），也被打包进 out/main/daemon.mjs，
+ * 两种情况下「上两级」都正好是项目根。打包分发（T14）需要把 resources/
+ * 复制进产物同级位置，或用 KAMIBUDDY_RESOURCES_DIR 覆盖。
+ */
+export function getResourcesDir(): string {
+	const override = process.env["KAMIBUDDY_RESOURCES_DIR"];
+	return override !== undefined && override !== "" ? override : resolve(import.meta.dirname, "..", "..", "resources");
 }
 
 /**

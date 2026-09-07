@@ -13,6 +13,7 @@
  * main 只做转发，不解释 payload。业务判断全在 daemon。
  */
 
+import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
 
@@ -37,6 +38,8 @@ export const INVOKE = {
 	prompt: "session:prompt",
 	/** 中断当前 run。 */
 	abort: "session:abort",
+	/** 新建任务：作废旧会话、开全新会话。 */
+	newTask: "session:new-task",
 	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
 	setScene: "session:set-scene",
 	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
@@ -47,7 +50,10 @@ export const INVOKE = {
 	workspaceSnapshot: "workspace:snapshot",
 	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
 	createWorkspace: "workspace:create",
-	/** 切换到指定目录。目录经 daemon 校验（配置目录/应用目录会拒）。返回生效的目录路径。 */
+	/**
+	 * 切换到指定目录。目录经 daemon 校验（配置目录/应用目录会拒）。返回生效的目录路径。
+	 * 传空字符串表示「不使用工作空间」（playground，cwd 为 undefined）。
+	 */
 	setWorkspace: "workspace:set",
 	/**
 	 * 弹出系统目录选择框。由 main 本地应答（要用 Electron dialog）。
@@ -84,6 +90,15 @@ export const INVOKE = {
 	readCustomProvider: "settings:read-custom-provider",
 	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
 	refreshCatalog: "settings:refresh-catalog",
+
+	/* ── 诊断 ─────────────────────────────────────────────────────── */
+
+	/**
+	 * 拉取可观测性快照（累计用量、缓存命中率、run 记录、工具统计、上下文成分）。
+	 * 诊断页打开时调一次，之后随会话事件刷新，不配专用推送通道——
+	 * 会话事件本身就是「该刷新了」的信号，多开一条通道只是重复投递。
+	 */
+	statsSnapshot: "stats:snapshot",
 } as const;
 
 /** daemon → renderer，单向推送（webContents.send）。 */
@@ -132,8 +147,8 @@ export type DaemonStatus =
 
 /** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
 export interface WorkspaceSnapshot {
-	/** 当前生效的工作空间目录。 */
-	readonly current: string;
+	/** 当前生效的工作空间目录。playground（不使用工作空间）时为 undefined。 */
+	readonly current: string | undefined;
 	/** 默认根目录（「新建工作空间」都建在它下面）。 */
 	readonly defaultRoot: string;
 	/** 默认根下已有的工作空间目录列表。 */
@@ -146,12 +161,13 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: []; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
+	[INVOKE.newTask]: { args: []; result: void };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
 	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
-	[INVOKE.setWorkspace]: { args: [path: string]; result: string };
+	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };
 	[INVOKE.pickWorkspaceDirectory]: { args: []; result: string | undefined };
 	[INVOKE.uiResponse]: { args: [UiResponse]; result: void };
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
@@ -166,6 +182,8 @@ export interface InvokeMap {
 	[INVOKE.deleteCustomProvider]: { args: [providerId: string]; result: void };
 	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
+
+	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
 }
 
 /** push 通道的 payload 映射。 */

@@ -38,7 +38,8 @@ export type ConversationAction =
 export const initialConversation: ConversationView = {
 	state: {
 		sessionId: "",
-		cwd: "",
+		cwd: undefined,
+		isPlayground: true,
 		sceneId: "work",
 		interactionId: "craft",
 		modelId: undefined,

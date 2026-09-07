@@ -30,6 +30,8 @@ export interface KamiBridge {
 	readonly snapshot: () => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
+	/** 新建任务：作废旧会话、开一个全新会话（在当前工作空间语义下）。 */
+	readonly newTask: () => Promise<void>;
 	/** 切换场景（work / code / design）。 */
 	readonly setScene: (sceneId: string) => Promise<void>;
 	/** 切换交互模式（ask / craft / plan / expert）。 */
@@ -40,8 +42,8 @@ export interface KamiBridge {
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;
 	/** 在默认根下新建工作空间并切换。名称非法或重名时 reject 原因。 */
 	readonly createWorkspace: (name: string) => Promise<string>;
-	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。 */
-	readonly setWorkspace: (path: string) => Promise<string>;
+	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。传空串 = 不使用工作空间（playground）。 */
+	readonly setWorkspace: (path: string) => Promise<string | undefined>;
 	/** 系统目录选择框。取消返回 undefined。 */
 	readonly pickWorkspaceDirectory: () => Promise<string | undefined>;
 

@@ -30,7 +30,8 @@ process.env["KAMIBUDDY_WORKSPACE_DIR"] = join(workDir, "workspace");
 const { ModelCatalog } = await import("../src/core/model-catalog.ts");
 const { SessionHost } = await import("../src/core/session-host.ts");
 const { createPermissionGate } = await import("../src/extensions/permission-gate.ts");
-const { getConfigDir, getWorkspaceDir } = await import("../src/core/config-paths.ts");
+const { loadResources } = await import("../src/core/resources.ts");
+const { getConfigDir, getResourcesDir, getWorkspaceDir } = await import("../src/core/config-paths.ts");
 const { mkdirSync } = await import("node:fs");
 
 const results: { name: string; ok: boolean; detail: string }[] = [];
@@ -82,6 +83,8 @@ const host = await SessionHost.create({
 	sceneId: "work",
 	interactionId: "craft",
 	emit: (event) => events.push(event.type),
+	// 与 daemon 同源：真实加载仓库的 resources/（顺带验证资源文件本身没坏）。
+	resources: loadResources(getResourcesDir()),
 	extensions: [
 		createPermissionGate({
 			paths: { workspaceDir: cwd, configDir: getConfigDir() },

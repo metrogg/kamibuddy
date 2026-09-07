@@ -25,9 +25,13 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEvent, SessionState, ToolCard, ToolOutcome } from "../shared/session-events.ts";
+import type { LoadedResources } from "./resources.ts";
+import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { parseModelKey, toModelKey } from "./model-catalog.ts";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * 默认工具集：**不含 bash / powershell**。
@@ -39,6 +43,16 @@ import { parseModelKey, toModelKey } from "./model-catalog.ts";
  * D4-5 起由 resources/modes/<id>.md 的 frontmatter 驱动，届时本常量退化为兜底。
  */
 const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
+
+/**
+ * playground 会话的工具集：一个文件工具都不给。
+ *
+ * 为什么不只把 cwd 置空就算完事：pi 的内置工具支持绝对路径，
+ * 模型给出绝对路径照样能写硬盘任意位置。所以 playground 的安全边界
+ * 不是「没有目录」，而是「根本不注册这些工具」——工具不在模型可见的工具
+ * 清单里，它连调用都发不出来。
+ */
+const PLAYGROUND_TOOLS = [] as const;
 
 /**
  * 工具的中文标签与摘要取法。
@@ -95,18 +109,37 @@ export interface SessionHostOptions {
 	readonly catalog: ModelCatalog;
 	/** 选中的模型标识（`provider/model`）。undefined 表示让 pi 自己挑第一个可用的。 */
 	readonly modelKey: string | undefined;
-	/** 会话工作目录。文档产物落在这里。 */
-	readonly cwd: string;
+	/**
+	 * 会话工作目录。playground（不使用工作空间）为 undefined：
+	 * 不加载本地文件工具，模型只能做问答。pi 侧的技术 cwd 用配置目录下的
+	 * playground 占位目录（资源发现需要真实目录，但绝不作为产物落点）。
+	 */
+	readonly cwd: string | undefined;
 	readonly sceneId: string;
 	readonly interactionId: string;
+	/**
+	 * 是否为 playground 会话（WorkBuddy 的「不使用工作空间」）。
+	 * true 时 state.cwd 下发 undefined，且建会话时不注册任何本地文件工具
+	 * （PLAYGROUND_TOOLS 为空）——安全边界是「工具不在模型可见清单里」，
+	 * 而不是「没有目录」。缺省 false（正式工作空间）。
+	 */
+	readonly isPlayground?: boolean;
 	/** 领域事件出口。 */
 	readonly emit: (event: SessionEvent) => void;
 	/**
-	 * 要装载的 pi 扩展（权限门等）。
+	 * 两轴资源（场景骨架 + 交互模式，含工具白名单）。
+	 *
+	 * 由调用方加载后传入：daemon 在启动时也要同一份来下发 UI 描述符与做
+	 * requireReady 校验，两处各读一遍同一批不可变文件虽然结果一致，
+	 * 但显式传递保证「daemon 校验用的」与「宿主切工具集用的」是同一份对象。
+	 */
+	readonly resources: LoadedResources;
+	/**
+	 * 要装载的 pi 扩展（权限门、提示词切换等）。
 	 *
 	 * 由调用方组装而非本文件自建：`core/` 不许 import `extensions/`
 	 * （依赖方向是 extensions → core，见 AGENTS.md §1）。
-	 * 权限门需要向宿主发起审批询问，那是 daemon 的职责。
+	 * 权限门需要向宿主发起审批询问，提示词切换需要两轴与技能——都是 daemon 的职责。
 	 */
 	readonly extensions?: readonly InlineExtension[];
 }
@@ -126,6 +159,7 @@ export class SessionHost {
 		private readonly options: SessionHostOptions,
 		private sceneId: string,
 		private interactionId: string,
+		private readonly skills: readonly SkillDescriptor[],
 	) {}
 
 	static async create(options: SessionHostOptions): Promise<SessionHost> {
@@ -142,17 +176,29 @@ export class SessionHost {
 		const agentDir = getConfigDir();
 
 		/*
+		 * playground 的技术 cwd：pi 的 DefaultResourceLoader / SettingsManager /
+		 * SessionManager 都需要一个真实存在的目录做资源发现，但 playground 语义上
+		 * 不绑定任何用户目录。用配置目录下的 playground 占位目录 —— 它在配置目录内，
+		 * 权限门本来就禁写，模型也拿不到文件工具，双保险。
+		 * 正式工作空间则直接用用户选的目录。
+		 */
+		const playground = options.isPlayground === true;
+		const cwd = playground ? join(agentDir, "playground") : options.cwd;
+		if (cwd === undefined) throw new Error("正式工作空间会话必须提供 cwd");
+		mkdirSync(cwd, { recursive: true });
+
+		/*
 		 * SettingsManager 自己建、并同时交给 loader 与 createAgentSession。
 		 *
 		 * 照 pi 自己的做法（sdk.ts:182-188）：它把同一个实例传给两处。
 		 * 若只给 createAgentSession、loader 自己再建一个，就会有两份设置状态，
 		 * 症状是「改了设置一处生效一处不生效」，极难排查。
 		 */
-		const settingsManager = SettingsManager.create(options.cwd, agentDir);
+		const settingsManager = SettingsManager.create(cwd, agentDir);
 
 		// 扩展要经 ResourceLoader 注入，且必须 reload 后才生效（同 sdk.ts:185-188）。
 		const resourceLoader = new DefaultResourceLoader({
-			cwd: options.cwd,
+			cwd,
 			agentDir,
 			settingsManager,
 			extensionFactories: [...(options.extensions ?? [])],
@@ -160,18 +206,26 @@ export class SessionHost {
 		await resourceLoader.reload();
 
 		const { session } = await createAgentSession({
-			cwd: options.cwd,
+			cwd,
 			agentDir,
 			// 复用 ModelCatalog 已建好的 runtime，避免重复读 auth.json / models.json。
 			modelRuntime: options.catalog.modelRuntime,
 			...(model === undefined ? {} : { model }),
-			sessionManager: SessionManager.create(options.cwd, getSessionsDir()),
+			sessionManager: SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
-			tools: [...DEFAULT_TOOLS],
+			tools: playground ? [...PLAYGROUND_TOOLS] : [...DEFAULT_TOOLS],
 		});
 
-		const host = new SessionHost(session, options, options.sceneId, options.interactionId);
+		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
+		// 提示词切换扩展整体替换 systemPrompt 后 pi 不再自动附加技能段，
+		// 所以这里取出来、经 daemon 的 compose 拼进提示词（prompt-composer.ts）。
+		const skills: SkillDescriptor[] = resourceLoader.getSkills().skills.map((s) => ({
+			name: String(s.name ?? ""),
+			description: String(s.description ?? ""),
+		}));
+
+		const host = new SessionHost(session, options, options.sceneId, options.interactionId, skills);
 		session.subscribe((event) => host.translate(event));
 		return host;
 	}
@@ -211,26 +265,40 @@ export class SessionHost {
 	/**
 	 * 切换场景 / 交互模式。
 	 *
-	 * 目前只改状态并回推 —— 提示词与工具白名单的重组在 D4-5 落地
-	 * （届时要重建 systemPrompt 并更新工具集）。现在就存住两轴，
-	 * 是为了让 UI 与权威状态从一开始就一致，不留漂移。
+	 * 提示词的每轮重组在 prompt-switch 扩展里发生（before_agent_start），
+	 * 这里只负责存轴 + 换工具集。工具白名单是模式 frontmatter 声明的
+	 * （resources/modes/<id>.md），白名单语义：未列出的工具被禁用，
+	 * 含扩展注册的自定义工具。
 	 */
 	setScene(sceneId: string): void {
+		const scene = this.options.resources.scenes.find((s) => s.id === sceneId);
+		if (scene === undefined) throw new Error(`未知的场景：${sceneId}`);
 		this.sceneId = sceneId;
 		this.emitState();
 	}
 
 	setInteraction(interactionId: string): void {
+		const mode = this.options.resources.modes.find((m) => m.id === interactionId);
+		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
 		this.interactionId = interactionId;
+		this.session.setActiveToolsByName([...mode.tools]);
 		this.emitState();
+	}
+
+	/** 当前技能描述符，供 daemon 组装提示词的技能段。 */
+	get skillDescriptors(): readonly SkillDescriptor[] {
+		return this.skills;
 	}
 
 	get state(): SessionState {
 		const usage = this.session.getContextUsage();
 		const model = this.session.model;
+		const playground = this.options.isPlayground === true;
 		return {
 			sessionId: this.session.sessionId,
-			cwd: this.options.cwd,
+			// playground 会话不绑定目录（shared/session-events.ts 的字段契约）。
+			...(playground ? { cwd: undefined } : { cwd: this.options.cwd }),
+			isPlayground: playground,
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
 			modelId: model === undefined ? undefined : toModelKey(model.provider, model.id),

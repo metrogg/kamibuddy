@@ -11,6 +11,8 @@
  * （用户看到的是一条条消息和工具卡片，不是"轮"），所以在 adapter 里被吞掉。
  */
 
+import type { TokenUsage } from "./observability.ts";
+
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
 
@@ -35,6 +37,12 @@ export interface AssistantMessage {
 	readonly text: string;
 	/** 思考内容。模型未输出思考时为 undefined，不要用空串代替。 */
 	readonly thinking?: string;
+	/**
+	 * 本条消息对应的模型调用用量（pi 的 AssistantMessage.usage 翻译而来）。
+	 * 聊天 UI 不展示它——它服务于诊断页的 run 级聚合（shared/observability.ts）。
+	 * 出错中断等无完整响应的场景为 undefined。
+	 */
+	readonly usage?: TokenUsage;
 	readonly at: number;
 }
 
@@ -97,7 +105,16 @@ export type SessionEvent =
  */
 export interface SessionState {
 	readonly sessionId: string;
-	readonly cwd: string;
+	/**
+	 * 会话工作目录。playground 会话（isPlayground=true）为 undefined：
+	 * 不绑定任何本地目录，也不加载文件工具（WorkBuddy 的 cwd="" 同语义）。
+	 */
+	readonly cwd: string | undefined;
+	/**
+	 * 是否为 playground 会话（WorkBuddy 的「不使用工作空间」）。
+	 * 每次新建任务默认进入 playground —— 不选空间时不该默认写进某个公共目录。
+	 */
+	readonly isPlayground: boolean;
 	/** 场景 id，对应 resources/scenes/<id>/。决定根代理与可用能力面。 */
 	readonly sceneId: string;
 	/** 交互模式 id，对应 resources/modes/<id>.md。决定工具白名单与行为片段。 */

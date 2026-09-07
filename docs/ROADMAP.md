@@ -89,32 +89,79 @@ pi README 自述 "does not include a built-in permission system" —— 它的�
 
 没有这几项，"通用 agent" 不成立。**按顺序做**，有依赖关系。
 
-### T1 · 提示词两轴落地（进行中）
+### T1 · 提示词两轴落地（✅ 已完成 · 轻量版，2026-09-07）
 
-现状：`core/frontmatter.ts` 已完成（29 个测试）。`resources/` 目录**还不存在**。
-`SessionHost.setScene/setInteraction` 目前只改状态、不改提示词与工具集。
+已落地：`resources/scenes/work/prompt.md` + `modes/{craft,ask}.md`（轻量通用文案，
+按用户要求**先不做重的**，等功能齐了再细调）、`core/resources.ts`、`core/prompt-composer.ts`、
+`extensions/prompt-switch.ts`（before_agent_start 每轮整体替换）、
+`setInteraction` 时 `setActiveToolsByName()`、daemon 两轴常量改为 resources 驱动。
+配套 19 个测试（composer/resources/prompt-switch），smoke:session 12/12，
+真机直跑验证 daemon 正常启动、snapshot 往返正常。
 
-要做：
+注意：整体替换后 pi 不再自动附加技能清单与 cwd —— 由 composer 的
+`{{skills}}` / `{{cwd}}` 槽位负责（技能段当前为空，T2 接通）。
+以下设计细节保留，供细调提示词时参考：
+
+#### 设计定稿（2026-09-07，可照此直接实现）
+
+**资源文件形态**（「双面文件」：frontmatter 给加载器，正文给提示词）：
 
 ```
 resources/
-  scenes/<id>/prompt.md      场景骨架，用占位符 include 交互片段
-  modes/<id>.md              frontmatter 声明工具白名单，正文是行为片段
-  prompts/fragments/*.md     共享片段（记忆、交付纪律等）
+  scenes/work/prompt.md      场景骨架。frontmatter: id/label/description/ready；
+                             正文含 4 个槽位：{{interaction}} {{skills}} {{cwd}} {{model}}
+  modes/craft.md             frontmatter: id/label/description/ready/tools: [read, write, edit, find, grep, ls]
+  modes/ask.md               frontmatter: tools: [read, find, grep, ls]（只读）
 ```
 
-抄 WorkBuddy 的「双面文件」：一份 `.md` 的 frontmatter 给加载器读工具白名单，
-正文给模板引擎读提示片段 —— 一份文件同时定义策略与内容，两者不会漂移。
+- **不引模板引擎**（YAGNI）：槽位就是字面量替换，20 行搞定。composer 对**未识别的
+  `{{token}}` 必须抛错**——带着空槽位上线的提示词是最难排查的故障。
+- `prompts/fragments/` 推迟到第二个场景真正需要共享时再建（现在只有一个场景 ready）。
 
-实现要点：
+**提示词骨架**（正文自己写，合规红线 §0；结构参考 WorkBuddy 的机制，文字全部原创）：
 
-1. 写 `core/prompt-composer.ts`：读 scene + mode → 拼出 systemPrompt + toolNames。纯函数，可单测。
-2. 在 `SessionHost` 里注册一个扩展监听 `before_agent_start`，返回组合好的 `systemPrompt`。
-3. `setScene` / `setInteraction` 时调 `setActiveToolsByName()` 换工具集。
-4. 把 `SCENES` / `INTERACTIONS` 常量（现在硬编码在 `daemon/index.ts`）改为扫描 `resources/` 生成。
+1. 身份与产品 —— 你是 KamiBuddy，办公场景的智能助手。**绝不出现 pi / coding 痕迹**
+2. 能力边界 —— 能读写工作目录、生成文档产物；不装软件、不改系统设置
+3. 安全与路径 —— 工作目录概念（绝对路径或相对 cwd）、配置区不可碰、删除需确认
+4. 交付纪律 —— 产物落盘到工作目录并告诉用户路径；「中间过程在界面被折叠，
+   最终回复必须自足」；HTML 优先
+5. 行为规范 —— 优先用专用工具、时间不心算、一次一事
+6. 语言与地域 —— 中文回复、人民币、A股红涨绿跌
+7. `{{interaction}}` ← 模式行为段注入点：
+   - craft：完整能力的执行循环（理解→动手→验证→交付）
+   - ask：**只读三禁**（不改文件 / 不执行命令 / **不得谎称已创建**）+ 建议切创作模式
+8. `{{skills}}` ← 技能清单注入点（T2 前为空，空内容零 token）
+9. 收尾：`{{cwd}}` + `{{model}}`
 
-验收：**加一个模式只需加一个 `.md` 文件，零行代码改动**（AGENTS.md §3）。
-先把 `craft` 与 `ask` 做通（`ask` 是只读模式，注意上面那个「无 read 则技能消失」的陷阱）。
+**机制选择（关键，别走弯路）**：
+
+- 用 `before_agent_start` 扩展事件**每轮返回** `{ systemPrompt }` 覆盖。
+  这是 pi 官方支持的替换路径（`BeforeAgentStartEventResult`），每次 run 结束自动清空，
+  两轴切换零状态同步。**代价**：覆盖是整体替换，pi 默认会自动附加的技能清单、
+  cwd、上下文文件**全部失效**——所以 composer 必须自己把这些拼进去（骨架第 8、9 节）。
+- 工具集：`setScene/setInteraction` 时调 `session.setActiveToolsByName(mode.tools)`
+  （白名单语义：未列出的工具被禁用，含扩展注册的自定义工具）。
+- 场景/交互的**权威状态**仍在 SessionHost；扩展经一个可变引用回调取当前两轴
+  （SessionHost 构造完成后再回填引用，pi 自己的 extensionRunnerRef 就是这个模式）。
+
+**改动点清单**：
+
+| 文件 | 动作 |
+|---|---|
+| `core/resources.ts`（新） | 扫描 `resources/`，parseFrontmatter → SceneResource / ModeResource / ModeDescriptor[]。坏文件抛错 |
+| `core/prompt-composer.ts`（新） | 纯函数：scene 骨架 + 模式正文 + skills + cwd + model → string。槽位替换、未知槽位抛错 |
+| `extensions/prompt-switch.ts`（新） | 薄胶水：监听 before_agent_start，取两轴 → composer → 返回 systemPrompt |
+| `core/session-host.ts` | 保存 loader 引用（取 skills）；create() 里多注入一个扩展；setScene/setInteraction 加 setActiveToolsByName；DEFAULT_TOOLS 降级为「资源缺失时的兜底」 |
+| `daemon/index.ts` | SCENES / INTERACTIONS 常量删除，改由 resources loader 在启动时加载（加载失败响亮崩溃——没有提示词的产品是错的） |
+
+**测试**：composer 槽位替换/未知槽位抛错/空技能省略；loader 扫描与坏文件；
+prompt-switch 胶水（仿 permission-gate.test 的假 ExtensionAPI）。
+
+**验收**：
+1. 加一个模式 = 加一个 `.md` 文件，零行代码；
+2. 问「你是谁」→ 自称 KamiBuddy 办公助手，无 pi 痕迹；
+3. ask 模式让它写文件 → 拒绝且说明只读，不得谎称已创建；
+4. `npm run smoke:session` 仍全绿。
 
 风险：`resources/` 在打包后要能被读到 —— electron-vite 默认不复制它。
 建议现在就验证一次打包路径，别等 T14。
