@@ -13,6 +13,7 @@
 
 import type { TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
+import type { FileChange } from "./artifacts.ts";
 
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
@@ -58,6 +59,11 @@ export interface ToolCard {
 	readonly outcome: ToolOutcome | undefined;
 	/** 展开态显示的正文。大输出已在 daemon 侧截断，UI 不做二次防御。 */
 	readonly detail: string | undefined;
+	/**
+	 * 写文件工具（write/edit）的增删行统计，执行成功时由 session-host 从 args 算出。
+	 * 产物清单（collectArtifacts）与 +/- 徽章都以此为唯一来源。
+	 */
+	readonly change?: FileChange;
 	readonly at: number;
 }
 

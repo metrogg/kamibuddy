@@ -30,6 +30,11 @@ import type {
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
+import {
+	changeFromEditArgs,
+	changeFromWriteArgs,
+	type FileChange,
+} from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
@@ -166,6 +171,8 @@ export class SessionHost {
 	private currentRunId: string | undefined;
 	/** 已发出的工具卡片，tool_execution_end 时要在原卡上补 outcome 与 detail。 */
 	private readonly toolCards = new Map<string, ToolCard>();
+	/** write/edit 工具启动时暂存的变更统计，执行成功才落到卡片上（失败不算产物）。 */
+	private readonly pendingChanges = new Map<string, FileChange>();
 
 	private constructor(
 		private readonly session: Awaited<
@@ -565,6 +572,14 @@ export class SessionHost {
 					at: Date.now(),
 				};
 				this.toolCards.set(event.toolCallId, card);
+				// write/edit 把 args 算成变更统计暂存：成功后 +/- 徽章与产物清单都以此为准。
+				const change =
+					event.toolName === "write"
+						? changeFromWriteArgs(event.args)
+						: event.toolName === "edit"
+							? changeFromEditArgs(event.args)
+							: undefined;
+				if (change !== undefined) this.pendingChanges.set(event.toolCallId, change);
 				emit({ type: "tool_started", card });
 				return;
 			}
@@ -579,6 +594,8 @@ export class SessionHost {
 			case "tool_execution_end": {
 				const started = this.toolCards.get(event.toolCallId);
 				this.toolCards.delete(event.toolCallId);
+				const change = this.pendingChanges.get(event.toolCallId);
+				this.pendingChanges.delete(event.toolCallId);
 				const outcome: ToolOutcome = event.isError ? "error" : "ok";
 				const detail = toolResultText(event.result);
 
@@ -595,6 +612,8 @@ export class SessionHost {
 						summary: started?.summary ?? "",
 						outcome,
 						detail: detail === "" ? undefined : detail,
+						// 失败的写入不产生变更（文件可能只写了一半，统计会误导）。
+						...(outcome === "ok" && change !== undefined ? { change } : {}),
 						at: started?.at ?? Date.now(),
 					},
 				});

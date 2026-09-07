@@ -161,8 +161,7 @@ export function App(): React.JSX.Element {
 		[link.kind],
 	);
 
-	/**
-	 * 中断当前生成。
+	/** 中断当前生成。
 	 *
 	 * 失败只提示、不落进对话流：中断失败通常是「已经停了」这类无害情况，
 	 * 没必要在消息流里留一条错误。
@@ -172,6 +171,16 @@ export function App(): React.JSX.Element {
 			showToast(error instanceof Error ? error.message : String(error));
 		});
 	}, []);
+
+	/** 产物卡片点击：外部打开（系统关联程序）。预览面板接入后「预览」会改走面板。 */
+	const openArtifact = useCallback(
+		(path: string) => {
+			window.kami.openArtifact(path).catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+		},
+		[showToast],
+	);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
 	const changeInteraction = useCallback(
@@ -303,6 +312,7 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
+					onOpenArtifact={openArtifact}
 					onTodo={showTodo}
 				/>
 			)}

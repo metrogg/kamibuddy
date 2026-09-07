@@ -959,6 +959,59 @@ button {
 	overflow-wrap: anywhere;
 }
 
+/* write/edit 成功后的增删行徽章（+n / -n）。 */
+.tool-change {
+	display: flex;
+	gap: 6px;
+	flex: 0 0 auto;
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.tool-change .added {
+	color: var(--ok);
+}
+
+.tool-change .removed {
+	color: var(--danger);
+}
+
+/* ── 产物卡片区（run 结束后，消息流底部） ─────────────────────── */
+
+.artifacts {
+	margin-top: 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+	padding: 10px 12px;
+}
+
+.artifacts-header {
+	color: var(--text-dim);
+	font-size: 12px;
+	margin-bottom: 6px;
+}
+
+.artifact-card {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 10px;
+	border-radius: 8px;
+	text-align: left;
+}
+
+.artifact-card:hover {
+	background: var(--bg-hover);
+}
+
+.artifact-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .stream-pending {
 	color: var(--text-dim);
 	font-size: 13px;

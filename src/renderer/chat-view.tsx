@@ -8,7 +8,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import type { ModeDescriptor, ToolCard } from "@shared/session-events.ts";
-import { IconBack, IconChevronDown, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
+import { collectArtifacts } from "@shared/artifacts.ts";
+import { IconBack, IconChevronDown, IconDoc, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { Markdown } from "./markdown.tsx";
@@ -23,6 +24,8 @@ interface ChatViewProps {
 	readonly onSubmit: (text: string) => void;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
+	/** 点击产物卡片（v1：外部打开；预览面板接入后改成打开面板）。 */
+	readonly onOpenArtifact: (path: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -78,6 +81,13 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				<span className={`tool-dot ${outcomeClass(card.outcome)}`} />
 				<span className="tool-label">{card.label}</span>
 				<span className="tool-summary">{card.summary}</span>
+				{/* write/edit 成功后的增删行徽章（对标 WorkBuddy 的「创建 path +276 -0」）。 */}
+				{card.change !== undefined && (
+					<span className="tool-change">
+						<span className="added">+{card.change.added}</span>
+						<span className="removed">-{card.change.removed}</span>
+					</span>
+				)}
 				{expandable && <IconChevronDown size={12} className={open ? "tool-caret open" : "tool-caret"} />}
 			</button>
 			{open && card.detail !== undefined && <pre className="tool-detail">{card.detail}</pre>}
@@ -144,12 +154,16 @@ export function ChatView({
 	onSubmit,
 	onAbort,
 	onInteractionChange,
+	onOpenArtifact,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const streaming = conversation.state.isStreaming;
+	// 产物清单：从工具卡片推导（write 成功 = 产物），整会话聚合。
+	// 我们一会话一任务，「本会话产物」就是「本任务产物」（WorkBuddy 的口径）。
+	const artifacts = collectArtifacts(conversation.entries);
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
@@ -201,6 +215,27 @@ export function ChatView({
 					);
 				})}
 				{streaming && <div className="stream-pending">正在思考…</div>}
+				{/*
+					产物卡片区：本会话 write 成功的文件（collectArtifacts 从工具卡片推导，
+					规则见 shared/artifacts.ts）。流式期间不显示 —— 产物可能还没写完。
+				*/}
+				{!streaming && artifacts.length > 0 && (
+					<section className="artifacts">
+						<header className="artifacts-header">产物（{artifacts.length}）</header>
+						{artifacts.map((a) => (
+							<button
+								key={a.path}
+								type="button"
+								className="artifact-card"
+								title={`${a.path}（点击外部打开）`}
+								onClick={() => onOpenArtifact(a.path)}
+							>
+								<IconDoc size={16} />
+								<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+							</button>
+						))}
+					</section>
+				)}
 				{lastError !== undefined && <div className="entry error">{lastError}</div>}
 			</div>
 
