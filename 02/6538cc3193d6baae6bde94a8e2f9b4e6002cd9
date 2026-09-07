@@ -1,0 +1,57 @@
+src/renderer/home-view.tsx
+  s_e14366e77609a6::t_deb95cfeeeae12 12-13,40-41,44-45,47-48,104,107,109,181
+  s_e14366e77609a6::t_683fd6bfaa3390 182
+src/core/session-host.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 196-203,237-242
+src/shared/bridge.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 16,39-46
+  s_e14366e77609a6::t_73fe15ddbee7a1 47
+src/core/workspace.test.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-113
+src/core/workspace.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-85
+src/shared/ipc.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 46-56,133-142,152-155
+src/daemon/index.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 18,128-135,145,214,234-265,355-365
+  s_e14366e77609a6::t_f0d5b0ab88e519 366
+src/renderer/App.tsx
+  s_e14366e77609a6::t_deb95cfeeeae12 230
+src/core/session-host.test.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 1-74
+src/main/index.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 32,190-197
+  s_e14366e77609a6::t_10738b8611f464 198
+src/preload/index.ts
+  s_e14366e77609a6::t_deb95cfeeeae12 29-33
+src/renderer/model-menu.tsx
+  s_e14366e77609a6::t_deb95cfeeeae12 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "026538cc3193d6baae6bde94a8e2f9b4e6002cd9",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "source_scene": "agent",
+        "edit_kind": "bash",
+        "display_model_name": "Kimi-K3",
+        "tool_use_id": "6a9e710a4d41cfbf4a20f128",
+        "client_type": "ide",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_name": "RunCommand",
+        "operation_id": "6a9e710a4d41cfbf4a20f128"
+      }
+    }
+  }
+}
