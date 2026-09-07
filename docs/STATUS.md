@@ -1,7 +1,8 @@
 # 当前进度
 
-> 最后更新：2026-09-07（D3 编码完成）
-> 新接手请按顺序读：本文 → [ARCHITECTURE.md](ARCHITECTURE.md) → [../AGENTS.md](../AGENTS.md)
+> 最后更新：2026-09-07（D3 完成，策略转向通用底座优先）
+> 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
+> → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
 ## 一句话现状
 
@@ -100,8 +101,8 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 ```
 typecheck        通过
-check:deps       29 个文件，依赖方向合规
-test             70 passed（4 个文件）
+check:deps       31 个文件，依赖方向合规
+test             99 passed（5 个文件）
 smoke:sdk        3/3
 smoke:session    12/12  ← SessionHost.create() 全流程，含扩展注入实测
 真机运行          daemon 正常启动，IPC 往返正常，无报错
@@ -249,25 +250,20 @@ cd node_modules/electron && ELECTRON_MIRROR="https://npmmirror.com/mirrors/elect
 
 ## 下一步
 
-| 天 | 内容 |
-|---|---|
-| **D4-5** | 两轴落地为 `resources/` 文件：提示词组合 + 工具白名单 + 技能加载 |
-| D6-8 | 文档纵切片：HTML 流水线、体裁模板、design token、ECharts、导出、预览面板 |
-| D9 | 联网工具（WebFetch / WebSearch）+ 记忆 |
-| D10 | 打包、修 bug、演示脚本与交付文档 |
+**策略已调整**：原先按天排的纵切片计划（D4-10）改为
+**先做通用 Agent 底座，再以技能包形式一个个补专用能力**。
 
-D4-5 的第一步是建 `resources/`（目前不存在）：
+理由：pi 的技能机制（Agent Skills）本身就是「加专用能力」的正确入口，
+WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机制做好，
+后面每个垂类就是加一个技能包而非改代码；反过来先硬编码文档生成，
+等技能机制上来还得重构一遍。
 
-```
-resources/
-  scenes/<id>/prompt.md      场景骨架，include 交互片段
-  modes/<id>.md              frontmatter 声明工具白名单，正文是提示片段
-  prompts/fragments/*.md     共享片段
-```
+完整任务清单见 **[ROADMAP.md](ROADMAP.md)**，含：
+接手者硬约束、已查清的 pi API 事实（省下重复调研）、P0-P3 分级任务、排期建议。
 
-抄 WorkBuddy 的「双面文件」技巧：一份 `.md` 的 frontmatter 给加载器读工具白名单，
-正文给模板引擎读提示片段 —— 一份文件同时定义策略与内容，两者不会漂移。
-判据：**加一个体裁或模式应当只是加一个目录，零行代码改动**（AGENTS.md §3）。
+眼下第一件事是 ROADMAP 的 **T1 提示词两轴落地**：
+`core/frontmatter.ts` 已完成（29 个测试），但 `resources/` 目录还不存在，
+`SessionHost.setScene/setInteraction` 目前只改状态、不改提示词与工具集。
 
 ## 尚未做的事
 
