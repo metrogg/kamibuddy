@@ -193,6 +193,14 @@ export class SessionHost {
 		await this.session.abort();
 	}
 
+	/**
+	 * 释放底层会话。切换工作空间时旧会话整个作废——
+	 * cwd 在建会话时一次性注入工具集，不存在「换目录继续聊」。
+	 */
+	dispose(): void {
+		this.session.dispose();
+	}
+
 	async setModel(modelKey: string): Promise<void> {
 		const model = this.options.catalog.resolveModel(modelKey);
 		if (model === undefined) throw new Error("该模型不可用");
@@ -226,7 +234,12 @@ export class SessionHost {
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
 			modelId: model === undefined ? undefined : toModelKey(model.provider, model.id),
-			isStreaming: this.session.isStreaming,
+			// 不能透传 pi 的 session.isStreaming：pi 要到 finally 的 _emitAgentSettled
+			// 才把它置 false（agent-session.ts:631/1113），agent_end 事件分发时它仍是 true。
+			// 曾经透传导致 agent_end 处理中的 emitState 把 isStreaming:true 推给 renderer，
+			// 覆盖 run_finished 刚置的 false —— UI 永久卡在「正在思考…」。
+			// 用自家的 run 记账：agent_start 置、agent_end 清，时序完全由本文件控制。
+			isStreaming: this.currentRunId !== undefined,
 			// tokens 可能为 null（刚压缩完、还没下一次响应），此时不下发用量。
 			...(usage === undefined || usage.tokens === null
 				? {}

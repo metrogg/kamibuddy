@@ -9,6 +9,8 @@
 
 import { useState } from "react";
 import type { ModeDescriptor } from "@shared/session-events.ts";
+import { ModelMenu } from "./model-menu.tsx";
+import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
 	IconChevronDown,
@@ -35,22 +37,16 @@ interface HomeViewProps {
 	readonly sceneId: string;
 	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
 	readonly modelId: string | undefined;
+	/** 当前工作空间目录（session_state.cwd），工作空间选择器要用。 */
+	readonly cwd: string;
 	readonly onSceneChange: (sceneId: string) => void;
 	readonly onOpenSettings: () => void;
+	/** 主页就地操作（切模型等）失败时的提示出口。 */
+	readonly onError: (message: string) => void;
 	readonly onSubmit: (text: string) => void;
+	/** 工作空间切换成功后调用：daemon 已重置会话，App 重拉快照。 */
+	readonly onWorkspaceChanged: () => void;
 	readonly onTodo: (feature: string) => void;
-}
-
-/**
- * 模型标识只取模型名部分显示。
- *
- * 完整标识形如 `anthropic/claude-sonnet-4-6`，服务商前缀在按钮上占位太多；
- * 完整值放 title 里，鼠标悬停可见。
- */
-function shortModelName(modelId: string | undefined): string {
-	if (modelId === undefined) return "选择模型";
-	const at = modelId.indexOf("/");
-	return at === -1 ? modelId : modelId.slice(at + 1);
 }
 
 /* ── 能力入口 ────────────────────────────────────────────────────── */
@@ -105,9 +101,12 @@ export function HomeView({
 	scenes,
 	sceneId,
 	modelId,
+	cwd,
 	onSceneChange,
 	onOpenSettings,
+	onError,
 	onSubmit,
+	onWorkspaceChanged,
 	onTodo,
 }: HomeViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
@@ -179,20 +178,8 @@ export function HomeView({
 								<IconPlus size={17} />
 							</button>
 							<span className="bar-spacer" />
-							{/*
-								直接进设置页而不是在这里做一个下拉：
-								模型选择涉及「服务商是否已配 Key」的可用性判断，
-								设置页已经把这套呈现好了，再做一个简化版下拉只会两处不一致。
-							*/}
-							<button
-								type="button"
-								className="bar-btn bar-btn-text"
-								title={modelId ?? "尚未选择模型"}
-								onClick={onOpenSettings}
-							>
-								{shortModelName(modelId)}
-								<IconChevronDown size={13} />
-							</button>
+							{/* 就地快捷切换；管理与填 Key 在设置页（菜单底部有入口）。 */}
+							<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
 							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 								<IconMic size={16} />
 							</button>
@@ -211,11 +198,7 @@ export function HomeView({
 				</div>
 
 				<div className="context-row">
-					<button type="button" className="context-chip" onClick={() => onTodo("工作空间")}>
-						<IconWorkspace size={14} />
-						选择工作空间
-						<IconChevronDown size={12} />
-					</button>
+					<WorkspacePicker cwd={cwd} onChanged={onWorkspaceChanged} />
 					<button type="button" className="context-chip" onClick={() => onTodo("权限策略")}>
 						默认权限
 						<IconChevronDown size={12} />

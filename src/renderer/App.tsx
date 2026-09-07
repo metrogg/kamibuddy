@@ -107,6 +107,11 @@ export function App(): React.JSX.Element {
 		return () => window.clearTimeout(toastTimer.current);
 	}, [toast]);
 
+	/** 轻提示的统一出口（区别于 showTodo 的「待做」语义，这里是真实的错误/状态反馈）。 */
+	const showToast = useCallback((text: string) => {
+		setToast({ id: Date.now(), text });
+	}, []);
+
 	const showTodo = useCallback((feature: string) => {
 		setToast({ id: Date.now(), text: `「${feature}」待做，随版本迭代开放` });
 	}, []);
@@ -134,7 +139,7 @@ export function App(): React.JSX.Element {
 		(sceneId: string) => {
 			if (link.kind !== "ready") return;
 			window.kami.setScene(sceneId).catch((error: unknown) => {
-				setToast({ id: Date.now(), text: error instanceof Error ? error.message : String(error) });
+				showToast(error instanceof Error ? error.message : String(error));
 			});
 		},
 		[link.kind],
@@ -148,7 +153,7 @@ export function App(): React.JSX.Element {
 	 */
 	const abort = useCallback(() => {
 		window.kami.abort().catch((error: unknown) => {
-			setToast({ id: Date.now(), text: error instanceof Error ? error.message : String(error) });
+			showToast(error instanceof Error ? error.message : String(error));
 		});
 	}, []);
 
@@ -157,7 +162,7 @@ export function App(): React.JSX.Element {
 		(interactionId: string) => {
 			if (link.kind !== "ready") return;
 			window.kami.setInteraction(interactionId).catch((error: unknown) => {
-				setToast({ id: Date.now(), text: error instanceof Error ? error.message : String(error) });
+				showToast(error instanceof Error ? error.message : String(error));
 			});
 		},
 		[link.kind],
@@ -172,7 +177,7 @@ export function App(): React.JSX.Element {
 	const decideApproval = useCallback((id: string, decision: "allow" | "deny", remember: boolean) => {
 		setApprovals((queue) => queue.filter((item) => item.id !== id));
 		window.kami.respondToPermission({ id, decision, remember }).catch((error: unknown) => {
-			setToast({ id: Date.now(), text: error instanceof Error ? error.message : String(error) });
+			showToast(error instanceof Error ? error.message : String(error));
 		});
 	}, []);
 
@@ -184,6 +189,21 @@ export function App(): React.JSX.Element {
 		setReturnView(view === "chat" ? "chat" : "home");
 		setView("settings");
 	}, [view]);
+
+	/**
+	 * 工作空间切换后重拉快照。
+	 *
+	 * 换空间会让 daemon 作废旧会话并清空历史（cwd 与会话终身绑定），
+	 * 本地 reducer 里的 entries 不会自己消失，必须以服务端快照为准重同步。
+	 */
+	const resyncSnapshot = useCallback(() => {
+		window.kami
+			.snapshot()
+			.then((snapshot: SessionSnapshot) => dispatch({ type: "snapshot", snapshot }))
+			.catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+	}, []);
 
 	const firstUserText = conversation.entries.find((e) => e.role === "user")?.text;
 	const title = firstUserText === undefined ? undefined : taskTitle(firstUserText);
@@ -204,9 +224,12 @@ export function App(): React.JSX.Element {
 					scenes={conversation.availableScenes}
 					sceneId={conversation.state.sceneId}
 					modelId={conversation.state.modelId}
+					cwd={conversation.state.cwd}
 					onSceneChange={changeScene}
 					onOpenSettings={openSettings}
+					onError={showToast}
 					onSubmit={submit}
+					onWorkspaceChanged={resyncSnapshot}
 					onTodo={showTodo}
 				/>
 			)}

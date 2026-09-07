@@ -15,6 +15,7 @@ import { getConfigDir, getWorkspaceDir } from "../core/config-paths.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
 import { readPreferences, writePreferences } from "../core/preferences.ts";
 import { SessionHost } from "../core/session-host.ts";
+import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { conversationReducer, type ConversationView } from "../shared/conversation.ts";
 import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
@@ -125,6 +126,14 @@ let activeModelKey: string | undefined = readPreferences().activeModelKey;
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
+ * 当前工作空间。默认 ~/KamiBuddy（getWorkspaceDir），用户在首页可换。
+ *
+ * 会话与 cwd 终身绑定（cwd 在建会话时一次性注入 pi 的工具集），
+ * 所以换空间 = 作废当前会话重开，见 applyWorkspace。
+ */
+let workspaceDir: string = getWorkspaceDir();
+
+/**
  * 会话历史。用 shared 的 reducer 折叠，与渲染进程**同一份实现** ——
  * 各写一份会漂移，症状是「重开界面后内容变了」，极难排查（shared/conversation.ts 的注释）。
  *
@@ -133,7 +142,7 @@ let activeModelKey: string | undefined = readPreferences().activeModelKey;
 let conversation: ConversationView = {
 	state: {
 		sessionId: "",
-		cwd: getWorkspaceDir(),
+		cwd: workspaceDir,
 		sceneId: "work",
 		interactionId: "craft",
 		modelId: activeModelKey,
@@ -202,7 +211,7 @@ async function createHost(): Promise<SessionHost> {
 	}
 
 	// AI 要往这里读写文件，目录必须先存在。
-	const cwd = getWorkspaceDir();
+	const cwd = workspaceDir;
 	mkdirSync(cwd, { recursive: true });
 
 	const host = await SessionHost.create({
@@ -220,6 +229,38 @@ async function createHost(): Promise<SessionHost> {
 	// 会话建好后 sessionId / cwd 才有真值，推一次让 UI 同步。
 	emitSessionEvent({ type: "session_state", state: host.state });
 	return host;
+}
+
+/**
+ * 切换工作空间。
+ *
+ * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
+ * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
+ *
+ * 换空间 = 作废当前会话：cwd 在建会话时一次性注入 pi 的工具集，
+ * 不存在「换目录继续聊」（WorkBuddy 同样如此，它的 cwd 在 session.create 时绑定）。
+ * 旧会话的本地历史一并清掉——它属于上一个空间，留着会让 UI 显示别处的对话。
+ */
+async function applyWorkspace(dir: string): Promise<string> {
+	const error = validateWorkspacePath(dir, { configDir: getConfigDir(), appDir: process.cwd() });
+	if (error !== undefined) throw new Error(error);
+	if (dir === workspaceDir) return workspaceDir;
+	if (conversation.state.isStreaming) throw new Error("任务进行中，请先停止当前任务再切换工作空间");
+
+	mkdirSync(dir, { recursive: true });
+	workspaceDir = dir;
+
+	if (hostPromise !== undefined) {
+		(await hostPromise).dispose();
+		hostPromise = undefined;
+		conversation = {
+			...conversation,
+			state: { ...conversation.state, sessionId: "", isStreaming: false },
+			entries: [],
+		};
+	}
+	updateStateLocally({ cwd: dir });
+	return dir;
 }
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
@@ -310,6 +351,18 @@ const handlers: Record<string, Handler> = {
 		if (hostPromise !== undefined) await (await hostPromise).setModel(key);
 		else updateStateLocally({ modelId: key });
 	},
+
+	/* ── 工作空间 ───────────────────────────────────────────────────── */
+
+	[INVOKE.workspaceSnapshot]: async () => ({
+		current: workspaceDir,
+		defaultRoot: getWorkspaceDir(),
+		workspaces: listWorkspaces(getWorkspaceDir()),
+	}),
+
+	[INVOKE.createWorkspace]: async ([name]) => applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
+
+	[INVOKE.setWorkspace]: async ([path]) => applyWorkspace(path as string),
 
 	/* ── 权限审批回程 ─────────────────────────────────────────────── */
 

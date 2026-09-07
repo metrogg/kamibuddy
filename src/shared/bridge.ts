@@ -13,6 +13,7 @@ import type {
 	SaveArtifactRequest,
 	UiRequest,
 	UiResponse,
+	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
@@ -34,6 +35,15 @@ export interface KamiBridge {
 	/** 切换交互模式（ask / craft / plan / expert）。 */
 	readonly setInteraction: (interactionId: string) => Promise<void>;
 	readonly setModel: (modelId: string) => Promise<void>;
+
+	/** 拉取当前工作空间与可选列表。 */
+	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;
+	/** 在默认根下新建工作空间并切换。名称非法或重名时 reject 原因。 */
+	readonly createWorkspace: (name: string) => Promise<string>;
+	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。 */
+	readonly setWorkspace: (path: string) => Promise<string>;
+	/** 系统目录选择框。取消返回 undefined。 */
+	readonly pickWorkspaceDirectory: () => Promise<string | undefined>;
 
 	readonly respondToUi: (response: UiResponse) => Promise<void>;
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;

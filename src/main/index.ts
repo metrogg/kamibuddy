@@ -29,6 +29,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.daemonStatus,
 	INVOKE.openArtifact,
 	INVOKE.saveArtifactAs,
+	INVOKE.pickWorkspaceDirectory,
 ];
 
 let window: BrowserWindow | undefined;
@@ -185,6 +186,15 @@ function registerIpc(): void {
 			defaultPath: request.suggestedName,
 		});
 		return canceled ? undefined : filePath;
+	});
+
+	ipcMain.handle(INVOKE.pickWorkspaceDirectory, async () => {
+		if (window === undefined) return undefined;
+		const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+			title: "选择工作空间目录",
+			properties: ["openDirectory", "createDirectory"],
+		});
+		return canceled ? undefined : filePaths[0];
 	});
 }
 

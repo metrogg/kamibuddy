@@ -45,3 +45,6 @@ Desktop.ini
 *.temp
 tmp/
 temp/
+
+# Claude 系会话的本地产物（个人设置与会话工件，不入库）
+.claude/

@@ -26,6 +26,11 @@ const bridge: KamiBridge = {
 	setInteraction: (interactionId) => ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
 
+	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
+	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),
+	setWorkspace: (path) => ipcRenderer.invoke(INVOKE.setWorkspace, path),
+	pickWorkspaceDirectory: () => ipcRenderer.invoke(INVOKE.pickWorkspaceDirectory),
+
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
 	respondToPermission: (response) => ipcRenderer.invoke(INVOKE.permissionResponse, response),
 

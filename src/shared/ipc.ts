@@ -43,6 +43,17 @@ export const INVOKE = {
 	setInteraction: "session:set-interaction",
 	/** 切换模型。 */
 	setModel: "session:set-model",
+	/** 拉取当前工作空间与可选列表（默认根 + 已有子目录）。 */
+	workspaceSnapshot: "workspace:snapshot",
+	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
+	createWorkspace: "workspace:create",
+	/** 切换到指定目录。目录经 daemon 校验（配置目录/应用目录会拒）。返回生效的目录路径。 */
+	setWorkspace: "workspace:set",
+	/**
+	 * 弹出系统目录选择框。由 main 本地应答（要用 Electron dialog）。
+	 * 用户取消返回 undefined。
+	 */
+	pickWorkspaceDirectory: "workspace:pick-directory",
 	/** 应答 daemon 发来的 UI 请求（确认框/选择框/输入框）。 */
 	uiResponse: "ui:response",
 	/** 应答权限审批。 */
@@ -119,6 +130,16 @@ export type DaemonStatus =
 	| { readonly kind: "ready" }
 	| { readonly kind: "down"; readonly reason: string };
 
+/** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
+export interface WorkspaceSnapshot {
+	/** 当前生效的工作空间目录。 */
+	readonly current: string;
+	/** 默认根目录（「新建工作空间」都建在它下面）。 */
+	readonly defaultRoot: string;
+	/** 默认根下已有的工作空间目录列表。 */
+	readonly workspaces: readonly string[];
+}
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -128,6 +149,10 @@ export interface InvokeMap {
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
+	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
+	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
+	[INVOKE.setWorkspace]: { args: [path: string]; result: string };
+	[INVOKE.pickWorkspaceDirectory]: { args: []; result: string | undefined };
 	[INVOKE.uiResponse]: { args: [UiResponse]; result: void };
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
