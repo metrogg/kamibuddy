@@ -11,17 +11,39 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { getConfigDir, getResourcesDir, getWorkspaceDir } from "../core/config-paths.ts";
+import { join } from "node:path";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
+import {
+	getConfigDir,
+	getResourcesDir,
+	getWorkspaceDir,
+} from "../core/config-paths.ts";
+import { EventLog } from "../core/event-log.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
+import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
 import { readPreferences, writePreferences } from "../core/preferences.ts";
-import { composePrompt, formatSkillsSection, type SkillDescriptor } from "../core/prompt-composer.ts";
+import {
+	composePrompt,
+	formatSkillsSection,
+	type SkillDescriptor,
+} from "../core/prompt-composer.ts";
 import { loadResources, toDescriptors } from "../core/resources.ts";
 import { SessionHost } from "../core/session-host.ts";
-import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
+import {
+	createWorkspace,
+	listWorkspaces,
+	validateWorkspacePath,
+} from "../core/workspace.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
-import { conversationReducer, type ConversationView } from "../shared/conversation.ts";
-import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
+import {
+	conversationReducer,
+	type ConversationView,
+} from "../shared/conversation.ts";
+import type {
+	DaemonOutbound,
+	DaemonRequest,
+} from "../shared/daemon-protocol.ts";
 import { isDaemonRequest } from "../shared/daemon-protocol.ts";
 import {
 	INVOKE,
@@ -30,8 +52,12 @@ import {
 	type PermissionResponse,
 	type PromptRequest,
 } from "../shared/ipc.ts";
-import type { ModeDescriptor, SessionEvent, SessionState } from "../shared/session-events.ts";
-import type { CustomProviderInput } from "../shared/settings.ts";
+import type {
+	ModeDescriptor,
+	SessionEvent,
+	SessionState,
+} from "../shared/session-events.ts";
+import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 
 /* ── 与父进程的通道 ───────────────────────────────────────────────── */
 
@@ -53,7 +79,9 @@ function requireParentPort(): ParentPort {
 	const port = (process as unknown as { parentPort?: ParentPort }).parentPort;
 	if (port === undefined) {
 		// 直接用 node 跑本文件会走到这里。不静默降级——这属于用错了入口。
-		throw new Error("daemon 必须在 Electron utilityProcess 中启动（process.parentPort 不存在）");
+		throw new Error(
+			"daemon 必须在 Electron utilityProcess 中启动（process.parentPort 不存在）",
+		);
 	}
 	return port;
 }
@@ -110,6 +138,36 @@ function getCatalog(): Promise<ModelCatalog> {
  */
 let activeModelKey: string | undefined = readPreferences().activeModelKey;
 
+/** 内置技能目录（resources/skills/，随应用分发）。 */
+const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
+
+/**
+ * 供设置页展示的技能清单。
+ *
+ * 独立于 SessionHost 的加载（宿主是懒建的，设置页要在第一次发消息前就能看）。
+ * 加载失败不抛：设置页不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
+ */
+function listSkillsForSettings(): SkillInfo[] {
+	try {
+		const { skills } = loadSkills({
+			cwd: getWorkspaceDir(),
+			agentDir: getConfigDir(),
+			skillPaths: [BUILTIN_SKILLS_DIR],
+			includeDefaults: true,
+		});
+		return skills.map((s) => ({
+			name: s.name,
+			description: s.description,
+			filePath: s.filePath,
+			origin: s.filePath.startsWith(BUILTIN_SKILLS_DIR) ? "builtin" : "user",
+			disableModelInvocation: s.disableModelInvocation,
+		}));
+	} catch (error) {
+		console.error("技能加载失败（设置页列表为空）：", error);
+		return [];
+	}
+}
+
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
@@ -143,10 +201,42 @@ let conversation: ConversationView = {
 	availableModes: INTERACTIONS,
 };
 
-/** 事件出口：同时折叠进本地历史并推给渲染进程。顺序无关，但必须都做。 */
+/* ── 可观测性 ─────────────────────────────────────────────────────── */
+
+/**
+ * 结构化事件日志（JSONL 落盘）+ 诊断页统计聚合。
+ *
+ * daemon 没有界面，console 只打到终端，终端一关现场就没了——
+ * 这两件是「出问题时唯一的现场证据」（WorkBuddy 把启动即可观测列为 P0）。
+ * 聚合口径是进程内累计，不做历史持久化（core/observability.ts 的注释）。
+ */
+const eventLog = new EventLog(join(getConfigDir(), "logs"));
+const observability = new ObservabilityStore();
+
+/** 最近一次组装的系统提示词 token 估算（compose 时更新），供上下文成分统计。 */
+let lastSystemPromptTokens = 0;
+
+/** 事件出口：折叠进本地历史、推给渲染进程、喂给统计与日志。四件事都必须做。 */
 function emitSessionEvent(event: SessionEvent): void {
 	conversation = conversationReducer(conversation, { type: "event", event });
+	observability.record(event);
+	eventLog.append({ kind: "session_event", event: sanitizeForLog(event) });
 	post({ kind: "push", channel: PUSH.sessionEvent, payload: event });
+}
+
+/**
+ * 落盘前把流式增量替换成长度——逐字 delta 全记会把日志撑爆且没有信息量，
+ * 真正要查的是事件序列与终态，不是每个字符。
+ */
+function sanitizeForLog(event: SessionEvent): unknown {
+	if (
+		event.type === "assistant_text_delta" ||
+		event.type === "assistant_thinking_delta" ||
+		event.type === "tool_progress"
+	) {
+		return { ...event, delta: `(${event.delta.length} chars)` };
+	}
+	return event;
 }
 
 /* ── 权限审批：daemon 发问 → 渲染进程作答 ─────────────────────────── */
@@ -159,13 +249,22 @@ function emitSessionEvent(event: SessionEvent): void {
  * 比让它等着更糟。窗口关闭时 Electron 会 quit 并杀掉 daemon，
  * 所以不存在「永久悬挂」的实际后果。
  */
-const pendingApprovals = new Map<string, (response: PermissionResponse) => void>();
+const pendingApprovals = new Map<
+	string,
+	(response: PermissionResponse) => void
+>();
 
-function requestApproval(request: Omit<PermissionRequest, "id">): Promise<PermissionResponse> {
+function requestApproval(
+	request: Omit<PermissionRequest, "id">,
+): Promise<PermissionResponse> {
 	const id = randomUUID();
 	return new Promise<PermissionResponse>((resolve) => {
 		pendingApprovals.set(id, resolve);
-		post({ kind: "push", channel: PUSH.permissionRequest, payload: { id, ...request } });
+		post({
+			kind: "push",
+			channel: PUSH.permissionRequest,
+			payload: { id, ...request },
+		});
 	});
 }
 
@@ -194,10 +293,14 @@ async function createHost(): Promise<SessionHost> {
 	// 没选模型时不擅自挑一个：用户不知道在用哪家、也不知道会产生谁的费用。
 	// 明确指路比静默可用更好。
 	if (activeModelKey === undefined) {
-		throw new Error("还没有选择模型。请点左下角设置，为任一服务商填写 API Key 并选择模型。");
+		throw new Error(
+			"还没有选择模型。请点左下角设置，为任一服务商填写 API Key 并选择模型。",
+		);
 	}
 	if (!catalog.isUsable(activeModelKey)) {
-		throw new Error("选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型。");
+		throw new Error(
+			"选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型。",
+		);
 	}
 
 	// playground 的 cwd 为 undefined；正式空间才需要在建会话前确保目录存在
@@ -221,7 +324,13 @@ async function createHost(): Promise<SessionHost> {
 		extensions: [
 			...(cwd === undefined
 				? []
-				: [createPermissionGate({ paths: { workspaceDir: cwd, configDir: getConfigDir() }, cwd, requestApproval })]),
+				: [
+						createPermissionGate({
+							paths: { workspaceDir: cwd, configDir: getConfigDir() },
+							cwd,
+							requestApproval,
+						}),
+					]),
 			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
 			// 两轴的权威状态经 conversation 折叠镜像读取；技能段取自宿主的 loader 发现结果。
 			createPromptSwitch({
@@ -233,17 +342,23 @@ async function createHost(): Promise<SessionHost> {
 					const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
 					const mode = RESOURCES.modes.find((m) => m.id === interactionId);
 					if (scene === undefined || mode === undefined) {
-						throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
+						throw new Error(
+							`场景或交互模式不存在：${sceneId} / ${interactionId}`,
+						);
 					}
 					let skills: SkillDescriptor[] = [];
-					if (hostPromise !== undefined) skills = [...(await hostPromise).skillDescriptors];
-					return composePrompt({
+					if (hostPromise !== undefined)
+						skills = [...(await hostPromise).skillDescriptors];
+					const prompt = composePrompt({
 						sceneBody: scene.body,
 						modeBody: mode.body,
 						skillsSection: formatSkillsSection(skills),
 						// playground 无工作目录，提示词里如实说明，免得模型去找一个不存在的路径。
 						cwd: cwd ?? "（未选择工作空间，无本地文件目录）",
 					});
+					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
+					lastSystemPromptTokens = estimateTokens(prompt);
+					return prompt;
 				},
 			}),
 		],
@@ -284,11 +399,15 @@ async function applyWorkspace(dir: string): Promise<string | undefined> {
 	// 空串 = playground，无需路径校验（本就不绑定任何目录）。
 	const next = dir === "" ? undefined : dir;
 	if (next !== undefined) {
-		const error = validateWorkspacePath(next, { configDir: getConfigDir(), appDir: process.cwd() });
+		const error = validateWorkspacePath(next, {
+			configDir: getConfigDir(),
+			appDir: process.cwd(),
+		});
 		if (error !== undefined) throw new Error(error);
 	}
 	if (next === workspaceDir) return workspaceDir;
-	if (conversation.state.isStreaming) throw new Error("任务进行中，请先停止当前任务再切换工作空间");
+	if (conversation.state.isStreaming)
+		throw new Error("任务进行中，请先停止当前任务再切换工作空间");
 
 	if (next !== undefined) mkdirSync(next, { recursive: true });
 	workspaceDir = next;
@@ -308,10 +427,15 @@ const handlers: Record<string, Handler> = {
 
 	/* ── 设置：已可用 ─────────────────────────────────────────────── */
 
-	[INVOKE.settingsSnapshot]: async () => (await getCatalog()).snapshot(activeModelKey),
+	[INVOKE.settingsSnapshot]: async () => {
+		const snapshot = await (await getCatalog()).snapshot(activeModelKey);
+		return { ...snapshot, skills: listSkillsForSettings() };
+	},
 
 	[INVOKE.setApiKey]: async ([providerId, apiKey]) => {
-		await (await getCatalog()).setApiKey(providerId as string, apiKey as string);
+		await (
+			await getCatalog()
+		).setApiKey(providerId as string, apiKey as string);
 	},
 
 	[INVOKE.removeApiKey]: async ([providerId]) => {
@@ -319,18 +443,34 @@ const handlers: Record<string, Handler> = {
 	},
 
 	[INVOKE.saveCustomProvider]: async ([input, apiKey]) => {
-		await (await getCatalog()).saveCustomProvider(input as CustomProviderInput, apiKey as string | undefined);
+		await (
+			await getCatalog()
+		).saveCustomProvider(
+			input as CustomProviderInput,
+			apiKey as string | undefined,
+		);
 	},
 
 	[INVOKE.deleteCustomProvider]: async ([providerId]) => {
 		await (await getCatalog()).deleteCustomProvider(providerId as string);
 	},
 
-	[INVOKE.readCustomProvider]: async ([providerId]) => (await getCatalog()).readCustomProvider(providerId as string),
+	[INVOKE.readCustomProvider]: async ([providerId]) =>
+		(await getCatalog()).readCustomProvider(providerId as string),
 
 	[INVOKE.refreshCatalog]: async () => {
 		await (await getCatalog()).refreshCatalog();
 	},
+
+	/* ── 诊断 ─────────────────────────────────────────────────────── */
+
+	[INVOKE.statsSnapshot]: async () =>
+		observability.snapshot({
+			entries: conversation.entries,
+			systemPromptTokens: lastSystemPromptTokens,
+			contextUsage: conversation.state.contextUsage,
+			logDir: eventLog.dir,
+		}),
 
 	/* ── 会话 ─────────────────────────────────────────────────────── */
 
@@ -357,7 +497,8 @@ const handlers: Record<string, Handler> = {
 	 * 会话本体是懒建的（getHost），这里只需作废 + 清空，下次 prompt 自然建新的。
 	 */
 	[INVOKE.newTask]: async () => {
-		if (conversation.state.isStreaming) throw new Error("任务进行中，请先停止当前任务");
+		if (conversation.state.isStreaming)
+			throw new Error("任务进行中，请先停止当前任务");
 		await resetSession();
 		updateStateLocally({});
 	},
@@ -408,7 +549,8 @@ const handlers: Record<string, Handler> = {
 		workspaces: listWorkspaces(getWorkspaceDir()),
 	}),
 
-	[INVOKE.createWorkspace]: async ([name]) => applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
+	[INVOKE.createWorkspace]: async ([name]) =>
+		applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
 
 	[INVOKE.setWorkspace]: async ([path]) => applyWorkspace(path as string),
 
@@ -440,7 +582,11 @@ const handlers: Record<string, Handler> = {
  * 但真被选中时必须拒绝：静默接受会让用户以为切过去了，
  * 而实际提示词与工具集没变（AGENTS.md §7）。
  */
-function requireReady(options: readonly ModeDescriptor[], id: string, kind: string): string {
+function requireReady(
+	options: readonly ModeDescriptor[],
+	id: string,
+	kind: string,
+): string {
 	const found = options.find((o) => o.id === id);
 	if (found === undefined) throw new Error(`未知${kind}：${id}`);
 	if (!found.ready) throw new Error(`「${found.label}」${kind}还未实现`);
@@ -449,17 +595,27 @@ function requireReady(options: readonly ModeDescriptor[], id: string, kind: stri
 
 /** 会话尚未建立时更新状态并推给 UI。会话建立后一律由 SessionHost 发权威状态。 */
 function updateStateLocally(changes: Partial<SessionState>): void {
-	emitSessionEvent({ type: "session_state", state: { ...conversation.state, ...changes } });
+	emitSessionEvent({
+		type: "session_state",
+		state: { ...conversation.state, ...changes },
+	});
 }
 
 async function dispatch(request: DaemonRequest): Promise<void> {
-	// 每个请求记一行。daemon 没有界面，出问题时这是唯一的现场证据
+	// 每个请求记一行（终端 + 落盘）。daemon 没有界面，出问题时这是唯一的现场证据
 	// （WorkBuddy 把「启动即可观测」列为 P0，同一个考虑）。
+	// 只记通道名不记参数：参数里可能有 API Key（shared/ipc.ts 的 setApiKey 约定）。
 	console.log(`← ${request.channel}`);
+	eventLog.append({ kind: "ipc", channel: request.channel });
 
 	const handler = handlers[request.channel];
 	if (handler === undefined) {
-		post({ kind: "response", id: request.id, ok: false, error: `未知通道：${request.channel}` });
+		post({
+			kind: "response",
+			id: request.id,
+			ok: false,
+			error: `未知通道：${request.channel}`,
+		});
 		return;
 	}
 	try {
@@ -467,7 +623,14 @@ async function dispatch(request: DaemonRequest): Promise<void> {
 		post({ kind: "response", id: request.id, ok: true, value });
 	} catch (error) {
 		// 只回一句给用户看的话；stack 留在 daemon 侧日志里（shared/daemon-protocol.ts 的约定）。
-		if (error instanceof Error && error.stack !== undefined) console.error(error.stack);
+		const stack = error instanceof Error ? error.stack : undefined;
+		if (stack !== undefined) console.error(stack);
+		eventLog.append({
+			kind: "ipc_error",
+			channel: request.channel,
+			message: error instanceof Error ? error.message : String(error),
+			stack,
+		});
 		post({
 			kind: "response",
 			id: request.id,
@@ -486,6 +649,35 @@ parentPort.on("message", (message) => {
 	void dispatch(frame);
 });
 
+/* ── 进程级崩溃取证 ───────────────────────────────────────────────── */
+
+/*
+ * 崩溃前的最后一条日志往往正是最需要的那条，所以这里同步落盘再退出
+ * （EventLog 用同步 appendFileSync 就是为这个场景选的）。
+ * 不吞异常：记完照样退出，让 main 的 PUSH.daemonDown 把「已断开」显示给用户
+ * （AGENTS.md §7：让它响亮地失败）。
+ */
+process.on("uncaughtException", (error) => {
+	eventLog.append({
+		kind: "fatal",
+		why: "uncaughtException",
+		message: error.message,
+		stack: error.stack,
+	});
+	console.error(error.stack ?? error.message);
+	process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+	eventLog.append({
+		kind: "fatal",
+		why: "unhandledRejection",
+		message: reason instanceof Error ? reason.message : String(reason),
+		stack: reason instanceof Error ? reason.stack : undefined,
+	});
+	console.error(reason);
+});
+
 /* ── 启动 ─────────────────────────────────────────────────────────── */
 
 function start(): void {
@@ -493,8 +685,16 @@ function start(): void {
 	// Electron 内的 Node-API 兼容性已在 D2 实测确认（ARCHITECTURE.md §4.1），
 	// 原先那段 dlopen 计数探针已移除 —— 静态导入先于模块体执行，钩子挂不上，
 	// 读数恒为 0，留着只会误导人。
-	console.log(`daemon 启动：node ${process.version} on ${process.platform}-${process.arch}`);
+	console.log(
+		`daemon 启动：node ${process.version} on ${process.platform}-${process.arch}`,
+	);
 	console.log(`配置目录：${getConfigDir()}`);
+	eventLog.append({
+		kind: "process",
+		event: "daemon_start",
+		node: process.version,
+		platform: `${process.platform}-${process.arch}`,
+	});
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，
 	// 而不是让 daemon 起不来、界面永久卡在「正在启动」。
@@ -506,6 +706,14 @@ try {
 } catch (error) {
 	// 启动失败不能静默：父进程会一直等 ready，UI 停在 loading。
 	console.error("daemon 启动失败");
-	console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+	console.error(
+		error instanceof Error ? (error.stack ?? error.message) : String(error),
+	);
+	eventLog.append({
+		kind: "fatal",
+		why: "startup",
+		message: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined,
+	});
 	process.exit(1);
 }

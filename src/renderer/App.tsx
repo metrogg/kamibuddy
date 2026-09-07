@@ -11,30 +11,39 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { PermissionRequest } from "@shared/ipc.ts";
 import type { SessionEvent, SessionSnapshot } from "@shared/session-events.ts";
-import { conversationReducer, initialConversation } from "@shared/conversation.ts";
+import {
+	conversationReducer,
+	initialConversation,
+} from "@shared/conversation.ts";
 import { Sidebar, type LinkState } from "./sidebar.tsx";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
+import { DiagnosticsView } from "./diagnostics-view.tsx";
 import { Toast, type ToastMessage } from "./toast.tsx";
 
-type View = "home" | "chat" | "settings";
+type View = "home" | "chat" | "settings" | "diagnostics";
 
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
 
 function taskTitle(text: string): string {
 	const oneLine = text.replace(/\s+/g, " ").trim();
-	return oneLine.length > TITLE_MAX ? `${oneLine.slice(0, TITLE_MAX)}…` : oneLine;
+	return oneLine.length > TITLE_MAX
+		? `${oneLine.slice(0, TITLE_MAX)}…`
+		: oneLine;
 }
 
 export function App(): React.JSX.Element {
 	const [link, setLink] = useState<LinkState>({ kind: "connecting" });
-	const [conversation, dispatch] = useReducer(conversationReducer, initialConversation);
+	const [conversation, dispatch] = useReducer(
+		conversationReducer,
+		initialConversation,
+	);
 	const [view, setView] = useState<View>("home");
 	/** 关闭设置页后要回到的视图。见下方 openSettings 的理由。 */
-	const [returnView, setReturnView] = useState<Exclude<View, "settings">>("home");
+	const [returnView, setReturnView] = useState<"home" | "chat">("home");
 	const [lastError, setLastError] = useState<string | undefined>(undefined);
 	const [toast, setToast] = useState<ToastMessage | undefined>(undefined);
 	const toastTimer = useRef<number | undefined>(undefined);
@@ -54,7 +63,8 @@ export function App(): React.JSX.Element {
 		let activated = false;
 
 		const fail = (error: unknown): void => {
-			if (!disposed) setLastError(error instanceof Error ? error.message : String(error));
+			if (!disposed)
+				setLastError(error instanceof Error ? error.message : String(error));
 		};
 
 		const activate = (): void => {
@@ -70,15 +80,19 @@ export function App(): React.JSX.Element {
 		};
 
 		// 先注册监听，再主动查状态：顺序反了会漏掉两者之间到达的事件。
-		const offEvent = window.kami.onSessionEvent((event: SessionEvent) => dispatch({ type: "event", event }));
+		const offEvent = window.kami.onSessionEvent((event: SessionEvent) =>
+			dispatch({ type: "event", event }),
+		);
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
 			if (!disposed) setLink({ kind: "down", reason });
 		});
 		const offReady = window.kami.onDaemonReady(activate);
 		// 追加而非替换：并行工具可能同时来多条，覆盖会让后来的工具永久挂住。
-		const offPermission = window.kami.onPermissionRequest((request: PermissionRequest) => {
-			if (!disposed) setApprovals((queue) => [...queue, request]);
-		});
+		const offPermission = window.kami.onPermissionRequest(
+			(request: PermissionRequest) => {
+				if (!disposed) setApprovals((queue) => [...queue, request]);
+			},
+		);
 
 		// 消除竞态：daemon 可能在监听器注册之前就已就绪，那条推送已经丢了。
 		window.kami
@@ -86,7 +100,8 @@ export function App(): React.JSX.Element {
 			.then((status) => {
 				if (disposed) return;
 				if (status.kind === "ready") activate();
-				else if (status.kind === "down") setLink({ kind: "down", reason: status.reason });
+				else if (status.kind === "down")
+					setLink({ kind: "down", reason: status.reason });
 			})
 			.catch(fail);
 
@@ -174,12 +189,17 @@ export function App(): React.JSX.Element {
 	 * 无论应答成功与否都出队：失败通常意味着 daemon 已经不在了（进程退出、
 	 * 或该请求已被别处应答），把弹窗留在屏幕上只会让用户反复点击一个死按钮。
 	 */
-	const decideApproval = useCallback((id: string, decision: "allow" | "deny", remember: boolean) => {
-		setApprovals((queue) => queue.filter((item) => item.id !== id));
-		window.kami.respondToPermission({ id, decision, remember }).catch((error: unknown) => {
-			showToast(error instanceof Error ? error.message : String(error));
-		});
-	}, []);
+	const decideApproval = useCallback(
+		(id: string, decision: "allow" | "deny", remember: boolean) => {
+			setApprovals((queue) => queue.filter((item) => item.id !== id));
+			window.kami
+				.respondToPermission({ id, decision, remember })
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		[],
+	);
 
 	/**
 	 * 工作空间切换后重拉快照。
@@ -190,7 +210,9 @@ export function App(): React.JSX.Element {
 	const resyncSnapshot = useCallback(() => {
 		window.kami
 			.snapshot()
-			.then((snapshot: SessionSnapshot) => dispatch({ type: "snapshot", snapshot }))
+			.then((snapshot: SessionSnapshot) =>
+				dispatch({ type: "snapshot", snapshot }),
+			)
 			.catch((error: unknown) => {
 				showToast(error instanceof Error ? error.message : String(error));
 			});
@@ -231,8 +253,17 @@ export function App(): React.JSX.Element {
 		setView("settings");
 	}, [view]);
 
-	const firstUserText = conversation.entries.find((e) => e.role === "user")?.text;
-	const title = firstUserText === undefined ? undefined : taskTitle(firstUserText);
+	/** 诊断页同理：记住来路，关闭后回去。 */
+	const openDiagnostics = useCallback(() => {
+		setReturnView(view === "chat" ? "chat" : "home");
+		setView("diagnostics");
+	}, [view]);
+
+	const firstUserText = conversation.entries.find(
+		(e) => e.role === "user",
+	)?.text;
+	const title =
+		firstUserText === undefined ? undefined : taskTitle(firstUserText);
 
 	return (
 		<div className="app">
@@ -242,6 +273,7 @@ export function App(): React.JSX.Element {
 				onNewTask={newTask}
 				onOpenTask={() => setView("chat")}
 				onOpenSettings={openSettings}
+				onOpenDiagnostics={openDiagnostics}
 				onTodo={showTodo}
 			/>
 			{view === "home" && (
@@ -273,7 +305,12 @@ export function App(): React.JSX.Element {
 				/>
 			)}
 			{/* 设置页自持滚动与返回按钮，不复用对话页的框架。 */}
-			{view === "settings" && <SettingsView onClose={() => setView(returnView)} />}
+			{view === "settings" && (
+				<SettingsView onClose={() => setView(returnView)} />
+			)}
+			{view === "diagnostics" && (
+				<DiagnosticsView onClose={() => setView(returnView)} />
+			)}
 			{/*
 				一次只展示队首那条：并行工具可能同时来好几条，
 				全都堆在屏幕上用户无从判断哪条对应哪个操作。

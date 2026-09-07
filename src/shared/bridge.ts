@@ -15,6 +15,7 @@ import type {
 	UiResponse,
 	WorkspaceSnapshot,
 } from "./ipc.ts";
+import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
 
@@ -51,7 +52,9 @@ export interface KamiBridge {
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;
 
 	readonly openArtifact: (path: string) => Promise<void>;
-	readonly saveArtifactAs: (request: SaveArtifactRequest) => Promise<string | undefined>;
+	readonly saveArtifactAs: (
+		request: SaveArtifactRequest,
+	) => Promise<string | undefined>;
 
 	/* ── 设置 ─────────────────────────────────────────────────────── */
 
@@ -59,16 +62,32 @@ export interface KamiBridge {
 	readonly setApiKey: (providerId: string, apiKey: string) => Promise<void>;
 	readonly removeApiKey: (providerId: string) => Promise<void>;
 	/** apiKey 省略表示复用已存的凭据（编辑时只改 baseUrl，不必重输密钥）。 */
-	readonly saveCustomProvider: (input: CustomProviderInput, apiKey?: string) => Promise<void>;
+	readonly saveCustomProvider: (
+		input: CustomProviderInput,
+		apiKey?: string,
+	) => Promise<void>;
 	readonly deleteCustomProvider: (providerId: string) => Promise<void>;
-	readonly readCustomProvider: (providerId: string) => Promise<CustomProviderInput | undefined>;
+	readonly readCustomProvider: (
+		providerId: string,
+	) => Promise<CustomProviderInput | undefined>;
 	readonly refreshCatalog: () => Promise<void>;
 
-	readonly onSessionEvent: (listener: (event: SessionEvent) => void) => Unsubscribe;
+	/* ── 诊断 ─────────────────────────────────────────────────────── */
+
+	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
+	readonly statsSnapshot: () => Promise<ObservabilitySnapshot>;
+
+	readonly onSessionEvent: (
+		listener: (event: SessionEvent) => void,
+	) => Unsubscribe;
 	readonly onUiRequest: (listener: (request: UiRequest) => void) => Unsubscribe;
-	readonly onPermissionRequest: (listener: (request: PermissionRequest) => void) => Unsubscribe;
+	readonly onPermissionRequest: (
+		listener: (request: PermissionRequest) => void,
+	) => Unsubscribe;
 	readonly onDaemonReady: (listener: () => void) => Unsubscribe;
-	readonly onDaemonDown: (listener: (info: { readonly reason: string }) => void) => Unsubscribe;
+	readonly onDaemonDown: (
+		listener: (info: { readonly reason: string }) => void,
+	) => Unsubscribe;
 }
 
 declare global {

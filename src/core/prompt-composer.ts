@@ -11,9 +11,13 @@
  *      正文是我们自己的资源文件，出现槽位就是笔误。
  */
 
+import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+
 export interface SkillDescriptor {
 	readonly name: string;
 	readonly description: string;
+	/** SKILL.md 的绝对路径 —— 模型用 read 工具按需加载全文就靠它。 */
+	readonly filePath: string;
 }
 
 export interface ComposePromptInput {
@@ -65,11 +69,11 @@ export function composePrompt(input: ComposePromptInput): string {
 /**
  * 技能清单段。无技能返回空串——骨架里 {{skills}} 所在行会被压平，零 token。
  *
- * 注意：pi 默认会在 customPrompt 路径自动附加技能清单，但经 before_agent_start
- * 整体替换后**不会**，所以这份清单必须由这里自己提供（见 ROADMAP T1）。
+ * 格式直接委托 pi 的 formatSkillsForPrompt（agentskills.io 规范的 XML 形态）：
+ * 我们的 before_agent_start 整体替换让 pi 不再自动附加这段，但「模型如何理解
+ * 技能清单」的格式决定权仍应归 pi——它升级格式（比如改调用约定）时我们零改动。
  */
 export function formatSkillsSection(skills: readonly SkillDescriptor[]): string {
 	if (skills.length === 0) return "";
-	const lines = skills.map((s) => `- ${s.name}：${s.description}`);
-	return ["可用技能：", ...lines].join("\n");
+	return formatSkillsForPrompt(skills as never[]).trim();
 }

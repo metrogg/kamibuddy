@@ -123,6 +123,15 @@ check("modelId 与选中的一致", state.modelId === MODEL_KEY, `modelId = ${st
 check("初始不在流式中", !state.isStreaming, `isStreaming = ${state.isStreaming}`);
 check("两轴状态保留", state.sceneId === "work" && state.interactionId === "craft", `${state.sceneId} / ${state.interactionId}`);
 
+/* ── 技能发现（T2 的验收：内置技能经 additionalSkillPaths 进提示词链路）──── */
+
+const skillNames = host.skillDescriptors.map((s) => s.name);
+check(
+	"内置技能被发现（resources/skills/meeting-notes）",
+	skillNames.includes("meeting-notes"),
+	`发现技能：${skillNames.join(", ") || "(无)"}`,
+);
+
 /* ── 两轴切换会回推状态 ──────────────────────────────────────────── */
 
 const before = events.length;

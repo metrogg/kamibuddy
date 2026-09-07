@@ -6,7 +6,7 @@
  * renderer 只拿快照、不做二次计算——两端各算一份必然漂移（同 conversation.ts 的理由）。
  */
 
-import type { RunId } from "./session-events.ts";
+import type { RunId, ToolOutcome } from "./session-events.ts";
 
 /** 一次或多次模型调用的 token 用量。cost 为美元总计。 */
 export interface TokenUsage {
@@ -19,7 +19,14 @@ export interface TokenUsage {
 }
 
 export function emptyUsage(): TokenUsage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: 0,
+	};
 }
 
 /**
@@ -33,6 +40,19 @@ export function cacheHitRate(usage: TokenUsage): number | undefined {
 }
 
 export type RunStatus = "running" | "ok" | "error";
+
+/** 一次工具执行的时间跨度，诊断页的 run 时间线（泳道）靠它画。 */
+export interface ToolSpan {
+	readonly toolName: string;
+	/** 面向用户的中文标签，与 ToolCard.label 同源。 */
+	readonly label: string;
+	/** 一行摘要（如文件路径），时间线悬停提示用。 */
+	readonly summary: string;
+	readonly startedAt: number;
+	/** 进行中为 undefined。 */
+	readonly endedAt: number | undefined;
+	readonly outcome: ToolOutcome | undefined;
+}
 
 /** 一次用户提问到 agent 停止的完整过程（与 SessionEvent 的 RunId 对应）。 */
 export interface RunRecord {
@@ -51,6 +71,8 @@ export interface RunRecord {
 	readonly usage: TokenUsage | undefined;
 	readonly toolCalls: number;
 	readonly toolErrors: number;
+	/** 该 run 内的工具执行时间线（开始顺序）。供诊断页画泳道。 */
+	readonly toolSpans: readonly ToolSpan[];
 }
 
 /** 单个工具维度的聚合统计。 */
@@ -93,7 +115,8 @@ export interface ObservabilitySnapshot {
 	/** 上下文成分估算。还没有任何会话内容时为 undefined。 */
 	readonly composition: ContextComposition | undefined;
 	/** 当前上下文占用（同 SessionState.contextUsage）。 */
-	readonly contextUsage: { readonly usedTokens: number; readonly maxTokens: number } | undefined;
+	readonly contextUsage:
+		{ readonly usedTokens: number; readonly maxTokens: number } | undefined;
 	/** 事件日志目录（JSONL 落盘位置），诊断页「打开日志目录」按钮用。 */
 	readonly logDir: string;
 }

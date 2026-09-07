@@ -11,8 +11,12 @@ import type { KamiBridge, Unsubscribe } from "../shared/bridge.ts";
 import { INVOKE, PUSH } from "../shared/ipc.ts";
 
 /** 订阅一个推送通道，剥掉 IpcRendererEvent —— renderer 不需要它。 */
-function subscribe<T>(channel: string, listener: (payload: T) => void): Unsubscribe {
-	const wrapped = (_event: IpcRendererEvent, payload: T): void => listener(payload);
+function subscribe<T>(
+	channel: string,
+	listener: (payload: T) => void,
+): Unsubscribe {
+	const wrapped = (_event: IpcRendererEvent, payload: T): void =>
+		listener(payload);
 	ipcRenderer.on(channel, wrapped);
 	return () => ipcRenderer.off(channel, wrapped);
 }
@@ -24,31 +28,43 @@ const bridge: KamiBridge = {
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
 	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
 	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
-	setInteraction: (interactionId) => ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
+	setInteraction: (interactionId) =>
+		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
 
 	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
 	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),
 	setWorkspace: (path) => ipcRenderer.invoke(INVOKE.setWorkspace, path),
-	pickWorkspaceDirectory: () => ipcRenderer.invoke(INVOKE.pickWorkspaceDirectory),
+	pickWorkspaceDirectory: () =>
+		ipcRenderer.invoke(INVOKE.pickWorkspaceDirectory),
 
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
-	respondToPermission: (response) => ipcRenderer.invoke(INVOKE.permissionResponse, response),
+	respondToPermission: (response) =>
+		ipcRenderer.invoke(INVOKE.permissionResponse, response),
 
 	openArtifact: (path) => ipcRenderer.invoke(INVOKE.openArtifact, path),
-	saveArtifactAs: (request) => ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
+	saveArtifactAs: (request) =>
+		ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
 
 	settingsSnapshot: () => ipcRenderer.invoke(INVOKE.settingsSnapshot),
-	setApiKey: (providerId, apiKey) => ipcRenderer.invoke(INVOKE.setApiKey, providerId, apiKey),
-	removeApiKey: (providerId) => ipcRenderer.invoke(INVOKE.removeApiKey, providerId),
-	saveCustomProvider: (input, apiKey) => ipcRenderer.invoke(INVOKE.saveCustomProvider, input, apiKey),
-	deleteCustomProvider: (providerId) => ipcRenderer.invoke(INVOKE.deleteCustomProvider, providerId),
-	readCustomProvider: (providerId) => ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
+	setApiKey: (providerId, apiKey) =>
+		ipcRenderer.invoke(INVOKE.setApiKey, providerId, apiKey),
+	removeApiKey: (providerId) =>
+		ipcRenderer.invoke(INVOKE.removeApiKey, providerId),
+	saveCustomProvider: (input, apiKey) =>
+		ipcRenderer.invoke(INVOKE.saveCustomProvider, input, apiKey),
+	deleteCustomProvider: (providerId) =>
+		ipcRenderer.invoke(INVOKE.deleteCustomProvider, providerId),
+	readCustomProvider: (providerId) =>
+		ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
 	refreshCatalog: () => ipcRenderer.invoke(INVOKE.refreshCatalog),
+
+	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
 
 	onSessionEvent: (listener) => subscribe(PUSH.sessionEvent, listener),
 	onUiRequest: (listener) => subscribe(PUSH.uiRequest, listener),
-	onPermissionRequest: (listener) => subscribe(PUSH.permissionRequest, listener),
+	onPermissionRequest: (listener) =>
+		subscribe(PUSH.permissionRequest, listener),
 	onDaemonReady: (listener) => subscribe(PUSH.daemonReady, () => listener()),
 	onDaemonDown: (listener) => subscribe(PUSH.daemonDown, listener),
 };

@@ -64,10 +64,15 @@ describe("formatSkillsSection", () => {
 		expect(formatSkillsSection([])).toBe("");
 	});
 
-	it("有技能输出清单", () => {
+	it("委托 pi 的规范格式：含名称、描述与文件路径（模型按需 read 的入口）", () => {
 		const section = formatSkillsSection([
-			{ name: "周报生成", description: "把要点整理成周报" },
+			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
 		]);
-		expect(section).toBe("可用技能：\n- 周报生成：把要点整理成周报");
+		// 断言关键信息存在而不是整段文本：格式归 pi（agentskills.io 规范），升级零改动。
+		expect(section).toContain("<name>meeting-notes</name>");
+		expect(section).toContain("整理会议纪要");
+		expect(section).toContain("meeting-notes\\SKILL.md");
+		// 保守检查：不该出现我们自己旧格式的痕迹。
+		expect(section).not.toContain("可用技能：");
 	});
 });

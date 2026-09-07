@@ -68,10 +68,24 @@ export interface ModelInfo {
 	readonly available: boolean;
 }
 
+/** 技能在设置界面的一行。 */
+export interface SkillInfo {
+	readonly name: string;
+	readonly description: string;
+	/** SKILL.md 绝对路径。模型按需加载全文的入口，展示给用户便于排查。 */
+	readonly filePath: string;
+	/** 随应用内置（resources/skills/）还是用户自装（~/.kamibuddy/skills/ 等）。 */
+	readonly origin: "builtin" | "user";
+	/** frontmatter 声明仅限手动 /skill:name 触发，不出现在模型提示词里。 */
+	readonly disableModelInvocation: boolean;
+}
+
 /** 设置界面一次性拉取的全部内容。 */
 export interface SettingsSnapshot {
 	readonly providers: readonly ProviderInfo[];
 	readonly models: readonly ModelInfo[];
+	/** 已发现的技能。加载失败时为空数组、原因进 error。 */
+	readonly skills: readonly SkillInfo[];
 	/** 当前选中的模型，形如 `provider/model`。未选则为 undefined。 */
 	readonly activeModelId: string | undefined;
 	/** 凭据与自定义配置的落盘目录，显示给用户便于排障。 */

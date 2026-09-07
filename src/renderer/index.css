@@ -798,7 +798,6 @@ button {
 }
 
 /* ── 设置页 ───────────────────────────────────────────────────── */
-
 .settings {
 	flex: 1 1 auto;
 	display: flex;
@@ -1297,6 +1296,190 @@ button {
 	font-weight: 400;
 }
 
+/* ── 诊断页 ───────────────────────────────────────────────────── */
+
+.stat-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 10px;
+}
+
+.stat-card {
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+}
+
+.stat-value {
+	font-size: 20px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.stat-hint {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.stat-err {
+	color: var(--danger);
+}
+
+.stat-ok {
+	color: var(--ok);
+}
+
+.stat-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+.stat-table th,
+.stat-table td {
+	padding: 6px 10px 6px 0;
+	text-align: left;
+	border-bottom: 1px solid var(--border);
+	font-variant-numeric: tabular-nums;
+}
+
+.stat-table th {
+	color: var(--text-dim);
+	font-weight: 500;
+	font-size: 12px;
+}
+
+.stat-table-clickable tbody tr {
+	cursor: pointer;
+}
+
+.stat-table-clickable tbody tr:hover {
+	background: var(--bg-hover);
+}
+
+.stat-table-clickable tbody tr.selected {
+	background: var(--bg-raised);
+}
+
+/* 上下文成分条：五段的色值刻意避开语义色（红/绿留给成败）。 */
+.comp-bar {
+	display: flex;
+	height: 14px;
+	border-radius: 7px;
+	overflow: hidden;
+	background: var(--bg-raised);
+	margin-bottom: 8px;
+}
+
+.comp-seg {
+	min-width: 2px;
+}
+
+.comp-system {
+	background: #6b7a90;
+}
+
+.comp-user {
+	background: #4c9aff;
+}
+
+.comp-assistant {
+	background: #36b37e;
+}
+
+.comp-thinking {
+	background: #8777d9;
+}
+
+.comp-tools {
+	background: #ff991f;
+}
+
+.comp-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	margin: 0 0 6px;
+	padding: 0;
+	list-style: none;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.comp-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-right: 5px;
+}
+
+/* run 时间线（泳道）：左标签、中轨道、右耗时。 */
+.timeline {
+	margin-top: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	padding: 10px 12px;
+}
+
+.timeline-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 26px;
+}
+
+.timeline-row + .timeline-row {
+	margin-top: 4px;
+}
+
+.timeline-label {
+	flex: 0 0 72px;
+	font-size: 12px;
+	color: var(--text-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.timeline-track {
+	position: relative;
+	flex: 1 1 auto;
+	height: 10px;
+	border-radius: 5px;
+	background: var(--bg-raised);
+}
+
+.timeline-span {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	border-radius: 5px;
+	background: #4c9aff;
+}
+
+.timeline-span.err {
+	background: var(--danger);
+}
+
+.timeline-span.running {
+	background: #ff991f;
+}
+
+.timeline-dur {
+	flex: 0 0 56px;
+	text-align: right;
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
 .mode-menu-item.active .mode-menu-tag {
 	background: var(--bg);
 }
@@ -1517,4 +1700,21 @@ button {
 
 .model-menu-goto:hover {
 	color: var(--text);
+}
+
+/* ── 技能列表（设置页）────────────────────────────────────────── */
+
+.settings-hint {
+	font-size: 11px;
+	color: var(--text-dim);
+	font-weight: 400;
+}
+
+/* 技能行复用 provider-main 的布局，但整行不可点、不响应 hover。 */
+.skill-row {
+	cursor: default;
+}
+
+.skill-row:hover {
+	background: transparent;
 }

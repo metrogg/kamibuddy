@@ -166,20 +166,29 @@ prompt-switch 胶水（仿 permission-gate.test 的假 ExtensionAPI）。
 风险：`resources/` 在打包后要能被读到 —— electron-vite 默认不复制它。
 建议现在就验证一次打包路径，别等 T14。
 
-### T2 · 技能机制接通
+### T2 · 技能机制接通（✅ 已完成，2026-09-07）
 
-**这是「后面一个个补专用能力」的入口**，优先级高于任何具体垂类能力。
-WorkBuddy 那 33 个内置插件全是这么组织的。
+已落地：
 
-要做：确认技能从 `~/.kamibuddy/skills/` 被加载 → 在设置页加一个技能列表（看得见、能开关）
-→ 写第一个技能包验证闭环。
+- **加载**：pi 的 `DefaultResourceLoader` 挂 `additionalSkillPaths: [resources/skills/]`（内置技能随应用分发）；
+  用户的技能放 `~/.kamibuddy/skills/` 自动发现。pi 原生实现 Agent Skills 标准，零自研。
+- **提示词**：`{{skills}}` 槽位直接委托 pi 的 `formatSkillsForPrompt`（agentskills.io 规范 XML，
+  含 name/description/**filePath**）——格式决定权归 pi，它升级我们零改动。
+  调用机制是渐进式披露：模型按描述匹配后用 `read` 加载全文（这就是"无 read 则技能消失"陷阱的根源），
+  也可 `/skill:name` 强制。
+- **首个技能包**：`resources/skills/meeting-notes/`（会议纪要整理，红线+步骤+输出格式，原创文案）。
+- **设置页**：技能列表（名称 / 内置或自装 / 描述 / 仅手动触发标记）。
+  **按技能开关未做**——pi 没有原生 per-skill disable（只有全局 `enableSkillCommands` 与
+  frontmatter `disable-model-invocation`），要做得自己持久化过滤，后排期。
+- **验证**：smoke:session 断言 `meeting-notes` 被发现（13/13）。
 
-验收：把一个 `SKILL.md` 放进目录，重启后模型能按 `description` 自动识别并调用。
+**验收**（需用户重启后确认）：问「帮我把这段会议记录整理成纪要」→ 模型应读 SKILL.md 并按格式产出文件。
 
 写技能的方法论照抄 WorkBuddy 的**渐进式披露**：
-`SKILL.md` 只写红线 + 路由 + `when_to_use`（穷举口语化触发场景），
-方法论拆到 `references/*.md` 按需 Read —— 控制常驻上下文。
+`SKILL.md` 只写红线 + 路由 + 触发场景穷举（description 写口语化场景），
+方法论拆 `references/*.md` 按需 Read —— 控制常驻上下文。
 参考 `docs/workbuddy分析/03-plugins-skills.md` 的 `wb-finance-skill` 案例。
+技能名只能小写 a-z / 0-9 / 连字符（pi 的 validateName）。
 
 ### T3 · 联网工具（WebFetch + WebSearch）
 

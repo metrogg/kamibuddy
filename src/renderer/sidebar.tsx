@@ -9,6 +9,7 @@
 import {
 	IconAssistant,
 	IconAutomation,
+	IconChart,
 	IconLibrary,
 	IconMore,
 	IconPlus,
@@ -30,6 +31,7 @@ interface SidebarProps {
 	readonly onNewTask: () => void;
 	readonly onOpenTask: () => void;
 	readonly onOpenSettings: () => void;
+	readonly onOpenDiagnostics: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -48,6 +50,7 @@ export function Sidebar({
 	onNewTask,
 	onOpenTask,
 	onOpenSettings,
+	onOpenDiagnostics,
 	onTodo,
 }: SidebarProps): React.JSX.Element {
 	return (
@@ -64,11 +67,21 @@ export function Sidebar({
 
 			<nav className="sidebar-nav">
 				{NAV_ITEMS.map(({ icon: Icon, label }) => (
-					<button key={label} type="button" className="nav-item" onClick={() => onTodo(label)}>
+					<button
+						key={label}
+						type="button"
+						className="nav-item"
+						onClick={() => onTodo(label)}
+					>
 						<Icon size={16} />
 						{label}
 					</button>
 				))}
+				{/* 诊断是真能用的入口（用量、缓存命中率、工具时间线），不走 onTodo。 */}
+				<button type="button" className="nav-item" onClick={onOpenDiagnostics}>
+					<IconChart size={16} />
+					诊断
+				</button>
 			</nav>
 
 			<div className="sidebar-section">
@@ -76,14 +89,23 @@ export function Sidebar({
 				{currentTaskTitle === undefined ? (
 					<p className="section-empty">暂无历史任务</p>
 				) : (
-					<button type="button" className="task-item" onClick={onOpenTask} title={currentTaskTitle}>
+					<button
+						type="button"
+						className="task-item"
+						onClick={onOpenTask}
+						title={currentTaskTitle}
+					>
 						{currentTaskTitle}
 					</button>
 				)}
 			</div>
 
 			<div className="sidebar-section">
-				<button type="button" className="section-title section-title-btn" onClick={() => onTodo("空间")}>
+				<button
+					type="button"
+					className="section-title section-title-btn"
+					onClick={() => onTodo("空间")}
+				>
 					空间
 				</button>
 			</div>
@@ -96,7 +118,13 @@ export function Sidebar({
 					{link.kind === "down" && `已断开：${link.reason}`}
 				</span>
 				{/* 设置是真能用的入口，不走 onTodo。放在底部与 WorkBuddy 的位置一致。 */}
-				<button type="button" className="footer-btn" aria-label="设置" title="设置" onClick={onOpenSettings}>
+				<button
+					type="button"
+					className="footer-btn"
+					aria-label="设置"
+					title="设置"
+					onClick={onOpenSettings}
+				>
 					<IconSettings size={15} />
 				</button>
 			</div>

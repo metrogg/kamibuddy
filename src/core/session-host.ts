@@ -24,10 +24,15 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { SessionEvent, SessionState, ToolCard, ToolOutcome } from "../shared/session-events.ts";
+import type {
+	SessionEvent,
+	SessionState,
+	ToolCard,
+	ToolOutcome,
+} from "../shared/session-events.ts";
 import type { LoadedResources } from "./resources.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
-import { getConfigDir, getSessionsDir } from "./config-paths.ts";
+import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { parseModelKey, toModelKey } from "./model-catalog.ts";
 import { mkdirSync } from "node:fs";
@@ -77,7 +82,15 @@ function summarizeArgs(args: unknown): string {
 	if (typeof args !== "object" || args === null) return "";
 	const record = args as Record<string, unknown>;
 	// 顺序即优先级：路径类最有信息量，其次是查询/命令。
-	for (const key of ["path", "file_path", "filePath", "pattern", "query", "command", "dir"]) {
+	for (const key of [
+		"path",
+		"file_path",
+		"filePath",
+		"pattern",
+		"query",
+		"command",
+		"dir",
+	]) {
 		const value = record[key];
 		if (typeof value === "string" && value !== "") return value;
 	}
@@ -155,7 +168,9 @@ export class SessionHost {
 	private readonly toolCards = new Map<string, ToolCard>();
 
 	private constructor(
-		private readonly session: Awaited<ReturnType<typeof createAgentSession>>["session"],
+		private readonly session: Awaited<
+			ReturnType<typeof createAgentSession>
+		>["session"],
 		private readonly options: SessionHostOptions,
 		private sceneId: string,
 		private interactionId: string,
@@ -163,12 +178,17 @@ export class SessionHost {
 	) {}
 
 	static async create(options: SessionHostOptions): Promise<SessionHost> {
-		const model = options.modelKey === undefined ? undefined : options.catalog.resolveModel(options.modelKey);
+		const model =
+			options.modelKey === undefined
+				? undefined
+				: options.catalog.resolveModel(options.modelKey);
 
 		// 选了模型但解析不出来，说明配置变过（服务商被删、models.json 改过）。
 		// 明确报错而不是静默回落 —— 静默回落会让用户以为在用自己选的模型。
 		if (options.modelKey !== undefined && model === undefined) {
-			throw new Error(`选中的模型「${options.modelKey}」已不可用，请到设置里重新选择`);
+			throw new Error(
+				`选中的模型「${options.modelKey}」已不可用，请到设置里重新选择`,
+			);
 		}
 
 		// 让 pi 的 extensions / skills / settings 都从我们自己的目录读，
@@ -197,10 +217,14 @@ export class SessionHost {
 		const settingsManager = SettingsManager.create(cwd, agentDir);
 
 		// 扩展要经 ResourceLoader 注入，且必须 reload 后才生效（同 sdk.ts:185-188）。
+		// additionalSkillPaths：随应用内置的技能（resources/skills/）；
+		// 用户的技能（agentDir/skills/）pi 会自动发现。
+		// cwd 用上面算好的值而不是 options.cwd：playground 时是占位目录。
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
 			settingsManager,
+			additionalSkillPaths: [join(getResourcesDir(), "skills")],
 			extensionFactories: [...(options.extensions ?? [])],
 		});
 		await resourceLoader.reload();
@@ -220,19 +244,32 @@ export class SessionHost {
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
 		// 提示词切换扩展整体替换 systemPrompt 后 pi 不再自动附加技能段，
 		// 所以这里取出来、经 daemon 的 compose 拼进提示词（prompt-composer.ts）。
-		const skills: SkillDescriptor[] = resourceLoader.getSkills().skills.map((s) => ({
-			name: String(s.name ?? ""),
-			description: String(s.description ?? ""),
-		}));
+		// filePath 必须保留：模型按需加载全文靠它（渐进式披露）。
+		const skills: SkillDescriptor[] = resourceLoader
+			.getSkills()
+			.skills.map((s) => ({
+				name: String(s.name ?? ""),
+				description: String(s.description ?? ""),
+				filePath: String(s.filePath ?? ""),
+			}));
 
-		const host = new SessionHost(session, options, options.sceneId, options.interactionId, skills);
+		const host = new SessionHost(
+			session,
+			options,
+			options.sceneId,
+			options.interactionId,
+			skills,
+		);
 		session.subscribe((event) => host.translate(event));
 		return host;
 	}
 
 	/* ── 对外操作 ────────────────────────────────────────────────── */
 
-	async prompt(text: string, whileStreaming?: "steer" | "followUp"): Promise<void> {
+	async prompt(
+		text: string,
+		whileStreaming?: "steer" | "followUp",
+	): Promise<void> {
 		if (this.session.isStreaming) {
 			// 流式期间直接 prompt 会被 pi 拒绝，必须显式选择排队方式。
 			// 默认 steer：用户追加的话通常是想纠偏当前这轮，而不是等它跑完。
@@ -278,7 +315,9 @@ export class SessionHost {
 	}
 
 	setInteraction(interactionId: string): void {
-		const mode = this.options.resources.modes.find((m) => m.id === interactionId);
+		const mode = this.options.resources.modes.find(
+			(m) => m.id === interactionId,
+		);
 		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
 		this.interactionId = interactionId;
 		this.session.setActiveToolsByName([...mode.tools]);
@@ -301,7 +340,8 @@ export class SessionHost {
 			isPlayground: playground,
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
-			modelId: model === undefined ? undefined : toModelKey(model.provider, model.id),
+			modelId:
+				model === undefined ? undefined : toModelKey(model.provider, model.id),
 			// 不能透传 pi 的 session.isStreaming：pi 要到 finally 的 _emitAgentSettled
 			// 才把它置 false（agent-session.ts:631/1113），agent_end 事件分发时它仍是 true。
 			// 曾经透传导致 agent_end 处理中的 emitState 把 isStreaming:true 推给 renderer，
@@ -311,7 +351,12 @@ export class SessionHost {
 			// tokens 可能为 null（刚压缩完、还没下一次响应），此时不下发用量。
 			...(usage === undefined || usage.tokens === null
 				? {}
-				: { contextUsage: { usedTokens: usage.tokens, maxTokens: usage.contextWindow } }),
+				: {
+						contextUsage: {
+							usedTokens: usage.tokens,
+							maxTokens: usage.contextWindow,
+						},
+					}),
 		};
 	}
 
@@ -384,7 +429,11 @@ export class SessionHost {
 				if (message.role === "assistant") {
 					const id = this.nextId("assistant");
 					this.currentAssistantId = id;
-					emit({ type: "assistant_started", messageId: id, at: message.timestamp });
+					emit({
+						type: "assistant_started",
+						messageId: id,
+						at: message.timestamp,
+					});
 				}
 				return;
 			}
@@ -395,9 +444,17 @@ export class SessionHost {
 				const inner = event.assistantMessageEvent;
 
 				if (inner.type === "text_delta") {
-					emit({ type: "assistant_text_delta", messageId: id, delta: inner.delta });
+					emit({
+						type: "assistant_text_delta",
+						messageId: id,
+						delta: inner.delta,
+					});
 				} else if (inner.type === "thinking_delta") {
-					emit({ type: "assistant_thinking_delta", messageId: id, delta: inner.delta });
+					emit({
+						type: "assistant_thinking_delta",
+						messageId: id,
+						delta: inner.delta,
+					});
 				}
 				// toolcall_delta 不上传：工具卡片由 tool_execution_* 事件驱动，
 				// 让 UI 只有一个来源，避免两套状态打架。
@@ -420,6 +477,16 @@ export class SessionHost {
 						role: "assistant",
 						text: textOf(message.content),
 						...(thinking === "" ? {} : { thinking }),
+						// usage 服务于诊断页的 run 级聚合（shared/observability.ts），
+						// 聊天 UI 不展示。pi 的 Usage 止步于此，出口是 shared 的 TokenUsage。
+						usage: {
+							input: message.usage.input,
+							output: message.usage.output,
+							cacheRead: message.usage.cacheRead,
+							cacheWrite: message.usage.cacheWrite,
+							totalTokens: message.usage.totalTokens,
+							cost: message.usage.cost.total,
+						},
 						at: message.timestamp,
 					},
 				});
@@ -473,7 +540,8 @@ export class SessionHost {
 						toolName: event.toolName,
 						// started 缺失说明漏了 start 事件（理论上不该发生），
 						// 回落到工具名而不是编一个假标签。
-						label: started?.label ?? TOOL_LABELS[event.toolName] ?? event.toolName,
+						label:
+							started?.label ?? TOOL_LABELS[event.toolName] ?? event.toolName,
 						summary: started?.summary ?? "",
 						outcome,
 						detail: detail === "" ? undefined : detail,

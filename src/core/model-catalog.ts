@@ -64,7 +64,7 @@ export class ModelCatalog {
 		return new ModelCatalog(runtime, getModelsPath());
 	}
 
-	/** 设置界面一次性拉取的全部内容。 */
+	/** 设置界面一次性拉取的全部内容。技能清单恒为空数组，由 daemon 展开覆盖（见 INVOKE.settingsSnapshot）。 */
 	snapshot(activeModelKey: string | undefined): SettingsSnapshot {
 		const owned = new Set(listOwnedProviderIds(this.modelsPath));
 		const providers = this.runtime.getProviders().map((provider) => this.toProviderInfo(provider.id, provider.name, owned));
@@ -82,6 +82,9 @@ export class ModelCatalog {
 		return {
 			providers: sorted,
 			models,
+			// 技能不属于模型目录的职责：daemon 会展开此对象并补 skills 字段
+			// （宿主懒建，设置页要在第一次发消息前就能看到技能）。
+			skills: [],
 			activeModelId: activeModelKey,
 			configDir: getConfigDir(),
 			error: this.runtime.getError(),
