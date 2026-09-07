@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, SessionEvent, SessionSnapshot, ToolCard } from "@shared/session-events.ts";
+import type { AssistantMessage, SessionEvent, SessionSnapshot, ToolCard } from "./session-events.ts";
 import { conversationReducer, initialConversation, type ConversationView } from "./conversation.ts";
 
 /** 依次应用一串事件，返回最终视图。 */
@@ -36,18 +36,24 @@ describe("snapshot", () => {
 			state: {
 				sessionId: "s1",
 				cwd: "E:/demo",
-				modeId: "ask",
+				sceneId: "work",
+				interactionId: "ask",
 				modelId: "m1",
 				isStreaming: false,
 			},
 			entries: [{ id: "u1", role: "user", text: "你好", at: 1 }],
-			availableModes: [{ id: "ask", label: "问答", description: "只读" }],
+			availableScenes: [{ id: "work", label: "日常办公", description: "文档与汇报", ready: true }],
+			availableModes: [{ id: "ask", label: "问答", description: "只读", ready: true }],
 		};
 
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 
 		expect(view.state.sessionId).toBe("s1");
 		expect(view.entries).toHaveLength(1);
+		// 两个轴各自独立传递（WorkBuddy 的 welcomemode / interactionmode 正交结构）。
+		expect(view.state.sceneId).toBe("work");
+		expect(view.state.interactionId).toBe("ask");
+		expect(view.availableScenes[0]?.id).toBe("work");
 		expect(view.availableModes[0]?.id).toBe("ask");
 	});
 });

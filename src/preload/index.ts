@@ -22,7 +22,8 @@ const bridge: KamiBridge = {
 	snapshot: () => ipcRenderer.invoke(INVOKE.snapshot),
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
-	setMode: (modeId) => ipcRenderer.invoke(INVOKE.setMode, modeId),
+	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
+	setInteraction: (interactionId) => ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
 
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
@@ -30,6 +31,14 @@ const bridge: KamiBridge = {
 
 	openArtifact: (path) => ipcRenderer.invoke(INVOKE.openArtifact, path),
 	saveArtifactAs: (request) => ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
+
+	settingsSnapshot: () => ipcRenderer.invoke(INVOKE.settingsSnapshot),
+	setApiKey: (providerId, apiKey) => ipcRenderer.invoke(INVOKE.setApiKey, providerId, apiKey),
+	removeApiKey: (providerId) => ipcRenderer.invoke(INVOKE.removeApiKey, providerId),
+	saveCustomProvider: (input, apiKey) => ipcRenderer.invoke(INVOKE.saveCustomProvider, input, apiKey),
+	deleteCustomProvider: (providerId) => ipcRenderer.invoke(INVOKE.deleteCustomProvider, providerId),
+	readCustomProvider: (providerId) => ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
+	refreshCatalog: () => ipcRenderer.invoke(INVOKE.refreshCatalog),
 
 	onSessionEvent: (listener) => subscribe(PUSH.sessionEvent, listener),
 	onUiRequest: (listener) => subscribe(PUSH.uiRequest, listener),

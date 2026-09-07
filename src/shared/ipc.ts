@@ -14,6 +14,7 @@
  */
 
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
+import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
 
 /* ────────────────────────────────────────────────────────────────
  * 通道名
@@ -36,8 +37,10 @@ export const INVOKE = {
 	prompt: "session:prompt",
 	/** 中断当前 run。 */
 	abort: "session:abort",
-	/** 切换交互模式。 */
-	setMode: "session:set-mode",
+	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
+	setScene: "session:set-scene",
+	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
+	setInteraction: "session:set-interaction",
 	/** 切换模型。 */
 	setModel: "session:set-model",
 	/** 应答 daemon 发来的 UI 请求（确认框/选择框/输入框）。 */
@@ -48,6 +51,28 @@ export const INVOKE = {
 	openArtifact: "artifact:open",
 	/** 另存为。返回用户选择的路径，取消则返回 undefined。 */
 	saveArtifactAs: "artifact:save-as",
+
+	/* ── 设置 ─────────────────────────────────────────────────────── */
+
+	/** 拉取服务商与模型列表。打开设置页时调用。 */
+	settingsSnapshot: "settings:snapshot",
+	/**
+	 * 存入某家服务商的 API Key。
+	 *
+	 * 密钥经 renderer → main → daemon 传递，最终由 pi 写进 auth.json（0600）。
+	 * main 是哑转发器、daemon 的请求日志只记通道名不记参数 —— 密钥不会落到任何日志里。
+	 */
+	setApiKey: "settings:set-api-key",
+	/** 删除某家服务商的 API Key（仅能删 auth.json 里的，环境变量删不掉）。 */
+	removeApiKey: "settings:remove-api-key",
+	/** 新增或更新自定义服务商。 */
+	saveCustomProvider: "settings:save-custom-provider",
+	/** 删除自定义服务商，连带清掉其凭据。 */
+	deleteCustomProvider: "settings:delete-custom-provider",
+	/** 读回自定义服务商配置，供编辑表单回填。 */
+	readCustomProvider: "settings:read-custom-provider",
+	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
+	refreshCatalog: "settings:refresh-catalog",
 } as const;
 
 /** daemon → renderer，单向推送（webContents.send）。 */
@@ -100,12 +125,22 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: []; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
-	[INVOKE.setMode]: { args: [modeId: string]; result: void };
+	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
+	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
 	[INVOKE.uiResponse]: { args: [UiResponse]; result: void };
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
 	[INVOKE.saveArtifactAs]: { args: [SaveArtifactRequest]; result: string | undefined };
+
+	[INVOKE.settingsSnapshot]: { args: []; result: SettingsSnapshot };
+	[INVOKE.setApiKey]: { args: [providerId: string, apiKey: string]; result: void };
+	[INVOKE.removeApiKey]: { args: [providerId: string]; result: void };
+	/** apiKey 可省略：编辑场景下用户可能只想改 baseUrl，不该被迫重输密钥。 */
+	[INVOKE.saveCustomProvider]: { args: [input: CustomProviderInput, apiKey?: string]; result: void };
+	[INVOKE.deleteCustomProvider]: { args: [providerId: string]; result: void };
+	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
+	[INVOKE.refreshCatalog]: { args: []; result: void };
 }
 
 /** push 通道的 payload 映射。 */

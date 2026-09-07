@@ -8,6 +8,7 @@
  */
 
 import { useState } from "react";
+import type { ModeDescriptor } from "@shared/session-events.ts";
 import {
 	IconChart,
 	IconChevronDown,
@@ -26,13 +27,31 @@ import {
 interface HomeViewProps {
 	/** daemon 未就绪时输入禁用，避免消息发出去才报错。 */
 	readonly ready: boolean;
+	/**
+	 * 场景轴选项，由 daemon 下发（对标 WorkBuddy 的 welcomemode/{work,code,design}）。
+	 * 不在此处硬编码：加场景应当只改 daemon 的资源目录，UI 零改动（AGENTS.md §3）。
+	 */
+	readonly scenes: readonly ModeDescriptor[];
+	readonly sceneId: string;
+	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
+	readonly modelId: string | undefined;
+	readonly onSceneChange: (sceneId: string) => void;
+	readonly onOpenSettings: () => void;
 	readonly onSubmit: (text: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
-/* ── 模式页签 ────────────────────────────────────────────────────── */
-
-const MODES = ["日常办公", "代码开发", "设计创意"] as const;
+/**
+ * 模型标识只取模型名部分显示。
+ *
+ * 完整标识形如 `anthropic/claude-sonnet-4-6`，服务商前缀在按钮上占位太多；
+ * 完整值放 title 里，鼠标悬停可见。
+ */
+function shortModelName(modelId: string | undefined): string {
+	if (modelId === undefined) return "选择模型";
+	const at = modelId.indexOf("/");
+	return at === -1 ? modelId : modelId.slice(at + 1);
+}
 
 /* ── 能力入口 ────────────────────────────────────────────────────── */
 
@@ -81,9 +100,17 @@ function Mascot(): React.JSX.Element {
 	);
 }
 
-export function HomeView({ ready, onSubmit, onTodo }: HomeViewProps): React.JSX.Element {
+export function HomeView({
+	ready,
+	scenes,
+	sceneId,
+	modelId,
+	onSceneChange,
+	onOpenSettings,
+	onSubmit,
+	onTodo,
+}: HomeViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
-	const [mode, setMode] = useState<(typeof MODES)[number]>("日常办公");
 	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
 	const [caseOffset, setCaseOffset] = useState(0);
 	const [casesVisible, setCasesVisible] = useState(true);
@@ -107,18 +134,17 @@ export function HomeView({ ready, onSubmit, onTodo }: HomeViewProps): React.JSX.
 				<h1 className="home-title">KamiBuddy，开工吧</h1>
 
 				<div className="mode-tabs">
-					{MODES.map((m) => (
+					{scenes.map((scene) => (
 						<button
-							key={m}
+							key={scene.id}
 							type="button"
-							className={`mode-tab${m === mode ? " active" : ""}`}
-							onClick={() => {
-								if (m === "日常办公") setMode(m);
-								// 三模式能力排在 D4-5，先给入口一个明确反馈。
-								else onTodo(`「${m}」模式`);
-							}}
+							className={`mode-tab${scene.id === sceneId ? " active" : ""}`}
+							title={scene.description}
+							// 未实现的场景仍然显示（对齐 WorkBuddy 的能力面），
+							// 点击给明确反馈而不是静默切过去。
+							onClick={() => (scene.ready ? onSceneChange(scene.id) : onTodo(`「${scene.label}」场景`))}
 						>
-							{m}
+							{scene.label}
 						</button>
 					))}
 				</div>
@@ -153,8 +179,18 @@ export function HomeView({ ready, onSubmit, onTodo }: HomeViewProps): React.JSX.
 								<IconPlus size={17} />
 							</button>
 							<span className="bar-spacer" />
-							<button type="button" className="bar-btn bar-btn-text" onClick={() => onTodo("模型选择")}>
-								均衡
+							{/*
+								直接进设置页而不是在这里做一个下拉：
+								模型选择涉及「服务商是否已配 Key」的可用性判断，
+								设置页已经把这套呈现好了，再做一个简化版下拉只会两处不一致。
+							*/}
+							<button
+								type="button"
+								className="bar-btn bar-btn-text"
+								title={modelId ?? "尚未选择模型"}
+								onClick={onOpenSettings}
+							>
+								{shortModelName(modelId)}
 								<IconChevronDown size={13} />
 							</button>
 							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>

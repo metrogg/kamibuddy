@@ -157,3 +157,44 @@ export const IconChevronDown = (p: IconProps): React.JSX.Element => (
 		<path d="m6 9 6 6 6-6" />
 	</Svg>
 );
+
+export const IconSettings = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<circle cx="12" cy="12" r="3" />
+		<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+	</Svg>
+);
+
+export const IconKey = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<circle cx="7.5" cy="15.5" r="4.5" />
+		<path d="m10.7 12.3 8.3-8.3M16 4l4 4M14 6l4 4" />
+	</Svg>
+);
+
+export const IconTrash = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="M4 7h16M10 11v6M14 11v6" />
+		<path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+	</Svg>
+);
+
+export const IconCheck = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="m4 12.5 5 5L20 6.5" />
+	</Svg>
+);
+
+export const IconEdit = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z" />
+		<path d="m13.5 6.5 4 4" />
+	</Svg>
+);
+
+export const IconStop = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 实心方块：停止是「立即生效」的动作，实心比线框更笃定。 */}
+		<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />
+	</Svg>
+);

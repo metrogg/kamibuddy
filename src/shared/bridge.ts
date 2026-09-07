@@ -15,6 +15,7 @@ import type {
 	UiResponse,
 } from "./ipc.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
+import type { CustomProviderInput, SettingsSnapshot } from "./settings.ts";
 
 /** 订阅函数统一返回取消订阅的闭包，配合 React useEffect 的清理约定。 */
 export type Unsubscribe = () => void;
@@ -28,7 +29,10 @@ export interface KamiBridge {
 	readonly snapshot: () => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
-	readonly setMode: (modeId: string) => Promise<void>;
+	/** 切换场景（work / code / design）。 */
+	readonly setScene: (sceneId: string) => Promise<void>;
+	/** 切换交互模式（ask / craft / plan / expert）。 */
+	readonly setInteraction: (interactionId: string) => Promise<void>;
 	readonly setModel: (modelId: string) => Promise<void>;
 
 	readonly respondToUi: (response: UiResponse) => Promise<void>;
@@ -36,6 +40,17 @@ export interface KamiBridge {
 
 	readonly openArtifact: (path: string) => Promise<void>;
 	readonly saveArtifactAs: (request: SaveArtifactRequest) => Promise<string | undefined>;
+
+	/* ── 设置 ─────────────────────────────────────────────────────── */
+
+	readonly settingsSnapshot: () => Promise<SettingsSnapshot>;
+	readonly setApiKey: (providerId: string, apiKey: string) => Promise<void>;
+	readonly removeApiKey: (providerId: string) => Promise<void>;
+	/** apiKey 省略表示复用已存的凭据（编辑时只改 baseUrl，不必重输密钥）。 */
+	readonly saveCustomProvider: (input: CustomProviderInput, apiKey?: string) => Promise<void>;
+	readonly deleteCustomProvider: (providerId: string) => Promise<void>;
+	readonly readCustomProvider: (providerId: string) => Promise<CustomProviderInput | undefined>;
+	readonly refreshCatalog: () => Promise<void>;
 
 	readonly onSessionEvent: (listener: (event: SessionEvent) => void) => Unsubscribe;
 	readonly onUiRequest: (listener: (request: UiRequest) => void) => Unsubscribe;

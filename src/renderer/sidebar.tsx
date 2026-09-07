@@ -13,6 +13,7 @@ import {
 	IconMore,
 	IconPlus,
 	IconProject,
+	IconSettings,
 	IconSkill,
 } from "./icons.tsx";
 
@@ -28,6 +29,7 @@ interface SidebarProps {
 	readonly currentTaskTitle: string | undefined;
 	readonly onNewTask: () => void;
 	readonly onOpenTask: () => void;
+	readonly onOpenSettings: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -40,7 +42,14 @@ const NAV_ITEMS = [
 	{ icon: IconMore, label: "更多" },
 ] as const;
 
-export function Sidebar({ link, currentTaskTitle, onNewTask, onOpenTask, onTodo }: SidebarProps): React.JSX.Element {
+export function Sidebar({
+	link,
+	currentTaskTitle,
+	onNewTask,
+	onOpenTask,
+	onOpenSettings,
+	onTodo,
+}: SidebarProps): React.JSX.Element {
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-brand">
@@ -81,9 +90,15 @@ export function Sidebar({ link, currentTaskTitle, onNewTask, onOpenTask, onTodo 
 
 			<div className="sidebar-footer">
 				<span className={`link-dot link-dot-${link.kind}`} />
-				{link.kind === "connecting" && "正在启动…"}
-				{link.kind === "ready" && "引擎已就绪"}
-				{link.kind === "down" && `已断开：${link.reason}`}
+				<span className="footer-text">
+					{link.kind === "connecting" && "正在启动…"}
+					{link.kind === "ready" && "引擎已就绪"}
+					{link.kind === "down" && `已断开：${link.reason}`}
+				</span>
+				{/* 设置是真能用的入口，不走 onTodo。放在底部与 WorkBuddy 的位置一致。 */}
+				<button type="button" className="footer-btn" aria-label="设置" title="设置" onClick={onOpenSettings}>
+					<IconSettings size={15} />
+				</button>
 			</div>
 		</aside>
 	);

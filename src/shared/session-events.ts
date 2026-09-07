@@ -84,12 +84,24 @@ export type SessionEvent =
 	/** 会话元信息变化（模型切换、模式切换、token 用量）。 */
 	| { readonly type: "session_state"; readonly state: SessionState };
 
-/** 会话的当前状态。变化时整体重发——字段少，不值得做差量。 */
+/**
+ * 会话的当前状态。变化时整体重发——字段少，不值得做差量。
+ *
+ * 模式是**两个正交的轴**，照 WorkBuddy 的结构来（其内置插件目录即证据）：
+ *
+ *   场景轴 welcomemode/  work / code / design      各带 agents/<name>.md 根代理
+ *   交互轴 interactionmode/  ask / craft / plan / expert   各带 fragments/*.md 提示片段
+ *
+ * 系统提示词是两轴共同的函数：场景模板 include 交互片段。
+ * 所以两者都要存，不能压成一个 modeId —— 否则 D4-5 写提示词时必然返工。
+ */
 export interface SessionState {
 	readonly sessionId: string;
 	readonly cwd: string;
-	/** 交互模式 id，对应 resources/modes/<id>.md。不是枚举——加模式不该改代码。 */
-	readonly modeId: string;
+	/** 场景 id，对应 resources/scenes/<id>/。决定根代理与可用能力面。 */
+	readonly sceneId: string;
+	/** 交互模式 id，对应 resources/modes/<id>.md。决定工具白名单与行为片段。 */
+	readonly interactionId: string;
 	readonly modelId: string | undefined;
 	readonly isStreaming: boolean;
 	/** 上下文占用。undefined 表示尚未有过一次请求。 */
@@ -103,13 +115,20 @@ export interface SessionState {
 export interface SessionSnapshot {
 	readonly state: SessionState;
 	readonly entries: readonly ConversationEntry[];
-	/** 可用的交互模式，供 UI 渲染切换器。 */
+	/** 可选场景，供首页页签渲染。 */
+	readonly availableScenes: readonly ModeDescriptor[];
+	/** 可选交互模式，供对话页切换器渲染。 */
 	readonly availableModes: readonly ModeDescriptor[];
 }
 
-/** 一个交互模式的展示信息。工具白名单不下发到 UI——UI 不需要知道。 */
+/**
+ * 一个场景或交互模式的展示信息。
+ * 工具白名单不下发到 UI —— 那是 daemon 的判定依据，UI 不需要也不该知道。
+ */
 export interface ModeDescriptor {
 	readonly id: string;
 	readonly label: string;
 	readonly description: string;
+	/** 该项是否已实现。未实现的仍然显示（对齐 WorkBuddy 的能力面），点击给明确反馈。 */
+	readonly ready: boolean;
 }

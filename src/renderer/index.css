@@ -518,13 +518,65 @@ button {
 	white-space: pre-wrap;
 }
 
+/* 工具卡片：折叠头 + 可展开正文。padding 归 .tool-head，整行都可点。 */
 .entry.tool {
 	display: flex;
-	gap: 8px;
-	align-items: baseline;
+	flex-direction: column;
+	padding: 0;
+	overflow: hidden;
 	background: var(--bg-raised);
 	border-left: 2px solid var(--primary);
 	font-size: 13px;
+	white-space: normal;
+}
+
+.entry.tool-error {
+	border-left-color: var(--danger);
+}
+
+.tool-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 12px;
+	text-align: left;
+}
+
+/* 无正文可展开时不给点击手型，避免暗示能点开。 */
+.tool-head:disabled {
+	cursor: default;
+}
+
+.tool-head:not(:disabled):hover {
+	background: var(--bg-hover);
+}
+
+.tool-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex: 0 0 auto;
+}
+
+.tool-dot.running {
+	background: var(--text-dim);
+	/* 执行中用呼吸动画，静态点看不出「还在跑」。 */
+	animation: tool-pulse 1.1s ease-in-out infinite;
+}
+
+.tool-dot.ok {
+	background: var(--ok);
+}
+
+.tool-dot.bad {
+	background: var(--danger);
+}
+
+@keyframes tool-pulse {
+	50% {
+		opacity: 0.25;
+	}
 }
 
 .tool-label {
@@ -533,10 +585,35 @@ button {
 }
 
 .tool-summary {
+	flex: 1 1 auto;
 	color: var(--text-dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.tool-caret {
+	flex: 0 0 auto;
+	color: var(--text-dim);
+	transition: transform 0.15s ease;
+}
+
+.tool-caret.open {
+	transform: rotate(180deg);
+}
+
+.tool-detail {
+	margin: 0;
+	padding: 10px 12px;
+	border-top: 1px solid var(--border);
+	/* 工具输出可能很长（读文件、搜索结果），限高避免把对话冲掉。 */
+	max-height: 320px;
+	overflow: auto;
+	color: var(--text-dim);
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 .stream-pending {
@@ -576,4 +653,643 @@ button {
 		opacity: 1;
 		transform: translate(-50%, 0);
 	}
+}
+
+/* ── 设置页 ───────────────────────────────────────────────────── */
+
+.settings {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--bg);
+}
+
+.settings-head {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 20px;
+	border-bottom: 1px solid var(--border);
+}
+
+.settings-head h1 {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.settings-body {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: 20px 24px 40px;
+	max-width: 900px;
+	width: 100%;
+	margin: 0 auto;
+}
+
+.settings-error {
+	margin-bottom: 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--danger);
+	border-radius: var(--radius-md);
+	background: color-mix(in srgb, var(--danger) 8%, var(--bg));
+	color: var(--danger);
+	font-size: 13px;
+	/* 错误信息可能很长（如 models.json 的解析错误），保留换行便于阅读。 */
+	white-space: pre-wrap;
+}
+
+.settings-empty {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 13px;
+}
+
+.settings-section {
+	margin-bottom: 28px;
+}
+
+.settings-section-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 10px;
+}
+
+.settings-section-head h2 {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+	flex: 1 1 auto;
+}
+
+.settings-foot {
+	margin: 24px 0 0;
+	color: var(--text-dim);
+	font-size: 12px;
+	/* 配置目录路径较长，允许在任意位置断行。 */
+	overflow-wrap: anywhere;
+}
+
+/* ── 通用小按钮 ───────────────────────────────────────────────── */
+
+.mini-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	font-size: 12px;
+	color: var(--text);
+	flex: 0 0 auto;
+}
+
+.mini-btn:hover:not(:disabled) {
+	background: var(--bg-hover);
+}
+
+.mini-btn:disabled {
+	color: var(--text-dim);
+	cursor: default;
+}
+
+.mini-btn.danger {
+	color: var(--danger);
+	border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.mini-btn.danger:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--danger) 8%, var(--bg));
+}
+
+.primary-btn {
+	padding: 7px 18px;
+	border-radius: 8px;
+	background: var(--primary);
+	color: var(--primary-text);
+	font-size: 13px;
+}
+
+.primary-btn:hover:not(:disabled) {
+	opacity: 0.88;
+}
+
+.primary-btn:disabled {
+	background: var(--border);
+	color: var(--text-dim);
+	cursor: default;
+}
+
+/* ── 模型卡片 ─────────────────────────────────────────────────── */
+
+.model-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+	gap: 10px;
+}
+
+.model-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+	text-align: left;
+}
+
+.model-card:hover:not(:disabled) {
+	border-color: var(--text-dim);
+}
+
+.model-card.active {
+	border-color: var(--primary);
+	background: var(--bg-raised);
+}
+
+/* 未配置凭据的模型点了必然报错，视觉上明确禁用。 */
+.model-card.unavailable {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.model-card-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.model-card-name {
+	font-size: 13px;
+	font-weight: 500;
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.model-card-meta {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+/* ── 服务商列表 ───────────────────────────────────────────────── */
+
+.provider-list {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+}
+
+.provider-row {
+	border-bottom: 1px solid var(--border);
+}
+
+.provider-row:last-child {
+	border-bottom: 0;
+}
+
+.provider-main {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 9px 12px;
+}
+
+.provider-row:hover .provider-main {
+	background: var(--bg-sidebar);
+}
+
+/* 已配置的服务商亮点，未配置的灰点 —— 一眼扫出哪些能用。 */
+.provider-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--border);
+	flex: 0 0 auto;
+}
+
+.provider-dot.on {
+	background: var(--ok);
+}
+
+.provider-name {
+	font-size: 13px;
+	font-weight: 500;
+	flex: 0 0 auto;
+}
+
+.provider-tag {
+	padding: 1px 6px;
+	border-radius: 4px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: 11px;
+}
+
+.provider-meta,
+.provider-hint {
+	font-size: 12px;
+	color: var(--text-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.key-input {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 12px 10px;
+	flex-wrap: wrap;
+}
+
+.key-input input {
+	flex: 1 1 260px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+}
+
+.key-note {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+/* ── 自定义服务商表单 ─────────────────────────────────────────── */
+
+.custom-form {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-bottom: 14px;
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-sidebar);
+}
+
+.form-head {
+	display: flex;
+	align-items: center;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.form-head span {
+	flex: 1 1 auto;
+}
+
+.form-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.field-label {
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.field input[type="text"],
+.field input[type="password"],
+.field input[type="number"],
+.field input:not([type]) {
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+}
+
+.field input:disabled {
+	background: var(--bg-raised);
+	color: var(--text-dim);
+}
+
+.field-hint {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.field-error {
+	font-size: 11px;
+	color: var(--danger);
+}
+
+.check {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: var(--text);
+	cursor: pointer;
+}
+
+.check.compact {
+	font-size: 11px;
+	color: var(--text-dim);
+	flex: 0 0 auto;
+}
+
+.check input {
+	margin: 0;
+	cursor: pointer;
+}
+
+.api-options {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.api-option {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	text-align: left;
+	font-size: 12px;
+	flex: 1 1 170px;
+}
+
+.api-option:hover {
+	border-color: var(--text-dim);
+}
+
+.api-option.active {
+	border-color: var(--primary);
+	background: var(--bg-raised);
+}
+
+.model-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.model-row input {
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 12px;
+}
+
+.model-row .model-id {
+	flex: 1 1 150px;
+}
+
+.model-row .model-name {
+	flex: 1 1 120px;
+}
+
+/* 上下文窗口与最大输出是数字，给固定窄宽度即可。 */
+.model-row .model-num {
+	flex: 0 0 84px;
+}
+
+/* ── 侧栏底部 ─────────────────────────────────────────────────── */
+
+.footer-text {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.footer-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px;
+	border-radius: 6px;
+	color: var(--text-dim);
+	flex: 0 0 auto;
+}
+
+.footer-btn:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+/* ── 交互模式切换（对话页右上角）─────────────────────────────── */
+
+.mode-switch {
+	position: relative;
+	flex: 0 0 auto;
+}
+
+.mode-menu {
+	position: absolute;
+	top: calc(100% + 4px);
+	right: 0;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	min-width: 220px;
+	padding: 4px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-card);
+}
+
+.mode-menu-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 7px 9px;
+	border-radius: 7px;
+	text-align: left;
+}
+
+.mode-menu-item:hover {
+	background: var(--bg-hover);
+}
+
+.mode-menu-item.active {
+	background: var(--bg-raised);
+}
+
+.mode-menu-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+/* 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），用标签说明状态。 */
+.mode-menu-tag {
+	padding: 0 5px;
+	border-radius: 4px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: 10px;
+	font-weight: 400;
+}
+
+.mode-menu-item.active .mode-menu-tag {
+	background: var(--bg);
+}
+
+.mode-menu-desc {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+/* ── 停止生成 ─────────────────────────────────────────────────── */
+
+/*
+ * 停止键占据发送键的位置，颜色改为警示色。
+ * 同一位置切换语义比另加一个按钮好：流式期间发送本来就不该是主动作。
+ */
+.send-btn.stop {
+	background: var(--danger);
+}
+
+.send-btn.stop:hover {
+	opacity: 0.88;
+}
+
+/* ── 权限审批弹窗 ─────────────────────────────────────────────── */
+
+/*
+ * 阻塞式：daemon 侧的工具执行正 await 在这条链路上。
+ * 遮罩不可点关闭 —— 误触悬空会让工具永久挂住，只能从按钮或 Esc 作答。
+ */
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgb(0 0 0 / 32%);
+}
+
+.permission-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	max-width: 460px;
+	padding: 18px 20px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+/* 高风险时整卡描边警示，避免用户快速点过。 */
+.permission-card.risk-high {
+	border-color: var(--danger);
+}
+
+.permission-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.permission-badge {
+	padding: 2px 8px;
+	border-radius: 5px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: 11px;
+}
+
+.permission-badge.risk-high {
+	background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+	color: var(--danger);
+}
+
+.permission-tool {
+	color: var(--text-dim);
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.permission-summary {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.permission-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	align-self: flex-start;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.permission-toggle:hover {
+	color: var(--text);
+}
+
+/* 折叠态的一行预览：多数情况一个路径就够判断，不该逼用户多点一次。 */
+.permission-preview {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.permission-details {
+	margin: 0;
+	padding: 10px 12px;
+	max-height: 220px;
+	overflow: auto;
+	background: var(--bg-sidebar);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.permission-remember {
+	margin-top: 2px;
+	color: var(--text-dim);
+}
+
+.permission-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 4px;
 }

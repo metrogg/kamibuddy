@@ -1,9 +1,13 @@
 /**
  * 把 SessionEvent 流折叠成可渲染的会话状态。
  *
- * 放在 renderer 里而不是 daemon 里，是有意的：daemon 发的是**增量**，
- * UI 才需要"当前完整视图"这个概念。daemon 不持有 UI 状态，
- * 也就不会出现两侧状态不一致的经典问题。
+ * 放在 shared/ 而非任一端，是因为**两端都需要它**：
+ *   - renderer 用它把增量事件折叠成当前视图；
+ *   - daemon 用它维护同一份历史，供渲染进程重新挂载时经 snapshot 拉取。
+ *
+ * 各写一份必然漂移（同一个事件在两边折叠出不同结果，且症状是「刷新后内容变了」，
+ * 极难排查），而 daemon 不许 import renderer（AGENTS.md §1）。
+ * 这个 reducer 纯函数、零依赖，放 shared/ 两端共用是唯一不漂移的做法。
  *
  * 纯函数，无 React 依赖，可单测。
  */
@@ -16,11 +20,14 @@ import type {
 	SessionState,
 	ModeDescriptor,
 	ToolCard,
-} from "@shared/session-events.ts";
+} from "./session-events.ts";
 
 export interface ConversationView {
 	readonly state: SessionState;
 	readonly entries: readonly ConversationEntry[];
+	/** 场景轴选项（首页页签）。 */
+	readonly availableScenes: readonly ModeDescriptor[];
+	/** 交互轴选项（对话页切换器）。 */
 	readonly availableModes: readonly ModeDescriptor[];
 }
 
@@ -32,11 +39,13 @@ export const initialConversation: ConversationView = {
 	state: {
 		sessionId: "",
 		cwd: "",
-		modeId: "craft",
+		sceneId: "work",
+		interactionId: "craft",
 		modelId: undefined,
 		isStreaming: false,
 	},
 	entries: [],
+	availableScenes: [],
 	availableModes: [],
 };
 
@@ -60,6 +69,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		return {
 			state: action.snapshot.state,
 			entries: action.snapshot.entries,
+			availableScenes: action.snapshot.availableScenes,
 			availableModes: action.snapshot.availableModes,
 		};
 	}
