@@ -1,0 +1,267 @@
+# KamiBuddy 架构设计
+
+> 基于 pi agent harness 的办公 AI Agent 桌面端，对标腾讯 WorkBuddy。
+> 本文是开发契约：改架构先改本文，理由写进 §4 决策记录。
+> 开发约定见 [AGENTS.md](../AGENTS.md)。
+
+## 1. 目标与范围
+
+**交付目标**：两周内交出一个能直接给部门同事试用的桌面应用。
+成功标准不是功能覆盖率，是"文档生成这件事真能用"。
+
+**范围策略：深度优先**。WorkBuddy 的功能清单当规格书，深度优先只决定做的顺序，不缩小最终范围。
+
+本期做：
+
+- Electron 单窗口 + 流式对话 + 工具调用可视化 + 右侧产物预览面板
+- 权限确认弹窗
+- 三模式 Ask / Craft / Plan（工具白名单 + 提示片段组合）
+- 文档生成纵切片：职场文档 + 联网调研报告
+- 联网工具（WebFetch / WebSearch，pi 没有，自研）
+- 技能机制（pi 原生 Agent Skills）+ 记忆 + 提示词模板
+
+本期不做（写明原因，避免被当作遗漏）：
+
+| 不做 | 原因 |
+|---|---|
+| 沙箱 | WorkBuddy 自研 tsbx + 语言 shim 是一个团队的量级 |
+| IM 多渠道 | 交付形态是桌面试用，渠道不在评价路径上 |
+| 插件市场 | pi 有 packages 机制（npm/git 安装），本期用不上分发 |
+| 多模态生成 | 依赖图像/视频模型接入，价值不在文档主线上 |
+| Agent Teams | 单场景纵切片不需要多智能体协作 |
+| 云端配置热更 | 本期本地配置文件，但**接口按可换成云端设计**（见 §4.5） |
+| 多会话标签 / 托盘 / 自动更新 / 设置界面 | 壳层成本，试用阶段用配置文件代替 |
+| MCP | 内部系统集成本期不做；pi 也没有内置 MCP |
+
+## 2. 技术选型
+
+| 层 | 选型 | 理由 |
+|---|---|---|
+| Agent 内核 | `@earendil-works/pi-coding-agent` **0.85.1**，npm 依赖 | 不 fork。pi 迭代快，fork 即永久背 merge 债 |
+| 桌面壳 | Electron + electron-vite + React + TypeScript | 本地文件与本地 Office 是办公 Agent 的能力上限所在 |
+| Agent 进程 | Electron `utilityProcess`，直接 import pi SDK | 见 §4.1、§4.2 |
+| 文档中间态 | HTML | 一份代码同时拿到预览 / PDF / 图表 / OOXML 导出，见 §4.3 |
+| 模型 | 自备 API Key，走 `pi-ai` 现成 provider | 不自建抽象层，`pi-ai` 已是多 provider 统一层 |
+
+WorkBuddy 的关键认知同样适用于我们：**Agent 主循环不自研**。
+它 bundle 了 OpenAI Agents SDK，工程量全在外面那一圈（权限链、沙箱、提示词、生态）。
+我们把 pi 放在同一个位置。
+
+## 3. 分层架构
+
+```
+┌ Renderer (React) ─────────────────────────────────┐
+│ 对话流 / 工具调用卡片 / 产物预览 / 权限弹窗          │
+└──────────────────▲────────────────────────────────┘
+        Electron IPC（契约集中在 src/shared/ipc.ts）
+┌──────────────────┴────────────────────────────────┐
+│ Main  只做窗口 / 生命周期 / safeStorage / 文件对话框 │
+└──────────────────▲────────────────────────────────┘
+        MessagePort（utilityProcess）
+┌──────────────────┴────────────────────────────────┐
+│ Daemon  会话编排 / 配置 / 审计                      │
+│  core/       pi SDK 适配层（pi 类型止步于此）        │
+│  extensions/ 自定义工具 / 权限门 / 模式 / UI 路由    │
+└──────────────────▲────────────────────────────────┘
+                   │
+┌──────────────────┴────────────────────────────────┐
+│ documents/  纯函数：内容+tokens+体裁 → HTML → bytes │
+│             不认识 pi，不认识 Electron，可单测        │
+└───────────────────────────────────────────────────┘
+```
+
+比 WorkBuddy 的五层（Renderer→Main→Daemon→Sidecar→CLI）少两层：
+不需要 Sidecar 保姆进程（`utilityProcess` 由 Electron 托管），
+不需要独立 CLI 进程（直接 import SDK，见 §4.2）。
+
+### 目录结构
+
+```
+src/
+  shared/      类型 + IPC 契约。零运行时依赖，谁都可以 import
+  documents/   文档流水线（纯函数）
+  core/        pi SDK 适配层
+  extensions/  pi 扩展：工具 / 权限门 / 模式 / uiContext 路由
+  daemon/      utilityProcess 入口
+  main/        Electron 主进程
+  preload/
+  renderer/    React
+resources/     modes / prompts / genres / tokens / skills（能力即数据）
+scripts/       冒烟测试 / 依赖规则校验
+开源项目/pi/    参考源码，不参与构建
+```
+
+依赖方向单向流动，`npm run check:deps` 机械校验。规则见 [AGENTS.md](../AGENTS.md) §1。
+
+## 4. 决策记录
+
+### 4.1 Daemon 用 utilityProcess，不用独立 Node sidecar
+
+Electron 自带 Node 运行时，用户不需要装任何东西，与 §4.4 的零依赖原则一致。
+崩溃不带走主进程。
+
+**原生模块风险（已大幅降低）**。依赖树里有三个 `.node`：
+
+| 模块 | 加载时机 | ABI |
+|---|---|---|
+| `@mariozechner/clipboard` | **import 期立即加载**（实测，非懒加载） | napi-rs 构建（`package.json` 有 `napi` 字段） |
+| `pi-tui` `win32-console-mode` | 懒加载（`terminal.ts:375`） | 用 `napi_register_module_v`，运行时解析 `napi_*` 符号 |
+| `pi-tui` `darwin-modifiers` | 懒加载（`native-modifiers.ts:29`） | 同上，走 dlfcn（仅 macOS） |
+
+原先的假设"全部懒加载，纯 SDK 路径不触及"**被证伪**——clipboard 在 import 期就加载。
+但实际风险更低：三者**全部基于 Node-API**，而 Node-API 的设计目的就是 ABI 稳定，
+跨 Node 版本、跨 Electron 都不需要重编译。若是 V8 内部 API（如 nan）才需要 electron-rebuild。
+
+**D2 已实测确认（风险关闭）**：daemon 在 Electron `utilityProcess` 内成功加载 pi SDK，
+clipboard 原生模块正常加载，无 ABI 错误。
+
+关键旁证：daemon 代码在 `process.parentPort` 不存在时会主动抛错
+（`src/daemon/index.ts` 的 `requireParentPort()`）。它没抛而是正常打印启动日志，
+证明确实跑在 utilityProcess 里，而非退化成普通 Node 进程。
+
+因此 §4.1 的 Node sidecar 退路**不再需要**，进程模型定稿。
+
+### 4.2 用 pi SDK，不 spawn `pi --mode rpc`
+
+pi 两条路都提供。RPC 是 JSONL 子进程协议，隔离性好，但只能用协议暴露的那部分能力。
+SDK 给完整 `AgentSession`：`subscribe()` 事件流、`setModel()`、`steer()`、扩展注册全在手上。
+进程隔离由 `utilityProcess` 提供，不需要再靠协议边界换取。
+
+### 4.3 HTML 是文档流水线的唯一中间态
+
+WorkBuddy 自己就是这条路（`doc-typeset` → HTML → `html-to-docx` → OOXML）。
+一份代码同时得到四样东西：
+
+- **预览**：HTML 直接在 Electron 渲染，文档逐段长出来，演示效果最强且免费
+- **PDF**：`webContents.printToPDF`，Electron 原生，零依赖
+- **图表**：ECharts 在 HTML 里直接跑，不需要图片生成
+- **docx / xlsx / pptx**：导出是末端一步，导出器签名统一 `(html, opts) => Promise<Buffer>`
+
+反例：直接拼 docx 对象，则预览、PDF、图表三件事都要另做一遍。**此路封禁。**
+
+抄 WorkBuddy 的流水线机制（一步不少）：
+
+```
+内容 + design tokens + 体裁
+  → genres/<体裁>/{prompt.md, template.html}
+  → HTML（样式只许引用 CSS 变量，禁裸值）
+  → 六维审查（token 合规 / 结构 / 体裁契合 / 安全 / 排版 / 装饰）
+  → 导出器
+```
+
+### 4.4 文档流水线不碰 shell
+
+pi 在 Windows 上找不到 bash 会**直接抛异常**，不是降级
+（`utils/shell.ts:100`，查找顺序：`settings.shellPath` → `%ProgramFiles%\Git\bin\bash.exe` → PATH 上的 `bash.exe`）。
+目标用户（行政 / 产品 / 销售）机器上不会装 Git for Windows。
+
+WorkBuddy 的解法是自带用户态：`vendor/brokered-bin/` 30 个 toybox 替身、
+`vendor/toybox-macos`、`sitecustomize.py`，Python 侧靠 SessionStart hook 预热 venv。
+代价是 287MB 安装包和一个团队。
+
+我们的解法是不产生依赖：文档流水线全部做成 Node 自定义工具，在进程内完成。
+机制与 WorkBuddy 一致，运行时从 Python 换成 Node。
+
+`shellPath` 作为配置项预留。若后续需要 `bash` 工具或 command hook，
+打包 MinGit（约 50MB）指向它即可，不改代码。
+
+### 4.5 配置读取单一入口
+
+所有配置走 `config.get(key)`，分层合并：内置默认 → 本地文件 → （预留）云端下发。
+云端配置是将来少发版的命根子（WorkBuddy 的 product.json 模式：
+模型目录 / 提示词 / 工具描述 / 阈值全云下发，客户端少发版）。
+
+本期不做云端，但入口现在就统一——将来加一层远程 loader 只改一个模块。
+反面是到处 `readFileSync('settings.json')`，将来全仓库大搜。
+
+### 4.55 构建产物必须是 `.mjs`，且 dev/preview 走包装脚本
+
+两个 Windows + Electron 的坑，都会导致「启动即崩」，且报错极具误导性。记在这里免得重踩。
+
+**坑一：main 产物扩展名。** Electron 的 ESM 主进程按**扩展名**判断模块类型，
+`.js` 会走 CJS 互操作路径，报：
+
+```
+SyntaxError: The requested module 'electron' does not provide an export named 'BrowserWindow'
+```
+
+electron-vite 只在单入口时自动加 `.mjs`，我们是双入口（`index` + `daemon`），
+默认 `entryFileNames` 退回 `[name].js`。故在 `electron.vite.config.ts` 里显式指定
+`entryFileNames: "[name].mjs"`，`package.json` 的 `main` 与 `utilityProcess.fork()`
+的路径同步改为 `.mjs`。
+
+**坑二：IDE 注入 `ELECTRON_RUN_AS_NODE=1`。** Electron 系的 IDE（Trae CN、VS Code、Cursor…）
+本身是 Electron 应用，会给集成终端注入该变量，使 Electron 二进制退化成普通 Node
+——没有 `app`、没有 `BrowserWindow`，**报错与坑一完全相同**，极易误判为构建问题。
+
+判据：`npx electron --version` 打印 Node 版本（`v24.20.0`）而非 Electron 版本（`v44.2.0`）。
+
+因此所有真正拉起 Electron 的命令（`dev` / `start`）都经 `scripts/run-electron.mjs`
+在子进程环境里剔除 `ELECTRON_RUN_AS_NODE`、`ELECTRON_FORCE_IS_PACKAGED`、
+`VSCODE_RUN_IN_ELECTRON`、`NODE_OPTIONS`。`build` 不启动 Electron，无需包装。
+
+### 4.56 daemon ready 用「推送 + 主动查询」双路
+
+daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle，
+**谁先完成取决于机器**。若 `daemonReady` 推送早于渲染进程注册监听器，
+这条推送永久丢失，界面卡在「正在启动」且无法恢复——典型的「本机正常、别人机器白屏」。
+
+解法：main 持有 `DaemonStatus`（只有它知道子进程真实状况），
+渲染进程挂载后除订阅推送外**必须再主动查一次** `INVOKE.daemonStatus`。
+两路都走 `activate()`，用 `activated` 标志保证快照只拉一次。
+
+### 4.6 能力是数据，不是代码
+
+模式 / 提示词 / 体裁 / token 全部放 `resources/` 下的文件，代码只负责读取。
+判据：**加一个体裁或模式，应该是加一个目录，零行代码改动。**
+
+抄 WorkBuddy 的"双面文件"技巧：一份 `.md` 的 YAML frontmatter 给加载器读工具白名单，
+正文给模板引擎读提示片段。一份文件同时定义策略和内容，两者不会漂移。
+
+### 4.7 只在有第二实现的地方开缝
+
+为"将来可能要换"造的抽象层，通常在真要换时并不合用。开缝的五处及其第二实现：
+
+| 缝 | 第二实现（已知，非假想） |
+|---|---|
+| pi SDK 边界（`core/adapter.ts`） | pi 破坏性升级；将来换内核 |
+| UI 传输（`ExtensionUIContext`） | 已验证：TUI / RPC / Electron 三套 |
+| 配置解析（`config.get`） | 本地文件 → 云端下发 |
+| 导出器（`(html, opts) => Buffer`） | PDF、docx 立刻就有两个 |
+| shell 策略（`getShellConfig`） | 无 shell → MinGit |
+
+明确不抽象：LLM provider（`pi-ai` 已是）、插件加载器（pi 有 packages + Skills）、
+会话存储（`SessionManager` 已给 JSONL / 内存两种）、多租户、事件 schema 版本号。
+
+## 5. pi 能力边界（D1 验证结论）
+
+| 项 | 结论 |
+|---|---|
+| `ctx.ui` 路由到 Electron | **通过**。`bindExtensions({uiContext, mode:"rpc"})` 注入自己的实现；`modes/rpc/rpc-mode.ts:136` 是现成范本 |
+| 可跨进程的 UI 方法 | `confirm` / `select` / `input` / `notify` / `setStatus` / `setTitle` / `setWidget`（仅字符串数组）。权限弹窗够用 |
+| 不可跨进程 | `custom()` / `setFooter` / `setHeader` / `setWorking*` / `onTerminalInput` / 编辑器系列——需要真 TUI 对象。复杂交互走自己的 IPC |
+| `ExtensionMode` | 仅 `"tui" \| "rpc" \| "json" \| "print"`，无自定义槽位。宿主声明 `"rpc"`（非 TUI 路径里能力最全） |
+| Skills | 原生支持 Agent Skills 标准，可加载 `~/.pi/agent/skills/`、`.pi/skills/`、`.agents/skills/`。WorkBuddy 的渐进式披露架构可近乎原样搬 |
+| 会话存储 | `SessionManager.create()` 走 JSONL 文件、`inMemory()` 走内存。`node:sqlite` 在独立包里，不引入 |
+| 内置工具 | 仅 8 个：bash / powershell / read / write / edit / find / grep / ls |
+| 缺口需自研 | WebFetch / WebSearch / 权限判定链 / MCP |
+| 原生模块 | 三个 `.node`，clipboard 在 import 期即加载（原"全懒加载"假设已证伪）；但全部基于 Node-API，ABI 稳定。基线 3/3 通过，待 Electron 内复核（§4.1） |
+| SDK 导出面 | 实测确认 `createAgentSession` / `SessionManager` / `ModelRuntime` / `AgentSession` 均从包根导出 |
+
+## 6. 十天计划
+
+| 天 | 内容 |
+|---|---|
+| D1 | pi 能力边界验证（**已完成**，见 §5）；仓库骨架、架构文档、依赖规则校验 |
+| D2 | Electron 骨架 + daemon（utilityProcess）+ IPC 事件桥 + 最小对话界面端到端；**原生模块冒烟** |
+| D3 | 工具调用卡片渲染 + 权限确认弹窗（`uiContext` 路由落地） |
+| D4-5 | 三模式（工具白名单 + 提示片段组合）+ 提示词模板 + 技能加载 |
+| D6-8 | 文档纵切片：HTML 流水线、体裁模板、design token、ECharts、导出、预览面板 |
+| D9 | 联网工具（WebFetch / WebSearch）+ 记忆 |
+| D10 | 打包、修 bug、演示脚本与交付文档 |
+
+## 7. 合规
+
+`docs/workbuddy分析/` 是经批准的逆向调研素材，仅限内部参考。
+**机制可以学，文字必须自己写**——提示词、模板、技能正文一律独立撰写，
+不从 WorkBuddy 原文复制。详见 [AGENTS.md](../AGENTS.md) §6。

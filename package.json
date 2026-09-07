@@ -1,0 +1,38 @@
+{
+  "name": "kamibuddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "办公 AI Agent 桌面端（基于 pi agent harness）",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./out/main/index.mjs",
+  "scripts": {
+    "dev": "node scripts/run-electron.mjs dev",
+    "build": "electron-vite build",
+    "start": "node scripts/run-electron.mjs preview",
+    "smoke:sdk": "tsx scripts/smoke-pi-sdk.ts",
+    "check:deps": "tsx scripts/check-dependency-rules.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run check:deps",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.2.0",
+    "electron-vite": "5.0.0",
+    "tsx": "4.22.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "3.2.4"
+  }
+}

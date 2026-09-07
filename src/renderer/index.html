@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!--
+			CSP 不写在这里，改由主进程按 dev/prod 分别下发（src/main/index.ts）。
+			原因：dev 模式下 @vitejs/plugin-react 会注入内联的 react-refresh preamble，
+			静态 meta CSP 收紧 script-src 就会把它拦掉。
+		-->
+		<title>KamiBuddy</title>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./main.tsx"></script>
+	</body>
+</html>
