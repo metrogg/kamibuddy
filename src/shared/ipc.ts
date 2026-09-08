@@ -15,7 +15,15 @@
 
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
-import type { CustomProviderInput, SettingsSnapshot, SkillsSnapshot, SkillInfo } from "./settings.ts";
+import type {
+	CustomProviderInput,
+	SettingsSnapshot,
+	SkillsSnapshot,
+	SkillInfo,
+	WebSearchConfigInfo,
+	WebSearchConfigInput,
+	WebSearchTestResult,
+} from "./settings.ts";
 
 /* ────────────────────────────────────────────────────────────────
  * 通道名
@@ -100,6 +108,14 @@ export const INVOKE = {
 	readCustomProvider: "settings:read-custom-provider",
 	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
 	refreshCatalog: "settings:refresh-catalog",
+	/** 读回联网搜索配置（不含 key，只给 provider + 是否已配）。 */
+	getWebSearchConfig: "settings:get-web-search-config",
+	/** 保存联网搜索配置（服务商 + API Key，Key 落偏好文件）。 */
+	setWebSearchConfig: "settings:set-web-search-config",
+	/** 清除联网搜索配置。 */
+	clearWebSearchConfig: "settings:clear-web-search-config",
+	/** 测试联网搜索：用已存的配置真实搜索一次，返回可展示的结果。 */
+	testWebSearch: "settings:test-web-search",
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
@@ -238,6 +254,10 @@ export interface InvokeMap {
 	[INVOKE.deleteCustomProvider]: { args: [providerId: string]; result: void };
 	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
+	[INVOKE.getWebSearchConfig]: { args: []; result: WebSearchConfigInfo };
+	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
+	[INVOKE.clearWebSearchConfig]: { args: []; result: void };
+	[INVOKE.testWebSearch]: { args: []; result: WebSearchTestResult };
 
 	[INVOKE.skillsSnapshot]: { args: []; result: SkillsSnapshot };
 	[INVOKE.importSkill]: { args: [sourcePath: string]; result: SkillInfo };

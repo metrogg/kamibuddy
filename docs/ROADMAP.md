@@ -5,6 +5,11 @@
 >
 > 接手前必读顺序：[STATUS.md](STATUS.md)（现状 / 怎么跑 / 已知坑）→
 > [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）。
+>
+> 竞品参考材料在 [docs/workbuddy分析/](workbuddy分析/)，其中
+> **[08-builtin-tools-reference.md](workbuddy分析/08-builtin-tools-reference.md)
+> 是 WorkBuddy 桌面 16 个自研工具的逐实现对照手册**（入参/结果/推送契约/可抄要点），
+> 做 T3/T6/T11 前先读它。
 
 ## 0. 给接手者的硬约束
 
@@ -166,45 +171,28 @@ prompt-switch 胶水（仿 permission-gate.test 的假 ExtensionAPI）。
 风险：`resources/` 在打包后要能被读到 —— electron-vite 默认不复制它。
 建议现在就验证一次打包路径，别等 T14。
 
-### T2 · 技能机制接通（✅ 已完成，2026-09-07）
+### T2 · 技能机制接通（✅ 已完成 · 2026-09-08）
 
-已落地：
+已落地：pi 原生 Agent Skills 加载（内置 `resources/skills/` + 用户 `~/.kamibuddy/skills/`）、
+侧栏独立页面「专家·技能·连接器」（`renderer/skills-view.tsx`，不放设置页）、
+技能导入（`core/skill-install.ts`，含 frontmatter 校验与重名拒绝）、
+提示词技能段由 `prompt-composer` 每轮现读（导入后下一轮即生效，无需重启）。
 
-- **加载**：pi 的 `DefaultResourceLoader` 挂 `additionalSkillPaths: [resources/skills/]`（内置技能随应用分发）；
-  用户的技能放 `~/.kamibuddy/skills/` 自动发现。pi 原生实现 Agent Skills 标准，零自研。
-- **提示词**：`{{skills}}` 槽位直接委托 pi 的 `formatSkillsForPrompt`（agentskills.io 规范 XML，
-  含 name/description/**filePath**）——格式决定权归 pi，它升级我们零改动。
-  调用机制是渐进式披露：模型按描述匹配后用 `read` 加载全文（这就是"无 read 则技能消失"陷阱的根源），
-  也可 `/skill:name` 强制。
-- **首个技能包**：`resources/skills/meeting-notes/`（会议纪要整理，红线+步骤+输出格式，原创文案）。
-- **设置页**：技能列表（名称 / 内置或自装 / 描述 / 仅手动触发标记）。
-  **按技能开关未做**——pi 没有原生 per-skill disable（只有全局 `enableSkillCommands` 与
-  frontmatter `disable-model-invocation`），要做得自己持久化过滤，后排期。
-- **验证**：smoke:session 断言 `meeting-notes` 被发现（13/13）。
+**注意**：pi 的 `buildSystemPrompt` 只在工具白名单含 `read` 时注入技能段——
+模式 frontmatter 去掉 `read` 会让技能静默消失（见上方 §1 的陷阱条目）。
 
-**验收**（需用户重启后确认）：问「帮我把这段会议记录整理成纪要」→ 模型应读 SKILL.md 并按格式产出文件。
+待补：单技能开关（pi 无原生 per-skill disable，需自己做持久化过滤，优先级低）。
 
 写技能的方法论照抄 WorkBuddy 的**渐进式披露**：
-`SKILL.md` 只写红线 + 路由 + 触发场景穷举（description 写口语化场景），
-方法论拆 `references/*.md` 按需 Read —— 控制常驻上下文。
+`SKILL.md` 只写红线 + 路由 + `when_to_use`（穷举口语化触发场景），
+方法论拆到 `references/*.md` 按需 Read —— 控制常驻上下文。
 参考 `docs/workbuddy分析/03-plugins-skills.md` 的 `wb-finance-skill` 案例。
-技能名只能小写 a-z / 0-9 / 连字符（pi 的 validateName）。
 
-### T3 · 联网工具（WebFetch + WebSearch）
+### T3 · 联网工具（WebFetch + WebSearch）（✅ 已完成 · 2026-09-08）
 
-pi 没有，必须自研。**没有联网，任何调研类任务都做不了**，这是通用 agent 的底线能力。
-
-要做：在 `src/extensions/` 里注册两个自定义工具。
-
-- `WebFetch`：取 URL → 正文提取（建议 `@mozilla/readability` + `linkedom`，纯 JS 无原生依赖）→ 转 Markdown。
-- `WebSearch`：需要一个搜索 API。**这个要用户定**（Bing / Brave / Tavily / 博查等，都要 Key）。
-  Key 走已有的凭据体系，别新造一套。
-
-注意：
-- 大输出必须截断或落盘 —— 一个网页正文可能几万字，直接进上下文会爆。
-  WorkBuddy 的做法是超阈值落盘、只给模型截断+路径指针。
-- 抓回来的内容是**不可信输入**，可能含提示注入。至少在工具结果里加一层标记提示模型别当指令。
-- 这两个工具是「只读」的，在 `permission-policy.ts` 里登记为放行，别让它们弹窗。
+`web_search` / `web_fetch` 两个自定义工具已注册（`extensions/web-tools.ts`），
+四个搜索服务商（Tavily/博查/Brave/Bing）做成注册表，设置页「联网搜索」区块选填 Key。
+已落地细节见 [STATUS.md 联网工具（2026-09-08 落地）](STATUS.md)。
 
 ### T4 · 会话管理（多会话 / 历史 / 恢复）
 
@@ -230,18 +218,19 @@ WorkBuddy 是四层：云端画像 / 用户级 `MEMORY.md`（4000 字符上限�
 
 ## 3. P1 · 通用体验
 
-### T6 · 产物预览面板
+### T6 · 产物预览面板（✅ 已完成 · 2026-09-08，由并行会话推进）
 
-**通用能力大多不可见**（"它有记忆"演示不出来），这一项是让工作**看得见**的关键，
-也是后面文档能力的承载面。优先级不低。
+已落地：`present_files` 交付工具（`extensions/present-files.ts`，对齐 WorkBuddy
+「产物交付唯一入口」协议）、右侧预览面板（`renderer/artifact-panel.tsx`：多 tab +
+概览下拉 + 变更 diff 视图）、静态预览服务（`core/preview-server.ts`，根固定为当前
+工作区、resolve 后必须在根内防 `../` 穿越，playground 不起服务）。
 
-要做：右侧面板，列出会话工作目录（`~/KamiBuddy`）下的产物 → 点击预览
-（HTML 直接 iframe 渲染、图片直接显示、其他给"用系统程序打开"）。
-
-`shared/ipc.ts` 里 `openArtifact` / `saveArtifactAs` 两个通道已就绪，主进程侧已实现。
-
-**安全**：预览模型生成的 HTML 必须放进独立沙箱 iframe，
-不能共享渲染进程的权限（`main/index.ts` 的 CSP 只保护主界面）。
+**遗留一处安全项**（不阻塞交付，但打包前应复核）：预览 iframe 目前是
+`sandbox="allow-scripts allow-same-origin allow-forms"`。这两个值同时给会**削弱沙箱**
+——模型生成的 HTML 拿到脚本执行 + 同源身份后，可访问预览服务同源下的其他工作区文件。
+当前风险有限（服务根就是用户自己的工作区、内容由用户自己的模型产出、不含凭据），
+但更稳的做法是让预览服务对每个产物发不同 origin，或去掉 `allow-same-origin`
+（代价是页面内 fetch 相对路径会失效）。决定前先确认 T11 生成的 HTML 是否依赖同源请求。
 
 ### T7 · 文件引用（@ 与附件）
 
@@ -259,11 +248,15 @@ WorkBuddy 的治理机制值得抄：嵌套深度上限、spawn 预算、**子�
 pi 没有，`examples/extensions/plan-mode/`、`todo.ts` 有参考实现。
 两轴里的 `plan` 模式要靠它落地。长任务的进度可见性也依赖它。
 
-### T10 · 上下文用量与压缩提示
+### T10 · 上下文用量与压缩提示（✅ 已完成 · 2026-09-08，由并行会话推进）
 
-`session.getContextUsage()` 已在 `SessionHost.state` 里下发（`contextUsage` 字段），
-但 UI 还没显示。长对话时用户需要知道「快满了」。
-pi 内置自动压缩，监听 `compaction_start` / `compaction_end` 给个提示即可。
+已落地：输入条常驻用量圆环（`renderer/context-usage.tsx`，点击展开分类估算——
+系统提示词 / 技能 / 对话 / 工具结果，成分口径在 `shared/context-usage.ts`）、
+`/compact` 手动压缩（`shared/builtin-commands.ts` 拦截 + `SessionHost.compact`）、
+压缩期间复用 run 记账维持流式态与停止键（`compaction_start` / `compaction_end`）。
+
+**一处已修的坑**：压缩后 pi 的 `getContextUsage()` 有一段 `tokens=null` 空窗，
+此时必须清掉明细，否则圆环停在压缩前的旧值（reducer 里有对应分支与测试）。
 
 ---
 
@@ -334,18 +327,24 @@ WorkBuddy 的 `wb-finance-skill` 是教科书案例（46 篇 references + 16 个
 
 ---
 
-## 6. 排期建议
+## 6. 排期建议（2026-09-08 修订）
 
-到 2026-09-21 还有两周，而原十天计划的 D1-D3 已在一天内完成，余量充足。
+**P0 底座与 P1 主要体验已完成**：T1 提示词两轴、T2 技能机制、T3 联网工具、
+T6 产物交付与预览面板、T10 用量与压缩。距 2026-09-21 约两周。
+
+剩余按价值排序：
 
 | 顺序 | 内容 | 理由 |
 |---|---|---|
-| 1 | T1 提示词两轴 → 打一次包（T14 前哨） | 提示词是一切行为的基础；打包尽早暴露路径问题 |
-| 2 | T2 技能机制 | 后面所有专用能力的入口 |
-| 3 | T3 联网工具 | 通用 agent 的底线能力 |
-| 4 | T6 产物面板 + T4 会话管理 | 让工作看得见、留得住 |
-| 5 | T11 文档生成（第一个技能包） | 产品价值主菜，验证 T2 是否做透 |
-| 6 | 其余按需 | |
+| 1 | **T14 先打一次包** | 拖到最后风险最高：`resources/` 是否被复制、asar 内能否读文件、原生模块——这些只有打包才暴露。现在打一次，问题还有时间修 |
+| 2 | **T11 文档生成** | 产品价值主菜，也是「交给同事试用」时唯一能一眼看懂的能力。做一个体裁（周报）到位，胜过三个半成品 |
+| 3 | T4 会话恢复 | 试用者必然会问「昨天那个报告呢」。JSONL 已落盘，主要是 UI |
+| 4 | T5 记忆 | 「以后周报都用这个格式」——试用中很容易被夸的点 |
+| 5 | 其余（T7/T8/T9/T12/T13） | 按试用反馈决定 |
+
+**补测试债**：`extensions/present-files.ts` 目前**没有测试**（其余扩展都有：
+policy 23 / gate 16 / prompt-switch 3 / web-tools 7）。它是交付协议的实现，
+路径分类与工作区校验出错会直接影响产物可见性，动它之前先补上。
 
 **每完成一项就更新 [STATUS.md](STATUS.md)** —— 它是进度的唯一权威来源，
 写给非当事人也能读懂（用户明确要求过）。
@@ -354,14 +353,18 @@ WorkBuddy 的 `wb-finance-skill` 是教科书案例（46 篇 references + 16 个
 
 ## 7. 等用户亲自验证的事
 
-我（上一个 AI）没有 API Key 也不该用用户的，所以**从未真正调用过一次模型**。
-下列事项只能用户操作，做任何新功能前建议先验完，免得在错误的基础上继续：
+**已通过**（用户实测）：真实对话（填 Key → 选模型 → 正常回复）、Markdown 与
+思考块折叠、工具卡片、工作空间切换。
 
-1. **真实对话** —— 设置 → 填 Key → 选模型 → 首页发一句话。
-   国内网络推荐 DeepSeek / 智谱（pi 内置，填 Key 即用）。
-2. **权限弹窗** —— 让它「在桌面建一个 txt」应弹审批框；「在工作目录写文件」应直接放行。
-3. **工具卡片** —— 折叠 / 展开 / 状态点 / 失败态。
+**待验证**——必须**重启应用**（Electron 不热更新 daemon/preload，改动只在新进程生效）：
+
+1. **联网搜索** —— 设置 → 联网搜索 → 「测试连接」，15 秒内必有结果。
+   服务商侧已实测可用（博查直连返回真实结果），验的是应用内链路。
+2. **联网问答** —— **新建任务**问「今天嘉立创的股价」，应出现「联网搜索 → 已搜索」
+   卡片且回答带来源。旧会话不生效：工具集在建会话时一次性注入。
+3. **权限弹窗** —— 「在桌面建一个 txt」应弹审批框；写工作目录内应直接放行。
 4. **中断** —— 长任务中途点停止键。
+5. **产物交付** —— 让它生成一份文件，看产物卡片与右侧预览面板。
 
-已通过构造级实测的部分见 `npm run smoke:session`（12/12），
-但那只验证了「会话能建起来」，不等于「模型能正常回话」。
+构造级实测见 `npm run smoke:session`（13/13），
+但那只验证「会话能建起来」，不等于「端到端行为正确」。

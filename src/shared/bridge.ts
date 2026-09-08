@@ -19,7 +19,15 @@ import type {
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
-import type { CustomProviderInput, SettingsSnapshot, SkillsSnapshot, SkillInfo } from "./settings.ts";
+import type {
+	CustomProviderInput,
+	SettingsSnapshot,
+	SkillsSnapshot,
+	SkillInfo,
+	WebSearchConfigInfo,
+	WebSearchConfigInput,
+	WebSearchTestResult,
+} from "./settings.ts";
 
 /** 订阅函数统一返回取消订阅的闭包，配合 React useEffect 的清理约定。 */
 export type Unsubscribe = () => void;
@@ -77,6 +85,14 @@ export interface KamiBridge {
 		providerId: string,
 	) => Promise<CustomProviderInput | undefined>;
 	readonly refreshCatalog: () => Promise<void>;
+
+	/* ── 联网搜索 ─────────────────────────────────────────────────── */
+
+	/** 读回配置（不含 key 本身，界面上只显示「已保存」）。 */
+	readonly getWebSearchConfig: () => Promise<WebSearchConfigInfo>;
+	readonly setWebSearchConfig: (input: WebSearchConfigInput) => Promise<void>;
+	readonly clearWebSearchConfig: () => Promise<void>;
+	readonly testWebSearch: () => Promise<WebSearchTestResult>;
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 

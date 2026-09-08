@@ -25,8 +25,8 @@ function facts(overrides: Partial<ToolCallFacts> = {}): ToolCallFacts {
 }
 
 describe("只读工具", () => {
-	it("read / find / grep / ls / present_files 一律放行", () => {
-		for (const toolName of ["read", "find", "grep", "ls", "present_files"]) {
+	it("read / find / grep / ls / web_search / web_fetch / present_files 一律放行", () => {
+		for (const toolName of ["read", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]) {
 			expect(decide(facts({ toolName, path: join(HOME, "任意位置.txt") }), PATHS, CWD)).toEqual({ kind: "allow" });
 		}
 	});

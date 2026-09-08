@@ -57,14 +57,18 @@ import { join, resolve } from "node:path";
 const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 
 /**
- * playground 会话的工具集：一个文件工具都不给。
+ * playground 会话的工具集：**一个文件工具都不给，只留联网**。
  *
  * 为什么不只把 cwd 置空就算完事：pi 的内置工具支持绝对路径，
  * 模型给出绝对路径照样能写硬盘任意位置。所以 playground 的安全边界
  * 不是「没有目录」，而是「根本不注册这些工具」——工具不在模型可见的工具
  * 清单里，它连调用都发不出来。
+ *
+ * web_search / web_fetch 是仅有的例外：只读、无路径、不碰本地文件，
+ * 且「不选工作空间的问答」正是联网能力的主场景（问新闻、查资料），
+ * 不给它即砍掉产品最常用的入口。
  */
-const PLAYGROUND_TOOLS = [] as const;
+const PLAYGROUND_TOOLS = ["web_search", "web_fetch"] as const;
 
 /**
  * 工具卡片的状态标签（对齐 WorkBuddy 的 tool.* 词汇表，见 lib-chat-ui 的
@@ -81,6 +85,8 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	find: "查找中",
 	bash: "执行中",
 	powershell: "执行中",
+	web_search: "搜索中",
+	web_fetch: "抓取中",
 	present_files: "交付中",
 };
 
@@ -91,6 +97,8 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	find: "已查找",
 	bash: "已执行",
 	powershell: "已执行",
+	web_search: "已搜索",
+	web_fetch: "已抓取",
 	present_files: "已交付",
 };
 
@@ -300,6 +308,13 @@ export class SessionHost {
 		});
 		await resourceLoader.reload();
 
+		/*
+		 * 初始工具集必须与 setInteraction 同源：取当前交互模式的 frontmatter。
+		 * 曾经只传 DEFAULT_TOOLS、切换只发生在 setInteraction —— 新建任务后的
+		 * 首次对话（没人点过切换器）工具集就没有 web_search，模型自称「没有联网
+		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
+		 */
+		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
@@ -309,7 +324,11 @@ export class SessionHost {
 			sessionManager: SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
-			tools: playground ? [...PLAYGROUND_TOOLS] : [...DEFAULT_TOOLS],
+			tools: playground
+				? [...PLAYGROUND_TOOLS]
+				: mode === undefined
+					? [...DEFAULT_TOOLS]
+					: [...mode.tools],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。

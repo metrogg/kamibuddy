@@ -61,6 +61,12 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
 	refreshCatalog: () => ipcRenderer.invoke(INVOKE.refreshCatalog),
 
+	getWebSearchConfig: () => ipcRenderer.invoke(INVOKE.getWebSearchConfig),
+	setWebSearchConfig: (input) =>
+		ipcRenderer.invoke(INVOKE.setWebSearchConfig, input),
+	clearWebSearchConfig: () => ipcRenderer.invoke(INVOKE.clearWebSearchConfig),
+	testWebSearch: () => ipcRenderer.invoke(INVOKE.testWebSearch),
+
 	skillsSnapshot: () => ipcRenderer.invoke(INVOKE.skillsSnapshot),
 	importSkill: (sourcePath) => ipcRenderer.invoke(INVOKE.importSkill, sourcePath),
 	pickSkillDirectory: () => ipcRenderer.invoke(INVOKE.pickSkillDirectory),

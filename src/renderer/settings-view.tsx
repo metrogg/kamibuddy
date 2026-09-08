@@ -11,8 +11,16 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { CustomProviderInput, ModelInfo, ProviderInfo, SettingsSnapshot } from "@shared/settings.ts";
-import { validateCustomProvider } from "@shared/settings.ts";
+import type {
+	CustomProviderInput,
+	ModelInfo,
+	ProviderInfo,
+	SettingsSnapshot,
+	WebSearchConfigInfo,
+	WebSearchProviderId,
+	WebSearchTestResult,
+} from "@shared/settings.ts";
+import { WEB_SEARCH_PROVIDERS, validateCustomProvider } from "@shared/settings.ts";
 import { IconBack, IconCheck, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "./icons.tsx";
 
 /** 凭据来源 → 用户能看懂的说明。 */
@@ -169,6 +177,169 @@ interface CustomFormProps {
 	readonly busy: boolean;
 	readonly onCancel: () => void;
 	readonly onSave: (input: CustomProviderInput, apiKey: string | undefined) => void;
+}
+
+/* ── 联网搜索 ──────────────────────────────────────────────────── */
+
+interface WebSearchSectionProps {
+	readonly busy: boolean;
+}
+
+function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
+	// config 由自己管理（读回 provider + 是否已存 Key；key 本身不回显，与模型凭据同策略）。
+	// 注意不能用 SettingsView 的 snapshot：settingsSnapshot 不含 webSearch，
+	// 保存成功后必须自己重新拉 —— 否则界面停在「未配置」（用户踩过的 bug）。
+	const [config, setConfig] = useState<WebSearchConfigInfo | undefined>(undefined);
+	const [providerId, setProviderId] = useState<WebSearchProviderId | "">("");
+	const [apiKey, setApiKey] = useState("");
+	const [open, setOpen] = useState(false);
+	const [error, setError] = useState<string | undefined>(undefined);
+	const [testing, setTesting] = useState(false);
+	const [testResult, setTestResult] = useState<WebSearchTestResult | undefined>(undefined);
+
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			const info = await window.kami.getWebSearchConfig();
+			setConfig(info);
+			setProviderId(info.providerId ?? "");
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	const save = (): void => {
+		if (providerId === "" || apiKey.trim() === "") return;
+		setApiKey("");
+		setOpen(false);
+		void window.kami
+			.setWebSearchConfig({ providerId, apiKey: apiKey.trim() })
+			.then(() => void refresh())
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	};
+
+	const test = (): void => {
+		if (testing) return;
+		setTesting(true);
+		setTestResult(undefined);
+		// UI 侧再兜一层：daemon 的返回可能延迟或丢失（网络层有不可中断的
+		// Windows DNS 解析，见 daemon 的 withHardTimeout），按钮不能永远转圈。
+		const request = window.kami.testWebSearch();
+		const waiter = new Promise<WebSearchTestResult>((resolve) => {
+			setTimeout(() => resolve({ ok: false, message: "测试超时：请检查网络后重试" }), 20_000);
+		});
+		void Promise.race([request, waiter])
+			.then((result) => setTestResult(result))
+			.catch((e: unknown) => setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) }))
+			.finally(() => setTesting(false));
+	};
+
+	const hasKey = config?.hasKey === true;
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>联网搜索</h2>
+				{hasKey && (
+					<>
+						<button
+							type="button"
+							className="mini-btn"
+							disabled={busy || testing}
+							onClick={test}
+						>
+							{testing ? "测试中…" : "测试连接"}
+						</button>
+						<button
+							type="button"
+							className="mini-btn danger"
+							disabled={busy}
+							onClick={() =>
+								void window.kami
+									.clearWebSearchConfig()
+									.then(() => void refresh())
+									.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+							}
+						>
+							清除配置
+						</button>
+					</>
+				)}
+			</header>
+
+			{error !== undefined && <div className="settings-error">{error}</div>}
+			{testResult !== undefined && (
+				<div className={`test-result${testResult.ok ? " ok" : ""}`}>{testResult.message}</div>
+			)}
+
+			<div className="provider-row">
+				<div className="provider-main">
+					<span className={`provider-dot${hasKey ? " on" : ""}`} />
+					<span className="provider-name">
+						{WEB_SEARCH_PROVIDERS.find((p) => p.id === config?.providerId)?.name ?? "未配置"}
+					</span>
+					<span className="provider-meta">
+						{hasKey ? "已保存 API Key · 对话中的「联网搜索」可直接使用" : "未配置 · 工具会提醒你配置"}
+					</span>
+					<span className="bar-spacer" />
+					<button type="button" className="mini-btn" disabled={busy} onClick={() => setOpen((v) => !v)}>
+						{hasKey ? "更换" : "配置"}
+					</button>
+				</div>
+
+				{open && (
+					<div className="key-input">
+						<select
+							className="provider-select"
+							value={providerId}
+							disabled={busy}
+							onChange={(e) => setProviderId(e.target.value as WebSearchProviderId)}
+						>
+							<option value="">选择搜索服务商</option>
+							{WEB_SEARCH_PROVIDERS.map((p) => (
+								<option key={p.id} value={p.id}>
+									{p.name} — {p.description}
+								</option>
+							))}
+						</select>
+						<input
+							type="password"
+							value={apiKey}
+							autoComplete="off"
+							placeholder="粘贴 API Key，回车保存"
+							onChange={(e) => setApiKey(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") save();
+								if (e.key === "Escape") {
+									setApiKey("");
+									setOpen(false);
+								}
+							}}
+						/>
+						<button
+							type="button"
+							className="mini-btn"
+							disabled={providerId === "" || apiKey.trim() === ""}
+							title={
+								providerId === ""
+									? "请先选择搜索服务商"
+									: apiKey.trim() === ""
+										? "请填写 API Key"
+										: undefined
+							}
+							onClick={save}
+						>
+							保存
+						</button>
+					</div>
+				)}
+			</div>
+		</section>
+	);
 }
 
 function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React.JSX.Element {
@@ -579,6 +750,8 @@ export function SettingsView({ onClose }: { readonly onClose: () => void }): Rea
 								))}
 							</div>
 						</section>
+
+						<WebSearchSection busy={busy} />
 
 						<p className="settings-foot">配置目录：{snapshot.configDir}</p>
 					</>

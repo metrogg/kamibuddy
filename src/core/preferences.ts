@@ -16,6 +16,13 @@ import { getConfigDir } from "./config-paths.ts";
 export interface Preferences {
 	/** 选中的模型，形如 `provider/model`。未选则 undefined。 */
 	readonly activeModelKey: string | undefined;
+	/** 联网搜索配置（服务商 + API Key）。未配置则 undefined。 */
+	readonly webSearch?: WebSearchPrefs;
+}
+
+export interface WebSearchPrefs {
+	readonly providerId: string;
+	readonly apiKey: string;
 }
 
 const EMPTY: Preferences = { activeModelKey: undefined };
@@ -42,8 +49,31 @@ export function readPreferences(): Preferences {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (typeof parsed !== "object" || parsed === null) return EMPTY;
-		const key = (parsed as { activeModelKey?: unknown }).activeModelKey;
-		return { activeModelKey: typeof key === "string" && key !== "" ? key : undefined };
+		const record = parsed as { activeModelKey?: unknown; webSearch?: unknown };
+		const key =
+			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
+				? record.activeModelKey
+				: undefined;
+		const ws = record.webSearch;
+		const webSearch =
+			typeof ws === "object" && ws !== null
+				? {
+						providerId:
+							typeof (ws as WebSearchPrefs).providerId === "string"
+								? (ws as WebSearchPrefs).providerId
+								: "",
+						apiKey:
+							typeof (ws as WebSearchPrefs).apiKey === "string"
+								? (ws as WebSearchPrefs).apiKey
+								: "",
+					}
+				: undefined;
+		return {
+			activeModelKey: key,
+			...(webSearch !== undefined && webSearch.providerId !== ""
+				? { webSearch }
+				: {}),
+		};
 	} catch {
 		return EMPTY;
 	}

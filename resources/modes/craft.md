@@ -3,7 +3,7 @@ id: craft
 label: 创作
 description: 完整工具集，可读写与执行
 ready: true
-tools: [read, write, edit, find, grep, ls]
+tools: [read, write, edit, find, grep, ls, web_search, web_fetch]
 ---
 当前为创作模式：你可以直接读写文件、整理与生成内容。
 

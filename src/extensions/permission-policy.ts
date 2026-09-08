@@ -49,9 +49,14 @@ export interface PolicyPaths {
 
 /**
  * 只读工具：不改变任何状态，放行。
- * present_files：stat 文件大小（限工作区）+ 发交付事件，不写盘。
+ *
+ * web_search / web_fetch 虽然访问外网，但不写本地、不改任何状态，
+ * 且数据不是密钥 —— 放行。不可信内容的风险由工具层（web-tools.ts）的
+ * 标记 + 本门对「后续写操作」的拦截共同兜住。
+ *
+ * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
  */
-const READ_ONLY = new Set(["read", "find", "grep", "ls", "present_files"]);
+const READ_ONLY = new Set(["read", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]);
 
 /** 会改文件的内置工具。 */
 const MUTATING = new Set(["write", "edit"]);

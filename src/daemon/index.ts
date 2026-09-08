@@ -37,6 +37,8 @@ import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
+import { createWebTools } from "../extensions/web-tools.ts";
+import type { WebSearchConfig } from "../core/web-search.ts";
 import { buildContextUsage } from "../shared/context-usage.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
 import {
@@ -56,6 +58,13 @@ import {
 	type ArtifactContent,
 	type PromptRequest,
 } from "../shared/ipc.ts";
+import {
+	isWebSearchProviderId,
+	type WebSearchConfigInfo,
+	type WebSearchConfigInput,
+	type WebSearchTestResult,
+} from "../shared/settings.ts";
+import { searchWeb } from "../core/web-search.ts";
 import type {
 	ModeDescriptor,
 	SessionEvent,
@@ -257,6 +266,23 @@ let lastSystemPromptTokens = 0;
 let lastSkillsTokens = 0;
 
 /** 事件出口：折叠进本地历史、推给渲染进程、喂给统计与日志。四件事都必须做。 */
+/**
+ * 并发竞速一个硬超时。
+ *
+ * 与 fetch 侧的 AbortSignal.timeout 不同，这是**结果层面**的最后防线：
+ * Windows DNS 解析不可中断（nodejs/node#46549），信号超时拦不住它，
+ * 只有从这里兜住「永不返回」。timer 不清理：超时后搜索仍会自然结束，
+ * 无非多等十几秒，不值得为此引入清理逻辑。
+ */
+function withHardTimeout<T>(promise: Promise<T>, ms: number, message = "请求超时"): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_resolve, reject) => {
+			setTimeout(() => reject(new Error(message)), ms).unref?.();
+		}),
+	]);
+}
+
 function emitSessionEvent(event: SessionEvent): void {
 	conversation = conversationReducer(conversation, { type: "event", event });
 	observability.record(event);
@@ -436,6 +462,26 @@ async function createHost(): Promise<SessionHost> {
 					lastSystemPromptTokens = estimateTokens(prompt);
 					lastSkillsTokens = estimateTokens(skillsSection);
 					return prompt;
+				},
+			}),
+			// 联网工具：所有会话都装（playground 无文件工具，也正是问答主场景）。
+			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
+			createWebTools({
+				getSearchConfig: () => {
+					const webSearch = readPreferences().webSearch;
+					// 偏好文件可能被手工编辑出非法值：按「未配置」处理，
+					// 工具会引导用户去设置页 —— 不静默用错服务商打 API。
+					if (
+						webSearch === undefined ||
+						!isWebSearchProviderId(webSearch.providerId)
+					) {
+						return undefined;
+					}
+					const config: WebSearchConfig = {
+						providerId: webSearch.providerId,
+						apiKey: webSearch.apiKey,
+					};
+					return config;
 				},
 			}),
 		],
@@ -646,10 +692,80 @@ const handlers: Record<string, Handler> = {
 			throw new Error("该模型不可用：请先为其服务商配置 API Key");
 		}
 		activeModelKey = key;
-		writePreferences({ activeModelKey: key });
+		// 读改写：偏好文件里还有别的键（如联网搜索），整存覆盖会清掉它们。
+		writePreferences({ ...readPreferences(), activeModelKey: key });
 
 		if (hostPromise !== undefined) await (await hostPromise).setModel(key);
 		else updateStateLocally({ modelId: key });
+	},
+
+	/* ── 联网搜索配置 ───────────────────────────────────────────────── */
+
+	[INVOKE.getWebSearchConfig]: async (): Promise<WebSearchConfigInfo> => {
+		const webSearch = readPreferences().webSearch;
+		if (webSearch === undefined) return { providerId: undefined, hasKey: false };
+		const providerId = isWebSearchProviderId(webSearch.providerId)
+			? webSearch.providerId
+			: undefined;
+		return { providerId, hasKey: webSearch.apiKey !== "" };
+	},
+
+	[INVOKE.setWebSearchConfig]: async ([input]) => {
+		const config = input as WebSearchConfigInput;
+		// 与自定义服务商同样的双端校验：设置页即时校验 + 这里防绕过。
+		if (!isWebSearchProviderId(config.providerId)) {
+			throw new Error(`未知的搜索服务商：${config.providerId}`);
+		}
+		if (config.apiKey.trim() === "") {
+			throw new Error("API Key 不能为空");
+		}
+		writePreferences({
+			...readPreferences(),
+			webSearch: { providerId: config.providerId, apiKey: config.apiKey.trim() },
+		});
+	},
+
+	[INVOKE.clearWebSearchConfig]: async () => {
+		const { webSearch: _dropped, ...rest } = readPreferences();
+		writePreferences(rest);
+	},
+
+	[INVOKE.testWebSearch]: async (): Promise<WebSearchTestResult> => {
+		const webSearch = readPreferences().webSearch;
+		if (
+			webSearch === undefined ||
+			!isWebSearchProviderId(webSearch.providerId) ||
+			webSearch.apiKey.trim() === ""
+		) {
+			return { ok: false, message: "尚未配置搜索服务商与 API Key，请先保存配置" };
+		}
+		// 真实搜索一次：返回码/额度/网络问题在这里全部现形，
+		// 用户不用猜测「key 存上了没、服务商通没通」。
+		// 外层再叠一层硬超时：Windows 的 DNS 解析不可中断（libuv GetAddrInfoW，
+		// nodejs/node#46549），AbortSignal.timeout 在 DNS 卡死时停了它，
+		// fetch 会无限挂起 —— 测试按钮必须**永远**有返回，不能一直转圈。
+		try {
+			const results = await withHardTimeout(
+				searchWeb(
+					{ providerId: webSearch.providerId, apiKey: webSearch.apiKey },
+					"KamiBuddy 联网测试",
+					{ limit: 2 },
+				),
+				15_000,
+			);
+			return {
+				ok: true,
+				message: `连接成功，返回 ${results.length} 条结果`,
+				count: results.length,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			// 超时大概率是「服务商在国内网络不可达」，把选项告诉用户而不是让他猜。
+			const hint = message.includes("超时")
+				? "（Tavily 等海外服务在国内网络下常无法连接，建议换「博查」）"
+				: "";
+			return { ok: false, message: `${message}${hint}` };
+		}
 	},
 
 	/* ── 输入框补全数据源（@ 文件 + / 命令） ────────────────────────── */

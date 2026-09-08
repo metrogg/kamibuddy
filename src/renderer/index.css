@@ -1689,7 +1689,8 @@ button {
 	flex-wrap: wrap;
 }
 
-.key-input input {
+.key-input input,
+.key-input select {
 	flex: 1 1 260px;
 	padding: 6px 10px;
 	border: 1px solid var(--border);
@@ -1700,9 +1701,25 @@ button {
 	font-size: 13px;
 }
 
+.key-input select {
+	cursor: pointer;
+	/* select 的默认下箭头占位比 input 内边距宽，保持两行控件视觉对齐。 */
+	max-width: 320px;
+}
+
 .key-note {
 	font-size: 11px;
 	color: var(--text-dim);
+}
+
+.test-result {
+	margin: 0 12px 6px;
+	font-size: 12px;
+	color: var(--danger);
+}
+
+.test-result.ok {
+	color: var(--ok);
 }
 
 /* ── 自定义服务商表单 ─────────────────────────────────────────── */

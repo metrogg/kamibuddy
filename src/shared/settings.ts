@@ -194,3 +194,53 @@ export function validateCustomProvider(input: CustomProviderInput): ValidationRe
 
 	return { ok: Object.keys(errors).length === 0, errors };
 }
+
+/* ── 联网搜索 ────────────────────────────────────────────────────── */
+
+/**
+ * 联网搜索支持的服务商。
+ *
+ * 这张表放 shared/ 是有意的：core 的 HTTP 实现、daemon 的落盘校验、
+ * 设置页的下拉渲染用同一份数据，不会出现「设置页能选、工具说未知」。
+ * 注意：这是**纯数据表**，行为在 core/web-search.ts 里（provider → HTTP 契约），
+ * 新增服务商 = 两处各加一条（表 + 实现）。
+ */
+export interface WebSearchProviderInfo {
+	readonly id: string;
+	readonly name: string;
+	readonly description: string;
+}
+
+export const WEB_SEARCH_PROVIDERS: readonly WebSearchProviderInfo[] = [
+	{ id: "bocha", name: "博查", description: "国内直连，中文搜索质量好（推荐）" },
+	{ id: "tavily", name: "Tavily", description: "海外服务，免费额度，但国内网络常连不上" },
+	{ id: "brave", name: "Brave", description: "海外搜索引擎，默认隐私优先" },
+	{ id: "bing", name: "Bing", description: "微软搜索 API，需要 Azure 订阅" },
+] as const;
+
+export type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDERS)[number]["id"];
+
+/** 设置页读回的联网搜索配置状态。**不含 key 本身**（与模型凭据同策略：不回显）。 */
+export interface WebSearchConfigInfo {
+	readonly providerId: WebSearchProviderId | undefined;
+	readonly hasKey: boolean;
+}
+
+/** 保存联网搜索配置的入参。 */
+export interface WebSearchConfigInput {
+	readonly providerId: WebSearchProviderId;
+	readonly apiKey: string;
+}
+
+/** 校验 provider id 是否是注册表中的合法值（设置页与 daemon 共用）。 */
+export function isWebSearchProviderId(value: string): value is WebSearchProviderId {
+	return WEB_SEARCH_PROVIDERS.some((p) => p.id === value);
+}
+
+/** 「测试连接」的结果。ok=false 时 message 是中文原因，直接展示给用户。 */
+export interface WebSearchTestResult {
+	readonly ok: boolean;
+	readonly message: string;
+	/** 成功时的返回条数（证明服务商真实应答）。 */
+	readonly count?: number;
+}
