@@ -213,15 +213,28 @@ describe("生成阶段的工具卡片", () => {
 				type: "tool_stream_started",
 				card: toolCard({ toolName: "write", summary: "", generating: true }),
 			},
-			{ type: "tool_stream_progress", id: "t1", path: "snake.html", added: 42 },
+			{ type: "tool_stream_progress", id: "t1", path: "snake.html", added: 42, changeType: "created" },
 		]);
 
 		expect(view.entries).toHaveLength(1);
 		expect(view.entries[0]).toMatchObject({
+			label: "生成中",
 			summary: "snake.html",
 			generating: true,
-			change: { path: "snake.html", added: 42, removed: 0 },
+			change: { path: "snake.html", added: 42, removed: 0, changeType: "created" },
 		});
+	});
+
+	it("覆盖已有文件（changeType modified）→ 标签从「生成中」刷成「修改中」", () => {
+		const view = apply([
+			{
+				type: "tool_stream_started",
+				card: toolCard({ toolName: "write", label: "生成中", summary: "", generating: true }),
+			},
+			{ type: "tool_stream_progress", id: "t1", path: "a.md", added: 3, changeType: "modified" },
+		]);
+
+		expect(view.entries[0]).toMatchObject({ label: "修改中" });
 	});
 
 	it("path 未完整时不落卡：summary 与 change 保持原样", () => {
@@ -230,7 +243,7 @@ describe("生成阶段的工具卡片", () => {
 				type: "tool_stream_started",
 				card: toolCard({ toolName: "write", summary: "", generating: true }),
 			},
-			{ type: "tool_stream_progress", id: "t1", path: undefined, added: 0 },
+			{ type: "tool_stream_progress", id: "t1", path: undefined, added: 0, changeType: "created" },
 		]);
 
 		expect(view.entries[0]).toMatchObject({ summary: "" });
@@ -238,7 +251,9 @@ describe("生成阶段的工具卡片", () => {
 	});
 
 	it("tool_stream_progress 指向不存在的卡片时不造假", () => {
-		const view = apply([{ type: "tool_stream_progress", id: "ghost", path: "a.md", added: 3 }]);
+		const view = apply([
+			{ type: "tool_stream_progress", id: "ghost", path: "a.md", added: 3, changeType: "created" },
+		]);
 		expect(view.entries).toHaveLength(0);
 	});
 

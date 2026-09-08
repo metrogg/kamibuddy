@@ -30,9 +30,10 @@ import type {
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
+import { generatingLabel } from "../shared/session-events.ts";
 import {
-	changeFromEditArgs,
-	changeFromWriteArgs,
+	changeFromEdit,
+	changeFromWrite,
 	writeStreamProgress,
 	type FileChange,
 } from "../shared/artifacts.ts";
@@ -41,8 +42,8 @@ import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { parseModelKey, toModelKey } from "./model-catalog.ts";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 /**
  * 默认工具集：**不含 bash / powershell**。
@@ -66,22 +67,47 @@ const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 const PLAYGROUND_TOOLS = [] as const;
 
 /**
- * 工具的中文标签与摘要取法。
+ * 工具卡片的状态标签（对齐 WorkBuddy 的 tool.* 词汇表，见 lib-chat-ui 的
+ * tool.readFile/listFile/executeCommand 等条目）：每个工具一组「执行中 → 已完成」，
+ * write/edit 另按新建/覆盖走 generatingLabel / writeDoneLabel。
  *
  * 放在适配层而不是 UI 里：ToolCard 的契约是「label 由上游给定，UI 不做映射」
  * （shared/session-events.ts）。pi 的内置工具没有中文名，这里补上。
- * 未登记的工具（含将来的自定义工具）回落到工具名本身。
  */
-const TOOL_LABELS: Readonly<Record<string, string>> = {
-	read: "读取文件",
-	write: "写入文件",
-	edit: "编辑文件",
-	find: "查找文件",
-	grep: "搜索内容",
-	ls: "列出目录",
-	bash: "执行命令",
-	powershell: "执行命令",
+const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
+	read: "读取中",
+	ls: "列出中",
+	grep: "搜索中",
+	find: "查找中",
+	bash: "执行中",
+	powershell: "执行中",
 };
+
+const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
+	read: "已读取",
+	ls: "已列出",
+	grep: "已搜索",
+	find: "已查找",
+	bash: "已执行",
+	powershell: "已执行",
+};
+
+/** 执行中标签。write/edit 不走这里（它们的执行期沿用生成期标签）。 */
+function runningLabel(toolName: string): string {
+	return TOOL_RUNNING_LABELS[toolName] ?? toolName;
+}
+
+/** write/edit 完成标签（WorkBuddy：已生成/已修改、生成失败/修改失败）。 */
+function writeDoneLabel(changeType: "created" | "modified", outcome: ToolOutcome): string {
+	if (outcome === "ok") return changeType === "created" ? "已生成" : "已修改";
+	return changeType === "created" ? "生成失败" : "修改失败";
+}
+
+/** 其余工具完成标签。 */
+function doneLabel(toolName: string, outcome: ToolOutcome): string {
+	if (outcome !== "ok") return "失败";
+	return TOOL_DONE_LABELS[toolName] ?? toolName;
+}
 
 /** 从工具入参里挑一个最能说明「在对什么东西操作」的值作为摘要。 */
 function summarizeArgs(args: unknown): string {
@@ -172,8 +198,20 @@ export class SessionHost {
 	private currentRunId: string | undefined;
 	/** 已发出的工具卡片，tool_execution_end 时要在原卡上补 outcome 与 detail。 */
 	private readonly toolCards = new Map<string, ToolCard>();
-	/** write/edit 工具启动时暂存的变更统计，执行成功才落到卡片上（失败不算产物）。 */
-	private readonly pendingChanges = new Map<string, FileChange>();
+	/**
+	 * write/edit 执行前暂存的现场：真实 diff 所需的旧内容与变更统计。
+	 * 执行成功才落到卡片上（失败不算产物）。changeType 在启动时查文件存在性得出，
+	 * 即使 args 形状异常导致 change 算不出，完成标签也能区分 已生成/已修改。
+	 */
+	private readonly pendingChanges = new Map<
+		string,
+		{ change: FileChange | undefined; changeType: "created" | "modified" }
+	>();
+	/**
+	 * 会话的技术 cwd（playground 时为配置目录下的占位目录）。
+	 * 解析模型给的相对路径、读 write/edit 的旧内容都用它。
+	 */
+	private sessionCwd = "";
 	/**
 	 * 生成阶段的工具调用追踪（key = assistant 消息的 contentIndex）。
 	 *
@@ -187,7 +225,12 @@ export class SessionHost {
 	 */
 	private readonly streamToolCalls = new Map<
 		number,
-		{ emittedId?: string; rawArgs: string }
+		{
+			emittedId?: string;
+			rawArgs: string;
+			/** path 完整时查出的文件存在性（新建/覆盖），查一次缓存住。 */
+			changeType?: "created" | "modified";
+		}
 	>();
 
 	private constructor(
@@ -283,6 +326,7 @@ export class SessionHost {
 			options.interactionId,
 			skills,
 		);
+		host.sessionCwd = cwd;
 		session.subscribe((event) => host.translate(event));
 		return host;
 	}
@@ -603,25 +647,37 @@ export class SessionHost {
 				// 生成阶段已上屏的同 id 卡片会被 reducer 原位翻转（upsert）；
 				// at 沿用生成开始的时间 —— 卡片的寿命从「开始生成」算起，不是「开始执行」。
 				const existing = this.toolCards.get(event.toolCallId);
+
+				// write/edit：执行前留下旧内容现场（WorkBuddy checkpoint 同思路），
+				// changeType 与真实 diff 都靠它。此后文件被写掉，旧内容就再也拿不到了。
+				let stash: { change: FileChange | undefined; changeType: "created" | "modified" } | undefined;
+				if (event.toolName === "write" || event.toolName === "edit") {
+					const oldContent = this.readOverwriteTarget(event.args);
+					const changeType: "created" | "modified" = oldContent === undefined ? "created" : "modified";
+					const change =
+						event.toolName === "write"
+							? changeFromWrite(event.args, oldContent)
+							: changeFromEdit(event.args, oldContent);
+					stash = { change, changeType };
+					this.pendingChanges.set(event.toolCallId, stash);
+				}
+
 				const card: ToolCard = {
 					id: event.toolCallId,
 					role: "tool",
 					toolName: event.toolName,
-					label: TOOL_LABELS[event.toolName] ?? event.toolName,
+					// write/edit 执行期沿用生成期标签（WorkBuddy 词汇表没有「写入中」，
+					// 生成中/修改中 一直显示到完成态翻成 已生成/已修改）。
+					label:
+						stash !== undefined
+							? generatingLabel(event.toolName, stash.changeType)
+							: runningLabel(event.toolName),
 					summary: summarizeArgs(event.args),
 					outcome: undefined,
 					detail: undefined,
 					at: existing?.at ?? Date.now(),
 				};
 				this.toolCards.set(event.toolCallId, card);
-				// write/edit 把 args 算成变更统计暂存：成功后 +/- 徽章与产物清单都以此为准。
-				const change =
-					event.toolName === "write"
-						? changeFromWriteArgs(event.args)
-						: event.toolName === "edit"
-							? changeFromEditArgs(event.args)
-							: undefined;
-				if (change !== undefined) this.pendingChanges.set(event.toolCallId, change);
 				emit({ type: "tool_started", card });
 				return;
 			}
@@ -636,7 +692,7 @@ export class SessionHost {
 			case "tool_execution_end": {
 				const started = this.toolCards.get(event.toolCallId);
 				this.toolCards.delete(event.toolCallId);
-				const change = this.pendingChanges.get(event.toolCallId);
+				const stash = this.pendingChanges.get(event.toolCallId);
 				this.pendingChanges.delete(event.toolCallId);
 				const outcome: ToolOutcome = event.isError ? "error" : "ok";
 				const detail = toolResultText(event.result);
@@ -647,15 +703,20 @@ export class SessionHost {
 						id: event.toolCallId,
 						role: "tool",
 						toolName: event.toolName,
-						// started 缺失说明漏了 start 事件（理论上不该发生），
-						// 回落到工具名而不是编一个假标签。
+						// 完成标签：write/edit 按新建/覆盖分 已生成/已修改（WorkBuddy 词汇表），
+						// 其余工具走 已读取/已列出…。started 缺失说明漏了 start 事件
+						// （理论上不该发生），回落到工具名而不是编一个假标签。
 						label:
-							started?.label ?? TOOL_LABELS[event.toolName] ?? event.toolName,
+							stash !== undefined
+								? writeDoneLabel(stash.changeType, outcome)
+								: started === undefined
+									? event.toolName
+									: doneLabel(event.toolName, outcome),
 						summary: started?.summary ?? "",
 						outcome,
 						detail: detail === "" ? undefined : detail,
 						// 失败的写入不产生变更（文件可能只写了一半，统计会误导）。
-						...(outcome === "ok" && change !== undefined ? { change } : {}),
+						...(outcome === "ok" && stash?.change !== undefined ? { change: stash.change } : {}),
 						at: started?.at ?? Date.now(),
 					},
 				});
@@ -670,7 +731,25 @@ export class SessionHost {
 	}
 
 	/**
+	 * 读 write/edit 目标文件的旧内容（执行前调用，此后旧内容就被写掉了）。
+	 * 返回 undefined 表示目标原本不存在（新建）；存在但不可读时按空串处理
+	 * 不如让它响 —— 读盘失败说明环境有问题，掩成「新建」会把 diff 全算错。
+	 */
+	private readOverwriteTarget(args: unknown): string | undefined {
+		if (typeof args !== "object" || args === null) return undefined;
+		const { path } = args as Record<string, unknown>;
+		if (typeof path !== "string" || path === "") return undefined;
+		const abs = resolve(this.sessionCwd, path);
+		if (!existsSync(abs)) return undefined;
+		return readFileSync(abs, "utf8");
+	}
+
+	/**
 	 * toolcall_delta 的处理：累积参数原文，并在 id/name 稳定后发出生成中卡片。
+	 *
+	 * 只有 write/edit 有生成中卡片 —— 它们的参数里就是文件内容，生成阶段几十秒；
+	 * 其余工具参数小（一个路径/一个词），生成转瞬即逝，卡片等执行态再上
+	 * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
 	 *
 	 * write 额外发行数进度（「生成中 +N」的 N 从这里来）。edit 不发 ——
 	 * 它的参数是嵌套的 edits 数组，流式数行要维护部分 JSON 解析状态机，
@@ -684,13 +763,13 @@ export class SessionHost {
 	): void {
 		const track = this.streamToolCalls.get(inner.contentIndex);
 		if (track === undefined) return;
-		track.rawArgs += inner.delta;
 
 		const block = inner.partial.content[inner.contentIndex];
 		// id / name 可能迟到（openai 协议下 toolcall_start 时还是空串、后续回填）：
 		// 不稳定就不发，等下一个 delta；整段生成都没等到则由 tool_execution_start 兜底上屏。
 		if (block === undefined || block.type !== "toolCall") return;
 		if (block.id === "" || block.name === "") return;
+		if (block.name !== "write" && block.name !== "edit") return;
 
 		const emit = this.options.emit;
 		if (track.emittedId === undefined) {
@@ -699,7 +778,9 @@ export class SessionHost {
 				id: block.id,
 				role: "tool",
 				toolName: block.name,
-				label: TOOL_LABELS[block.name] ?? block.name,
+				// path 还没解析出来，changeType 未知：先按新建给标签，
+				// 进度事件到达时 reducer 会按真实 changeType 刷新（生成中→修改中）。
+				label: generatingLabel(block.name, "created"),
 				summary: "",
 				outcome: undefined,
 				detail: undefined,
@@ -711,14 +792,20 @@ export class SessionHost {
 		}
 
 		if (block.name === "write") {
+			track.rawArgs += inner.delta;
 			const progress = writeStreamProgress(track.rawArgs);
 			// path 未完整时不发：半截路径上屏像 bug（reducer 端同口径，双保险）。
 			if (progress.path !== undefined) {
+				// changeType 查一次缓存住：生成期间文件存在性不会变。
+				track.changeType ??= existsSync(resolve(this.sessionCwd, progress.path))
+					? "modified"
+					: "created";
 				emit({
 					type: "tool_stream_progress",
 					id: block.id,
 					path: progress.path,
 					added: progress.added,
+					changeType: track.changeType,
 				});
 			}
 		}

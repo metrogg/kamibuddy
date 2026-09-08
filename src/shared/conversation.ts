@@ -21,6 +21,7 @@ import type {
 	ModeDescriptor,
 	ToolCard,
 } from "./session-events.ts";
+import { generatingLabel } from "./session-events.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 
 export interface ConversationView {
@@ -168,14 +169,21 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "tool_stream_progress":
 			// path 未完整时不落卡（半截路径上屏像 bug）；行数随 path 一起进 change，
 			// UI 的 +N 徽章读同一个字段，生成中与终态两个口径不用分开渲染。
+			// 标签随 changeType 刷新：write 覆盖已有文件时从「生成中」变「修改中」。
 			return {
 				...view,
 				entries: replaceEntry(view.entries, event.id, (entry) =>
 					entry.role === "tool" && event.path !== undefined
 						? {
 								...entry,
+								label: generatingLabel(entry.toolName, event.changeType),
 								summary: event.path,
-								change: { path: event.path, added: event.added, removed: 0 },
+								change: {
+									path: event.path,
+									added: event.added,
+									removed: 0,
+									changeType: event.changeType,
+								},
 							}
 						: entry,
 				),

@@ -79,9 +79,9 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				onClick={() => setOpen((v) => !v)}
 			>
 				<span className={`tool-dot ${outcomeClass(card.outcome)}`} />
-				{/* 生成中 = 模型还在流式输出参数（写文件时内容全在参数里，是最长的一段）。
-				    WorkBuddy 同位置显示「生成中 +N」，参数吐完进入执行才显示工具名。 */}
-				<span className="tool-label">{card.generating === true ? "生成中" : card.label}</span>
+				{/* 标签是状态词（生成中/已生成/读取中/已读取…），由适配层按
+				    WorkBuddy 词汇表给出，UI 不做映射（契约见 session-events.ts）。 */}
+				<span className="tool-label">{card.label}</span>
 				<span className="tool-summary">{card.summary}</span>
 				{/* write/edit 的增删行徽章（对标 WorkBuddy 的「+276 -0」）。
 				    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。 */}
@@ -101,23 +101,44 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 /* ── 流式状态行 ──────────────────────────────────────────────────── */
 
 /**
- * 流式期间底部状态行的文案（WorkBuddy 的「正在写入文件」同位置）。
+ * 流式期间底部状态行的文案（WorkBuddy 的 progress.phase 同位置）。
  *
- * 有生成中的 write 卡片时报它在写哪个文件 —— 写文件是最长的一段，
- * 光显示「正在思考」用户会以为卡死；其余情况保持原状。
+ * 它的阶段机：model_requesting（等待模型响应）→ model_streaming（生成回复中，
+ * 写文件时是 正在写入文件/正在编辑文件）→ tool_executing.<Tool>（正在读取文件…）。
+ * 我们从 entries 末尾反推同样的阶段：最近一张未完成的工具卡决定工具阶段，
+ * 否则按消息流位置区分「等响应」与「生成中」。
  */
 function pendingText(entries: readonly ConversationEntry[]): string {
 	for (let i = entries.length - 1; i >= 0; i -= 1) {
 		const entry = entries[i];
 		if (entry === undefined) break;
-		if (entry.role === "tool" && entry.generating === true) {
-			if (entry.toolName === "write") {
-				return entry.summary === "" ? "正在写入文件…" : `正在写入文件 ${entry.summary}…`;
+		if (entry.role === "tool") {
+			if (entry.outcome !== undefined) return "生成回复中";
+			// 未完成：生成阶段（generating）与执行阶段同文案（WorkBuddy 两边都是「正在写入文件」）。
+			switch (entry.toolName) {
+				case "write":
+					return entry.summary === "" ? "正在写入文件…" : `正在写入文件 ${entry.summary}…`;
+				case "edit":
+					return entry.summary === "" ? "正在编辑文件…" : `正在编辑文件 ${entry.summary}…`;
+				case "read":
+					return "正在读取文件…";
+				case "ls":
+					return "正在列出目录…";
+				case "grep":
+					return "正在搜索内容…";
+				case "find":
+					return "正在查找文件…";
+				case "bash":
+				case "powershell":
+					return "正在执行命令…";
+				default:
+					return "正在处理…";
 			}
-			return "正在思考…";
 		}
+		if (entry.role === "assistant") return "生成回复中";
+		if (entry.role === "user") return "等待模型响应…";
 	}
-	return "正在思考…";
+	return "等待模型响应…";
 }
 
 /* ── 交互模式切换 ────────────────────────────────────────────────── */

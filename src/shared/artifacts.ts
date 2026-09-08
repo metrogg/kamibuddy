@@ -1,14 +1,16 @@
 /**
- * 产物与变更统计：从写文件工具的参数算 +/- 行数，从会话历史聚合产物清单。
+ * 产物与变更统计：写文件工具的真实行级 diff + 流式生成进度 + 产物清单聚合。
  *
- * WorkBuddy 靠 CLI 内核的 checkpoint/fileChanges 记录 diff（07-artifact-preview.md §1），
- * pi 没有这层——但 pi 的 tool_execution_start 带完整 args（write 的 content、
- * edit 的 edits[{oldText,newText}]），行数直接算得出来，不需要文件系统历史。
+ * 变更统计对齐 WorkBuddy 的 checkpoint 口径：不是从工具 args 数行
+ * （write 全量覆写时旧文件行数全丢，removed 恒 0 是失真），而是
+ * **执行前留旧内容、执行后做行级 LCS diff**（其 FileHistorySnapshot 同思路，
+ * 见 07-artifact-preview.md §1 与 08-builtin-tools-reference.md）。
  *
- * 产物采用**推导**而非 WorkBuddy 的 present_files 显式交付：
- * write 成功 = 产物。模型不需要多调一个工具，规则也没有歧义。
+ * 产物采用**推导**而非 WorkBuddy 的 present_files 显式交付（历史决策，见
+ * collectArtifacts 注释；显式交付工具落地后这里会切换口径）。
  *
- * 行数口径：split("\n") 的段数（"a\nb" = 2 行）。是展示用估算，不做 diff 级精确。
+ * 行数口径：split("\n") 的段数（"a\nb" = 2 行）。diff 用 LCS（最长公共子序列），
+ * 与 Myers 最小编辑距离在行级增删计数上等价（added = 新行数 - LCS，removed = 旧行数 - LCS）。
  */
 
 import type { ConversationEntry } from "./session-events.ts";
@@ -18,6 +20,11 @@ export interface FileChange {
 	readonly path: string;
 	readonly added: number;
 	readonly removed: number;
+	/**
+	 * created = 新文件；modified = 覆盖/编辑已有文件（WorkBuddy fileChangeInfo.changeType）。
+	 * 决定卡片标签（已生成/已修改）与「查看所有变更」的归类。
+	 */
+	readonly changeType: "created" | "modified";
 }
 
 /** 一个产物（本会话内 write 成功的文件）。 */
@@ -29,6 +36,47 @@ export interface ArtifactRef {
 function countLines(text: string): number {
 	if (text === "") return 0;
 	return text.split("\n").length;
+}
+
+/**
+ * LCS 动态规划的计算预算（旧行数 × 新行数的上限）。
+ * 2000×2000 = 4M 格在现代机器上毫秒级；超过就退化为全量口径，
+ * 宁可数字变粗也不能让一次大文件覆写卡住事件流。
+ */
+const DIFF_CELL_BUDGET = 4_000_000;
+
+/** 行级 LCS 长度（滚动数组，内存 O(min(m,n))）。 */
+function lcsLength(oldLines: readonly string[], newLines: readonly string[]): number {
+	// 让 b 始终是较短的那个，滚动数组长度 = b.length + 1。
+	const [a, b] = oldLines.length >= newLines.length ? [oldLines, newLines] : [newLines, oldLines];
+	let prev = new Array<number>(b.length + 1).fill(0);
+	for (let i = 1; i <= a.length; i += 1) {
+		const curr = new Array<number>(b.length + 1).fill(0);
+		const ai = a[i - 1];
+		for (let j = 1; j <= b.length; j += 1) {
+			const diag = prev[j - 1] ?? 0;
+			curr[j] = ai === b[j - 1] ? diag + 1 : Math.max(prev[j] ?? 0, curr[j - 1] ?? 0);
+		}
+		prev = curr;
+	}
+	return prev[b.length] ?? 0;
+}
+
+/**
+ * 行级增删统计（WorkBuddy additions/deletions 口径）：
+ * 公共行（LCS）不算增删；added = 新行数 - LCS，removed = 旧行数 - LCS。
+ */
+export function diffLineStats(
+	oldText: string,
+	newText: string,
+): { readonly added: number; readonly removed: number } {
+	const oldLines = oldText === "" ? [] : oldText.split("\n");
+	const newLines = newText === "" ? [] : newText.split("\n");
+	if (oldLines.length * newLines.length > DIFF_CELL_BUDGET) {
+		return { added: newLines.length, removed: oldLines.length };
+	}
+	const common = lcsLength(oldLines, newLines);
+	return { added: newLines.length - common, removed: oldLines.length - common };
 }
 
 /** JSON 字符串片段的反转义（只处理常见转义，路径场景够用）。 */
@@ -68,31 +116,63 @@ export function writeStreamProgress(rawArgs: string): {
 	return { path, added };
 }
 
-/** write 工具参数 → 变更统计。形状不符返回 undefined（pi 的 args 是 any，窄化失败不猜）。 */
-export function changeFromWriteArgs(args: unknown): FileChange | undefined {
+/**
+ * write 工具参数 + 执行前的旧内容 → 变更统计。
+ * oldContent === undefined 表示目标文件原本不存在（新建）；
+ * 形状不符返回 undefined（pi 的 args 是 any，窄化失败不猜）。
+ */
+export function changeFromWrite(args: unknown, oldContent: string | undefined): FileChange | undefined {
 	if (typeof args !== "object" || args === null) return undefined;
 	const { path, content } = args as Record<string, unknown>;
 	if (typeof path !== "string" || typeof content !== "string") return undefined;
-	// write 是全量覆写：旧内容无从得知，removed 恒 0（编辑走 edit 工具，有 oldText 可算）。
-	return { path, added: countLines(content), removed: 0 };
+	if (oldContent === undefined) {
+		return { path, added: countLines(content), removed: 0, changeType: "created" };
+	}
+	const { added, removed } = diffLineStats(oldContent, content);
+	return { path, added, removed, changeType: "modified" };
 }
 
-/** edit 工具参数 → 变更统计：added/removed 是各 edit 段 newText/oldText 的行数之和。 */
-export function changeFromEditArgs(args: unknown): FileChange | undefined {
+/** 把 edit 的 edits 依次应用到旧内容上；任一 oldText 找不到则返回 undefined（对不上就不猜）。 */
+function applyEdits(oldContent: string, edits: readonly { oldText: string; newText: string }[]): string | undefined {
+	let content = oldContent;
+	for (const { oldText, newText } of edits) {
+		const at = content.indexOf(oldText);
+		if (at === -1) return undefined;
+		content = content.slice(0, at) + newText + content.slice(at + oldText.length);
+	}
+	return content;
+}
+
+/**
+ * edit 工具参数 + 执行前的旧内容 → 变更统计（恒 modified）。
+ * 旧内容可用且 edits 全部能对上 → 真实 diff；否则退化为 oldText/newText 行数求和。
+ */
+export function changeFromEdit(args: unknown, oldContent: string | undefined): FileChange | undefined {
 	if (typeof args !== "object" || args === null) return undefined;
 	const { path, edits } = args as Record<string, unknown>;
 	if (typeof path !== "string" || !Array.isArray(edits)) return undefined;
 
-	let added = 0;
-	let removed = 0;
+	const pairs: { oldText: string; newText: string }[] = [];
 	for (const edit of edits) {
 		if (typeof edit !== "object" || edit === null) return undefined;
 		const { oldText, newText } = edit as Record<string, unknown>;
 		if (typeof oldText !== "string" || typeof newText !== "string") return undefined;
+		pairs.push({ oldText, newText });
+	}
+
+	const applied = oldContent === undefined ? undefined : applyEdits(oldContent, pairs);
+	if (applied !== undefined) {
+		const { added, removed } = diffLineStats(oldContent as string, applied);
+		return { path, added, removed, changeType: "modified" };
+	}
+
+	let added = 0;
+	let removed = 0;
+	for (const { oldText, newText } of pairs) {
 		removed += countLines(oldText);
 		added += countLines(newText);
 	}
-	return { path, added, removed };
+	return { path, added, removed, changeType: "modified" };
 }
 
 /**

@@ -80,6 +80,18 @@ export interface ToolCard {
 
 export type ConversationEntry = UserMessage | AssistantMessage | ToolCard;
 
+/**
+ * 生成中卡片的标签（WorkBuddy tool.writeFile 词汇表：生成中/修改中）。
+ * write 分新建（生成中）与覆盖已有文件（修改中），edit 恒修改中。
+ * 放在契约层而非某端：reducer（流式进度里随 changeType 更新）与
+ * session-host（首发卡片）共用，两端不会漂。
+ */
+export function generatingLabel(toolName: string, changeType: "created" | "modified"): string {
+	if (toolName === "edit") return "修改中";
+	if (toolName === "write") return changeType === "created" ? "生成中" : "修改中";
+	return toolName;
+}
+
 /** daemon → renderer 的单向事件流。 */
 export type SessionEvent =
 	/** 一次 run 开始。UI 据此进入 streaming 态（禁用输入、显示中断按钮）。 */
@@ -106,12 +118,15 @@ export type SessionEvent =
 	 * write 参数流式生成中的进度：path 完整后才出现（半截路径不该上屏），
 	 * added 为当前已生成行数。只有 write 发这个事件 —— edit 的参数是
 	 * 嵌套结构，流式数行成本高而收益低，生成中只显示卡片本身。
+	 * changeType 由 daemon 在 path 完整时查文件是否存在得出（新建/覆盖），
+	 * 与终态 FileChange.changeType 同口径。
 	 */
 	| {
 			readonly type: "tool_stream_progress";
 			readonly id: ToolCallId;
 			readonly path: string | undefined;
 			readonly added: number;
+			readonly changeType: "created" | "modified";
 	  }
 	/** 工具开始执行（参数已生成完毕）。同 id 的生成中卡片原位翻转为执行态。 */
 	| { readonly type: "tool_started"; readonly card: ToolCard }
