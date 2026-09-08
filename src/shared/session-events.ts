@@ -13,7 +13,7 @@
 
 import type { TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
-import type { FileChange } from "./artifacts.ts";
+import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
 
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
@@ -137,6 +137,16 @@ export type SessionEvent =
 	/** run 正常结束。 */
 	| { readonly type: "run_finished"; readonly runId: RunId }
 	/**
+	 * present_files 工具交付产物（唯一交付入口，WorkBuddy 同口径）。
+	 * 由工具 execute 内发出（先于该工具卡的 finished）：产物清单即刻更新，
+	 * focusFile（首个本地文件）由渲染进程自动在预览面板打开。
+	 */
+	| {
+			readonly type: "artifacts_presented";
+			readonly files: readonly PresentedFile[];
+			readonly focusFile: string | undefined;
+	  }
+	/**
 	 * run 异常结束。message 是给用户看的，不要塞 stack。
 	 * 诊断信息走 daemon 侧日志，不经 UI。
 	 */
@@ -207,6 +217,8 @@ export interface SessionSnapshot {
 	readonly usageDetail?: ContextUsageDetail;
 	/** 当前回合计时。还没有用户消息时为 undefined。 */
 	readonly turn?: TurnTiming;
+	/** 本会话已交付的产物（artifacts_presented 折叠而来）。 */
+	readonly artifacts: readonly ArtifactRef[];
 }
 
 /**

@@ -47,8 +47,11 @@ export interface PolicyPaths {
 	readonly configDir: string;
 }
 
-/** 只读工具：不改变任何状态，放行。 */
-const READ_ONLY = new Set(["read", "find", "grep", "ls"]);
+/**
+ * 只读工具：不改变任何状态，放行。
+ * present_files：stat 文件大小（限工作区）+ 发交付事件，不写盘。
+ */
+const READ_ONLY = new Set(["read", "find", "grep", "ls", "present_files"]);
 
 /** 会改文件的内置工具。 */
 const MUTATING = new Set(["write", "edit"]);

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationEntry } from "./session-events.ts";
 import {
 	changeFromEdit,
 	changeFromWrite,
-	collectArtifacts,
+	classifyPresentedFiles,
 	diffLineStats,
+	mergePresentedArtifacts,
 	writeStreamProgress,
 } from "./artifacts.ts";
 
@@ -111,44 +111,52 @@ describe("changeFromEdit", () => {
 	});
 });
 
-describe("collectArtifacts", () => {
-	const tool = (over: Partial<Extract<ConversationEntry, { role: "tool" }>>): ConversationEntry => ({
-		id: Math.random().toString(36).slice(2),
-		role: "tool",
-		toolName: "write",
-		label: "写入文件",
-		summary: "",
-		outcome: "ok",
-		detail: undefined,
-		at: 1,
-		...over,
+describe("classifyPresentedFiles", () => {
+	const sizeOf = (p: string) => (p.includes("big") ? 7460 : undefined);
+
+	it("绝对路径 → 产物卡；第一个本地文件成为 focusFile", () => {
+		const r = classifyPresentedFiles(["E:/w/snake.html", "E:/w/readme.md"], sizeOf);
+		expect(r.files).toEqual([
+			{ path: "E:/w/snake.html", size: 0, html: true },
+			{ path: "E:/w/readme.md", size: 0, html: false },
+		]);
+		expect(r.focusFile).toBe("E:/w/snake.html");
+		expect(r.invalid).toEqual([]);
 	});
 
-	it("只收 write 且成功的卡片；read、失败 write 都不算产物", () => {
-		const r = collectArtifacts([
-			tool({ change: { path: "a.html", added: 10, removed: 0, changeType: "created" } }),
-			tool({ toolName: "read", change: undefined }),
-			tool({ outcome: "error", change: { path: "b.txt", added: 1, removed: 0, changeType: "created" } }),
-		]);
-		expect(r.map((a) => a.path)).toEqual(["a.html"]);
+	it("http(s) URL → 只进列表不自动打开；URL 在前时 focus 落到后一个本地文件", () => {
+		const r = classifyPresentedFiles(["https://example.com/x", "E:/w/a.md"], sizeOf);
+		expect(r.files[0]).toEqual({ path: "https://example.com/x", size: 0, html: false });
+		expect(r.focusFile).toBe("E:/w/a.md");
 	});
 
-	it("同一路径多次写只留最后一次（产物是当前状态，不是历史）", () => {
-		const r = collectArtifacts([
-			tool({ change: { path: "a.html", added: 1, removed: 0, changeType: "created" }, at: 1 }),
-			tool({ change: { path: "b.md", added: 1, removed: 0, changeType: "created" }, at: 2 }),
-			tool({ change: { path: "a.html", added: 5, removed: 0, changeType: "modified" }, at: 3 }),
-		]);
-		expect(r.map((a) => a.path)).toEqual(["b.md", "a.html"]);
-		expect(r.find((a) => a.path === "a.html")?.at).toBe(3);
+	it("非绝对路径 → invalid（调用方整单报错）", () => {
+		const r = classifyPresentedFiles(["readme.md", "E:/w/ok.md"], sizeOf);
+		expect(r.invalid).toEqual(["readme.md"]);
+		expect(r.files).toHaveLength(1);
 	});
 
-	it("非工具条目与无 change 的工具卡片被忽略", () => {
-		const r = collectArtifacts([
-			{ id: "u1", role: "user", text: "hi", at: 0 },
-			tool({ toolName: "bash" }),
+	it("sizeOf 的结果进入 size；Windows 反斜杠路径同样认绝对", () => {
+		const r = classifyPresentedFiles(["E:\\w\\big.html"], sizeOf);
+		expect(r.files[0]).toEqual({ path: "E:\\w\\big.html", size: 7460, html: true });
+	});
+});
+
+describe("mergePresentedArtifacts", () => {
+	it("多次交付按路径去重，后交付的排到末尾", () => {
+		const first = mergePresentedArtifacts([], [{ path: "a.html", size: 1, html: true }], 100);
+		const second = mergePresentedArtifacts(
+			first,
+			[
+				{ path: "b.md", size: 2, html: false },
+				{ path: "a.html", size: 3, html: true },
+			],
+			200,
+		);
+		expect(second).toEqual([
+			{ path: "b.md", size: 2, at: 200 },
+			{ path: "a.html", size: 3, at: 200 },
 		]);
-		expect(r).toEqual([]);
 	});
 });
 

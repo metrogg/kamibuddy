@@ -43,9 +43,10 @@ describe("snapshot", () => {
 				isStreaming: false,
 			},
 			entries: [{ id: "u1", role: "user", text: "你好", at: 1 }],
-			availableScenes: [{ id: "work", label: "日常办公", description: "文档与汇报", ready: true }],
-			availableModes: [{ id: "ask", label: "问答", description: "只读", ready: true }],
-		};
+		availableScenes: [{ id: "work", label: "日常办公", description: "文档与汇报", ready: true }],
+		availableModes: [{ id: "ask", label: "问答", description: "只读", ready: true }],
+		artifacts: [],
+	};
 
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 
@@ -78,6 +79,7 @@ describe("context_usage", () => {
 			availableScenes: [],
 			availableModes: [],
 			usageDetail: usage,
+			artifacts: [],
 		};
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 		expect(view.usageDetail).toEqual(usage);
@@ -311,6 +313,43 @@ describe("run 生命周期", () => {
 		expect(view.state.isStreaming).toBe(false);
 		expect(view.entries).toHaveLength(1);
 		expect(view.entries[0]).toMatchObject({ role: "assistant", text: "模型调用失败" });
+	});
+});
+
+describe("产物交付", () => {
+	it("artifacts_presented 折叠进产物清单，同路径后交付的覆盖并排到末尾", () => {
+		const view = apply([
+			{
+				type: "artifacts_presented",
+				files: [{ path: "E:/w/a.html", size: 100, html: true }],
+				focusFile: "E:/w/a.html",
+			},
+			{
+				type: "artifacts_presented",
+				files: [
+					{ path: "E:/w/b.md", size: 50, html: false },
+					{ path: "E:/w/a.html", size: 120, html: true },
+				],
+				focusFile: "E:/w/b.md",
+			},
+		]);
+
+		expect(view.artifacts).toEqual([
+			{ path: "E:/w/b.md", size: 50, at: view.artifacts[0]?.at },
+			{ path: "E:/w/a.html", size: 120, at: view.artifacts[1]?.at },
+		]);
+	});
+
+	it("snapshot 恢复产物清单（渲染进程重挂载）", () => {
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [],
+			availableScenes: [],
+			availableModes: [],
+			artifacts: [{ path: "E:/w/a.html", size: 100, at: 7 }],
+		};
+		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
+		expect(view.artifacts).toEqual([{ path: "E:/w/a.html", size: 100, at: 7 }]);
 	});
 });
 

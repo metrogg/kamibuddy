@@ -35,6 +35,7 @@ import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
+import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { buildContextUsage } from "../shared/context-usage.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
@@ -203,6 +204,7 @@ let conversation: ConversationView = {
 	entries: [],
 	availableScenes: SCENES,
 	availableModes: INTERACTIONS,
+	artifacts: [],
 };
 
 /* ── 可观测性 ─────────────────────────────────────────────────────── */
@@ -392,6 +394,14 @@ async function createHost(): Promise<SessionHost> {
 							requestApproval,
 						}),
 					]),
+			// 产物交付：present_files 是产物的唯一入口（WorkBuddy 同构）。
+			// 只读工具，playground 也注册 —— 模型在 playground 没有写工具，
+			// 但交付动作本身无害（区外路径不 stat，见 extensions/present-files.ts）。
+			createPresentFiles({
+				getWorkspaceDir: () => workspaceDir,
+				onPresent: ({ files, focusFile }) =>
+					emitSessionEvent({ type: "artifacts_presented", files, focusFile }),
+			}),
 			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
 			// 两轴的权威状态经 conversation 折叠镜像读取；技能段取自宿主的 loader 发现结果。
 			createPromptSwitch({
@@ -453,6 +463,8 @@ async function resetSession(): Promise<void> {
 		usageDetail: undefined,
 		// 回合计时同理：新任务不该沿用旧回合的起表时间。
 		turn: undefined,
+		// 产物清单同理：上一任务的交付不该挂在新任务底下。
+		artifacts: [],
 	};
 }
 

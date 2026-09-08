@@ -1,19 +1,18 @@
 /**
- * 产物与变更统计：写文件工具的真实行级 diff + 流式生成进度 + 产物清单聚合。
+ * 产物与变更统计：写文件工具的真实行级 diff + 流式生成进度 + present_files 交付分类。
  *
  * 变更统计对齐 WorkBuddy 的 checkpoint 口径：不是从工具 args 数行
  * （write 全量覆写时旧文件行数全丢，removed 恒 0 是失真），而是
  * **执行前留旧内容、执行后做行级 LCS diff**（其 FileHistorySnapshot 同思路，
  * 见 07-artifact-preview.md §1 与 08-builtin-tools-reference.md）。
  *
- * 产物采用**推导**而非 WorkBuddy 的 present_files 显式交付（历史决策，见
- * collectArtifacts 注释；显式交付工具落地后这里会切换口径）。
+ * 产物交付对齐 present_files 口径：模型显式调用工具交付产物，
+ * UI 不从「write 成功」推导（交付意图与写盘动作是两回事 ——
+ * 草稿、中间产物不该出现在产物清单里）。
  *
  * 行数口径：split("\n") 的段数（"a\nb" = 2 行）。diff 用 LCS（最长公共子序列），
  * 与 Myers 最小编辑距离在行级增删计数上等价（added = 新行数 - LCS，removed = 旧行数 - LCS）。
  */
-
-import type { ConversationEntry } from "./session-events.ts";
 
 /** 一次写文件操作的增删行统计。 */
 export interface FileChange {
@@ -27,10 +26,63 @@ export interface FileChange {
 	readonly changeType: "created" | "modified";
 }
 
-/** 一个产物（本会话内 write 成功的文件）。 */
+/** 一个产物（本会话内经 present_files 交付的文件）。 */
 export interface ArtifactRef {
 	readonly path: string;
+	/** 字节数。URL 或工作区外无法 stat 的路径为 0（不探测区外文件）。 */
+	readonly size: number;
 	readonly at: number;
+}
+
+/** present_files 交付清单里的一项（WorkBuddy present_files_result 的分类口径）。 */
+export interface PresentedFile {
+	/** 绝对路径或 http(s) URL。 */
+	readonly path: string;
+	/** 字节数；URL 与无法 stat 的为 0。 */
+	readonly size: number;
+	/** .html/.htm：产物卡 + 预览双路（其余只进产物卡）。 */
+	readonly html: boolean;
+}
+
+/** 绝对路径判定（Windows 盘符 / UNC / posix）。hand-rolled：shared 会被 renderer 打包，不能 import node:path。 */
+const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/;
+const HTTP_URL = /^https?:\/\//i;
+const HTML_FILE = /\.html?$/i;
+
+/**
+ * present_files 入参分类（WorkBuddy handler 同口径）：
+ *   http(s) URL → 只进预览列表（v1 不自动打开）；
+ *   绝对路径    → 产物卡，第一个本地文件自动打开预览（focusFile）；
+ *   非绝对路径  → invalid，整单报错（"all entries must be absolute"）。
+ * sizeOf 由调用方注入（daemon 用 statSync 并限定工作区），本函数保持纯。
+ */
+export function classifyPresentedFiles(
+	input: readonly string[],
+	sizeOf: (absPath: string) => number | undefined,
+): {
+	readonly files: readonly PresentedFile[];
+	readonly focusFile: string | undefined;
+	readonly invalid: readonly string[];
+} {
+	const invalid: string[] = [];
+	const files: PresentedFile[] = [];
+	let focusFile: string | undefined;
+
+	for (const raw of input) {
+		if (HTTP_URL.test(raw)) {
+			files.push({ path: raw, size: 0, html: false });
+			continue;
+		}
+		if (!ABSOLUTE_PATH.test(raw)) {
+			invalid.push(raw);
+			continue;
+		}
+		files.push({ path: raw, size: sizeOf(raw) ?? 0, html: HTML_FILE.test(raw) });
+		// 顺序即推荐观看顺序，第一个本地文件自动打开（WorkBuddy：首位 = focusFile）。
+		if (focusFile === undefined) focusFile = raw;
+	}
+
+	return { files, focusFile, invalid };
 }
 
 function countLines(text: string): number {
@@ -176,18 +228,16 @@ export function changeFromEdit(args: unknown, oldContent: string | undefined): F
 }
 
 /**
- * 从会话历史聚合产物清单：write 且执行成功的工具卡片。
- * 同一路径多次写只保留最后一次（产物是文件的当前状态，不是写入历史）。
- * 返回按最后写入时间升序。
+ * 产物清单折叠：present_files 是**唯一交付入口**（WorkBuddy 同口径，
+ * UI 不猜、不扫目录）。多次调用按路径去重合并，后交付的排到末尾
+ * （顺序 = 推荐观看顺序）。
  */
-export function collectArtifacts(entries: readonly ConversationEntry[]): ArtifactRef[] {
-	const byPath = new Map<string, ArtifactRef>();
-	for (const entry of entries) {
-		if (entry.role !== "tool") continue;
-		if (entry.toolName !== "write" || entry.outcome !== "ok" || entry.change === undefined) {
-			continue;
-		}
-		byPath.set(entry.change.path, { path: entry.change.path, at: entry.at });
-	}
-	return [...byPath.values()].sort((a, b) => a.at - b.at);
+export function mergePresentedArtifacts(
+	current: readonly ArtifactRef[],
+	files: readonly PresentedFile[],
+	at: number,
+): ArtifactRef[] {
+	const fresh = new Set(files.map((f) => f.path));
+	const kept = current.filter((a) => !fresh.has(a.path));
+	return [...kept, ...files.map((f) => ({ path: f.path, size: f.size, at }))];
 }

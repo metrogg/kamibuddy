@@ -8,7 +8,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import type { ConversationEntry, ModeDescriptor, ToolCard } from "@shared/session-events.ts";
-import { collectArtifacts } from "@shared/artifacts.ts";
 import { IconBack, IconChevronDown, IconDoc, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
@@ -151,6 +150,13 @@ function formatDuration(ms: number): string {
 	return m === 0 ? `${s}s` : `${m}m${s}s`;
 }
 
+/** 文件大小格式化：WorkBuddy 产物卡口径（7.3 KB）。0（URL/不可 stat）不显示。 */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const kb = bytes / 1024;
+	return kb < 100 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+}
+
 /**
  * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」）。
  *
@@ -248,9 +254,8 @@ export function ChatView({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const streaming = conversation.state.isStreaming;
-	// 产物清单：从工具卡片推导（write 成功 = 产物），整会话聚合。
-	// 我们一会话一任务，「本会话产物」就是「本任务产物」（WorkBuddy 的口径）。
-	const artifacts = collectArtifacts(conversation.entries);
+	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
+	const artifacts = conversation.artifacts;
 	// 最后一个 user 消息的位置：当前回合的分界（回合头部走表的唯一依据）。
 	const lastUserIndex = conversation.entries.findLastIndex((e) => e.role === "user");
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
@@ -329,8 +334,9 @@ export function ChatView({
 				})}
 				{streaming && <div className="stream-pending">{pendingText(conversation.entries)}</div>}
 				{/*
-					产物卡片区：本会话 write 成功的文件（collectArtifacts 从工具卡片推导，
-					规则见 shared/artifacts.ts）。流式期间不显示 —— 产物可能还没写完。
+					产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
+					WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
+					交付一般发生在收尾，且流式中面板已被自动打开。
 				*/}
 				{!streaming && artifacts.length > 0 && (
 					<section className="artifacts">
@@ -345,6 +351,7 @@ export function ChatView({
 							>
 								<IconDoc size={16} />
 								<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+								{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
 							</button>
 						))}
 					</section>

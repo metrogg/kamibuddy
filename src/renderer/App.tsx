@@ -19,7 +19,6 @@ import { Sidebar, type LinkState } from "./sidebar.tsx";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel } from "./artifact-panel.tsx";
-import { collectArtifacts } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
@@ -92,9 +91,14 @@ export function App(): React.JSX.Element {
 		};
 
 		// 先注册监听，再主动查状态：顺序反了会漏掉两者之间到达的事件。
-		const offEvent = window.kami.onSessionEvent((event: SessionEvent) =>
-			dispatch({ type: "event", event }),
-		);
+		const offEvent = window.kami.onSessionEvent((event: SessionEvent) => {
+			dispatch({ type: "event", event });
+			// present_files 交付：首个本地文件自动在预览面板打开（WorkBuddy：第一个自动打开）。
+			// setPreviewPath 是稳定 setter，不随渲染变。
+			if (event.type === "artifacts_presented" && event.focusFile !== undefined) {
+				setPreviewPath(event.focusFile);
+			}
+		});
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
 			if (!disposed) setLink({ kind: "down", reason });
 		});
@@ -355,7 +359,7 @@ export function App(): React.JSX.Element {
 			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。 */}
 			{previewPath !== undefined && (
 				<ArtifactPanel
-					artifacts={collectArtifacts(conversation.entries)}
+					artifacts={conversation.artifacts}
 					cwd={conversation.state.cwd}
 					previewBaseUrl={previewBaseUrl}
 					path={previewPath}

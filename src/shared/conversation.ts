@@ -23,6 +23,7 @@ import type {
 	TurnTiming,
 } from "./session-events.ts";
 import { generatingLabel } from "./session-events.ts";
+import { mergePresentedArtifacts, type ArtifactRef } from "./artifacts.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 
 export interface ConversationView {
@@ -36,6 +37,8 @@ export interface ConversationView {
 	readonly usageDetail?: ContextUsageDetail;
 	/** 当前回合计时（user_message 起表，run 结束停表）。 */
 	readonly turn?: TurnTiming;
+	/** 本会话已交付的产物（artifacts_presented 折叠而来，唯一来源）。 */
+	readonly artifacts: readonly ArtifactRef[];
 }
 
 export type ConversationAction =
@@ -55,6 +58,7 @@ export const initialConversation: ConversationView = {
 	entries: [],
 	availableScenes: [],
 	availableModes: [],
+	artifacts: [],
 };
 
 /** 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。 */
@@ -105,6 +109,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			availableModes: action.snapshot.availableModes,
 			usageDetail: action.snapshot.usageDetail,
 			turn: action.snapshot.turn,
+			artifacts: action.snapshot.artifacts,
 		};
 	}
 
@@ -231,5 +236,11 @@ export function conversationReducer(view: ConversationView, action: Conversation
 
 		case "context_usage":
 			return { ...view, usageDetail: event.usage };
+
+		case "artifacts_presented":
+			return {
+				...view,
+				artifacts: mergePresentedArtifacts(view.artifacts, event.files, Date.now()),
+			};
 	}
 }

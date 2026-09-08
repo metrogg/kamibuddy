@@ -81,6 +81,7 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	find: "查找中",
 	bash: "执行中",
 	powershell: "执行中",
+	present_files: "交付中",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -90,6 +91,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	find: "已查找",
 	bash: "已执行",
 	powershell: "已执行",
+	present_files: "已交付",
 };
 
 /** 执行中标签。write/edit 不走这里（它们的执行期沿用生成期标签）。 */
@@ -126,6 +128,9 @@ function summarizeArgs(args: unknown): string {
 		const value = record[key];
 		if (typeof value === "string" && value !== "") return value;
 	}
+	// present_files 的 files 是数组：摘要是数量而不是某个路径。
+	const files = record.files;
+	if (Array.isArray(files)) return `${files.length} 个文件`;
 	return "";
 }
 
