@@ -338,3 +338,24 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 
 - 数据源组件挂载时拉一次；新建任务后组件随父级重挂载自然刷新。
 
+## 生成阶段工具卡片（2026-09-08 落地）
+
+对标 WorkBuddy 的「生成中 +N」：写文件时**模型流式吐参数的阶段卡片就上屏**，
+行数实时增长，不再等执行才出现（执行是毫秒级，等它等于整段生成不可见）。
+
+- **事件模型**：一次工具调用 = `tool_stream_started`（参数开始流式输出，卡片上屏、
+  带 `generating` 标记）→ `tool_stream_progress`（write 专属：path 完整后原位更新
+  路径与行数）→ `tool_started`（进入执行，同 id 原位翻转）→ `tool_finished`（终态）。
+  全程一张卡，reducer 按 toolCallId upsert（`shared/conversation.ts`）。
+- **适配层**（`core/session-host.ts` 的 `translateToolCallDelta`）：参数原文按
+  contentIndex 自行累积（各 provider 的暂存字段名不统一，`toolcall_delta.delta` 才是
+  公开契约）；卡片等 id/name 稳定才发出（openai 协议 start 时 id 是空串后补）。
+- **行数口径**（`shared/artifacts.ts` 的 `writeStreamProgress`）：从半截 JSON 里抠
+  path（闭合才认）与 content 片段，数字面 `\n` 得行数 —— 与终态 `changeFromWriteArgs`
+  同字段两口径，UI 的 +N 徽章不用分开渲染。
+- **兜底**：run 结束（正常/异常）时仍滞留的生成中卡片标记为 `aborted`，
+  呼吸动画不会永远转下去；edit 不发行数进度（嵌套参数流式数行成本高收益低），
+  生成中只有卡片本身。
+- **状态行**：流式期间底部从「正在思考…」变为「正在写入文件 \<path\>…」（有生成中
+  write 卡片时）。
+

@@ -194,6 +194,87 @@ describe("工具卡片", () => {
 	});
 });
 
+describe("生成阶段的工具卡片", () => {
+	it("stream_started 上屏生成中卡片，tool_started 同 id 原位翻转为执行态而非重复卡片", () => {
+		const generating = toolCard({ toolName: "write", label: "写入文件", summary: "", generating: true });
+		const executing = toolCard({ toolName: "write", label: "写入文件", summary: "snake.html" });
+		const view = apply([
+			{ type: "tool_stream_started", card: generating },
+			{ type: "tool_started", card: executing },
+		]);
+
+		expect(view.entries).toHaveLength(1);
+		expect(view.entries[0]).toEqual(executing);
+	});
+
+	it("tool_stream_progress 原位更新路径与行数，保留生成中标记", () => {
+		const view = apply([
+			{
+				type: "tool_stream_started",
+				card: toolCard({ toolName: "write", summary: "", generating: true }),
+			},
+			{ type: "tool_stream_progress", id: "t1", path: "snake.html", added: 42 },
+		]);
+
+		expect(view.entries).toHaveLength(1);
+		expect(view.entries[0]).toMatchObject({
+			summary: "snake.html",
+			generating: true,
+			change: { path: "snake.html", added: 42, removed: 0 },
+		});
+	});
+
+	it("path 未完整时不落卡：summary 与 change 保持原样", () => {
+		const view = apply([
+			{
+				type: "tool_stream_started",
+				card: toolCard({ toolName: "write", summary: "", generating: true }),
+			},
+			{ type: "tool_stream_progress", id: "t1", path: undefined, added: 0 },
+		]);
+
+		expect(view.entries[0]).toMatchObject({ summary: "" });
+		expect((view.entries[0] as ToolCard).change).toBeUndefined();
+	});
+
+	it("tool_stream_progress 指向不存在的卡片时不造假", () => {
+		const view = apply([{ type: "tool_stream_progress", id: "ghost", path: "a.md", added: 3 }]);
+		expect(view.entries).toHaveLength(0);
+	});
+
+	it("run 结束时仍滞留的生成中卡片标记为 aborted（生成被打断，不会执行了）", () => {
+		const view = apply([
+			{ type: "run_started", runId: "r1" },
+			{ type: "tool_stream_started", card: toolCard({ generating: true }) },
+			{ type: "run_finished", runId: "r1" },
+		]);
+
+		expect(view.entries[0]).toMatchObject({ outcome: "aborted" });
+		expect((view.entries[0] as ToolCard).generating).toBeUndefined();
+	});
+
+	it("run_error 同样清理滞留的生成中卡片", () => {
+		const view = apply([
+			{ type: "run_started", runId: "r1" },
+			{ type: "tool_stream_started", card: toolCard({ generating: true }) },
+			{ type: "run_error", runId: "r1", message: "中断" },
+		]);
+
+		expect(view.entries[0]).toMatchObject({ outcome: "aborted" });
+	});
+
+	it("已完成的卡片不受 run 结束清理影响", () => {
+		const view = apply([
+			{ type: "run_started", runId: "r1" },
+			{ type: "tool_started", card: toolCard() },
+			{ type: "tool_finished", card: toolCard({ outcome: "ok" }) },
+			{ type: "run_finished", runId: "r1" },
+		]);
+
+		expect(view.entries[0]).toMatchObject({ outcome: "ok" });
+	});
+});
+
 describe("run 生命周期", () => {
 	it("run_started / run_finished 切换 isStreaming", () => {
 		const running = apply([{ type: "run_started", runId: "r1" }]);

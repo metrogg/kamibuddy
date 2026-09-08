@@ -31,6 +31,43 @@ function countLines(text: string): number {
 	return text.split("\n").length;
 }
 
+/** JSON 字符串片段的反转义（只处理常见转义，路径场景够用）。 */
+function unescapeJsonString(fragment: string): string {
+	return fragment.replace(/\\(.)/g, (_m, ch: string) => {
+		if (ch === "n") return "\n";
+		if (ch === "t") return "\t";
+		if (ch === "r") return "\r";
+		return ch; // \" \\ \/ 等
+	});
+}
+
+/**
+ * write 工具调用参数**流式生成中**的进度：从累积的 partialJson 里
+ * 抠出已完整的 path 和 content 片段的当前行数。
+ *
+ * 为什么能这么做：模型写文件时 content 是逐 token 流出的 JSON 字符串
+ * （pi 的 toolcall_delta），真实换行在 JSON 里是 `\n` 两字符序列 ——
+ * 数它就能实时给出「生成中 +N」的行数（WorkBuddy 的生成中计数同口径）。
+ *
+ * path 必须等到闭合引号才返回：半截路径显示出来既是错的也像 bug。
+ */
+export function writeStreamProgress(rawArgs: string): {
+	readonly path: string | undefined;
+	readonly added: number;
+} {
+	const pathMatch = /"path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(rawArgs);
+	const path = pathMatch?.[1] === undefined ? undefined : unescapeJsonString(pathMatch[1]);
+
+	// content 不要求闭合：它通常还在流式中，抓到哪算哪。
+	const contentMatch = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(rawArgs);
+	const fragment = contentMatch?.[1] ?? "";
+	// 数 JSON 里的字面 \n（两字符）：content 非空时行数 = \n 数 + 1。
+	const newlines = (fragment.match(/\\n/g) ?? []).length;
+	const added = fragment === "" ? 0 : newlines + 1;
+
+	return { path, added };
+}
+
 /** write 工具参数 → 变更统计。形状不符返回 undefined（pi 的 args 是 any，窄化失败不猜）。 */
 export function changeFromWriteArgs(args: unknown): FileChange | undefined {
 	if (typeof args !== "object" || args === null) return undefined;

@@ -33,6 +33,7 @@ import type {
 import {
 	changeFromEditArgs,
 	changeFromWriteArgs,
+	writeStreamProgress,
 	type FileChange,
 } from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
@@ -173,6 +174,21 @@ export class SessionHost {
 	private readonly toolCards = new Map<string, ToolCard>();
 	/** write/edit 工具启动时暂存的变更统计，执行成功才落到卡片上（失败不算产物）。 */
 	private readonly pendingChanges = new Map<string, FileChange>();
+	/**
+	 * 生成阶段的工具调用追踪（key = assistant 消息的 contentIndex）。
+	 *
+	 * rawArgs 自己按 delta 累积，而不是读 content block 上的暂存字段：
+	 * 那个字段是各 provider 的私有草稿，名字都不统一（anthropic 叫 partialJson、
+	 * openai-completions 叫 partialArgs），而 toolcall_delta.delta 是公开契约。
+	 *
+	 * 卡片（tool_stream_started）不在 toolcall_start 时立刻发，要等首个 delta
+	 * 里读到稳定的 id 与 name —— openai 协议下 start 时 id 可能是空串、
+	 * 后续才补上（openai-completions.ts 的 block.id 回填逻辑）。
+	 */
+	private readonly streamToolCalls = new Map<
+		number,
+		{ emittedId?: string; rawArgs: string }
+	>();
 
 	private constructor(
 		private readonly session: Awaited<
@@ -460,6 +476,7 @@ export class SessionHost {
 				const runId = this.currentRunId ?? this.nextId("run");
 				this.currentRunId = undefined;
 				this.currentAssistantId = undefined;
+				this.streamToolCalls.clear();
 				emit({ type: "run_finished", runId });
 				this.emitState();
 				return;
@@ -467,6 +484,8 @@ export class SessionHost {
 
 			case "message_start": {
 				const message = event.message;
+				// contentIndex 每条消息重新计数，上一条消息的生成期追踪全部作废。
+				this.streamToolCalls.clear();
 
 				if (message.role === "user") {
 					// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
@@ -496,9 +515,29 @@ export class SessionHost {
 			}
 
 			case "message_update": {
+				const inner = event.assistantMessageEvent;
+
+				/*
+				 * 工具调用的生成阶段：卡片从「模型开始吐参数」就上屏（WorkBuddy 的
+				 * 「生成中 +N」），而不是等 tool_execution_start —— 写文件时参数里
+				 * 就是文件内容，生成几十秒、执行毫秒级，等执行才上屏等于整段不可见。
+				 * 这条路径不依赖 currentAssistantId（卡片定位靠 toolCallId），放最前。
+				 */
+				if (inner.type === "toolcall_start") {
+					this.streamToolCalls.set(inner.contentIndex, { rawArgs: "" });
+					return;
+				}
+				if (inner.type === "toolcall_delta") {
+					this.translateToolCallDelta(inner);
+					return;
+				}
+				if (inner.type === "toolcall_end") {
+					this.streamToolCalls.delete(inner.contentIndex);
+					return;
+				}
+
 				const id = this.currentAssistantId;
 				if (id === undefined) return;
-				const inner = event.assistantMessageEvent;
 
 				if (inner.type === "text_delta") {
 					emit({
@@ -513,8 +552,8 @@ export class SessionHost {
 						delta: inner.delta,
 					});
 				}
-				// toolcall_delta 不上传：工具卡片由 tool_execution_* 事件驱动，
-				// 让 UI 只有一个来源，避免两套状态打架。
+				// 其余 inner 事件（text_start/end、thinking_start/end、done…）不上传：
+				// 正文与思考靠 delta + assistant_done 终态校正，边界事件对 UI 无信息量。
 				return;
 			}
 
@@ -561,6 +600,9 @@ export class SessionHost {
 			}
 
 			case "tool_execution_start": {
+				// 生成阶段已上屏的同 id 卡片会被 reducer 原位翻转（upsert）；
+				// at 沿用生成开始的时间 —— 卡片的寿命从「开始生成」算起，不是「开始执行」。
+				const existing = this.toolCards.get(event.toolCallId);
 				const card: ToolCard = {
 					id: event.toolCallId,
 					role: "tool",
@@ -569,7 +611,7 @@ export class SessionHost {
 					summary: summarizeArgs(event.args),
 					outcome: undefined,
 					detail: undefined,
-					at: Date.now(),
+					at: existing?.at ?? Date.now(),
 				};
 				this.toolCards.set(event.toolCallId, card);
 				// write/edit 把 args 算成变更统计暂存：成功后 +/- 徽章与产物清单都以此为准。
@@ -624,6 +666,61 @@ export class SessionHost {
 			case "session_info_changed":
 				this.emitState();
 				return;
+		}
+	}
+
+	/**
+	 * toolcall_delta 的处理：累积参数原文，并在 id/name 稳定后发出生成中卡片。
+	 *
+	 * write 额外发行数进度（「生成中 +N」的 N 从这里来）。edit 不发 ——
+	 * 它的参数是嵌套的 edits 数组，流式数行要维护部分 JSON 解析状态机，
+	 * 成本高收益低，生成中只显示卡片本身（event 注释里也是这个口径）。
+	 */
+	private translateToolCallDelta(
+		inner: Extract<
+			Extract<AgentSessionEvent, { type: "message_update" }>["assistantMessageEvent"],
+			{ type: "toolcall_delta" }
+		>,
+	): void {
+		const track = this.streamToolCalls.get(inner.contentIndex);
+		if (track === undefined) return;
+		track.rawArgs += inner.delta;
+
+		const block = inner.partial.content[inner.contentIndex];
+		// id / name 可能迟到（openai 协议下 toolcall_start 时还是空串、后续回填）：
+		// 不稳定就不发，等下一个 delta；整段生成都没等到则由 tool_execution_start 兜底上屏。
+		if (block === undefined || block.type !== "toolCall") return;
+		if (block.id === "" || block.name === "") return;
+
+		const emit = this.options.emit;
+		if (track.emittedId === undefined) {
+			track.emittedId = block.id;
+			const card: ToolCard = {
+				id: block.id,
+				role: "tool",
+				toolName: block.name,
+				label: TOOL_LABELS[block.name] ?? block.name,
+				summary: "",
+				outcome: undefined,
+				detail: undefined,
+				generating: true,
+				at: Date.now(),
+			};
+			this.toolCards.set(block.id, card);
+			emit({ type: "tool_stream_started", card });
+		}
+
+		if (block.name === "write") {
+			const progress = writeStreamProgress(track.rawArgs);
+			// path 未完整时不发：半截路径上屏像 bug（reducer 端同口径，双保险）。
+			if (progress.path !== undefined) {
+				emit({
+					type: "tool_stream_progress",
+					id: block.id,
+					path: progress.path,
+					added: progress.added,
+				});
+			}
 		}
 	}
 }

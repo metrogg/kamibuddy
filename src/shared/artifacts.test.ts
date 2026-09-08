@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationEntry } from "./session-events.ts";
-import { changeFromEditArgs, changeFromWriteArgs, collectArtifacts } from "./artifacts.ts";
+import {
+	changeFromEditArgs,
+	changeFromWriteArgs,
+	collectArtifacts,
+	writeStreamProgress,
+} from "./artifacts.ts";
 
 describe("changeFromWriteArgs", () => {
 	it("{path, content} → added = content 行数，removed = 0", () => {
@@ -84,5 +89,31 @@ describe("collectArtifacts", () => {
 			tool({ toolName: "bash" }),
 		]);
 		expect(r).toEqual([]);
+	});
+});
+
+describe("writeStreamProgress", () => {
+	it("路径已完整、content 正在流式 → 返回 path 与当前行数", () => {
+		const raw = '{"path": "game/snake.html", "content": "<html>\\n<body>\\n贪吃';
+		expect(writeStreamProgress(raw)).toEqual({ path: "game/snake.html", added: 3 });
+	});
+
+	it("路径还没写完 → path undefined，行数 0（还不到显示卡片的时机）", () => {
+		expect(writeStreamProgress('{"path": "gam')).toEqual({ path: undefined, added: 0 });
+	});
+
+	it("content 为空片段 → 0 行", () => {
+		expect(writeStreamProgress('{"path": "a.md", "content": "')).toEqual({ path: "a.md", added: 0 });
+	});
+
+	it("路径含转义字符 → 反转义", () => {
+		const raw = '{"path": "a\\"b\\\\c.html", "content": "x\\ny"}';
+		// content 片段是 x\ny（JSON 转义的换行）→ 真实内容 2 行。
+		expect(writeStreamProgress(raw)).toEqual({ path: 'a"b\\c.html', added: 2 });
+	});
+
+	it("非预期文本 → 安全兜底", () => {
+		expect(writeStreamProgress("")).toEqual({ path: undefined, added: 0 });
+		expect(writeStreamProgress('{"foo": 1}')).toEqual({ path: undefined, added: 0 });
 	});
 });

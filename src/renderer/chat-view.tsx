@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
-import type { ModeDescriptor, ToolCard } from "@shared/session-events.ts";
+import type { ConversationEntry, ModeDescriptor, ToolCard } from "@shared/session-events.ts";
 import { collectArtifacts } from "@shared/artifacts.ts";
 import { IconBack, IconChevronDown, IconDoc, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
@@ -79,9 +79,12 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				onClick={() => setOpen((v) => !v)}
 			>
 				<span className={`tool-dot ${outcomeClass(card.outcome)}`} />
-				<span className="tool-label">{card.label}</span>
+				{/* 生成中 = 模型还在流式输出参数（写文件时内容全在参数里，是最长的一段）。
+				    WorkBuddy 同位置显示「生成中 +N」，参数吐完进入执行才显示工具名。 */}
+				<span className="tool-label">{card.generating === true ? "生成中" : card.label}</span>
 				<span className="tool-summary">{card.summary}</span>
-				{/* write/edit 成功后的增删行徽章（对标 WorkBuddy 的「创建 path +276 -0」）。 */}
+				{/* write/edit 的增删行徽章（对标 WorkBuddy 的「+276 -0」）。
+				    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。 */}
 				{card.change !== undefined && (
 					<span className="tool-change">
 						<span className="added">+{card.change.added}</span>
@@ -93,6 +96,28 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 			{open && card.detail !== undefined && <pre className="tool-detail">{card.detail}</pre>}
 		</div>
 	);
+}
+
+/* ── 流式状态行 ──────────────────────────────────────────────────── */
+
+/**
+ * 流式期间底部状态行的文案（WorkBuddy 的「正在写入文件」同位置）。
+ *
+ * 有生成中的 write 卡片时报它在写哪个文件 —— 写文件是最长的一段，
+ * 光显示「正在思考」用户会以为卡死；其余情况保持原状。
+ */
+function pendingText(entries: readonly ConversationEntry[]): string {
+	for (let i = entries.length - 1; i >= 0; i -= 1) {
+		const entry = entries[i];
+		if (entry === undefined) break;
+		if (entry.role === "tool" && entry.generating === true) {
+			if (entry.toolName === "write") {
+				return entry.summary === "" ? "正在写入文件…" : `正在写入文件 ${entry.summary}…`;
+			}
+			return "正在思考…";
+		}
+	}
+	return "正在思考…";
 }
 
 /* ── 交互模式切换 ────────────────────────────────────────────────── */
@@ -214,7 +239,7 @@ export function ChatView({
 						</div>
 					);
 				})}
-				{streaming && <div className="stream-pending">正在思考…</div>}
+				{streaming && <div className="stream-pending">{pendingText(conversation.entries)}</div>}
 				{/*
 					产物卡片区：本会话 write 成功的文件（collectArtifacts 从工具卡片推导，
 					规则见 shared/artifacts.ts）。流式期间不显示 —— 产物可能还没写完。

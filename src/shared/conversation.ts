@@ -68,6 +68,24 @@ function replaceEntry(
 	return next;
 }
 
+/**
+ * run 结束时把仍滞留的「生成中」卡片标记为 aborted。
+ *
+ * 正常流程下卡片离开生成态只有一条路：tool_execution_start 把它翻转为执行态。
+ * 生成被打断（用户中断、模型报错）时这条事件永远不会来 —— 不清理的话
+ * 卡片上的呼吸动画会永远转下去，看起来像还在写文件。
+ */
+function abortOrphanedGenerating(
+	entries: readonly ConversationEntry[],
+): readonly ConversationEntry[] {
+	if (!entries.some((e) => e.role === "tool" && e.generating === true)) return entries;
+	return entries.map((e) =>
+		e.role === "tool" && e.generating === true
+			? { ...e, generating: undefined, outcome: "aborted" as const }
+			: e,
+	);
+}
+
 export function conversationReducer(view: ConversationView, action: ConversationAction): ConversationView {
 	if (action.type === "snapshot") {
 		return {
@@ -85,7 +103,11 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			return { ...view, state: { ...view.state, isStreaming: true } };
 
 		case "run_finished":
-			return { ...view, state: { ...view.state, isStreaming: false } };
+			return {
+				...view,
+				state: { ...view.state, isStreaming: false },
+				entries: abortOrphanedGenerating(view.entries),
+			};
 
 		case "run_error":
 			// 错误作为一条助手消息落进流里，用户能看到上下文位置。
@@ -93,7 +115,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				...view,
 				state: { ...view.state, isStreaming: false },
 				entries: [
-					...view.entries,
+					...abortOrphanedGenerating(view.entries),
 					{ id: `error-${event.runId}`, role: "assistant", text: event.message, at: Date.now() },
 				],
 			};
@@ -133,8 +155,31 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			return { ...view, entries: replaced === view.entries ? [...view.entries, done] : replaced };
 		}
 
-		case "tool_started":
-			return { ...view, entries: [...view.entries, event.card] };
+		case "tool_stream_started":
+		case "tool_started": {
+			// upsert：tool_stream_started 在生成阶段上屏，tool_started 在进入执行时
+			// 把同一张卡翻转为执行态 —— 一次工具调用始终只有一张卡（WorkBuddy 同构）。
+			// 缺了 stream_started 的旧流程（或乱序）下找不到 id，退化为追加。
+			const card = event.card;
+			const replaced = replaceEntry(view.entries, card.id, () => card);
+			return { ...view, entries: replaced === view.entries ? [...view.entries, card] : replaced };
+		}
+
+		case "tool_stream_progress":
+			// path 未完整时不落卡（半截路径上屏像 bug）；行数随 path 一起进 change，
+			// UI 的 +N 徽章读同一个字段，生成中与终态两个口径不用分开渲染。
+			return {
+				...view,
+				entries: replaceEntry(view.entries, event.id, (entry) =>
+					entry.role === "tool" && event.path !== undefined
+						? {
+								...entry,
+								summary: event.path,
+								change: { path: event.path, added: event.added, removed: 0 },
+							}
+						: entry,
+				),
+			};
 
 		case "tool_progress":
 			return {

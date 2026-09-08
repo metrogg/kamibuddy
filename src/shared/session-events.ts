@@ -60,10 +60,21 @@ export interface ToolCard {
 	/** 展开态显示的正文。大输出已在 daemon 侧截断，UI 不做二次防御。 */
 	readonly detail: string | undefined;
 	/**
-	 * 写文件工具（write/edit）的增删行统计，执行成功时由 session-host 从 args 算出。
-	 * 产物清单（collectArtifacts）与 +/- 徽章都以此为唯一来源。
+	 * 写文件工具（write/edit）的增删行统计。
+	 * 生成阶段（generating）是流式实时计数（writeStreamProgress 从半截 JSON 数行），
+	 * 执行成功后是 session-host 从完整 args 算出的终值。
+	 * 产物清单（collectArtifacts）以 outcome==="ok" 为门槛，两个口径不会混。
 	 */
 	readonly change?: FileChange;
+	/**
+	 * 生成中 = 模型还在流式输出本调用的参数。
+	 *
+	 * 写文件时文件内容全在参数里，这段是整个调用生命周期里最长的一段
+	 * （几十秒），而执行（写盘）是毫秒级 —— 卡片必须在这段就上屏
+	 * （WorkBuddy 的「生成中 +N」），否则生成过程在 UI 上是黑洞。
+	 * tool_execution_start 到达时该标记消失（进入执行态）。
+	 */
+	readonly generating?: boolean;
 	readonly at: number;
 }
 
@@ -83,7 +94,26 @@ export type SessionEvent =
 	| { readonly type: "assistant_thinking_delta"; readonly messageId: MessageId; readonly delta: string }
 	/** 助手消息完成，带终全文。UI 用它做一次校正，覆盖累积的增量。 */
 	| { readonly type: "assistant_done"; readonly message: AssistantMessage }
-	/** 工具开始执行。 */
+	/**
+	 * 工具调用开始**生成**（模型正在流式输出参数）。卡片从这一刻上屏，
+	 * 而不是等到执行 —— 写文件时参数里就是文件内容，生成阶段几十秒、
+	 * 执行毫秒级，等执行才上屏等于整段生成不可见。
+	 * 卡片 id 与 tool_started/tool_finished 相同（pi 的 toolCallId），
+	 * 后续事件在同一张卡上原位更新。
+	 */
+	| { readonly type: "tool_stream_started"; readonly card: ToolCard }
+	/**
+	 * write 参数流式生成中的进度：path 完整后才出现（半截路径不该上屏），
+	 * added 为当前已生成行数。只有 write 发这个事件 —— edit 的参数是
+	 * 嵌套结构，流式数行成本高而收益低，生成中只显示卡片本身。
+	 */
+	| {
+			readonly type: "tool_stream_progress";
+			readonly id: ToolCallId;
+			readonly path: string | undefined;
+			readonly added: number;
+	  }
+	/** 工具开始执行（参数已生成完毕）。同 id 的生成中卡片原位翻转为执行态。 */
 	| { readonly type: "tool_started"; readonly card: ToolCard }
 	/** 工具流式输出（如命令 stdout）。 */
 	| { readonly type: "tool_progress"; readonly id: ToolCallId; readonly delta: string }
