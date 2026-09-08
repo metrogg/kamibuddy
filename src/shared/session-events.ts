@@ -89,7 +89,25 @@ export interface ToolCard {
 	readonly at: number;
 }
 
-export type ConversationEntry = UserMessage | AssistantMessage | ToolCard;
+/**
+ * run 异常结束的错误条目（run_error 折叠而来）。
+ *
+ * 错误是消息流的一部分：渲染为内嵌错误卡，新回合开始后仍留在历史原位
+ * （与 WorkBuddy 的错误卡机制一致）。不落 assistant 角色的原因：错误文本
+ * 不是模型输出，混进 assistant 会被 Markdown 渲染、被上下文估算当成
+ * 模型回复计数 —— 两个口径都会失真。
+ */
+export interface ErrorEntry {
+	readonly id: MessageId;
+	readonly role: "error";
+	/** 给用户看的错误信息（run_error.message，不含 stack）。 */
+	readonly message: string;
+	/** 出错的 run，错误卡上展示并随结构化报告复制。 */
+	readonly runId: RunId;
+	readonly at: number;
+}
+
+export type ConversationEntry = UserMessage | AssistantMessage | ToolCard | ErrorEntry;
 
 /**
  * 生成中卡片的标签（WorkBuddy tool.writeFile 词汇表：生成中/修改中）。

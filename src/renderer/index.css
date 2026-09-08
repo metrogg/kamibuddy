@@ -719,6 +719,16 @@ button {
 	text-overflow: ellipsis;
 }
 
+/* 滚动视口的定位基准：「回到底部」按钮钉在这里（absolute），
+   不随 .stream 的内容一起滚走。滚动容器仍是 .stream 本身。 */
+.stream-wrap {
+	position: relative;
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
 .stream {
 	flex: 1 1 auto;
 	overflow-y: auto;
@@ -726,6 +736,43 @@ button {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+}
+
+/* 「回到底部」：不在底部时浮现的圆形按钮（对标 WorkBuddy）。
+   白底圆钮 + 卡片阴影，底部居中；入场上浮淡入。 */
+.jump-to-bottom {
+	position: absolute;
+	left: 50%;
+	bottom: 20px;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	border: 1px solid var(--border);
+	background: var(--bg);
+	box-shadow: var(--shadow-card);
+	color: var(--text-dim);
+	transform: translateX(-50%);
+	animation: jump-to-bottom-in 0.16s ease-out;
+}
+
+.jump-to-bottom:hover {
+	color: var(--text);
+}
+
+/* transform 同时承担居中（translateX），keyframes 里必须带上，否则动画期间跑偏。 */
+@keyframes jump-to-bottom-in {
+	from {
+		opacity: 0;
+		transform: translate(-50%, 6px);
+	}
+	to {
+		opacity: 1;
+		transform: translate(-50%, 0);
+	}
 }
 
 .stream > * {
@@ -773,10 +820,110 @@ button {
 	color: var(--text-dim);
 }
 
+/* MetaFold 过程折叠行：回合结束后连续工具卡折成的一行摘要（机制对标
+   WorkBuddy）。它是「过程的墓碑」而非内容本身 —— 与取消指示行同级的
+   三级灰单行，hover 变主色提示可点；chevron 平时隐藏（opacity 0），
+   hover/展开才出现，减少长对话里的视觉噪声。 */
+.metafold {
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.metafold-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 4px 14px;
+	font-size: 15px;
+	color: var(--text-dim);
+	text-align: left;
+}
+
+.metafold-row:hover {
+	color: var(--primary);
+}
+
+.metafold-summary {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 收起态箭头朝右（-90°），展开态旋回朝下（0°）。 */
+.metafold-caret {
+	flex: 0 0 auto;
+	opacity: 0;
+	transform: rotate(-90deg);
+	transition:
+		opacity 0.15s ease,
+		transform 0.15s ease;
+}
+
+.metafold-row:hover .metafold-caret,
+.metafold-row.open .metafold-caret {
+	opacity: 1;
+}
+
+.metafold-row.open .metafold-caret {
+	transform: rotate(0deg);
+}
+
+/* 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，右下角直角。
+   外层 .entry.user 只做右对齐容器，padding/背景都内收到 .user-bubble ——
+   否则 hover 工具条也会被气泡背景包进去。 */
 .entry.user {
 	align-self: flex-end;
-	background: var(--primary);
-	color: var(--primary-text);
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	padding: 0;
+}
+
+.user-bubble {
+	width: fit-content;
+	max-width: calc(100% - 32px);
+	padding: 10px 14px;
+	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
+	background: var(--bg-raised);
+	/* 超高消息内部滚动，不让一条长消息占满整个消息流（WorkBuddy 同口径 310px）。 */
+	max-height: 310px;
+	overflow-y: auto;
+}
+
+/* hover 工具条：常驻占位只切透明度（避免 hover 插入 DOM 推搡下方消息流），
+   负 margin 把占位高度吃进 .stream 的 12px 间距里，平时几乎不占额外高度。 */
+.user-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 18px;
+	margin: -8px 4px -4px 0;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.entry.user:hover .user-toolbar {
+	opacity: 1;
+}
+
+.user-copy {
+	display: flex;
+	align-items: center;
+	padding: 2px;
+	border-radius: 4px;
+	color: var(--text-dim);
+}
+
+.user-copy:hover {
+	background: var(--bg-hover);
+	color: var(--text);
 }
 
 .entry.assistant {
@@ -784,10 +931,82 @@ button {
 	background: var(--bg-raised);
 }
 
-.entry.error {
-	background: rgb(229 83 75 / 8%);
-	border: 1px solid var(--danger);
+/* ── 错误卡（内嵌于消息流，run 异常或提交失败时展示）───────────────
+   对标 WorkBuddy：红色图标 + 可折行标题 + runId 区（复制报告）+ 重试按钮。
+   用独立样式体系，不再复用 .entry.error —— 错误卡内部有按钮与图标，
+   与消息卡片的边距/对齐需求不同。 */
+.error-card {
+	align-self: flex-start;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	max-width: calc(100% - 32px);
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-raised);
+}
+
+.error-card-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.error-card-icon {
+	flex: 0 0 auto;
+	margin-top: 2px;
+	color: var(--danger);
+}
+
+.error-card-title {
+	font-size: 14px;
+	line-height: 1.5;
+	color: var(--text);
+	word-break: break-word;
+}
+
+/* runId 区：二级灰小字，与复制按钮同高，复制成功后对勾 2s。 */
+.error-card-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: 24px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.error-card-runid {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.error-card-copy {
+	display: flex;
+	align-items: center;
+	padding: 2px;
+	border-radius: 4px;
+	color: var(--text-dim);
+}
+
+.error-card-copy:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+/* 重试：实心深色底白字圆角按钮，与 .send-btn 同一设计语言。 */
+.error-card-retry {
+	align-self: flex-start;
+	margin-left: 24px;
+	padding: 6px 14px;
+	border-radius: 6px;
 	font-size: 13px;
+	font-weight: 500;
+	color: var(--primary-text);
+	background: var(--primary);
+}
+
+.error-card-retry:hover {
+	opacity: 0.88;
 }
 
 /* 思考块：默认折叠成一行「深度思考」，点击展开（对标 WorkBuddy）。
@@ -1827,6 +2046,74 @@ button {
 
 .test-result.ok {
 	color: var(--ok);
+}
+
+/* ── 权限预设 ─────────────────────────────────────────────────── */
+
+.preset-list {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+}
+
+.preset-item {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	padding: 10px 12px;
+	text-align: left;
+	border-bottom: 1px solid var(--border);
+}
+
+.preset-item:last-child {
+	border-bottom: 0;
+}
+
+.preset-item:hover:not(:disabled) {
+	background: var(--bg-hover);
+}
+
+.preset-item.active {
+	background: var(--bg-raised);
+}
+
+.preset-item:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+/* 与 provider-dot 同尺寸同色，保持"已启用"的视觉一致。 */
+.preset-dot {
+	width: 7px;
+	height: 7px;
+	margin-top: 6px;
+	border-radius: 50%;
+	background: var(--border);
+	flex: 0 0 auto;
+}
+
+.preset-dot.on {
+	background: var(--ok);
+}
+
+.preset-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.preset-label {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.preset-desc {
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.5;
 }
 
 /* ── 自定义服务商表单 ─────────────────────────────────────────── */

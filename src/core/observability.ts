@@ -75,11 +75,12 @@ export function estimateComposition(
 		} else if (entry.role === "assistant") {
 			composition.assistant += estimateTokens(entry.text);
 			composition.thinking += estimateTokens(entry.thinking ?? "");
-		} else {
+		} else if (entry.role === "tool") {
 			composition.tools += estimateTokens(
 				`${entry.summary}\n${entry.detail ?? ""}`,
 			);
 		}
+		// error 条目不在模型上下文里（纯 UI 历史，见 ErrorEntry 注释），不计入估算。
 	}
 	return composition;
 }

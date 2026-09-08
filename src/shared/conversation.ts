@@ -157,14 +157,20 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		}
 
 		case "run_error":
-			// 错误作为一条助手消息落进流里，用户能看到上下文位置。
+			// 错误作为独立条目落进流里（渲染为错误卡，见 ErrorEntry），用户能看到上下文位置。
 			// 错误不是用户取消：停表但不落 cancelled 标记。
 			return {
 				...view,
 				state: { ...view.state, isStreaming: false },
 				entries: [
 					...abortOrphanedGenerating(view.entries),
-					{ id: `error-${event.runId}`, role: "assistant", text: event.message, at: Date.now() },
+					{
+						id: `error-${event.runId}`,
+						role: "error",
+						message: event.message,
+						runId: event.runId,
+						at: Date.now(),
+					},
 				],
 				turn: stopTurn(view.turn, false),
 			};

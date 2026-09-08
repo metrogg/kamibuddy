@@ -185,10 +185,26 @@ export const IconCheck = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+export const IconCopy = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 双矩形错位：「复制」的通用隐喻，与整套线性风格一致。 */}
+		<rect x="9" y="9" width="11" height="11" rx="2" />
+		<path d="M5 15V6a2 2 0 0 1 2-2h9" />
+	</Svg>
+);
+
 export const IconEdit = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		<path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z" />
 		<path d="m13.5 6.5 4 4" />
+	</Svg>
+);
+
+export const IconAlert = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 圆圈 + 叹号：错误卡的唯一红元素，与线性套保持同一视窗与端点风格。 */}
+		<circle cx="12" cy="12" r="9" />
+		<path d="M12 7.5v6M12 16.8h.01" />
 	</Svg>
 );
 

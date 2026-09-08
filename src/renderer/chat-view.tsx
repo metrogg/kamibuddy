@@ -5,11 +5,24 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
-import type { ConversationEntry, ModeDescriptor, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import { formatMessageTime } from "@shared/message-time.ts";
+import { buildRenderBlocks } from "@shared/metafold.ts";
+import type { ConversationEntry, ModeDescriptor, RunId, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
-import { IconBack, IconChevronDown, IconDoc, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
+import {
+	IconAlert,
+	IconBack,
+	IconCheck,
+	IconChevronDown,
+	IconCopy,
+	IconDoc,
+	IconMic,
+	IconPlus,
+	IconSend,
+	IconStop,
+} from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { shouldSwallowEnter } from "./ime-guard.ts";
@@ -69,6 +82,129 @@ function ThinkingBlock({
 	);
 }
 
+/* ── 用户消息气泡 ────────────────────────────────────────────────── */
+
+/** 复制成功后对勾停留时长（对标 WorkBuddy 的反馈节奏）。 */
+const COPY_TICK_MS = 2_000;
+
+/**
+ * 复制 + 对勾反馈（UserBubble 与错误卡共用同一节奏）。
+ * 对勾还原定时器走 ref：连续点击时清掉上一个重计，不需要为重渲染进 state。
+ */
+function useCopyWithTick(): {
+	readonly copied: boolean;
+	readonly copy: (text: string) => Promise<void>;
+} {
+	const [copied, setCopied] = useState(false);
+	const timerRef = useRef<number | undefined>(undefined);
+	useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+	const copy = async (text: string): Promise<void> => {
+		await navigator.clipboard.writeText(text);
+		setCopied(true);
+		window.clearTimeout(timerRef.current);
+		timerRef.current = window.setTimeout(() => setCopied(false), COPY_TICK_MS);
+	};
+	return { copied, copy };
+}
+
+/**
+ * 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，hover 时下方浮现工具条
+ * （时间戳 + 复制）。工具条常驻占位、只切透明度 —— 若 hover 才插入 DOM，
+ * 每次划过都会推动下方消息流抖动，长对话里非常刺眼。
+ */
+function UserBubble({ text, at }: { readonly text: string; readonly at: number }): React.JSX.Element {
+	const { copied, copy } = useCopyWithTick();
+
+	return (
+		<div className="entry user">
+			<div className="user-bubble">{text}</div>
+			<div className="user-toolbar">
+				<span className="user-time">{formatMessageTime(at, Date.now())}</span>
+				<button
+					type="button"
+					className="user-copy"
+					aria-label="复制消息内容"
+					title={copied ? "已复制" : "复制"}
+					onClick={() => void copy(text)}
+				>
+					{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+				</button>
+			</div>
+		</div>
+	);
+}
+
+/* ── 错误卡 ────────────────────────────────────────────────────── */
+
+/**
+ * 结构化错误报告（复制内容）：排障时需要的一组字段一次带走，
+ * 比让用户逐行手抄 runId 可靠。runId / 模型缺省时整行略去，
+ * 时间缺省（提交失败未落库）时取复制当下。
+ */
+function buildErrorReport(message: string, runId: RunId | undefined, at: number, modelId: string | undefined): string {
+	const lines = [`错误信息: ${message}`];
+	if (runId !== undefined) lines.push(`runId: ${runId}`);
+	lines.push(`时间: ${new Date(at).toISOString()}`);
+	if (modelId !== undefined) lines.push(`模型: ${modelId}`);
+	return lines.join("\n");
+}
+
+/**
+ * 内嵌错误卡（机制对标 WorkBuddy）：run 异常结束或提交失败时落在消息流里，
+ * 错误图标 + 可折行的标题 + runId 区（复制结构化报告）+ 重试实心按钮。
+ * 重试 = 重发最后一条 user 消息；没有可重发的消息时按钮隐藏。
+ * 卡片是历史的一部分：新回合开始后留在原位（ErrorEntry 不挪位）。
+ */
+function ErrorCard({
+	message,
+	runId,
+	at,
+	modelId,
+	retryText,
+	onRetry,
+}: {
+	readonly message: string;
+	/** 出错的 run；提交失败（未进入 run）时没有，runId 区整块不渲染。 */
+	readonly runId?: RunId;
+	/** 错误落库时间；缺省时报告取复制当下的时间。 */
+	readonly at?: number;
+	readonly modelId: string | undefined;
+	/** 最后一条 user 消息正文；undefined 时隐藏重试按钮。 */
+	readonly retryText: string | undefined;
+	readonly onRetry: () => void;
+}): React.JSX.Element {
+	const { copied, copy } = useCopyWithTick();
+
+	return (
+		<div className="error-card">
+			<div className="error-card-head">
+				<IconAlert size={16} className="error-card-icon" />
+				<span className="error-card-title">{message}</span>
+			</div>
+			{runId !== undefined && (
+				<div className="error-card-meta">
+					<span className="error-card-runid">runId: {runId}</span>
+					<button
+						type="button"
+						className="error-card-copy"
+						aria-label="复制错误报告"
+						title={copied ? "已复制" : "复制错误报告"}
+						onClick={() => void copy(buildErrorReport(message, runId, at ?? Date.now(), modelId))}
+					>
+						{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+					</button>
+				</div>
+			)}
+			{retryText !== undefined && (
+				<button type="button" className="error-card-retry" onClick={onRetry}>
+					重试
+				</button>
+			)}
+		</div>
+	);
+}
+
 /* ── 工具卡片 ────────────────────────────────────────────────────── */
 
 /** 执行状态 → 状态点样式类。undefined 表示还在跑。 */
@@ -116,6 +252,43 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				{expandable && <IconChevronDown size={12} className={open ? "tool-caret open" : "tool-caret"} />}
 			</button>
 			{open && card.detail !== undefined && <pre className="tool-detail">{card.detail}</pre>}
+		</div>
+	);
+}
+
+/* ── MetaFold 过程折叠 ───────────────────────────────────────────── */
+
+/**
+ * 一个折叠单元：回合结束后连续工具卡折成的一行摘要（机制对标 WorkBuddy）。
+ *
+ * 长任务一次调十几次工具，平铺会把助手的最终回答顶出视野；折成一行后
+ * 回答紧邻摘要可见。展开状态由父组件按折叠单元 id 记住（Map）——
+ * 块流每次渲染由纯函数重算，组件若自持状态会随块重建丢失。
+ * 展开后内容就是原 ToolEntry 列表，卡片自身的展开/详情行为不变。
+ */
+function MetaFoldBlock({
+	summary,
+	cards,
+	open,
+	onToggle,
+}: {
+	readonly summary: string;
+	readonly cards: readonly ToolCard[];
+	readonly open: boolean;
+	readonly onToggle: () => void;
+}): React.JSX.Element {
+	return (
+		<div className="metafold">
+			<button
+				type="button"
+				className={open ? "metafold-row open" : "metafold-row"}
+				title={open ? "收起过程" : "展开过程"}
+				onClick={onToggle}
+			>
+				<span className="metafold-summary">{summary}</span>
+				<IconChevronDown size={12} className="metafold-caret" />
+			</button>
+			{open && cards.map((card) => <ToolEntry key={card.id} card={card} />)}
 		</div>
 	);
 }
@@ -359,6 +532,9 @@ function ModeSwitch({ interactions, currentId, onChange, onTodo }: ModeSwitchPro
 
 /* ── 主体 ────────────────────────────────────────────────────────── */
 
+/** 距底多少像素内算「在底部」：覆盖子像素与平滑滚动的末段抖动。 */
+const BOTTOM_THRESHOLD_PX = 40;
+
 export function ChatView({
 	conversation,
 	ready,
@@ -381,8 +557,18 @@ export function ChatView({
 	const streaming = conversation.state.isStreaming;
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
-	// 最后一个 user 消息的位置：当前回合的分界（回合头部走表的唯一依据）。
-	const lastUserIndex = conversation.entries.findLastIndex((e) => e.role === "user");
+	// MetaFold 折叠单元的展开状态：按单元 id 记忆。块流每次渲染由纯函数
+	// 重算（见 buildRenderBlocks），状态必须留在组件层，否则随块重建丢失。
+	const [foldOpen, setFoldOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
+	// 渲染块流：MetaFold 折叠 + 回合头部/取消占位都在纯函数里定位（shared/metafold.ts）。
+	const blocks = buildRenderBlocks(conversation.entries, {
+		streaming,
+		cancelledTurns: conversation.cancelledTurns,
+	});
+	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
+	const lastUserEntry = conversation.entries.findLast((e) => e.role === "user");
+	const lastUserId = lastUserEntry?.id;
+	const retryText = lastUserEntry?.text;
 	// 等待首响应阶段：与 pendingText 返回「等待模型响应…」同口径（末尾是 user 或流为空）。
 	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
 	const lastEntry = conversation.entries[conversation.entries.length - 1];
@@ -390,22 +576,61 @@ export function ChatView({
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
-	// 新内容到达时贴底。用 scrollHeight 而非 scrollIntoView，避免流式增量时抖动。
+	// 滚动跟随（对标 WorkBuddy）：在底部时新内容自动贴底；用户上滚离开底部
+	// 即停止跟随，浮现「回到底部」按钮；回到底部后恢复跟随。
+	// 跟随状态走 ref（scroll/effect 里同步读），按钮可见性走 state（要触发渲染）。
+	const followRef = useRef(true);
+	const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+	/*
+		跟随判定只看「测量到的位置」（距底 < 阈值），不看事件来源（wheel/touch/程序）。
+		为什么不用「程序滚动中」标记区分：跟随贴底本身就是程序滚动，标记方案要在
+		每次程序写 scrollTop 前后维护时序，流式增量下极易漏一拍把跟随误关掉。
+		位置是地面真值 —— 程序贴底后测量结果恒为「在底部」，天然不会误判；
+		用户上滚离开底部（不管用什么输入设备）测量结果恒为「不在底部」。
+	*/
+	const handleStreamScroll = (): void => {
+		const node = scrollRef.current;
+		if (node === null) return;
+		const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < BOTTOM_THRESHOLD_PX;
+		followRef.current = atBottom;
+		setShowJumpToBottom(!atBottom);
+	};
+
+	// 新内容到达时若跟随中则贴底。用 scrollHeight 而非 scrollIntoView，避免流式增量时抖动。
 	useEffect(() => {
 		const node = scrollRef.current;
-		if (node !== null) node.scrollTop = node.scrollHeight;
+		if (node !== null && followRef.current) node.scrollTop = node.scrollHeight;
 	}, [conversation.entries]);
+
+	// 点「回到底部」：立即恢复跟随 + 平滑滚到底。跟随必须先于滚动恢复 ——
+	// 否则平滑动画没走完时新内容到达，底部被推远，动画终点已不在底部。
+	const jumpToBottom = (): void => {
+		const node = scrollRef.current;
+		if (node === null) return;
+		followRef.current = true;
+		setShowJumpToBottom(false);
+		node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+	};
 
 	const submit = (): void => {
 		const text = draft.trim();
 		if (text === "" || !ready) return;
 		setDraft("");
+		// 发新消息强制贴底（WorkBuddy 同行为）：回显经 daemon 确认后才进 entries，
+		// 这里先把跟随打开，entries 变化的 effect 落地时自然贴底。
+		followRef.current = true;
+		setShowJumpToBottom(false);
 		onSubmit(text);
 	};
 
-	// 渲染消息流时跟踪「当前条目属于哪个回合」（回合 = 最后一条 user 消息及其后条目），
-	// 供「用户已取消」指示行定位。map 回调里就地更新，不开第二遍循环。
-	let currentTurnUserId: string | undefined;
+	const toggleFold = (id: string): void => {
+		setFoldOpen((current) => {
+			const next = new Map(current);
+			next.set(id, !(current.get(id) ?? false));
+			return next;
+		});
+	};
 
 	return (
 		<main className="chat">
@@ -424,69 +649,96 @@ export function ChatView({
 				/>
 			</header>
 
-			<div className="stream" ref={scrollRef}>
-				{/*
-				回合头部的插入位置：每条 user 消息之后、助手回应之前；
-				user 是最后一条（等响应）时补在末尾。只有最后一个 user 消息
-				所在的回合是「当前回合」—— 它的头部走表，历史回合恒为已完成
-				（computeTurnActive 同口径：最后 user 组及其之后共享当前回合）。
+			{/*
+				stream-wrap 只提供定位基准：「回到底部」按钮要钉在滚动视口底部，
+				若直接放 .stream 里会随内容一起滚走（absolute 相对的是滚动内容盒）。
+				滚动容器仍是 .stream 本身，监听器不挂在 wrap 上 —— 挂错元素收不到
+				滚动事件，跟随判定会静默失效。
 			*/}
-			{conversation.entries.map((entry, index) => {
-				if (entry.role === "user") currentTurnUserId = entry.id;
-				const prev = conversation.entries[index - 1];
-				const headerHere =
-					prev?.role === "user" && entry.role !== "user" ? index - 1 : undefined;
-				const trailingHeader = index === conversation.entries.length - 1 && entry.role === "user";
-				const header = (userIndex: number) => (
-					<TurnHeader
-						key={`turn-${conversation.entries[userIndex]?.id ?? userIndex}`}
-						active={streaming && userIndex === lastUserIndex}
-						turn={userIndex === lastUserIndex ? conversation.turn : undefined}
-					/>
-				);
-				/*
-				 * 「用户已取消」指示行：回合末尾（下一条是 user 或已到流尾）且
-				 * 该回合在取消名单里时渲染。取消名单由 reducer 维护，新回合开始后
-				 * 指示行仍留在历史里对应回合的末尾。
-				 */
-				const turnEndsHere =
-					index === conversation.entries.length - 1 ||
-					conversation.entries[index + 1]?.role === "user";
-				const cancelledHere =
-					turnEndsHere &&
-					currentTurnUserId !== undefined &&
-					conversation.cancelledTurns.includes(currentTurnUserId);
-				return (
-					<Fragment key={entry.id}>
-						{headerHere !== undefined && header(headerHere)}
-						{entry.role === "tool" ? (
-							<ToolEntry card={entry} />
-						) : (
-							<div className={`entry ${entry.role}`}>
+			<div className="stream-wrap">
+				<div className="stream" ref={scrollRef} onScroll={handleStreamScroll}>
+				{/*
+			渲染块流来自 buildRenderBlocks（shared/metafold.ts）：已完成回合的
+			连续工具卡折成 fold 块；回合头部（turn-header）与「用户已取消」
+			（cancelled）占位块的定位规则与折叠分组共享同一遍扫描，视觉位置
+			与原实现一致（header 紧跟 user 之后，cancelled 在回合末尾）。
+			只有最后一个 user 消息所在的回合是「当前回合」—— 它的头部走表，
+			历史回合恒为已完成（computeTurnActive 同口径）。
+		*/}
+		{blocks.map((block) => {
+			switch (block.kind) {
+				case "turn-header":
+					return (
+						<TurnHeader
+							key={`turn-${block.userId}`}
+							active={streaming && block.userId === lastUserId}
+							turn={block.userId === lastUserId ? conversation.turn : undefined}
+						/>
+					);
+				case "cancelled":
+					return (
+						<div key={`cancelled-${block.userId}`} className="user-cancelled">
+							用户已取消
+						</div>
+					);
+				case "fold":
+					return (
+						<MetaFoldBlock
+							key={block.id}
+							summary={block.summary}
+							cards={block.cards}
+							open={foldOpen.get(block.id) ?? false}
+							onToggle={() => toggleFold(block.id)}
+						/>
+					);
+				case "entry": {
+						const { entry } = block;
+						if (entry.role === "tool") {
+							// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
+							return <ToolEntry key={entry.id} card={entry} />;
+						}
+						// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
+						if (entry.role === "user") {
+							return <UserBubble key={entry.id} text={entry.text} at={entry.at} />;
+						}
+						return (
+							<div key={entry.id} className={`entry ${entry.role}`}>
 								{/*
 									thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
 									assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
 									isStreaming 翻 false，扫光与自动展开同时停止。
 								*/}
-								{entry.role === "assistant" && entry.thinking !== undefined && (
+								{entry.thinking !== undefined && (
 									<ThinkingBlock
 										text={entry.thinking}
-										streaming={streaming && index === conversation.entries.length - 1}
+										streaming={streaming && entry.id === lastEntry?.id}
 									/>
 								)}
-								{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
-								{entry.role === "assistant" ? (
-									<Markdown text={entry.text} />
-								) : (
-									<div className="text">{entry.text}</div>
-								)}
+								{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
+								<Markdown text={entry.text} />
 							</div>
-						)}
-						{trailingHeader && header(index)}
-						{cancelledHere && <div className="user-cancelled">用户已取消</div>}
-					</Fragment>
-				);
-			})}
+						);
+					}
+					case "error": {
+						const { entry } = block;
+						return (
+							<ErrorCard
+								key={entry.id}
+								message={entry.message}
+								runId={entry.runId}
+								at={entry.at}
+								modelId={conversation.state.modelId}
+								retryText={retryText}
+								onRetry={() => {
+									if (retryText === undefined) return;
+									// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
+									onSubmit(retryText);
+								}}
+							/>
+						);
+					}
+				}
+		})}
 				{/*
 				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
 				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
@@ -523,7 +775,30 @@ export function ChatView({
 						))}
 					</section>
 				)}
-				{lastError !== undefined && <div className="entry error">{lastError}</div>}
+				{lastError !== undefined && (
+					<ErrorCard
+						message={lastError}
+						modelId={conversation.state.modelId}
+						retryText={retryText}
+						onRetry={() => {
+							if (retryText === undefined) return;
+							onSubmit(retryText);
+						}}
+					/>
+				)}
+				</div>
+				{/* 不在底部时浮现（跟随已停）；点击平滑回底并恢复跟随。 */}
+				{showJumpToBottom && (
+					<button
+						type="button"
+						className="jump-to-bottom"
+						aria-label="回到底部"
+						title="回到底部"
+						onClick={jumpToBottom}
+					>
+						<IconChevronDown size={16} />
+					</button>
+				)}
 			</div>
 
 			<footer className="chat-composer">

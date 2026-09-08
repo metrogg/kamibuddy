@@ -312,7 +312,24 @@ describe("run 生命周期", () => {
 
 		expect(view.state.isStreaming).toBe(false);
 		expect(view.entries).toHaveLength(1);
-		expect(view.entries[0]).toMatchObject({ role: "assistant", text: "模型调用失败" });
+		// 错误是独立的 error 条目（渲染为错误卡），不混进 assistant —— 见 ErrorEntry 注释。
+		expect(view.entries[0]).toMatchObject({
+			role: "error",
+			message: "模型调用失败",
+			runId: "r1",
+		});
+	});
+
+	it("错误条目在新回合开始后保留在原位（错误卡是历史的一部分）", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_error", runId: "r1", message: "模型调用失败" },
+			{ type: "run_started", runId: "r2" },
+			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
+		]);
+
+		expect(view.entries.map((e) => e.role)).toEqual(["user", "error", "user"]);
+		expect(view.entries[1]).toMatchObject({ runId: "r1" });
 	});
 });
 
