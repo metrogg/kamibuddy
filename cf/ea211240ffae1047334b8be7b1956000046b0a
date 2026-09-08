@@ -1,0 +1,42 @@
+src/shared/conversation.test.ts
+  s_e14366e77609a6::t_7cda01b6a60175 197-277
+src/shared/artifacts.ts
+  s_e14366e77609a6::t_7cda01b6a60175 34-70
+src/shared/session-events.ts
+  s_e14366e77609a6::t_7cda01b6a60175 63-66,69-77,97-116
+src/shared/artifacts.test.ts
+  s_e14366e77609a6::t_7cda01b6a60175 3-8,94-117
+  s_e14366e77609a6::t_d3a28745858478 118-119
+src/shared/conversation.ts
+  s_e14366e77609a6::t_7cda01b6a60175 71-88,106-110,118,158-182
+src/core/session-host.ts
+  s_e14366e77609a6::t_7cda01b6a60175 36,177-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "cfea211240ffae1047334b8be7b1956000046b0a",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "tool_use_id": "6a9f62c54d41cfbf4a20f284",
+        "edit_kind": "bash",
+        "client_type": "ide",
+        "source_scene": "agent",
+        "runtime_client": "trae-tob-git-ai",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "operation_id": "6a9f62c54d41cfbf4a20f284",
+        "display_model_name": "Kimi-K3",
+        "tool_name": "RunCommand"
+      }
+    }
+  }
+}
