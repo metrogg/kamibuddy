@@ -517,7 +517,7 @@ export class SessionHost {
 				if (runId === undefined) return;
 				this.currentRunId = undefined;
 				if (!event.aborted && event.errorMessage === undefined) {
-					emit({ type: "run_finished", runId });
+					emit({ type: "run_finished", runId, outcome: "completed" });
 				} else {
 					emit({
 						type: "run_error",
@@ -545,10 +545,20 @@ export class SessionHost {
 				this.currentRunId = undefined;
 				this.currentAssistantId = undefined;
 				this.streamToolCalls.clear();
-				emit({ type: "run_finished", runId });
+				/*
+				 * pi 没有独立的「已取消」事件：abort() 后 agent 循环照常走
+				 * message_end → turn_end → agent_end 收尾（agent.ts handleRunFailure /
+				 * agent-loop.ts:215），区别只在收尾消息里有一条 assistant 的
+				 * stopReason === "aborted"。取消与正常结束在 UI 是两种终态
+				 * （指示行、定格计时），所以在这里判定后随 run_finished 下发。
+				 */
+				const cancelled = event.messages.some(
+					(m) => m.role === "assistant" && m.stopReason === "aborted",
+				);
+				emit({ type: "run_finished", runId, outcome: cancelled ? "cancelled" : "completed" });
 				this.emitState();
 				return;
-			}
+		}
 
 			case "message_start": {
 				const message = event.message;
@@ -657,7 +667,15 @@ export class SessionHost {
 
 				// 模型侧报错（超限、内容策略、网关故障）不会走 agent_end 的异常路径，
 				// 只体现在消息的 errorMessage 上。不单独提示的话用户只会看到空回复。
-				if (message.errorMessage !== undefined && message.errorMessage !== "") {
+				// stopReason "aborted" 除外：那是用户取消，pi 的收尾消息同样带
+				// errorMessage（如 "Request was aborted"），但取消不是错误 ——
+				// 终态由 agent_end 的 run_finished cancelled 表达，再发 run_error
+				// 会多出一条吓人的错误气泡。
+				if (
+					message.errorMessage !== undefined &&
+					message.errorMessage !== "" &&
+					message.stopReason !== "aborted"
+				) {
 					emit({
 						type: "run_error",
 						runId: this.currentRunId ?? "unknown",

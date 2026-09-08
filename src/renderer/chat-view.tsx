@@ -7,11 +7,15 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
-import type { ConversationEntry, ModeDescriptor, ToolCard } from "@shared/session-events.ts";
+import type { ConversationEntry, ModeDescriptor, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
 import { IconBack, IconChevronDown, IconDoc, IconMic, IconPlus, IconSend, IconStop } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
+import { shouldSwallowEnter } from "./ime-guard.ts";
 import { Markdown } from "./markdown.tsx";
+import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
+import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 
 interface ChatViewProps {
 	readonly conversation: ConversationView;
@@ -31,18 +35,34 @@ interface ChatViewProps {
 /* ── 思考块 ────────────────────────────────────────────────────── */
 
 /**
- * 思考内容块。对标 WorkBuddy 的「深度思考」形态：默认折叠成一行标题，
- * 点击展开全文 —— 模型长推导过程平铺在正文里会冲掉最终回答。
- * 流式期间 thinking 还在累积，先展开让用户看到过程；完成后收起。
+ * 思考内容块。对标 WorkBuddy 的「深度思考」形态：
+ * 流式期间默认展开（标题扫光，chevron 隐藏），该条消息完成后自动收起
+ * 成一行标题（停扫光、chevron 出现）；用户手动开合优先于自动行为。
+ * 折叠状态机在 thinking-fold.ts（纯函数，可单测），这里只持有用户偏好。
  */
-function ThinkingBlock({ text }: { readonly text: string }): React.JSX.Element {
-	const [open, setOpen] = useState(false);
+function ThinkingBlock({
+	text,
+	streaming,
+}: {
+	readonly text: string;
+	/** 本条助手消息是否还在流式（assistant_done 后为 false）。 */
+	readonly streaming: boolean;
+}): React.JSX.Element {
+	const [override, setOverride] = useState<ThinkingFoldOverride>(undefined);
+	const open = thinkingOpen(streaming, override);
 
 	return (
 		<div className="thinking-block">
-			<button type="button" className="thinking-head" onClick={() => setOpen((v) => !v)}>
-				<IconChevronDown size={11} className={open ? "thinking-caret open" : "thinking-caret"} />
-				深度思考
+			<button
+				type="button"
+				className="thinking-head"
+				onClick={() => setOverride((v) => toggleThinking(streaming, v))}
+			>
+				{/* WorkBuddy：进行中标题扫光，完成后 chevron 才出现 —— 扫光与 chevron 互斥。 */}
+				{!streaming && (
+					<IconChevronDown size={11} className={open ? "thinking-caret open" : "thinking-caret"} />
+				)}
+				<span className={streaming ? "text-shimmer" : ""}>深度思考</span>
 			</button>
 			{open && <pre className="thinking-body">{text}</pre>}
 		</div>
@@ -67,6 +87,9 @@ function outcomeClass(outcome: ToolCard["outcome"]): string {
 function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const expandable = card.detail !== undefined && card.detail !== "";
+	// 执行中（outcome 未落定）或生成中（write 参数还在流式输出）→ 状态字扫光；
+	// 完成后摘类回归静态 —— 扫光是全局唯一「进行中」语言（对标 WorkBuddy）。
+	const running = card.outcome === undefined || card.generating === true;
 
 	return (
 		<div className={`entry tool${card.outcome === "error" ? " tool-error" : ""}`}>
@@ -80,7 +103,7 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				<span className={`tool-dot ${outcomeClass(card.outcome)}`} />
 				{/* 标签是状态词（生成中/已生成/读取中/已读取…），由适配层按
 				    WorkBuddy 词汇表给出，UI 不做映射（契约见 session-events.ts）。 */}
-				<span className="tool-label">{card.label}</span>
+				<span className={running ? "tool-label text-shimmer" : "tool-label"}>{card.label}</span>
 				<span className="tool-summary">{card.summary}</span>
 				{/* write/edit 的增删行徽章（对标 WorkBuddy 的「+276 -0」）。
 				    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。 */}
@@ -140,6 +163,95 @@ function pendingText(entries: readonly ConversationEntry[]): string {
 	return "等待模型响应…";
 }
 
+/* ── 等待首响应：安抚文案 + tips 轮播 ────────────────────────────── */
+
+/** 等待 4s 后出现首条 tip；等待 8s 主文案切换安抚文案；tip 每 10s 轮换。 */
+const TIP_SHOW_DELAY_MS = 4_000;
+const SOOTHE_DELAY_MS = 8_000;
+const TIP_ROTATE_MS = 10_000;
+
+/**
+ * 随机取下一条 tip 的下标，保证不与当前条重复（机制对齐 WorkBuddy）。
+ * 在 size-1 个候选里均匀取偏移量再绕环，比「抽到重复就重抽」干净。
+ */
+function nextTipIndex(size: number, current: number | undefined): number {
+	if (size <= 1 || current === undefined) return Math.floor(Math.random() * size);
+	return (current + 1 + Math.floor(Math.random() * (size - 1))) % size;
+}
+
+/**
+ * 等待模型首响应阶段的状态行（最后一条 entry 是 user 时才有意义）。
+ *
+ * 机制对齐 WorkBuddy：主文案扫光；4s 后右侧出现「| + 一条随机 tip」，
+ * 每 10s 换一条（不重复），hover/focus 暂停轮换，× 关闭后本次会话不再出现；
+ * 等待超过 8s 主文案切换安抚文案。模型开始响应后整条随状态行一起消失 ——
+ * 本组件只在等待阶段挂载，无残留。
+ *
+ * dismissed 由父组件持有：同一回合内阶段切换（等待→生成→工具→等待）会
+ * 重挂本组件，而「关闭后本次会话不再出现」是会话级承诺，不能随重挂复位。
+ */
+function WaitingPendingLine({
+	dismissed,
+	onDismiss,
+}: {
+	readonly dismissed: boolean;
+	readonly onDismiss: () => void;
+}): React.JSX.Element {
+	const [tipShown, setTipShown] = useState(false);
+	const [soothed, setSoothed] = useState(false);
+	const [tipIndex, setTipIndex] = useState(() => nextTipIndex(WAITING_TIPS.length, undefined));
+	const [paused, setPaused] = useState(false);
+
+	// 一次性计时：4s 出首条 tip、8s 切安抚文案。只在等待阶段计时（组件随阶段挂载）。
+	useEffect(() => {
+		const tipTimer = window.setTimeout(() => setTipShown(true), TIP_SHOW_DELAY_MS);
+		const sootheTimer = window.setTimeout(() => setSoothed(true), SOOTHE_DELAY_MS);
+		return () => {
+			window.clearTimeout(tipTimer);
+			window.clearTimeout(sootheTimer);
+		};
+	}, []);
+
+	// 轮换：恢复（hover 结束）后重新计满 10s，比补剩余时间简单且观感一致。
+	useEffect(() => {
+		if (!tipShown || dismissed || paused) return;
+		const timer = window.setInterval(() => {
+			setTipIndex((current) => nextTipIndex(WAITING_TIPS.length, current));
+		}, TIP_ROTATE_MS);
+		return () => window.clearInterval(timer);
+	}, [tipShown, dismissed, paused]);
+
+	const showTip = tipShown && !dismissed;
+	return (
+		<div className="stream-pending">
+			<span className="text-shimmer">{soothed ? WAITING_SOOTHED_TEXT : "等待模型响应…"}</span>
+			{showTip && (
+				<span
+					className="pending-tip"
+					onMouseEnter={() => setPaused(true)}
+					onMouseLeave={() => setPaused(false)}
+					onFocus={() => setPaused(true)}
+					onBlur={() => setPaused(false)}
+				>
+					<span className="pending-tip-sep" aria-hidden="true">
+						|
+					</span>
+					{WAITING_TIPS[tipIndex]}
+					<button
+						type="button"
+						className="pending-tip-close"
+						aria-label="不再显示提示"
+						title="不再显示提示"
+						onClick={onDismiss}
+					>
+						×
+					</button>
+				</span>
+			)}
+		</div>
+	);
+}
+
 /* ── 回合头部（已处理时长） ──────────────────────────────────────── */
 
 /** 时长格式化：WorkBuddy「已处理 *m*s」口径（41s / 2m3s）。 */
@@ -163,13 +275,17 @@ function formatSize(bytes: number): string {
  * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；回合结束或
  * 历史回合显示「已完成」。计时起点是用户消息落库时间，不是首个 token ——
  * 排队/检索的时间也计入，与其口径一致。
+ *
+ * turn 只传给当前回合的头部（历史回合没有计时数据）：被取消的当前回合
+ * 定格「已取消 Ns」（endedAt - startedAt），与正常结束的「已完成」区分 ——
+ * 中断是用户主动动作，UI 上必须看得出（机制对标 WorkBuddy 的取消终态）。
  */
 function TurnHeader({
 	active,
-	startedAt,
+	turn,
 }: {
 	readonly active: boolean;
-	readonly startedAt: number | undefined;
+	readonly turn: TurnTiming | undefined;
 }): React.JSX.Element {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -178,12 +294,17 @@ function TurnHeader({
 		return () => window.clearInterval(timer);
 	}, [active]);
 
+	let duration = "已完成";
+	if (active && turn?.startedAt !== undefined) {
+		duration = `已处理 ${formatDuration(now - turn.startedAt)}`;
+	} else if (turn?.cancelled === true && turn.endedAt !== undefined) {
+		duration = `已取消 ${formatDuration(turn.endedAt - turn.startedAt)}`;
+	}
+
 	return (
 		<div className="turn-header">
 			<span className="turn-agent">KamiBuddy</span>
-			<span className="turn-duration">
-				{active && startedAt !== undefined ? `已处理 ${formatDuration(now - startedAt)}` : "已完成"}
-			</span>
+			<span className="turn-duration">{duration}</span>
 		</div>
 	);
 }
@@ -251,13 +372,21 @@ export function ChatView({
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
+	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
+	const [tipsDismissed, setTipsDismissed] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// IME 状态走 ref 而非 state：guard 在 keydown 里同步读，不需要触发重渲染。
+	const imeRef = useRef({ composing: false, lastCompositionEndAt: 0 });
 	const streaming = conversation.state.isStreaming;
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
 	// 最后一个 user 消息的位置：当前回合的分界（回合头部走表的唯一依据）。
 	const lastUserIndex = conversation.entries.findLastIndex((e) => e.role === "user");
+	// 等待首响应阶段：与 pendingText 返回「等待模型响应…」同口径（末尾是 user 或流为空）。
+	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
+	const lastEntry = conversation.entries[conversation.entries.length - 1];
+	const awaitingFirstResponse = streaming && (lastEntry === undefined || lastEntry.role === "user");
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
@@ -273,6 +402,10 @@ export function ChatView({
 		setDraft("");
 		onSubmit(text);
 	};
+
+	// 渲染消息流时跟踪「当前条目属于哪个回合」（回合 = 最后一条 user 消息及其后条目），
+	// 供「用户已取消」指示行定位。map 回调里就地更新，不开第二遍循环。
+	let currentTurnUserId: string | undefined;
 
 	return (
 		<main className="chat">
@@ -293,46 +426,80 @@ export function ChatView({
 
 			<div className="stream" ref={scrollRef}>
 				{/*
-					回合头部的插入位置：每条 user 消息之后、助手回应之前；
-					user 是最后一条（等响应）时补在末尾。只有最后一个 user 消息
-					所在的回合是「当前回合」—— 它的头部走表，历史回合恒为已完成
-					（computeTurnActive 同口径：最后 user 组及其之后共享当前回合）。
-				*/}
-				{conversation.entries.map((entry, index) => {
-					const prev = conversation.entries[index - 1];
-					const headerHere =
-						prev?.role === "user" && entry.role !== "user" ? index - 1 : undefined;
-					const trailingHeader = index === conversation.entries.length - 1 && entry.role === "user";
-					const header = (userIndex: number) => (
-						<TurnHeader
-							key={`turn-${conversation.entries[userIndex]?.id ?? userIndex}`}
-							active={streaming && userIndex === lastUserIndex}
-							startedAt={conversation.turn?.startedAt}
-						/>
-					);
-					return (
-						<Fragment key={entry.id}>
-							{headerHere !== undefined && header(headerHere)}
-							{entry.role === "tool" ? (
-								<ToolEntry card={entry} />
-							) : (
-								<div className={`entry ${entry.role}`}>
-									{entry.role === "assistant" && entry.thinking !== undefined && (
-										<ThinkingBlock text={entry.thinking} />
-									)}
-									{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
-									{entry.role === "assistant" ? (
-										<Markdown text={entry.text} />
-									) : (
-										<div className="text">{entry.text}</div>
-									)}
-								</div>
-							)}
-							{trailingHeader && header(index)}
-						</Fragment>
-					);
-				})}
-				{streaming && <div className="stream-pending">{pendingText(conversation.entries)}</div>}
+				回合头部的插入位置：每条 user 消息之后、助手回应之前；
+				user 是最后一条（等响应）时补在末尾。只有最后一个 user 消息
+				所在的回合是「当前回合」—— 它的头部走表，历史回合恒为已完成
+				（computeTurnActive 同口径：最后 user 组及其之后共享当前回合）。
+			*/}
+			{conversation.entries.map((entry, index) => {
+				if (entry.role === "user") currentTurnUserId = entry.id;
+				const prev = conversation.entries[index - 1];
+				const headerHere =
+					prev?.role === "user" && entry.role !== "user" ? index - 1 : undefined;
+				const trailingHeader = index === conversation.entries.length - 1 && entry.role === "user";
+				const header = (userIndex: number) => (
+					<TurnHeader
+						key={`turn-${conversation.entries[userIndex]?.id ?? userIndex}`}
+						active={streaming && userIndex === lastUserIndex}
+						turn={userIndex === lastUserIndex ? conversation.turn : undefined}
+					/>
+				);
+				/*
+				 * 「用户已取消」指示行：回合末尾（下一条是 user 或已到流尾）且
+				 * 该回合在取消名单里时渲染。取消名单由 reducer 维护，新回合开始后
+				 * 指示行仍留在历史里对应回合的末尾。
+				 */
+				const turnEndsHere =
+					index === conversation.entries.length - 1 ||
+					conversation.entries[index + 1]?.role === "user";
+				const cancelledHere =
+					turnEndsHere &&
+					currentTurnUserId !== undefined &&
+					conversation.cancelledTurns.includes(currentTurnUserId);
+				return (
+					<Fragment key={entry.id}>
+						{headerHere !== undefined && header(headerHere)}
+						{entry.role === "tool" ? (
+							<ToolEntry card={entry} />
+						) : (
+							<div className={`entry ${entry.role}`}>
+								{/*
+									thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
+									assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
+									isStreaming 翻 false，扫光与自动展开同时停止。
+								*/}
+								{entry.role === "assistant" && entry.thinking !== undefined && (
+									<ThinkingBlock
+										text={entry.thinking}
+										streaming={streaming && index === conversation.entries.length - 1}
+									/>
+								)}
+								{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
+								{entry.role === "assistant" ? (
+									<Markdown text={entry.text} />
+								) : (
+									<div className="text">{entry.text}</div>
+								)}
+							</div>
+						)}
+						{trailingHeader && header(index)}
+						{cancelledHere && <div className="user-cancelled">用户已取消</div>}
+					</Fragment>
+				);
+			})}
+				{/*
+				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
+				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
+				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
+			*/}
+			{streaming &&
+				(awaitingFirstResponse ? (
+					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
+				) : (
+					<div className="stream-pending">
+						<span className="text-shimmer">{pendingText(conversation.entries)}</span>
+					</div>
+				))}
 				{/*
 					产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
 					WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
@@ -369,14 +536,30 @@ export function ChatView({
 							onChange={ac.bind.onChange}
 							onSelect={ac.bind.onSelect}
 							onBlur={ac.bind.onBlur}
-							onKeyDown={(e) => {
-								ac.bind.onKeyDown(e);
-								// ac 打开时已 preventDefault（Enter=选中），这里只对未被消费的 Enter 发送。
-								if (e.key === "Enter" && !e.shiftKey && !e.defaultPrevented) {
+							onCompositionStart={() => {
+							imeRef.current.composing = true;
+						}}
+						onCompositionEnd={() => {
+							// compositionend 先于它携带的那个 keydown 触发（React 合成事件顺序），
+							// 所以宽限期必须靠时间戳判定，不能只靠 composing 布尔（见 ime-guard.ts）。
+							imeRef.current.composing = false;
+							imeRef.current.lastCompositionEndAt = Date.now();
+						}}
+						onKeyDown={(e) => {
+							// ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
+							ac.bind.onKeyDown(e);
+							if (e.key === "Enter" && !e.defaultPrevented) {
+								// IME 守卫：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
+								if (shouldSwallowEnter({ ...imeRef.current, now: Date.now() })) {
+									e.preventDefault();
+									return;
+								}
+								if (!e.shiftKey) {
 									e.preventDefault();
 									submit();
 								}
-							}}
+							}
+						}}
 							// 流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
 							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
 							disabled={!ready}

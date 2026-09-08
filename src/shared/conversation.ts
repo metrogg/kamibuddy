@@ -15,6 +15,7 @@
 import type {
 	AssistantMessage,
 	ConversationEntry,
+	MessageId,
 	SessionEvent,
 	SessionSnapshot,
 	SessionState,
@@ -37,6 +38,11 @@ export interface ConversationView {
 	readonly usageDetail?: ContextUsageDetail;
 	/** 当前回合计时（user_message 起表，run 结束停表）。 */
 	readonly turn?: TurnTiming;
+	/**
+	 * 被取消回合的起始用户消息 id。「用户已取消」指示行按它定位到
+	 * 历史里对应回合的末尾；新回合不重置它（取消痕迹是历史的一部分）。
+	 */
+	readonly cancelledTurns: readonly MessageId[];
 	/** 本会话已交付的产物（artifacts_presented 折叠而来，唯一来源）。 */
 	readonly artifacts: readonly ArtifactRef[];
 }
@@ -58,6 +64,7 @@ export const initialConversation: ConversationView = {
 	entries: [],
 	availableScenes: [],
 	availableModes: [],
+	cancelledTurns: [],
 	artifacts: [],
 };
 
@@ -95,9 +102,25 @@ function abortOrphanedGenerating(
 }
 
 /** run 结束停表。没有起过表（如压缩 run）就不造一个假回合。 */
-function stopTurn(turn: TurnTiming | undefined): TurnTiming | undefined {
+function stopTurn(turn: TurnTiming | undefined, cancelled: boolean): TurnTiming | undefined {
 	if (turn === undefined || turn.endedAt !== undefined) return turn;
-	return { ...turn, endedAt: Date.now() };
+	// cancelled 只在为 true 时落键：正常结束的回合不该带这个标记取值。
+	return cancelled
+		? { ...turn, endedAt: Date.now(), cancelled: true }
+		: { ...turn, endedAt: Date.now() };
+}
+
+/**
+ * run 被取消时记录当前回合（最后一条 user 消息）的 id。
+ * 没有 user 消息的 run（如手动压缩）不构成回合，不记录。
+ */
+function markTurnCancelled(
+	entries: readonly ConversationEntry[],
+	cancelledTurns: readonly MessageId[],
+): readonly MessageId[] {
+	const lastUser = entries.findLast((e) => e.role === "user");
+	if (lastUser === undefined || cancelledTurns.includes(lastUser.id)) return cancelledTurns;
+	return [...cancelledTurns, lastUser.id];
 }
 
 export function conversationReducer(view: ConversationView, action: ConversationAction): ConversationView {
@@ -109,6 +132,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			availableModes: action.snapshot.availableModes,
 			usageDetail: action.snapshot.usageDetail,
 			turn: action.snapshot.turn,
+			cancelledTurns: action.snapshot.cancelledTurns ?? [],
 			artifacts: action.snapshot.artifacts,
 		};
 	}
@@ -118,16 +142,23 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "run_started":
 			return { ...view, state: { ...view.state, isStreaming: true } };
 
-		case "run_finished":
+		case "run_finished": {
+			const cancelled = event.outcome === "cancelled";
 			return {
 				...view,
 				state: { ...view.state, isStreaming: false },
 				entries: abortOrphanedGenerating(view.entries),
-				turn: stopTurn(view.turn),
+				turn: stopTurn(view.turn, cancelled),
+				// 取消的回合记入名单：指示行要在新回合开始后仍留在历史里。
+				cancelledTurns: cancelled
+					? markTurnCancelled(view.entries, view.cancelledTurns)
+					: view.cancelledTurns,
 			};
+		}
 
 		case "run_error":
 			// 错误作为一条助手消息落进流里，用户能看到上下文位置。
+			// 错误不是用户取消：停表但不落 cancelled 标记。
 			return {
 				...view,
 				state: { ...view.state, isStreaming: false },
@@ -135,7 +166,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 					...abortOrphanedGenerating(view.entries),
 					{ id: `error-${event.runId}`, role: "assistant", text: event.message, at: Date.now() },
 				],
-				turn: stopTurn(view.turn),
+				turn: stopTurn(view.turn, false),
 			};
 
 		case "user_message":

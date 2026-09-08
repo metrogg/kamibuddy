@@ -263,7 +263,7 @@ describe("生成阶段的工具卡片", () => {
 		const view = apply([
 			{ type: "run_started", runId: "r1" },
 			{ type: "tool_stream_started", card: toolCard({ generating: true }) },
-			{ type: "run_finished", runId: "r1" },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
 		]);
 
 		expect(view.entries[0]).toMatchObject({ outcome: "aborted" });
@@ -285,7 +285,7 @@ describe("生成阶段的工具卡片", () => {
 			{ type: "run_started", runId: "r1" },
 			{ type: "tool_started", card: toolCard() },
 			{ type: "tool_finished", card: toolCard({ outcome: "ok" }) },
-			{ type: "run_finished", runId: "r1" },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
 		]);
 
 		expect(view.entries[0]).toMatchObject({ outcome: "ok" });
@@ -299,7 +299,7 @@ describe("run 生命周期", () => {
 
 		const stopped = conversationReducer(running, {
 			type: "event",
-			event: { type: "run_finished", runId: "r1" },
+			event: { type: "run_finished", runId: "r1", outcome: "completed" },
 		});
 		expect(stopped.state.isStreaming).toBe(false);
 	});
@@ -357,7 +357,7 @@ describe("回合计时", () => {
 	it("user_message 起表，run_finished 停表", () => {
 		const running = apply([
 			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
-			{ type: "run_finished", runId: "r1" },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
 		]);
 
 		expect(running.turn?.startedAt).toBe(1000);
@@ -367,7 +367,7 @@ describe("回合计时", () => {
 	it("新一条 user_message 重新起表（上一回合的 endedAt 不残留）", () => {
 		const view = apply([
 			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
-			{ type: "run_finished", runId: "r1" },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
 			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
 		]);
 
@@ -384,7 +384,85 @@ describe("回合计时", () => {
 	});
 
 	it("没有起过表的 run（如压缩）不造假回合", () => {
-		const view = apply([{ type: "run_finished", runId: "r1" }]);
+		const view = apply([{ type: "run_finished", runId: "r1", outcome: "completed" }]);
 		expect(view.turn).toBeUndefined();
+	});
+});
+
+describe("中断终态", () => {
+	it("run_finished cancelled 停表并落 cancelled 标记", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "cancelled" },
+		]);
+
+		expect(view.turn?.cancelled).toBe(true);
+		expect(view.turn?.endedAt).toBeTypeOf("number");
+	});
+
+	it("cancelled 把当前回合（最后一条 user 消息）记入取消名单", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "assistant_started", messageId: "a1", at: 1100 },
+			{ type: "run_finished", runId: "r1", outcome: "cancelled" },
+		]);
+
+		expect(view.cancelledTurns).toEqual(["u1"]);
+	});
+
+	it("completed 不受影响：不落 cancelled 标记、不进取消名单", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+		]);
+
+		expect(view.turn?.cancelled).toBeUndefined();
+		expect(view.cancelledTurns).toEqual([]);
+	});
+
+	it("后续新回合正常开始：turn 重置不残留 cancelled，取消名单留在历史里", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "cancelled" },
+			{ type: "run_started", runId: "r2" },
+			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
+		]);
+
+		expect(view.turn).toEqual({ startedAt: 2000 });
+		expect(view.cancelledTurns).toEqual(["u1"]);
+	});
+
+	it("run_error 不是用户取消：停表但不落 cancelled、不进名单", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_error", runId: "r1", message: "模型调用失败" },
+		]);
+
+		expect(view.turn?.cancelled).toBeUndefined();
+		expect(view.cancelledTurns).toEqual([]);
+	});
+
+	it("没有 user 消息的 run（如压缩）取消时不记录回合", () => {
+		const view = apply([{ type: "run_finished", runId: "r1", outcome: "cancelled" }]);
+
+		expect(view.turn).toBeUndefined();
+		expect(view.cancelledTurns).toEqual([]);
+	});
+
+	it("snapshot 恢复取消名单（渲染进程重挂载后指示行不丢）", () => {
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [{ id: "u1", role: "user", text: "hi", at: 1 }],
+			availableScenes: [],
+			availableModes: [],
+			turn: { startedAt: 1, endedAt: 2, cancelled: true },
+			cancelledTurns: ["u1"],
+			artifacts: [],
+		};
+
+		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
+
+		expect(view.cancelledTurns).toEqual(["u1"]);
+		expect(view.turn?.cancelled).toBe(true);
 	});
 });

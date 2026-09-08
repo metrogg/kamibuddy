@@ -25,6 +25,17 @@ export type ToolCallId = string;
 /** 工具执行的最终状态。 */
 export type ToolOutcome = "ok" | "error" | "blocked" | "aborted";
 
+/**
+ * run 的结束方式。
+ *
+ * 中断与正常结束在 UI 上是两种终态：中断要留下「用户已取消」指示行、
+ * 回合计时定格为「已取消 Ns」，而正常结束只显示「已完成」。
+ * pi 侧没有独立的「已取消」事件（abort 后 agent 循环照常收尾，区别只在
+ * 最后一条 assistant 消息的 stopReason），所以结束方式由适配层判定后随
+ * run_finished 下发。
+ */
+export type RunOutcome = "completed" | "cancelled";
+
 export interface UserMessage {
 	readonly id: MessageId;
 	readonly role: "user";
@@ -134,8 +145,8 @@ export type SessionEvent =
 	| { readonly type: "tool_progress"; readonly id: ToolCallId; readonly delta: string }
 	/** 工具执行结束。 */
 	| { readonly type: "tool_finished"; readonly card: ToolCard }
-	/** run 正常结束。 */
-	| { readonly type: "run_finished"; readonly runId: RunId }
+	/** run 结束。outcome 区分正常完成与用户取消（取消语义见 RunOutcome 注释）。 */
+	| { readonly type: "run_finished"; readonly runId: RunId; readonly outcome: RunOutcome }
 	/**
 	 * present_files 工具交付产物（唯一交付入口，WorkBuddy 同口径）。
 	 * 由工具 execute 内发出（先于该工具卡的 finished）：产物清单即刻更新，
@@ -203,6 +214,11 @@ export interface SessionState {
 export interface TurnTiming {
 	readonly startedAt: number;
 	readonly endedAt?: number;
+	/**
+	 * 本回合是否被用户取消。取消的回合头部定格「已取消 Ns」（endedAt - startedAt），
+	 * 而不是「已完成」——中断与正常结束在 UI 终态不同（RunOutcome 注释）。
+	 */
+	readonly cancelled?: boolean;
 }
 
 /** 渲染进程挂载或热重载后拉取的完整状态。 */
@@ -217,6 +233,12 @@ export interface SessionSnapshot {
 	readonly usageDetail?: ContextUsageDetail;
 	/** 当前回合计时。还没有用户消息时为 undefined。 */
 	readonly turn?: TurnTiming;
+	/**
+	 * 被取消回合的起始用户消息 id（reducer 折叠 run_finished cancelled 而来）。
+	 * 「用户已取消」指示行要在新回合开始后仍留在历史里该回合末尾，
+	 * 单靠当前回合的 turn 做不到（user_message 会重置它），所以逐回合记录。
+	 */
+	readonly cancelledTurns?: readonly MessageId[];
 	/** 本会话已交付的产物（artifacts_presented 折叠而来）。 */
 	readonly artifacts: readonly ArtifactRef[];
 }

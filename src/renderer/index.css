@@ -651,6 +651,48 @@ button {
 	font-size: 13px;
 }
 
+/* ── 扫光（全局唯一「进行中」视觉语言）──────────────────────────── */
+
+/*
+ * 对标 WorkBuddy 的签名动画 cb-shining-text-sweep：110° 线性渐变、
+ * background-size 200%，亮带（文字色 55% 不透明）在暗带（26%）上扫过，
+ * 2.2s linear infinite，background-position 200% → -200%，background-clip: text。
+ * 全应用只允许这一种「进行中」动效（思考标题 / 工具状态字 / 底部状态行），
+ * 完成态一律回归静态灰字 —— 多种动效并存会让用户分不清什么还在跑。
+ * 文字基色走 --shimmer-color（默认三级灰），套用方按需覆盖变量。
+ */
+.text-shimmer {
+	--shimmer-color: var(--text-dim);
+	background-image: linear-gradient(
+		110deg,
+		color-mix(in srgb, var(--shimmer-color) 26%, transparent) 40%,
+		color-mix(in srgb, var(--shimmer-color) 55%, transparent) 50%,
+		color-mix(in srgb, var(--shimmer-color) 26%, transparent) 60%
+	);
+	background-size: 200% 100%;
+	background-clip: text;
+	color: transparent;
+	animation: text-shimmer-sweep 2.2s linear infinite;
+}
+
+@keyframes text-shimmer-sweep {
+	from {
+		background-position: 200% 0;
+	}
+	to {
+		background-position: -200% 0;
+	}
+}
+
+/* 减少动态偏好下退化为静态文字：扫光是纯装饰，不该造成前庭不适。 */
+@media (prefers-reduced-motion: reduce) {
+	.text-shimmer {
+		animation: none;
+		background-image: none;
+		color: var(--shimmer-color);
+	}
+}
+
 /* ── 对话页 ───────────────────────────────────────────────────── */
 
 .chat {
@@ -722,6 +764,15 @@ button {
 	color: var(--text-dim);
 }
 
+/* 「用户已取消」指示行：中断在消息流里留下的唯一痕迹（机制对标 WorkBuddy
+   的取消终态），所以用最低调的三级灰单行，不做成卡片也不加图标。 */
+.user-cancelled {
+	align-self: flex-start;
+	padding: 4px 14px;
+	font-size: 15px;
+	color: var(--text-dim);
+}
+
 .entry.user {
 	align-self: flex-end;
 	background: var(--primary);
@@ -739,12 +790,16 @@ button {
 	font-size: 13px;
 }
 
-/* 思考块：默认折叠成一行「深度思考」，点击展开（对标 WorkBuddy）。 */
+/* 思考块：默认折叠成一行「深度思考」，点击展开（对标 WorkBuddy）。
+   流式期间默认展开、标题扫光；该条消息完成后自动收起。 */
 .thinking-block {
 	margin: 0 0 8px;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	overflow: hidden;
+	/* 正文用 background-clip: text 做渐隐后自身背景被裁到文字上，
+	   白底上提到整块（否则正文区会透出 entry 的灰底）。 */
+	background: var(--bg);
 }
 
 .thinking-head {
@@ -774,13 +829,22 @@ button {
 	margin: 0;
 	padding: 10px 12px;
 	border-top: 1px solid var(--border);
-	background: var(--bg);
-	color: var(--text-dim);
+	/* 左侧 4px 竖条：标识「推导过程」与最终回答的区隔（WorkBuddy 同形态），
+	   颜色用边界灰而非主色 —— 它是辅助线，不是强调。 */
+	border-left: 4px solid var(--border);
 	font-size: 12px;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	max-height: 320px;
+	/* WorkBuddy 规格：展开态限高 200px 内部滚动。 */
+	max-height: 200px;
 	overflow-y: auto;
+	/* 上深下淡渐隐：上 20% 主色 → 下 80% 三级灰，background-clip: text 把渐变
+	   裁到文字上；background-attachment: local 让渐变跟随内部滚动
+	   （钉在元素盒上的话滚动时渐隐位置不动，看起来像 bug）。 */
+	background-image: linear-gradient(to bottom, var(--text) 20%, var(--text-dim) 80%);
+	background-clip: text;
+	background-attachment: local;
+	color: transparent;
 }
 
 /* Markdown 渲染区：模型输出的结构化排版。 */
@@ -941,6 +1005,11 @@ button {
 .tool-label {
 	flex: 0 0 auto;
 	font-weight: 500;
+}
+
+/* 执行中/生成中的状态字套用全局扫光；基色用主文字色，完成态摘类回归静态样式。 */
+.tool-label.text-shimmer {
+	--shimmer-color: var(--text);
 }
 
 .tool-summary {
@@ -1254,8 +1323,46 @@ button {
 }
 
 .stream-pending {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
 	color: var(--text-dim);
 	font-size: 13px;
+}
+
+/*
+ * 等待首响应的 tip 轮播（机制对齐 WorkBuddy）：主文案扫光，tip 与分隔符
+ * 用三级灰静态字 —— 扫光是「进行中」的唯一语言，tip 只是附属信息，不能抢。
+ * 整条横向排列，tip 过长时省略号截断，避免把状态行撑成两行。
+ */
+.pending-tip {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.pending-tip-sep {
+	flex: 0 0 auto;
+	opacity: 0.6;
+}
+
+.pending-tip-close {
+	flex: 0 0 auto;
+	padding: 0 2px;
+	border: none;
+	background: none;
+	color: var(--text-dim);
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.pending-tip-close:hover {
+	color: var(--text);
 }
 
 .chat-composer {

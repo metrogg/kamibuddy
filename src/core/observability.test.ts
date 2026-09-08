@@ -45,7 +45,7 @@ describe("run 生命周期", () => {
 		store.record(stateEvent());
 		store.record({ type: "run_started", runId: "run-1" });
 		now = 4500;
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.totalRuns).toBe(1);
@@ -64,7 +64,7 @@ describe("run 生命周期", () => {
 		const store = new ObservabilityStore(() => 1000);
 		store.record({ type: "run_started", runId: "run-1" });
 		store.record({ type: "run_error", runId: "run-1", message: "上下文超限" });
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.totalErrors).toBe(1);
@@ -78,7 +78,7 @@ describe("用量聚合", () => {
 		store.record({ type: "run_started", runId: "run-1" });
 		store.record({ type: "assistant_done", message: assistant("a1", usage(100, 900)) });
 		store.record({ type: "assistant_done", message: assistant("a2", usage(200, 800)) });
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.totalUsage.input).toBe(300);
@@ -90,10 +90,10 @@ describe("用量聚合", () => {
 		const store = new ObservabilityStore(() => 1000);
 		store.record({ type: "run_started", runId: "run-1" });
 		store.record({ type: "assistant_done", message: assistant("a1", usage(100, 0)) });
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 		store.record({ type: "run_started", runId: "run-2" });
 		store.record({ type: "assistant_done", message: assistant("a2", usage(50, 0)) });
-		store.record({ type: "run_finished", runId: "run-2" });
+		store.record({ type: "run_finished", runId: "run-2", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.totalRuns).toBe(2);
@@ -112,7 +112,7 @@ describe("工具统计", () => {
 		store.record({ type: "tool_started", card: toolCard("t2", "read", undefined, 1300) });
 		now = 1800;
 		store.record({ type: "tool_finished", card: toolCard("t2", "read", "error") });
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.tools).toHaveLength(1);
@@ -127,7 +127,7 @@ describe("工具统计", () => {
 		store.record({ type: "tool_started", card: toolCard("t1", "read") });
 		now = 1300;
 		store.record({ type: "tool_finished", card: toolCard("t1", "read", "error") });
-		store.record({ type: "run_finished", runId: "run-1" });
+		store.record({ type: "run_finished", runId: "run-1", outcome: "completed" });
 
 		const snap = store.snapshot({ entries: [], systemPromptTokens: 0, contextUsage: undefined, logDir: "/l" });
 		expect(snap.runs[0]?.toolSpans).toEqual([

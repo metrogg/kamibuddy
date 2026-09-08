@@ -213,6 +213,7 @@ let conversation: ConversationView = {
 	entries: [],
 	availableScenes: SCENES,
 	availableModes: INTERACTIONS,
+	cancelledTurns: [],
 	artifacts: [],
 };
 
@@ -509,6 +510,8 @@ async function resetSession(): Promise<void> {
 		usageDetail: undefined,
 		// 回合计时同理：新任务不该沿用旧回合的起表时间。
 		turn: undefined,
+		// 取消痕迹同理：上一任务的「用户已取消」指示行不该挂到新任务。
+		cancelledTurns: [],
 		// 产物清单同理：上一任务的交付不该挂在新任务底下。
 		artifacts: [],
 	};
