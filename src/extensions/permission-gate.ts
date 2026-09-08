@@ -12,12 +12,21 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
+import type { PermissionSettings } from "../shared/permissions.ts";
 import { decide, rememberKey, type PolicyPaths, type ToolCallFacts } from "./permission-policy.ts";
 
 export interface PermissionGateOptions {
 	readonly paths: PolicyPaths;
 	/** 会话工作目录，用于把相对路径解析成绝对路径。 */
 	readonly cwd: string;
+	/**
+	 * 取当前权限设置（沙箱模式 + 审批策略）。
+	 *
+	 * 用 getter 而不是构造时的快照：用户在设置页改了预设，**下一次工具调用就该生效**，
+	 * 不该等到重开会话。同 prompt-switch 用 getCurrent() 读两轴的做法。
+	 * 省略时用 DEFAULT_PERMISSIONS（= 引入模式之前的行为）。
+	 */
+	readonly getSettings?: () => PermissionSettings;
 	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
 	readonly requestApproval: (request: Omit<PermissionRequest, "id">) => Promise<PermissionResponse>;
 }
@@ -55,7 +64,7 @@ export function createPermissionGate(options: PermissionGateOptions) {
 	return (pi: ExtensionAPI): void => {
 		pi.on("tool_call", async (event) => {
 			const facts = extractFacts(event.toolName, event.input);
-			const decision = decide(facts, options.paths, options.cwd);
+			const decision = decide(facts, options.paths, options.cwd, options.getSettings?.());
 
 			if (decision.kind === "allow") return undefined;
 
@@ -64,6 +73,15 @@ export function createPermissionGate(options: PermissionGateOptions) {
 				return { block: true, reason: decision.reason };
 			}
 
+			/*
+			 * 「本次会话记住」在 deny 之后才查 —— 顺序是有意的：
+			 * 用户切到更严的预设（如只读）时，先前记住的批准必须失效，
+			 * 否则「切成只读」会变成一句空话。
+			 *
+			 * 同理，审批策略切成 never 时 decide() 已把 ask 转成 deny，
+			 * 先前记住的批准同样不再生效。这一点略反直觉（用户确实批准过），
+			 * 但方向是 fail-closed：「不要再问我」在无人值守语境下等于「不要再做」。
+			 */
 			const key = rememberKey(facts, options.cwd);
 			if (remembered.has(key)) return undefined;
 

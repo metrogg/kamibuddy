@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
@@ -35,6 +36,16 @@ import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
+import { defaultProtectedDirs, isPathInside } from "../extensions/permission-policy.ts";
+import { createProjectTrust } from "../extensions/project-trust.ts";
+import {
+	DEFAULT_PERMISSIONS,
+	isApprovalPolicy,
+	isSandboxMode,
+	presetIdFor,
+	type PermissionInfo,
+	type PermissionSettings,
+} from "../shared/permissions.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
@@ -150,6 +161,22 @@ function getCatalog(): Promise<ModelCatalog> {
  * 启动时从偏好文件恢复。
  */
 let activeModelKey: string | undefined = readPreferences().activeModelKey;
+
+/**
+ * 当前权限设置（沙箱模式 + 审批策略）。启动时从偏好恢复，缺省 = 引入模式前的行为。
+ *
+ * 与 activeModelKey 同样用模块级变量而非每次读盘：权限门在**每次工具调用**时都要读它，
+ * 读盘会把 IO 放进热路径。改动经 setPermissions 通道走，写盘与内存同步更新。
+ */
+let activePermissions: PermissionSettings = readPreferences().permissions ?? DEFAULT_PERMISSIONS;
+
+/**
+ * 受保护的凭据目录，进程启动时算一次。
+ *
+ * 家目录在进程生命周期内不会变，没必要每次判定都调 homedir()。
+ * 这批目录**读写都拒且任何权限模式都不能越过**（见 permission-policy.ts 阶段 1）。
+ */
+const PROTECTED_DIRS = defaultProtectedDirs(homedir());
 
 /** 内置技能目录（resources/skills/，随应用分发）。 */
 const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
@@ -284,6 +311,29 @@ function withHardTimeout<T>(promise: Promise<T>, ms: number, message = "请求�
 	]);
 }
 
+/**
+ * 组装权限状态，**含强制力的诚实声明**。
+ *
+ * enforcement 恒为 `partial`，因为我们没有 OS 级沙箱：
+ * `read-only` 靠权限门拦住已知的写工具（write/edit/bash/powershell），
+ * 但拦不住"某个自定义工具或子进程绕过工具层去写文件"这类间接路径。
+ *
+ * 为什么必须说出来：pi 的 security.md 明确警告
+ * "a partial in-process sandbox would be easy to misunderstand as a security boundary"。
+ * 界面上写清楚，用户才不会拿它当隔离用。将来真接上 OS 沙箱时只改这一处。
+ * 分析见 docs/workbuddy分析/09-sandbox-and-permissions.md。
+ */
+function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
+	return {
+		settings,
+		enforcement: "partial",
+		enforcementNote:
+			"权限由 KamiBuddy 在工具调用前判定，不是操作系统级隔离：" +
+			"它能拦住助手主动的读写与命令，但不能约束已运行程序的行为。" +
+			"凭据目录（.ssh/.gnupg/.aws 等）在任何档位下都禁止读写。",
+	};
+}
+
 function emitSessionEvent(event: SessionEvent): void {
 	conversation = conversationReducer(conversation, { type: "event", event });
 	observability.record(event);
@@ -416,11 +466,32 @@ async function createHost(): Promise<SessionHost> {
 				? []
 				: [
 						createPermissionGate({
-							paths: { workspaceDir: cwd, configDir: getConfigDir() },
+							paths: {
+								workspaceDir: cwd,
+								configDir: getConfigDir(),
+								protectedDirs: PROTECTED_DIRS,
+							},
 							cwd,
+							// getter 而非快照：用户改了预设，下一次工具调用即生效。
+							getSettings: () => activePermissions,
 							requestApproval,
 						}),
 					]),
+			/*
+			 * 项目信任：**所有会话都装**（与权限门不同）。
+			 *
+			 * 理由：项目级资源的加载发生在工具层之前 —— `.pi/extensions` 是
+			 * TypeScript 模块，以本进程权限执行任意代码，权限门根本拦不到它
+			 * （那不是工具调用）。所以哪怕 playground 也要把这道闸挂上。
+			 *
+			 * 自家目录（~/KamiBuddy 与配置目录下的 playground 占位）直接信任：
+			 * 内容都由本机产出，没有"别人塞进来的扩展"这个来源；
+			 * 每次新建任务都弹框会让用户条件反射点同意，那这道防线就废了。
+			 */
+			createProjectTrust({
+				isOwnWorkspace: (dir) =>
+					isPathInside(getWorkspaceDir(), dir) || isPathInside(getConfigDir(), dir),
+			}),
 			// 产物交付：present_files 是产物的唯一入口（WorkBuddy 同构）。
 			// 只读工具，playground 也注册 —— 模型在 playground 没有写工具，
 			// 但交付动作本身无害（区外路径不 stat，见 extensions/present-files.ts）。
@@ -769,6 +840,36 @@ const handlers: Record<string, Handler> = {
 				: "";
 			return { ok: false, message: `${message}${hint}` };
 		}
+	},
+
+	/* ── 权限设置 ───────────────────────────────────────────────────── */
+
+	[INVOKE.getPermissions]: async (): Promise<PermissionInfo> =>
+		buildPermissionInfo(activePermissions),
+
+	[INVOKE.setPermissions]: async ([input]): Promise<PermissionInfo> => {
+		const candidate = input as PermissionSettings;
+		// 双端校验（同自定义服务商 / 联网搜索的做法）：设置页即时校验 + 这里防绕过。
+		if (!isSandboxMode(candidate.sandbox)) {
+			throw new Error(`未知的权限范围：${String(candidate.sandbox)}`);
+		}
+		if (!isApprovalPolicy(candidate.approval)) {
+			throw new Error(`未知的审批策略：${String(candidate.approval)}`);
+		}
+		/*
+		 * presetId 由旋钮反算，**不信任前端传来的值** ——
+		 * 旋钮是真相（dsh 的 permission-presets 同一分工），
+		 * 若前端传了个对不上的 id，界面就会显示成另一档，等于骗用户。
+		 */
+		const settings: PermissionSettings = {
+			sandbox: candidate.sandbox,
+			approval: candidate.approval,
+			presetId: presetIdFor(candidate.sandbox, candidate.approval),
+		};
+		activePermissions = settings;
+		// 读改写：偏好文件里还有模型选择与联网搜索配置，整存会清掉它们。
+		writePreferences({ ...readPreferences(), permissions: settings });
+		return buildPermissionInfo(settings);
 	},
 
 	/* ── 输入框补全数据源（@ 文件 + / 命令） ────────────────────────── */

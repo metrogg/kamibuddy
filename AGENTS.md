@@ -38,10 +38,18 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
 
 - **HTML 是唯一中间态。** 内容先渲染成 HTML，导出器再把 HTML 转成目标格式。
   不许出现"直接拼 docx 对象"的第二条路径——那样预览、PDF、图表全要另做一遍。
-- **一行 shell 都不许碰。** 全部走 Node 自定义工具在进程内完成。
+- **文档流水线一行 shell 都不许碰。** 全部走 Node 自定义工具在进程内完成。
   原因：pi 在 Windows 找不到 bash 会**直接抛异常**（`utils/shell.ts:100`），
   而目标用户（行政/产品/销售）机器上不会装 Git for Windows。
   WorkBuddy 靠自带 287MB 用户态解决，我们靠不产生依赖解决。
+  这条**只约束文档流水线**（本节的范围），不是全局禁令 —— 见下一条。
+- **agent 的 shell 能力另有决策**：`bash` 仍然不用（上面那条理由不变），
+  但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已决定启用**
+  （决策记录见 `docs/workbuddy分析/09-sandbox-and-permissions.md` §6 决策 A）。
+  **前置条件：必须先有危险命令检查器**（`iex` / `Invoke-Expression` / `Add-Type` /
+  `-EncodedCommand` / 递归删除 / 下载执行…）。当前**尚未实现，工具面里也还没有
+  powershell** —— 在检查器落地之前不要打开它：没有 OS 沙箱时，一条命令就能绕开
+  权限门的全部路径保护（`type ~\.ssh\id_rsa`）。
 - 导出器统一签名 `(html, opts) => Promise<Buffer>`，新增格式就是新增一个文件。
 
 ## 三、能力是数据，不是代码

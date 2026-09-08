@@ -14,6 +14,7 @@
  */
 
 import type { ObservabilitySnapshot } from "./observability.ts";
+import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type {
 	CustomProviderInput,
@@ -116,6 +117,16 @@ export const INVOKE = {
 	clearWebSearchConfig: "settings:clear-web-search-config",
 	/** 测试联网搜索：用已存的配置真实搜索一次，返回可展示的结果。 */
 	testWebSearch: "settings:test-web-search",
+
+	/* ── 权限 ─────────────────────────────────────────────────────── */
+
+	/** 读回当前权限设置（沙箱模式 + 审批策略 + 强制力）。 */
+	getPermissions: "settings:get-permissions",
+	/**
+	 * 保存权限设置。旋钮是权威值，presetId 由 daemon 按旋钮反算，
+	 * 不信任前端传来的 —— 两者不一致时界面会显示成错误的档位。
+	 */
+	setPermissions: "settings:set-permissions",
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
@@ -258,6 +269,8 @@ export interface InvokeMap {
 	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
 	[INVOKE.clearWebSearchConfig]: { args: []; result: void };
 	[INVOKE.testWebSearch]: { args: []; result: WebSearchTestResult };
+	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
+	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
 
 	[INVOKE.skillsSnapshot]: { args: []; result: SkillsSnapshot };
 	[INVOKE.importSkill]: { args: [sourcePath: string]; result: SkillInfo };

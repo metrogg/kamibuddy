@@ -92,9 +92,10 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 **流式期间发送键变停止键**。没有中断入口时，模型跑偏或长任务只能干等甚至杀进程。
 
-**权限门**（`extensions/permission-policy.ts` + `permission-gate.ts`，39 个测试）：
+**权限门**（`extensions/permission-policy.ts` + `permission-gate.ts`，62 个测试）：
 判定主轴是路径归属而非工具种类，详见 ARCHITECTURE.md §4.57。
-工作目录内放行、目录外询问、**配置目录直接拒且不给「允许」选项**（auth.json 存着密钥）。
+工作目录内放行、目录外询问、**凭据目录直接拒且不给「允许」选项**（禁读也禁写）。
+2026-09-08 起加了权限档位与项目信任，见下方「权限模型」一节（权限相关共 89 个测试）。
 
 审批队列而非单槽 —— pi 默认并行执行工具，同批可能来多条请求，覆盖会让工具永久挂住。
 
@@ -108,8 +109,8 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 ```
 typecheck        通过
-check:deps       79 个文件，依赖方向合规
-test             292 passed（25 个测试文件）
+check:deps       93 个文件，依赖方向合规
+test             393 passed（31 个测试文件）
 smoke:session    13/13  ← SessionHost.create() 全流程，含扩展注入实测
 build            三目标（main/preload/renderer）产物正常
 真机运行          真实对话已跑通（用户实测：填 Key → 选模型 → 正常回复）
@@ -242,7 +243,8 @@ npm run smoke:sdk      # pi SDK 冒烟
 pi README 自述 "does not include a built-in permission system"，它的思路是靠容器隔离整个进程。
 
 我们的对策是 `src/extensions/` 那一层（ARCHITECTURE.md §4.57）。
-**改动那两个文件时务必跑** **`npm test`** —— 那 39 个测试是这条安全边界的唯一护栏。
+**改动权限相关文件时务必跑** **`npm test`** —— 那 89 个测试是这条安全边界的唯一护栏
+（`permission-policy` 41 + `permission-gate` 21 + `project-trust` 9 + `shared/permissions` 18）。
 
 ### IDE 注入 `ELECTRON_RUN_AS_NODE=1`
 
@@ -468,9 +470,84 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 - **设置页「测试连接」**：用已存配置真实搜一次，绿字给条数、红字给具体原因
   （Key 无效 / 额度 / 超时）。**15s（daemon）+ 20s（UI）双层硬超时**——
   Windows DNS 解析不可中断，信号超时拦不住，按钮必须永远有返回。
-- 测试：web-search 16 + web-fetch 12 + web-tools 7 + preferences 4 + policy 内 6 条
-  共 40+ 新用例（全量 292 passed / 25 文件）。
+- 测试：web-search 16 + web-fetch 12 + web-tools 7 + preferences 4 + policy 内若干
+  共 40+ 新用例（全量数字见上方「验证状态」，不在各功能段重复记录 —— 那样每加一个
+  功能就要回头改所有段落，必然漂移）。
 
 **待你验证（必须重启应用）**：设置 → 联网搜索 → 测试连接 → 绿了以后**新建任务**
 问「今天嘉立创的股价」。旧会话不生效：工具集在建会话时一次性注入。
+
+## 权限模型（2026-09-08 落地）
+
+调研四方（WorkBuddy / pi / codex / dsh）后落地，分析见
+[workbuddy分析/09-sandbox-and-permissions.md](workbuddy分析/09-sandbox-and-permissions.md)。
+**OS 级沙箱本轮搁置**（成本与排期，不是做不到 —— codex 与 dsh 各有一份 Windows 实现）。
+
+### 双旋钮 + 预设（对标 WorkBuddy 的「默认权限 / 允许完全访问」）
+
+词汇**直接采用 codex 与 dsh 已收敛的那一套**（两个独立项目取值逐字相同，
+自造名字只会让日后对照源码多一层翻译）：
+
+| 旋钮 | 取值 |
+|---|---|
+| 沙箱模式 | `read-only` / `workspace-write` / `danger-full-access` |
+| 审批策略 | `ask` / `never`（**never = 确定性拒绝，不是静默放行**） |
+
+预设 = 旋钮的捆绑包（`shared/permissions.ts`）：只读 / 默认权限 / 允许完全访问。
+**旋钮是真相，预设只是 UI 糖**（照 dsh 的 permission-presets 分工）——
+组合对不上任何预设时界面显示「自定义」；daemon 按旋钮反算 presetId，
+不信任前端传来的值（否则界面会显示成用户没选过的档位）。
+
+- 默认值 = **引入模式之前的行为**（`workspace-write` + `ask`），向后兼容；
+- 设置改动经 getter 读取，**下一次工具调用即生效**，不必重开会话；
+- 落盘在 `preferences.json`，读改写（不会清掉模型选择与联网搜索配置）。
+
+### 受保护的凭据路径（读写都拒，任何档位都不能越过）
+
+`.ssh` / `.gnupg` / `.aws` / `.kube` / `.docker` / `.npmrc` / `.git-credentials` /
+`~/.pi/agent`（pi 自己的 auth.json）—— 抄 WorkBuddy 的 `tsbx_rules.json`
+（`no_access: %USERPROFILE%\.ssh\**`）与 pi sandbox 扩展的默认 denyRead。
+
+**这里修了一个我自己引入的回归**：此前「读配置目录放行」的理由写的是
+"真正的防线是不让模型把内容发出去（无网络工具）"。**T3 落地 web_fetch 之后
+这个前提就不成立了** —— 提示注入可以诱导「读 auth.json 然后抓取某个 URL 带上内容」。
+所以现在凭据文件**禁读**，而不只是禁写。测试里留了这条用例的翻转记录。
+
+已实测确认：Windows 上 `path.relative` **大小写不敏感**，
+`c:\users\foo\.SSH` 这类变体不会绕过保护（否则这就是一条现成的绕过路径）。
+
+### 项目信任（`project_trust`，pi 原生事件）
+
+打开陌生目录时先问一句 —— 这是**工具层之前**的唯一攻击面：
+`.pi/extensions` 是 TypeScript 模块，**加载即以本进程权限执行任意代码**，
+权限门拦不到它（那不是工具调用）。同事发来一个带 `.pi/extensions/evil.ts`
+的文件夹，设为工作空间就跑起来了。
+
+- 自家目录（`~/KamiBuddy`、配置目录）直接信任 —— 每次新建任务都弹框，
+  用户会条件反射点同意，那这道防线就废了；
+- **记住"信任"，不记住"不信任"**：还没有信任管理界面，把 no 写进 `trust.json`
+  用户就没地方改回来；不记住的代价只是下次再问一次，方向上也更安全；
+- 无 UI 时返回 `undecided` 交回 pi 的默认值（其默认 `ask` 在无 UI 时跳过资源 = fail-closed）。
+
+### 强制力诚实上报
+
+`SandboxEnforcement` 恒为 **`partial`**，界面如实说明"这不是操作系统级隔离"。
+pi 的 security.md 明确警告过 *"a partial in-process sandbox would be easy to
+misunderstand as a security boundary"* —— 做不到就说清楚，不假装有边界。
+将来真接上 OS 沙箱时只改 `buildPermissionInfo` 一处。
+
+### 有意保留的保守选择
+
+**shell 在任何档位下都仍然拦**（含"允许完全访问"）：我们还没有危险命令分类器
+（`iex` / `-EncodedCommand` / 递归删除…），而没有 OS 沙箱时一条命令就能绕开
+上面所有路径保护（`type ~\.ssh\id_rsa`）。既然文档里批评了 WorkBuddy broker shim
+的 fail-open，自己就不能在同一处松手。
+
+测试：**权限相关共 89 个用例** —— `shared/permissions` 18（新增）+
+`permission-policy` 41（原 23）+ `permission-gate` 21（原 16）+ `project-trust` 9（新增）。
+其中最该留意的一条：**切到更严的档位后，先前「记住」的批准立即失效**
+（remembered 检查排在 decide 之后；若为了少弹窗把它提前，「切成只读」就成了空话）。
+
+**待你验证**：设置页 → 权限 → 切「只读」→ 让它写文件应被拒且提示切换预设；
+切「允许完全访问」→ 写工作区外文件不再询问，但 `.ssh` 仍拒、命令仍拦。
 

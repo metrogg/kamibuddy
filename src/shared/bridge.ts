@@ -18,6 +18,7 @@ import type {
 	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
+import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type {
 	CustomProviderInput,
@@ -93,6 +94,12 @@ export interface KamiBridge {
 	readonly setWebSearchConfig: (input: WebSearchConfigInput) => Promise<void>;
 	readonly clearWebSearchConfig: () => Promise<void>;
 	readonly testWebSearch: () => Promise<WebSearchTestResult>;
+
+	/* ── 权限 ─────────────────────────────────────────────────────── */
+
+	readonly getPermissions: () => Promise<PermissionInfo>;
+	/** 保存后返回规范化的结果（presetId 由 daemon 按旋钮反算）。 */
+	readonly setPermissions: (settings: PermissionSettings) => Promise<PermissionInfo>;
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 

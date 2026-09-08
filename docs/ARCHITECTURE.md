@@ -165,6 +165,48 @@ WorkBuddy 的解法是自带用户态：`vendor/brokered-bin/` 30 个 toybox 替
 `shellPath` 作为配置项预留。若后续需要 `bash` 工具或 command hook，
 打包 MinGit（约 50MB）指向它即可，不改代码。
 
+**本节的范围是文档流水线**（2026-09-08 补注）。它不等于"agent 永远不能执行命令"——
+那是另一个决策，见 §4.4a。上面的论证只否掉 `bash`（Windows 上的依赖问题），
+没有否掉 Windows 原生的 `powershell`。
+
+### 4.4a agent 的 shell 能力：用 powershell，不用 bash
+
+决策日期 2026-09-08，四方调研见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
+
+- **不用 bash**：§4.4 的理由不变（找不到就抛异常，目标用户不装 Git for Windows）；
+- **用 powershell**：pi 内置该工具，Windows 原生、零额外依赖，绕开了上述问题；
+- **前置条件（尚未满足）**：必须先有危险命令检查器 ——
+  `iex` / `Invoke-Expression` / `Add-Type` / `-EncodedCommand` / 递归删除 / 下载执行…
+  WorkBuddy 的 PowerShell 工具同样内置这类拦截。
+
+**在检查器落地之前不要把它放进工具面。** 原因是能力边界的实话：
+我们没有 OS 级沙箱（§4.4b），而一条命令就能绕开权限门的全部路径保护
+（`type ~\.ssh\id_rsa` 读走密钥，权限门看不到这是一次凭据读取）。
+所以当前 `permission-policy.ts` 对 shell 在**任何权限档位下都拦**，含"允许完全访问"。
+
+### 4.4b OS 级沙箱：本轮搁置（成本，不是能力）
+
+**"Windows 做不了沙箱"是错的判断**，必须写清楚，否则后人以为此路不通：
+
+| 项目 | Windows 实现 |
+|---|---|
+| codex | `codex-rs/windows-sandbox-rs`（约 40 文件）：专用沙箱用户账号 + ACL + 独立桌面 + DPAPI |
+| dsh | `packages/shell/pwsh-sandbox`：自述 "ACL restricted-token runner chain" |
+| WorkBuddy | 内核态 `tsbx.dll` + 287MB 用户态 + 语言 shim |
+| pi | 不做，指向容器 / 微 VM（其 sandbox 扩展硬编码只支持 darwin/linux） |
+
+两家独立收敛到同一机制（**受限令牌 + ACL**），这就是 Windows 上的正解。
+
+搁置理由：① 需一次性**管理员安装 + 创建系统账号**，对"给同事试用"是显著摩擦；
+② codex 那份是 Rust，无法复用，只能同机制重写；③「人人可写目录」这类绕过点
+必须一并处理（codex 专门有个 `WindowsWorldWritableWarningNotification`），
+否则又是一个假边界。
+
+搁置期间的诚实声明：`SandboxEnforcement` 恒为 `partial`，界面如实说明
+"这不是操作系统级隔离"。pi 的 security.md 警告过
+*"a partial in-process sandbox would be easy to misunderstand as a security boundary"* ——
+**做不到就说清楚，不假装有边界**。将来接上真沙箱只改 `buildPermissionInfo` 一处。
+
 ### 4.5 配置读取单一入口
 
 所有配置走 `config.get(key)`，分层合并：内置默认 → 本地文件 → （预留）云端下发。
@@ -219,14 +261,31 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 
 对办公产品不可接受：试用同事会让它「整理我的文档」，一次路径失误就可能覆盖别的文件。
 
-判定主轴是路径归属而非工具种类（`src/extensions/permission-policy.ts`，23 个测试）：
+判定主轴是路径归属而非工具种类（`src/extensions/permission-policy.ts`，41 个测试）。
+判定链**有序**（借鉴 WorkBuddy 的 9 阶求值链）：靠后的阶段无法放行靠前阶段已拒的东西。
 
-| 目标 | 判定 | 理由 |
-|---|---|---|
-| 工作目录内（`~/KamiBuddy`） | 放行 | 生成文档本就该在这儿，反复打扰会让人放弃使用 |
-| 工作目录外 | 询问 | 用户可能真想改桌面上的某个文件 |
-| 配置目录内（`~/.kamibuddy`） | **直接拒，不给「允许」选项** | 存着 API Key；若靠弹窗把关，提示注入可编造理由骗用户点允许 |
-| shell 工具 | 高风险询问 | 无法靠路径推断影响范围 |
+| 阶段 | 目标 | 判定 | 理由 |
+|---|---|---|---|
+| 1 | 凭据目录（`.ssh`/`.gnupg`/`.aws`/`.kube`/`.docker`/`.npmrc`/`~/.pi/agent`） | **禁读也禁写，任何权限档位都不能越过** | 泄露即账号级损失，不该由一次弹窗决定 |
+| 1 | 配置目录内（`~/.kamibuddy`） | 同上 | 存着 API Key；靠弹窗把关的话，提示注入可编造理由骗用户点允许 |
+| 2 | 只读工具（read/grep/ls/web_*/present_files） | 放行 | 不改变任何状态 |
+| 3 | `read-only` 档位下的一切改动与命令 | 拒 | 这就是该档位的全部含义 |
+| 3 | shell 工具 | **任何档位都拦**（含"允许完全访问"） | 没有危险命令分类器之前保持 fail-closed：一条命令就能绕开上面所有路径保护（`type ~\.ssh\id_rsa`）。见 §4.4a |
+| 4 | 工作目录内（`~/KamiBuddy`） | 放行 | 生成文档本就该在这儿，反复打扰会让人放弃使用 |
+| 4 | 工作目录外 | 询问（`danger-full-access` 放行） | 用户可能真想改桌面上的某个文件 |
+| 5 | 审批策略 `never` | 把「询问」转成**拒绝** | 无人值守时"不问"必须等于"不做"，不是"随便做" |
+
+**凭据从禁写改为禁读禁写**（2026-09-08）：原先放行读取的理由是
+"读到也带不走（没有网络工具）"，**T3 落地 `web_fetch` 后该前提消失** ——
+提示注入可诱导「读 auth.json → 抓取某 URL 带上内容」。
+新增任何外发能力（上传、发邮件、调第三方 API）都要重走一遍这个推理。
+
+权限档位（沙箱模式 × 审批策略）与预设见 `src/shared/permissions.ts`，
+词汇直接采用 codex 与 dsh 已收敛的取值；默认档 = 引入模式之前的行为，向后兼容。
+
+工具层之前还有一道闸：**项目信任**（`src/extensions/project-trust.ts`，9 个测试）。
+`.pi/extensions` 是 TS 模块，**加载即以本进程权限执行任意代码**，权限门拦不到
+（那不是工具调用）—— 打开陌生目录必须先问一句。
 | 未登记的工具 | 询问 | fail-safe：既不静默放行，也不静默阻断新能力 |
 
 「本次会话记住」按**工具 + 目标目录**记，且只在内存里：

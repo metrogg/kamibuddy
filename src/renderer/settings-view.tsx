@@ -21,6 +21,8 @@ import type {
 	WebSearchTestResult,
 } from "@shared/settings.ts";
 import { WEB_SEARCH_PROVIDERS, validateCustomProvider } from "@shared/settings.ts";
+import type { PermissionInfo } from "@shared/permissions.ts";
+import { CUSTOM_PRESET, PERMISSION_PRESETS } from "@shared/permissions.ts";
 import { IconBack, IconCheck, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "./icons.tsx";
 
 /** 凭据来源 → 用户能看懂的说明。 */
@@ -338,6 +340,85 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 					</div>
 				)}
 			</div>
+		</section>
+	);
+}
+
+/* ── 权限 ──────────────────────────────────────────────────────── */
+
+/**
+ * 权限预设选择器（对标 WorkBuddy 设置里的「默认权限 / 允许完全访问」）。
+ *
+ * 展示的是**预设**（三档人话），底下真正生效的是两个旋钮
+ * （沙箱模式 × 审批策略）—— 旋钮是权威，预设只是捆绑包。
+ * 手工编辑过偏好文件、旋钮组合对不上任何预设时显示「自定义」。
+ */
+function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
+	const [info, setInfo] = useState<PermissionInfo | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
+
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			setInfo(await window.kami.getPermissions());
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	const pick = (presetId: string): void => {
+		const preset = PERMISSION_PRESETS.find((p) => p.id === presetId);
+		if (preset === undefined) return;
+		void window.kami
+			.setPermissions({ sandbox: preset.sandbox, approval: preset.approval })
+			// 用返回值直接更新，省一次往返；daemon 已把 presetId 规范化。
+			.then((next) => setInfo(next))
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	};
+
+	const current = info?.settings.presetId;
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>权限</h2>
+				{current === CUSTOM_PRESET && <span className="provider-tag">自定义</span>}
+			</header>
+
+			{error !== undefined && <div className="settings-error">{error}</div>}
+
+			{info === undefined ? (
+				<p className="settings-empty">正在读取权限设置…</p>
+			) : (
+				<>
+					<div className="preset-list">
+						{PERMISSION_PRESETS.map((preset) => (
+							<button
+								key={preset.id}
+								type="button"
+								className={`preset-item${current === preset.id ? " active" : ""}`}
+								disabled={busy}
+								onClick={() => pick(preset.id)}
+							>
+								<span className={`preset-dot${current === preset.id ? " on" : ""}`} />
+								<span className="preset-text">
+									<span className="preset-label">{preset.label}</span>
+									<span className="preset-desc">{preset.description}</span>
+								</span>
+							</button>
+						))}
+					</div>
+					{/*
+						强制力声明：我们没有操作系统级沙箱，必须如实说明，
+						否则用户会把它当隔离用（文案由 daemon 给，见 buildPermissionInfo）。
+					*/}
+					<p className="settings-foot">{info.enforcementNote}</p>
+				</>
+			)}
 		</section>
 	);
 }
@@ -752,6 +833,8 @@ export function SettingsView({ onClose }: { readonly onClose: () => void }): Rea
 						</section>
 
 						<WebSearchSection busy={busy} />
+
+						<PermissionSection busy={busy} />
 
 						<p className="settings-foot">配置目录：{snapshot.configDir}</p>
 					</>

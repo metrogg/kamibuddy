@@ -67,6 +67,9 @@ const bridge: KamiBridge = {
 	clearWebSearchConfig: () => ipcRenderer.invoke(INVOKE.clearWebSearchConfig),
 	testWebSearch: () => ipcRenderer.invoke(INVOKE.testWebSearch),
 
+	getPermissions: () => ipcRenderer.invoke(INVOKE.getPermissions),
+	setPermissions: (settings) => ipcRenderer.invoke(INVOKE.setPermissions, settings),
+
 	skillsSnapshot: () => ipcRenderer.invoke(INVOKE.skillsSnapshot),
 	importSkill: (sourcePath) => ipcRenderer.invoke(INVOKE.importSkill, sourcePath),
 	pickSkillDirectory: () => ipcRenderer.invoke(INVOKE.pickSkillDirectory),

@@ -14,6 +14,7 @@ import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
+import { DEFAULT_PERMISSIONS, type PermissionSettings } from "../shared/permissions.ts";
 import { createPermissionGate } from "./permission-gate.ts";
 
 const HOME = resolve(sep, "users", "someone");
@@ -32,15 +33,21 @@ type Handler = (event: FakeToolCallEvent) => Promise<{ block?: boolean; reason?:
  * 装好权限门，返回捕获到的 tool_call 处理器与审批调用记录。
  *
  * approve 决定每次审批的答复；undefined 表示拒绝。
+ * 返回的 setSettings 可在运行中改权限档位 —— 镜像 daemon 的真实形态
+ * （getSettings 读的是模块级变量，用户改预设后立即变），
+ * 这样"切档后旧批准是否失效"才测得出来。
  */
 function mount(options: {
 	readonly approve?: (request: Omit<PermissionRequest, "id">) => PermissionResponse;
+	readonly settings?: PermissionSettings;
 }): {
 	readonly call: Handler;
 	readonly asked: Array<Omit<PermissionRequest, "id">>;
+	readonly setSettings: (next: PermissionSettings) => void;
 } {
 	const asked: Array<Omit<PermissionRequest, "id">> = [];
 	let captured: Handler | undefined;
+	let settings: PermissionSettings = options.settings ?? DEFAULT_PERMISSIONS;
 
 	const fakePi = {
 		on: (event: string, handler: unknown) => {
@@ -51,6 +58,7 @@ function mount(options: {
 	createPermissionGate({
 		paths: { workspaceDir: WORKSPACE, configDir: CONFIG },
 		cwd: WORKSPACE,
+		getSettings: () => settings,
 		requestApproval: async (request) => {
 			asked.push(request);
 			return options.approve?.(request) ?? { id: "x", decision: "deny" };
@@ -58,7 +66,13 @@ function mount(options: {
 	})(fakePi);
 
 	if (captured === undefined) throw new Error("权限门没有注册 tool_call 处理器");
-	return { call: captured, asked };
+	return {
+		call: captured,
+		asked,
+		setSettings: (next) => {
+			settings = next;
+		},
+	};
 }
 
 describe("放行路径", () => {
@@ -212,5 +226,105 @@ describe("本次会话记住", () => {
 		const result = await call({ toolName: "write", input: { path: join(CONFIG, "auth.json") } });
 
 		expect(result?.block).toBe(true);
+	});
+});
+
+/* ── 权限档位的运行时切换 ────────────────────────────────────────── */
+
+describe("设置每次现读（getter 而非快照）", () => {
+	const OUTSIDE = join(HOME, "Desktop", "报表.xlsx");
+
+	it("切到更宽的档位后，原本要问的写入不再询问", async () => {
+		const { call, asked, setSettings } = mount({
+			approve: () => ({ id: "x", decision: "allow" }),
+		});
+
+		// 默认档：工作区外要问。
+		await call({ toolName: "write", input: { path: OUTSIDE } });
+		expect(asked).toHaveLength(1);
+
+		// 用户在设置页切到「允许完全访问」——不该等到重开会话才生效。
+		setSettings({ sandbox: "danger-full-access", approval: "never" });
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result).toBeUndefined(); // 放行
+		expect(asked).toHaveLength(1); // 没有新增询问
+	});
+
+	it("★ 切到更严的档位后，先前「记住」的批准立即失效", async () => {
+		/*
+		 * 这条是本文件最容易被无声破坏的行为，也是我在实现里声明过的语义：
+		 * remembered 检查排在 decide() 之后，所以模式收紧时旧批准自然失效。
+		 * 若哪天有人为了"少弹窗"把 remembered 提到 decide() 前面，
+		 * 「切成只读」就会变成一句空话 —— 这个用例就是那道护栏。
+		 */
+		const { call, setSettings } = mount({
+			approve: () => ({ id: "x", decision: "allow", remember: true }),
+		});
+
+		// 先在默认档批准并记住"写桌面"。
+		const first = await call({ toolName: "write", input: { path: OUTSIDE } });
+		expect(first).toBeUndefined();
+
+		// 切成只读后，同一个操作必须被拒 —— 哪怕用户确实批准过。
+		setSettings({ sandbox: "read-only", approval: "ask" });
+		const after = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(after?.block).toBe(true);
+		expect(after?.reason).toContain("只读");
+	});
+
+	it("审批策略切成 never 后，原本要问的操作变成拒绝而非放行", async () => {
+		// never 的语义是「确定性拒绝」（照 dsh）：无人值守时"不问"等于"不做"。
+		// 方向搞反就是个静默后门，所以单独钉一条。
+		const { call, asked, setSettings } = mount({
+			approve: () => ({ id: "x", decision: "allow" }),
+		});
+
+		setSettings({ sandbox: "workspace-write", approval: "never" });
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+		expect(asked).toHaveLength(0); // 没有弹窗
+	});
+
+	it("never 档位下，工作区内的正常写入不受影响", async () => {
+		// 免得把「不打扰」做成「什么都干不了」。
+		const { call, setSettings } = mount({});
+		setSettings({ sandbox: "workspace-write", approval: "never" });
+
+		const result = await call({
+			toolName: "write",
+			input: { path: join(WORKSPACE, "报告.md") },
+		});
+
+		expect(result).toBeUndefined();
+	});
+
+	it("不传 getSettings 时行为等于默认档（向后兼容）", async () => {
+		// daemon 之外还有 smoke 脚本等调用方，省略该参数不能改变行为。
+		const asked: Array<Omit<PermissionRequest, "id">> = [];
+		let captured: Handler | undefined;
+		const fakePi = {
+			on: (event: string, handler: unknown) => {
+				if (event === "tool_call") captured = handler as Handler;
+			},
+		} as unknown as ExtensionAPI;
+
+		createPermissionGate({
+			paths: { workspaceDir: WORKSPACE, configDir: CONFIG },
+			cwd: WORKSPACE,
+			requestApproval: async (request) => {
+				asked.push(request);
+				return { id: "x", decision: "allow" };
+			},
+		})(fakePi);
+
+		if (captured === undefined) throw new Error("未注册处理器");
+
+		// 工作区内放行、区外询问 —— 与 DEFAULT_PERMISSIONS 一致。
+		expect(await captured({ toolName: "write", input: { path: join(WORKSPACE, "a.md") } })).toBeUndefined();
+		expect(await captured({ toolName: "write", input: { path: OUTSIDE } })).toBeUndefined();
+		expect(asked).toHaveLength(1);
 	});
 });
