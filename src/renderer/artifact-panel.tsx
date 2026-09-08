@@ -1,19 +1,28 @@
 /**
  * 产物预览面板（右侧栏，对标 WorkBuddy 的 DetailPanel，07-artifact-preview.md §3）。
  *
- * 三类内容一个面板：
- *   1. 「产物」页 —— 本会话 write 成功的文件（collectArtifacts 推导）；
- *   2. 「文件」页 —— 当前工作区的全部文件（回答「项目文件夹里有什么」）；
- *   3. 预览区 —— HTML 走静态服务的活页面（iframe，能跑 JS）；
- *      文本类走 readArtifact 只读；图片经静态服务 <img>；其余给外部打开。
+ * 结构对齐其 DetailPanel：顶部 tab 条 = 概览下拉 + 文件/变更 tab + 外部打开。
+ * - 概览下拉：产物 / 变更 / 工作区文件 三组导航（其「概览」+ 用户要的文件可见性）。
+ * - 文件 tab：HTML 走静态服务的活页面（iframe，能跑 JS）；文本只读；图片 <img>；其余外部打开。
+ * - 变更 tab：该文件的 unified diff（write/edit 执行前的旧内容 vs 新内容，
+ *   变更数据来自工具卡片的 change，按路径收拢见 shared/artifacts.ts collectChanges）。
  *
  * 安全边界在 daemon（preview-server 防穿越、readArtifact 限工作区），
  * 本组件只管渲染，不做路径判断 —— 判断放两边必然漂移。
  */
 
 import { useEffect, useState } from "react";
-import type { ArtifactRef } from "@shared/artifacts.ts";
-import { IconClose, IconDoc, IconOpenExternal } from "./icons.tsx";
+import type { ArtifactRef, ChangeRef } from "@shared/artifacts.ts";
+import { IconChevronDown, IconClose, IconDoc, IconOpenExternal } from "./icons.tsx";
+
+/** 预览对象：文件本身，或某文件的变更 diff。 */
+export type PreviewSelection =
+	| { readonly kind: "file"; readonly path: string }
+	| { readonly kind: "change"; readonly path: string };
+
+export function sameSelection(a: PreviewSelection, b: PreviewSelection): boolean {
+	return a.kind === b.kind && a.path === b.path;
+}
 
 /** 可按文本预览的扩展名（无扩展名也按文本试，daemon 用 NUL 判断二进制兜底）。 */
 const TEXT_EXTS = new Set([
@@ -27,6 +36,10 @@ function extOf(path: string): string {
 	const base = path.split(/[\\/]/).pop() ?? path;
 	const dot = base.lastIndexOf(".");
 	return dot === -1 ? "" : base.slice(dot).toLowerCase();
+}
+
+function baseName(path: string): string {
+	return path.split(/[\\/]/).pop() ?? path;
 }
 
 /** 模型写的路径可能是绝对路径或相对路径，统一折成工作区相对路径（posix 分隔）。 */
@@ -55,17 +68,29 @@ function kindOf(path: string): PreviewKind {
 	return "unsupported";
 }
 
+/** 文件大小格式化（与对话页产物卡同口径）。 */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const kb = bytes / 1024;
+	return kb < 100 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+}
+
 interface ArtifactPanelProps {
-	/** 本会话产物（可能为空）。 */
+	/** 本会话已交付的产物（present_files）。 */
 	readonly artifacts: readonly ArtifactRef[];
+	/** 本会话的文件变更（按路径收拢）。 */
+	readonly changes: readonly ChangeRef[];
 	/** 当前工作区目录。playground 为 undefined。 */
 	readonly cwd: string | undefined;
 	/** 静态服务 baseUrl。playground / 服务未起为 undefined。 */
 	readonly previewBaseUrl: string | undefined;
-	/** 当前预览的文件路径（与产物/文件列表里的一致）。 */
-	readonly path: string;
-	readonly onSelect: (path: string) => void;
-	readonly onClose: () => void;
+	/** 已打开的 tab（顺序即显示顺序）。 */
+	readonly tabs: readonly PreviewSelection[];
+	/** 当前激活的 tab。 */
+	readonly active: PreviewSelection;
+	/** 打开/激活一个预览对象（不在 tabs 里会自动补 tab）。 */
+	readonly onOpen: (sel: PreviewSelection) => void;
+	readonly onCloseTab: (sel: PreviewSelection) => void;
 	readonly onOpenExternal: (path: string) => void;
 	readonly onError: (message: string) => void;
 }
@@ -103,137 +128,248 @@ function TextPreview({ path, onError }: { readonly path: string; readonly onErro
 	return <pre className="preview-text">{text}</pre>;
 }
 
-export function ArtifactPanel({
-	artifacts,
-	cwd,
-	previewBaseUrl,
-	path,
-	onSelect,
-	onClose,
-	onOpenExternal,
-	onError,
-}: ArtifactPanelProps): React.JSX.Element {
-	const [tab, setTab] = useState<"artifacts" | "files">("artifacts");
-	const [workspaceFiles, setWorkspaceFiles] = useState<readonly string[] | undefined>(undefined);
+/** 变更预览：unified diff 按前缀着色（+ 增 / - 删 / @@ hunk 头）。 */
+function DiffView({ diff }: { readonly diff: string }) {
+	return (
+		<pre className="preview-diff">
+			{diff.split("\n").map((line, i) => (
+				<div
+					key={i}
+					className={
+						line.startsWith("+")
+							? "diff-add"
+							: line.startsWith("-")
+								? "diff-del"
+								: line.startsWith("@@")
+									? "diff-hunk"
+									: undefined
+					}
+				>
+					{line}
+				</div>
+			))}
+		</pre>
+	);
+}
 
-	// 文件页的数据：复用补全通道的文件索引（同一来源，两份扫描必然漂移）。
-	// cwd 变化时重拉（面板常驻，工作区切换不该看到旧目录）。
+/** 概览下拉：产物 / 变更 / 工作区文件 三组导航。 */
+function OverviewMenu({
+	artifacts,
+	changes,
+	cwd,
+	onOpen,
+}: {
+	readonly artifacts: readonly ArtifactRef[];
+	readonly changes: readonly ChangeRef[];
+	readonly cwd: string | undefined;
+	readonly onOpen: (sel: PreviewSelection) => void;
+}): React.JSX.Element {
+	const [open, setOpen] = useState(false);
+	const [files, setFiles] = useState<readonly string[] | undefined>(undefined);
+
+	// 工作区文件组：打开下拉时拉一次（复用补全通道的索引，两份扫描必然漂移）。
 	useEffect(() => {
-		if (tab !== "files" || cwd === undefined) return;
+		if (!open || cwd === undefined) return;
 		let disposed = false;
 		window.kami
 			.completions()
 			.then((d) => {
-				if (!disposed) setWorkspaceFiles(d.files);
+				if (!disposed) setFiles(d.files);
 			})
 			.catch(() => {
-				if (!disposed) setWorkspaceFiles([]);
+				if (!disposed) setFiles([]);
 			});
 		return () => {
 			disposed = true;
 		};
-	}, [tab, cwd]);
+	}, [open, cwd]);
 
-	const rel = toRelative(path, cwd);
-	const kind = kindOf(rel);
+	const pick = (sel: PreviewSelection): void => {
+		setOpen(false);
+		onOpen(sel);
+	};
+
+	return (
+		<div className="preview-overview">
+			<button type="button" className="bar-btn bar-btn-text" onClick={() => setOpen((v) => !v)}>
+				概览
+				<IconChevronDown size={13} />
+			</button>
+			{open && (
+				<div className="preview-menu">
+					<div className="preview-menu-group">
+						<header className="preview-menu-title">产物（{artifacts.length}）</header>
+						{artifacts.length === 0 && <div className="preview-menu-empty">本会话还没有产物</div>}
+						{artifacts.map((a) => (
+							<button
+								key={a.path}
+								type="button"
+								className="preview-item"
+								title={a.path}
+								onClick={() => pick({ kind: "file", path: a.path })}
+							>
+								<IconDoc size={14} />
+								<span className="preview-item-name">{baseName(a.path)}</span>
+								{a.size > 0 && <span className="preview-item-meta">{formatSize(a.size)}</span>}
+							</button>
+						))}
+					</div>
+					<div className="preview-menu-group">
+						<header className="preview-menu-title">变更（{changes.length}）</header>
+						{changes.length === 0 && <div className="preview-menu-empty">本会话还没有变更</div>}
+						{changes.map((c) => (
+							<button
+								key={c.path}
+								type="button"
+								className="preview-item"
+								title={c.path}
+								onClick={() => pick({ kind: "change", path: c.path })}
+							>
+								<IconDoc size={14} />
+								<span className="preview-item-name">{baseName(c.path)}</span>
+								<span className="preview-item-meta">
+									<span className="added">+{c.added}</span>
+									<span className="removed">-{c.removed}</span>
+								</span>
+							</button>
+						))}
+					</div>
+					<div className="preview-menu-group">
+						<header className="preview-menu-title">工作区文件</header>
+						{cwd === undefined ? (
+							<div className="preview-menu-empty">playground 没有工作区文件</div>
+						) : files === undefined ? (
+							<div className="preview-menu-empty">加载中…</div>
+						) : (
+							files.map((f) => (
+								<button
+									key={f}
+									type="button"
+									className="preview-item"
+									title={f}
+									onClick={() => pick({ kind: "file", path: f })}
+								>
+									<IconDoc size={14} />
+									<span className="preview-item-name">{f}</span>
+								</button>
+							))
+						)}
+					</div>
+				</div>
+			)}
+		</div>
+	);
+}
+
+export function ArtifactPanel({
+	artifacts,
+	changes,
+	cwd,
+	previewBaseUrl,
+	tabs,
+	active,
+	onOpen,
+	onCloseTab,
+	onOpenExternal,
+	onError,
+}: ArtifactPanelProps): React.JSX.Element {
 	const servable = previewBaseUrl !== undefined && cwd !== undefined;
-	const fileName = rel.split("/").pop() ?? rel;
+	const activeChange =
+		active.kind === "change" ? changes.find((c) => c.path === active.path) : undefined;
+
+	const rel = toRelative(active.path, cwd);
+	const kind = kindOf(rel);
 
 	return (
 		<aside className="preview-panel">
 			<header className="preview-head">
-				<span className="preview-title" title={path}>
-					{fileName}
-				</span>
+				<OverviewMenu artifacts={artifacts} changes={changes} cwd={cwd} onOpen={onOpen} />
+				<div className="preview-tabs-strip">
+					{tabs.map((sel) => (
+						<span
+							key={`${sel.kind}:${sel.path}`}
+							className={`preview-tab-item${sameSelection(sel, active) ? " active" : ""}`}
+						>
+							<button
+								type="button"
+								className="preview-tab-label"
+								title={sel.kind === "change" ? `${sel.path}（变更）` : sel.path}
+								onClick={() => onOpen(sel)}
+							>
+								{baseName(sel.path)}
+								{sel.kind === "change" && "（变更）"}
+							</button>
+							<button
+								type="button"
+								className="preview-tab-close"
+								title="关闭"
+								aria-label={`关闭 ${baseName(sel.path)}`}
+								onClick={() => onCloseTab(sel)}
+							>
+								<IconClose size={11} />
+							</button>
+						</span>
+					))}
+				</div>
 				<button
 					type="button"
 					className="bar-btn"
 					title="外部打开"
 					aria-label="外部打开"
-					onClick={() => onOpenExternal(path)}
+					onClick={() => onOpenExternal(active.path)}
 				>
 					<IconOpenExternal size={14} />
 				</button>
-				<button type="button" className="bar-btn" title="关闭面板" aria-label="关闭面板" onClick={onClose}>
-					<IconClose size={14} />
-				</button>
 			</header>
 
-			<div className="preview-tabs">
-				<button
-					type="button"
-					className={`preview-tab${tab === "artifacts" ? " active" : ""}`}
-					onClick={() => setTab("artifacts")}
-				>
-					产物（{artifacts.length}）
-				</button>
-				<button
-					type="button"
-					className={`preview-tab${tab === "files" ? " active" : ""}`}
-					onClick={() => setTab("files")}
-				>
-					文件
-				</button>
-			</div>
-
-			<div className="preview-list">
-				{tab === "artifacts" &&
-					(artifacts.length === 0 ? (
-						<div className="preview-empty">本会话还没有产物</div>
-					) : (
-						artifacts.map((a) => (
-							<button
-								key={a.path}
-								type="button"
-								className={`preview-item${a.path === path ? " active" : ""}`}
-								title={a.path}
-								onClick={() => onSelect(a.path)}
-							>
-								<IconDoc size={14} />
-								<span className="preview-item-name">{a.path.split(/[\\/]/).pop()}</span>
-							</button>
-						))
-					))}
-				{tab === "files" &&
-					(cwd === undefined ? (
-						<div className="preview-empty">playground 没有工作区文件</div>
-					) : workspaceFiles === undefined ? (
-						<div className="preview-empty">加载中…</div>
-					) : (
-						workspaceFiles.map((f) => (
-							<button
-								key={f}
-								type="button"
-								className={`preview-item${f === rel ? " active" : ""}`}
-								title={f}
-								onClick={() => onSelect(f)}
-							>
-								<IconDoc size={14} />
-								<span className="preview-item-name">{f}</span>
-							</button>
-						))
-					))}
-			</div>
-
 			<div className="preview-body">
-				{!servable && <div className="preview-fallback">选择工作空间后可预览文件</div>}
-				{servable && kind === "html" && (
+				{active.kind === "change" && (
+					activeChange?.diff !== undefined ? (
+						<DiffView diff={activeChange.diff} />
+					) : (
+						<div className="preview-fallback">
+							{activeChange === undefined
+								? "该变更记录已不存在"
+								: activeChange.changeType === "created"
+									? "新创建的文件，改动为全文新增"
+									: "文件过大，只统计了增删行数"}
+							{activeChange !== undefined && (
+								<>
+									{"，"}
+									<button
+										type="button"
+										className="preview-link"
+										onClick={() => onOpen({ kind: "file", path: activeChange.path })}
+									>
+										查看文件本身
+									</button>
+								</>
+							)}
+						</div>
+					)
+				)}
+				{active.kind === "file" && !servable && (
+					<div className="preview-fallback">选择工作空间后可预览文件</div>
+				)}
+				{active.kind === "file" && servable && kind === "html" && (
 					<iframe
 						className="preview-frame"
-						title={fileName}
+						title={baseName(rel)}
 						src={previewUrl(previewBaseUrl, rel)}
 						// 与宿主不同源（127.0.0.1:端口），allow-same-origin 只给它自己
 						// 源的 localStorage（游戏存档类需要），够不着我们的状态。
 						sandbox="allow-scripts allow-same-origin allow-forms"
 					/>
 				)}
-				{servable && kind === "image" && (
-					<img className="preview-image" src={previewUrl(previewBaseUrl, rel)} alt={fileName} />
+				{active.kind === "file" && servable && kind === "image" && (
+					<img className="preview-image" src={previewUrl(previewBaseUrl, rel)} alt={baseName(rel)} />
 				)}
-				{servable && kind === "text" && <TextPreview path={rel} onError={onError} />}
-				{servable && kind === "unsupported" && (
+				{active.kind === "file" && servable && kind === "text" && (
+					<TextPreview path={rel} onError={onError} />
+				)}
+				{active.kind === "file" && servable && kind === "unsupported" && (
 					<div className="preview-fallback">
-						暂不支持预览此类型，<button type="button" className="preview-link" onClick={() => onOpenExternal(path)}>外部打开</button>
+						暂不支持预览此类型，<button type="button" className="preview-link" onClick={() => onOpenExternal(active.path)}>外部打开</button>
 					</div>
 				)}
 			</div>

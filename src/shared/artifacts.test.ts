@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { ConversationEntry } from "./session-events.ts";
 import {
 	changeFromEdit,
 	changeFromWrite,
 	classifyPresentedFiles,
+	collectChanges,
+	computeLineDiff,
 	diffLineStats,
 	mergePresentedArtifacts,
 	writeStreamProgress,
@@ -55,7 +58,13 @@ describe("changeFromWrite", () => {
 		// 旧 3 行改成 3 行但只动中间行：+1 -1 而不是 +3 -0（args 口径的失真点）。
 		expect(
 			changeFromWrite({ path: "a.html", content: "l1\nNEW\nl3" }, "l1\nl2\nl3"),
-		).toEqual({ path: "a.html", added: 1, removed: 1, changeType: "modified" });
+		).toEqual({
+			path: "a.html",
+			added: 1,
+			removed: 1,
+			changeType: "modified",
+			diff: "@@ -1,3 +1,3 @@\n l1\n-l2\n+NEW\n l3",
+		});
 	});
 
 	it("空 content 新文件 → created，0/0", () => {
@@ -81,7 +90,13 @@ describe("changeFromEdit", () => {
 				{ path: "a.ts", edits: [{ oldText: "b", newText: "x\ny" }] },
 				"a\nb\nc",
 			),
-		).toEqual({ path: "a.ts", added: 2, removed: 1, changeType: "modified" });
+		).toEqual({
+			path: "a.ts",
+			added: 2,
+			removed: 1,
+			changeType: "modified",
+			diff: "@@ -1,3 +1,4 @@\n a\n-b\n+x\n+y\n c",
+		});
 	});
 
 	it("旧内容缺失或 oldText 对不上 → 退化为 oldText/newText 行数求和", () => {
@@ -108,6 +123,70 @@ describe("changeFromEdit", () => {
 		});
 		expect(changeFromEdit({ path: "a" }, undefined)).toBeUndefined();
 		expect(changeFromEdit({ edits: [] }, undefined)).toBeUndefined();
+	});
+});
+
+describe("computeLineDiff", () => {
+	it("改一行 → 统计 1/1 且产出 unified hunk（3 行上下文）", () => {
+		const r = computeLineDiff("a\nb\nc", "a\nx\nc");
+		expect(r.added).toBe(1);
+		expect(r.removed).toBe(1);
+		expect(r.diff).toBe("@@ -1,3 +1,3 @@\n a\n-b\n+x\n c");
+	});
+
+	it("两处改动相距超过上下文窗口 → 拆成两个 hunk", () => {
+		const oldText = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9";
+		const newText = "L1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nL9";
+		const r = computeLineDiff(oldText, newText);
+		expect(r.added).toBe(2);
+		expect(r.removed).toBe(2);
+		expect(r.diff?.match(/@@ -\d+,\d+ \+\d+,\d+ @@/g)).toHaveLength(2);
+	});
+
+	it("全量替换 → 一个 hunk 全删全增", () => {
+		const r = computeLineDiff("a\nb", "x\ny");
+		expect(r.diff).toBe("@@ -1,2 +1,2 @@\n-a\n-b\n+x\n+y");
+	});
+
+	it("超预算 → 有统计无 diff 文本（徽章照显，面板给回落文案）", () => {
+		const oldText = Array.from({ length: 3000 }, (_, i) => `o${i}`).join("\n");
+		const newText = Array.from({ length: 3000 }, (_, i) => `n${i}`).join("\n");
+		const r = computeLineDiff(oldText, newText);
+		expect(r.added).toBe(3000);
+		expect(r.diff).toBeUndefined();
+	});
+});
+
+describe("collectChanges", () => {
+	const tool = (over: Partial<Extract<ConversationEntry, { role: "tool" }>>): ConversationEntry => ({
+		id: Math.random().toString(36).slice(2),
+		role: "tool",
+		toolName: "write",
+		label: "已生成",
+		summary: "",
+		outcome: "ok",
+		detail: undefined,
+		at: 1,
+		...over,
+	});
+
+	it("write/edit 成功卡片按路径收成一条；生成中与失败的卡不算", () => {
+		const r = collectChanges([
+			tool({ change: { path: "a.html", added: 10, removed: 0, changeType: "created" }, at: 1 }),
+			tool({ toolName: "edit", change: { path: "b.ts", added: 2, removed: 1, changeType: "modified" }, at: 2 }),
+			tool({ outcome: undefined, generating: true, change: { path: "c.md", added: 5, removed: 0, changeType: "created" } }),
+			tool({ outcome: "error", change: { path: "d.md", added: 1, removed: 0, changeType: "created" } }),
+		]);
+		expect(r.map((c) => c.path)).toEqual(["a.html", "b.ts"]);
+	});
+
+	it("同一路径多次改只留最后一次（变更列表是文件的当前状态）", () => {
+		const r = collectChanges([
+			tool({ change: { path: "a.html", added: 10, removed: 0, changeType: "created" }, at: 1 }),
+			tool({ change: { path: "a.html", added: 3, removed: 2, changeType: "modified", diff: "@@ -1,1 +1,1 @@\n-x\n+y" }, at: 3 }),
+		]);
+		expect(r).toHaveLength(1);
+		expect(r[0]).toMatchObject({ changeType: "modified", added: 3, removed: 2, at: 3 });
 	});
 });
 

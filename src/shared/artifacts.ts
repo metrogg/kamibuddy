@@ -14,6 +14,8 @@
  * 与 Myers 最小编辑距离在行级增删计数上等价（added = 新行数 - LCS，removed = 旧行数 - LCS）。
  */
 
+import type { ConversationEntry } from "./session-events.ts";
+
 /** 一次写文件操作的增删行统计。 */
 export interface FileChange {
 	readonly path: string;
@@ -24,6 +26,11 @@ export interface FileChange {
 	 * 决定卡片标签（已生成/已修改）与「查看所有变更」的归类。
 	 */
 	readonly changeType: "created" | "modified";
+	/**
+	 * unified 风格的 hunk 文本（3 行上下文），只在 modified 且预算内产出 ——
+	 * created 的 diff 就是全文（看文件本身更直接），超预算只有统计。
+	 */
+	readonly diff?: string;
 }
 
 /** 一个产物（本会话内经 present_files 交付的文件）。 */
@@ -122,13 +129,139 @@ export function diffLineStats(
 	oldText: string,
 	newText: string,
 ): { readonly added: number; readonly removed: number } {
+	const r = computeLineDiff(oldText, newText);
+	return { added: r.added, removed: r.removed };
+}
+
+export interface LineDiff {
+	readonly added: number;
+	readonly removed: number;
+	/**
+	 * unified 风格的 hunk 文本（3 行上下文）。超预算时为 undefined ——
+	 * 统计照显，diff 视图给回落文案（WorkBuddy 的 diffStatus 同思路）。
+	 */
+	readonly diff?: string;
+}
+
+/** diff 视图的上下文行数（unified diff 惯例）。 */
+const DIFF_CONTEXT = 3;
+
+/**
+ * 行级 diff：统计 + hunk 文本。
+ * 统计用滚动数组（内存 O(min)）；hunk 需要回溯时才建全量表 ——
+ * 同一预算上限，超过就只给统计（见 DIFF_CELL_BUDGET）。
+ */
+export function computeLineDiff(oldText: string, newText: string): LineDiff {
 	const oldLines = oldText === "" ? [] : oldText.split("\n");
 	const newLines = newText === "" ? [] : newText.split("\n");
 	if (oldLines.length * newLines.length > DIFF_CELL_BUDGET) {
 		return { added: newLines.length, removed: oldLines.length };
 	}
 	const common = lcsLength(oldLines, newLines);
-	return { added: newLines.length - common, removed: oldLines.length - common };
+	return {
+		added: newLines.length - common,
+		removed: oldLines.length - common,
+		diff: buildHunks(oldLines, newLines),
+	};
+}
+
+/** 全量 DP 回溯出操作序列（" "/" - "/"+"），再按上下文窗口收成 hunk。 */
+function buildHunks(oldLines: readonly string[], newLines: readonly string[]): string {
+	const m = oldLines.length;
+	const n = newLines.length;
+	// dp[i][j] = oldLines[i:] 与 newLines[j:] 的 LCS 长度（从右下角往左上填）。
+	const dp: Uint32Array[] = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+	for (let i = m - 1; i >= 0; i -= 1) {
+		for (let j = n - 1; j >= 0; j -= 1) {
+			const skipOld = dp[i + 1]?.[j] ?? 0;
+			const skipNew = dp[i]?.[j + 1] ?? 0;
+			const both = dp[i + 1]?.[j + 1] ?? 0;
+			const row = dp[i];
+			if (row !== undefined) {
+				row[j] = oldLines[i] === newLines[j] ? both + 1 : Math.max(skipOld, skipNew);
+			}
+		}
+	}
+
+	// 回溯：每个元素是 [行内容, 前缀]；前缀 " " 上下文、"-" 删除、"+" 新增。
+	const ops: [string, " " | "-" | "+"][] = [];
+	let i = 0;
+	let j = 0;
+	while (i < m && j < n) {
+		if (oldLines[i] === newLines[j]) {
+			ops.push([oldLines[i] ?? "", " "]);
+			i += 1;
+			j += 1;
+		} else if ((dp[i + 1]?.[j] ?? 0) >= (dp[i]?.[j + 1] ?? 0)) {
+			ops.push([oldLines[i] ?? "", "-"]);
+			i += 1;
+		} else {
+			ops.push([newLines[j] ?? "", "+"]);
+			j += 1;
+		}
+	}
+	while (i < m) {
+		ops.push([oldLines[i] ?? "", "-"]);
+		i += 1;
+	}
+	while (j < n) {
+		ops.push([newLines[j] ?? "", "+"]);
+		j += 1;
+	}
+
+	// 改动位置按间隔 > 2×上下文分组，每组前后各扩 DIFF_CONTEXT 行。
+	const changeIdx: number[] = [];
+	for (let k = 0; k < ops.length; k += 1) {
+		if (ops[k]?.[1] !== " ") changeIdx.push(k);
+	}
+	if (changeIdx.length === 0) return ""; // 无改动（统计 0/0）
+	const blocks: [number, number][] = [];
+	let bs = changeIdx[0] ?? 0;
+	let prev = bs;
+	for (const idx of changeIdx) {
+		if (idx - prev > DIFF_CONTEXT * 2) {
+			blocks.push([bs, prev]);
+			bs = idx;
+		}
+		prev = idx;
+	}
+	blocks.push([bs, prev]);
+
+	const hunks: string[] = [];
+	for (const [cs, ce] of blocks) {
+		const start = Math.max(0, cs - DIFF_CONTEXT);
+		const end = Math.min(ops.length - 1, ce + DIFF_CONTEXT);
+		const slice = ops.slice(start, end + 1);
+		const oldCount = slice.filter(([, p]) => p !== "+").length;
+		const newCount = slice.filter(([, p]) => p !== "-").length;
+		// 旧起始行号 = start 之前非 "+" 的行数 + 1；新起始行号同理。
+		const oldStart = ops.slice(0, start).filter(([, p]) => p !== "+").length + 1;
+		const newStart = ops.slice(0, start).filter(([, p]) => p !== "-").length + 1;
+		hunks.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+		for (const [line, prefix] of slice) hunks.push(`${prefix}${line}`);
+	}
+	return hunks.join("\n");
+}
+
+/** 一次会话内的文件变更（按路径收拢后的展示记录）。 */
+export interface ChangeRef extends FileChange {
+	readonly at: number;
+}
+
+/**
+ * 会话级「查看所有变更」：write/edit 成功卡片按路径收成一条
+ * （WorkBuddy：Change 是 request 粒度，多轮改同一文件不能再展平）。
+ * 生成中与失败的卡不算；同一路径多次改只留最后一次（文件的当前状态）。
+ */
+export function collectChanges(entries: readonly ConversationEntry[]): ChangeRef[] {
+	const byPath = new Map<string, ChangeRef>();
+	for (const entry of entries) {
+		if (entry.role !== "tool") continue;
+		if (entry.toolName !== "write" && entry.toolName !== "edit") continue;
+		if (entry.outcome !== "ok" || entry.change === undefined) continue;
+		byPath.set(entry.change.path, { ...entry.change, at: entry.at });
+	}
+	return [...byPath.values()].sort((a, b) => a.at - b.at);
 }
 
 /** JSON 字符串片段的反转义（只处理常见转义，路径场景够用）。 */
@@ -172,6 +305,7 @@ export function writeStreamProgress(rawArgs: string): {
  * write 工具参数 + 执行前的旧内容 → 变更统计。
  * oldContent === undefined 表示目标文件原本不存在（新建）；
  * 形状不符返回 undefined（pi 的 args 是 any，窄化失败不猜）。
+ * diff 文本只在 modified 时产出：created 的 diff 就是全文，看文件本身更直接。
  */
 export function changeFromWrite(args: unknown, oldContent: string | undefined): FileChange | undefined {
 	if (typeof args !== "object" || args === null) return undefined;
@@ -180,8 +314,8 @@ export function changeFromWrite(args: unknown, oldContent: string | undefined): 
 	if (oldContent === undefined) {
 		return { path, added: countLines(content), removed: 0, changeType: "created" };
 	}
-	const { added, removed } = diffLineStats(oldContent, content);
-	return { path, added, removed, changeType: "modified" };
+	const { added, removed, diff } = computeLineDiff(oldContent, content);
+	return { path, added, removed, changeType: "modified", ...(diff === "" ? {} : { diff }) };
 }
 
 /** 把 edit 的 edits 依次应用到旧内容上；任一 oldText 找不到则返回 undefined（对不上就不猜）。 */
@@ -214,8 +348,8 @@ export function changeFromEdit(args: unknown, oldContent: string | undefined): F
 
 	const applied = oldContent === undefined ? undefined : applyEdits(oldContent, pairs);
 	if (applied !== undefined) {
-		const { added, removed } = diffLineStats(oldContent as string, applied);
-		return { path, added, removed, changeType: "modified" };
+		const { added, removed, diff } = computeLineDiff(oldContent as string, applied);
+		return { path, added, removed, changeType: "modified", ...(diff === "" ? {} : { diff }) };
 	}
 
 	let added = 0;

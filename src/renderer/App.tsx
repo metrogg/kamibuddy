@@ -18,7 +18,8 @@ import {
 import { Sidebar, type LinkState } from "./sidebar.tsx";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
-import { ArtifactPanel } from "./artifact-panel.tsx";
+import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
+import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
@@ -94,9 +95,8 @@ export function App(): React.JSX.Element {
 		const offEvent = window.kami.onSessionEvent((event: SessionEvent) => {
 			dispatch({ type: "event", event });
 			// present_files 交付：首个本地文件自动在预览面板打开（WorkBuddy：第一个自动打开）。
-			// setPreviewPath 是稳定 setter，不随渲染变。
 			if (event.type === "artifacts_presented" && event.focusFile !== undefined) {
-				setPreviewPath(event.focusFile);
+				openPreview({ kind: "file", path: event.focusFile });
 			}
 		});
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
@@ -197,10 +197,33 @@ export function App(): React.JSX.Element {
 		[showToast],
 	);
 
-	/** 预览面板状态：undefined = 关闭。 */
-	const [previewPath, setPreviewPath] = useState<string | undefined>(undefined);
+	/** 预览面板的 tab 集合与激活项（对标 WorkBuddy DetailPanel 的多 tab）。空数组 = 面板关闭。 */
+	const [previewTabs, setPreviewTabs] = useState<readonly PreviewSelection[]>([]);
+	const [previewActive, setPreviewActive] = useState<PreviewSelection | undefined>(undefined);
 	/** 静态服务 baseUrl，随工作空间快照刷新（playground 为 undefined）。 */
 	const [previewBaseUrl, setPreviewBaseUrl] = useState<string | undefined>(undefined);
+
+	/** 打开/激活预览对象：不在 tab 集合里自动补 tab（概览下拉与产物卡的唯一入口）。 */
+	const openPreview = useCallback((sel: PreviewSelection) => {
+		setPreviewTabs((tabs) => (tabs.some((t) => sameSelection(t, sel)) ? tabs : [...tabs, sel]));
+		setPreviewActive(sel);
+	}, []);
+
+	const closePreviewTab = useCallback(
+		(sel: PreviewSelection) => {
+			const next = previewTabs.filter((t) => !sameSelection(t, sel));
+			setPreviewTabs(next);
+			if (previewActive !== undefined && sameSelection(previewActive, sel)) {
+				setPreviewActive(next[next.length - 1]);
+			}
+		},
+		[previewTabs, previewActive],
+	);
+
+	const closePreviewPanel = useCallback(() => {
+		setPreviewTabs([]);
+		setPreviewActive(undefined);
+	}, []);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
 	const changeInteraction = useCallback(
@@ -251,7 +274,7 @@ export function App(): React.JSX.Element {
 			.workspaceSnapshot()
 			.then((snap) => setPreviewBaseUrl(snap.previewBaseUrl))
 			.catch(() => setPreviewBaseUrl(undefined));
-		setPreviewPath(undefined);
+		closePreviewPanel();
 		// showToast 是稳定的 useCallback（空依赖），不需列入依赖数组。
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
@@ -338,7 +361,7 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
-					onPreviewArtifact={setPreviewPath}
+					onPreviewArtifact={(path) => openPreview({ kind: "file", path })}
 					onTodo={showTodo}
 				/>
 			)}
@@ -357,14 +380,16 @@ export function App(): React.JSX.Element {
 				<DiagnosticsView onClose={() => setView(returnView)} />
 			)}
 			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。 */}
-			{previewPath !== undefined && (
+			{previewActive !== undefined && (
 				<ArtifactPanel
 					artifacts={conversation.artifacts}
+					changes={collectChanges(conversation.entries)}
 					cwd={conversation.state.cwd}
 					previewBaseUrl={previewBaseUrl}
-					path={previewPath}
-					onSelect={setPreviewPath}
-					onClose={() => setPreviewPath(undefined)}
+					tabs={previewTabs}
+					active={previewActive}
+					onOpen={openPreview}
+					onCloseTab={closePreviewTab}
 					onOpenExternal={openArtifact}
 					onError={showToast}
 				/>
