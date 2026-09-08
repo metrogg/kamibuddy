@@ -185,6 +185,16 @@ export interface SessionState {
 	};
 }
 
+/**
+ * 当前回合的计时（WorkBuddy 的「已处理 Ns」）。
+ * startedAt = 用户消息落库时间（daemon 打点）；endedAt = run 结束时间。
+ * endedAt 缺省表示回合还在跑 —— UI 每 500ms 走表，停表后显示「已完成」。
+ */
+export interface TurnTiming {
+	readonly startedAt: number;
+	readonly endedAt?: number;
+}
+
 /** 渲染进程挂载或热重载后拉取的完整状态。 */
 export interface SessionSnapshot {
 	readonly state: SessionState;
@@ -195,6 +205,8 @@ export interface SessionSnapshot {
 	readonly availableModes: readonly ModeDescriptor[];
 	/** 最近的上下文用量明细。还没有过带用量的响应时为 undefined。 */
 	readonly usageDetail?: ContextUsageDetail;
+	/** 当前回合计时。还没有用户消息时为 undefined。 */
+	readonly turn?: TurnTiming;
 }
 
 /**

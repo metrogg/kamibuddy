@@ -451,6 +451,8 @@ async function resetSession(): Promise<void> {
 		entries: [],
 		// 用量明细属于旧会话，不清掉新任务的圆环会停在旧值。
 		usageDetail: undefined,
+		// 回合计时同理：新任务不该沿用旧回合的起表时间。
+		turn: undefined,
 	};
 }
 

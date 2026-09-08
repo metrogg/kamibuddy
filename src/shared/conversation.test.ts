@@ -313,3 +313,39 @@ describe("run 生命周期", () => {
 		expect(view.entries[0]).toMatchObject({ role: "assistant", text: "模型调用失败" });
 	});
 });
+
+describe("回合计时", () => {
+	it("user_message 起表，run_finished 停表", () => {
+		const running = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_finished", runId: "r1" },
+		]);
+
+		expect(running.turn?.startedAt).toBe(1000);
+		expect(running.turn?.endedAt).toBeTypeOf("number");
+	});
+
+	it("新一条 user_message 重新起表（上一回合的 endedAt 不残留）", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1" },
+			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
+		]);
+
+		expect(view.turn).toEqual({ startedAt: 2000 });
+	});
+
+	it("run_error 同样停表", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_error", runId: "r1", message: "中断" },
+		]);
+
+		expect(view.turn?.endedAt).toBeTypeOf("number");
+	});
+
+	it("没有起过表的 run（如压缩）不造假回合", () => {
+		const view = apply([{ type: "run_finished", runId: "r1" }]);
+		expect(view.turn).toBeUndefined();
+	});
+});

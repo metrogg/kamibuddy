@@ -20,6 +20,7 @@ import type {
 	SessionState,
 	ModeDescriptor,
 	ToolCard,
+	TurnTiming,
 } from "./session-events.ts";
 import { generatingLabel } from "./session-events.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
@@ -33,6 +34,8 @@ export interface ConversationView {
 	readonly availableModes: readonly ModeDescriptor[];
 	/** 最近的上下文用量明细（context_usage 事件折叠而来）。 */
 	readonly usageDetail?: ContextUsageDetail;
+	/** 当前回合计时（user_message 起表，run 结束停表）。 */
+	readonly turn?: TurnTiming;
 }
 
 export type ConversationAction =
@@ -87,6 +90,12 @@ function abortOrphanedGenerating(
 	);
 }
 
+/** run 结束停表。没有起过表（如压缩 run）就不造一个假回合。 */
+function stopTurn(turn: TurnTiming | undefined): TurnTiming | undefined {
+	if (turn === undefined || turn.endedAt !== undefined) return turn;
+	return { ...turn, endedAt: Date.now() };
+}
+
 export function conversationReducer(view: ConversationView, action: ConversationAction): ConversationView {
 	if (action.type === "snapshot") {
 		return {
@@ -95,6 +104,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			availableScenes: action.snapshot.availableScenes,
 			availableModes: action.snapshot.availableModes,
 			usageDetail: action.snapshot.usageDetail,
+			turn: action.snapshot.turn,
 		};
 	}
 
@@ -108,6 +118,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				...view,
 				state: { ...view.state, isStreaming: false },
 				entries: abortOrphanedGenerating(view.entries),
+				turn: stopTurn(view.turn),
 			};
 
 		case "run_error":
@@ -119,10 +130,16 @@ export function conversationReducer(view: ConversationView, action: Conversation
 					...abortOrphanedGenerating(view.entries),
 					{ id: `error-${event.runId}`, role: "assistant", text: event.message, at: Date.now() },
 				],
+				turn: stopTurn(view.turn),
 			};
 
 		case "user_message":
-			return { ...view, entries: [...view.entries, event.message] };
+			// 回合计时从用户消息落库起表（WorkBuddy：从 user 消息发出到当前）。
+			return {
+				...view,
+				entries: [...view.entries, event.message],
+				turn: { startedAt: event.message.at },
+			};
 
 		case "assistant_started":
 			return {

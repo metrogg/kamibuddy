@@ -5,7 +5,7 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import type { ConversationEntry, ModeDescriptor, ToolCard } from "@shared/session-events.ts";
 import { collectArtifacts } from "@shared/artifacts.ts";
@@ -141,6 +141,47 @@ function pendingText(entries: readonly ConversationEntry[]): string {
 	return "等待模型响应…";
 }
 
+/* ── 回合头部（已处理时长） ──────────────────────────────────────── */
+
+/** 时长格式化：WorkBuddy「已处理 *m*s」口径（41s / 2m3s）。 */
+function formatDuration(ms: number): string {
+	const totalSec = Math.max(0, Math.floor(ms / 1000));
+	const m = Math.floor(totalSec / 60);
+	const s = totalSec % 60;
+	return m === 0 ? `${s}s` : `${m}m${s}s`;
+}
+
+/**
+ * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」）。
+ *
+ * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；回合结束或
+ * 历史回合显示「已完成」。计时起点是用户消息落库时间，不是首个 token ——
+ * 排队/检索的时间也计入，与其口径一致。
+ */
+function TurnHeader({
+	active,
+	startedAt,
+}: {
+	readonly active: boolean;
+	readonly startedAt: number | undefined;
+}): React.JSX.Element {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		const timer = window.setInterval(() => setNow(Date.now()), 500);
+		return () => window.clearInterval(timer);
+	}, [active]);
+
+	return (
+		<div className="turn-header">
+			<span className="turn-agent">KamiBuddy</span>
+			<span className="turn-duration">
+				{active && startedAt !== undefined ? `已处理 ${formatDuration(now - startedAt)}` : "已完成"}
+			</span>
+		</div>
+	);
+}
+
 /* ── 交互模式切换 ────────────────────────────────────────────────── */
 
 interface ModeSwitchProps {
@@ -210,6 +251,8 @@ export function ChatView({
 	// 产物清单：从工具卡片推导（write 成功 = 产物），整会话聚合。
 	// 我们一会话一任务，「本会话产物」就是「本任务产物」（WorkBuddy 的口径）。
 	const artifacts = collectArtifacts(conversation.entries);
+	// 最后一个 user 消息的位置：当前回合的分界（回合头部走表的唯一依据）。
+	const lastUserIndex = conversation.entries.findLastIndex((e) => e.role === "user");
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
@@ -244,20 +287,44 @@ export function ChatView({
 			</header>
 
 			<div className="stream" ref={scrollRef}>
-				{conversation.entries.map((entry) => {
-					if (entry.role === "tool") return <ToolEntry key={entry.id} card={entry} />;
+				{/*
+					回合头部的插入位置：每条 user 消息之后、助手回应之前；
+					user 是最后一条（等响应）时补在末尾。只有最后一个 user 消息
+					所在的回合是「当前回合」—— 它的头部走表，历史回合恒为已完成
+					（computeTurnActive 同口径：最后 user 组及其之后共享当前回合）。
+				*/}
+				{conversation.entries.map((entry, index) => {
+					const prev = conversation.entries[index - 1];
+					const headerHere =
+						prev?.role === "user" && entry.role !== "user" ? index - 1 : undefined;
+					const trailingHeader = index === conversation.entries.length - 1 && entry.role === "user";
+					const header = (userIndex: number) => (
+						<TurnHeader
+							key={`turn-${conversation.entries[userIndex]?.id ?? userIndex}`}
+							active={streaming && userIndex === lastUserIndex}
+							startedAt={conversation.turn?.startedAt}
+						/>
+					);
 					return (
-						<div key={entry.id} className={`entry ${entry.role}`}>
-							{entry.role === "assistant" && entry.thinking !== undefined && (
-								<ThinkingBlock text={entry.thinking} />
-							)}
-							{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
-							{entry.role === "assistant" ? (
-								<Markdown text={entry.text} />
+						<Fragment key={entry.id}>
+							{headerHere !== undefined && header(headerHere)}
+							{entry.role === "tool" ? (
+								<ToolEntry card={entry} />
 							) : (
-								<div className="text">{entry.text}</div>
+								<div className={`entry ${entry.role}`}>
+									{entry.role === "assistant" && entry.thinking !== undefined && (
+										<ThinkingBlock text={entry.thinking} />
+									)}
+									{/* 助手消息走 Markdown 渲染；用户消息保持纯文本（聊天气泡，不排版）。 */}
+									{entry.role === "assistant" ? (
+										<Markdown text={entry.text} />
+									) : (
+										<div className="text">{entry.text}</div>
+									)}
+								</div>
 							)}
-						</div>
+							{trailingHeader && header(index)}
+						</Fragment>
 					);
 				})}
 				{streaming && <div className="stream-pending">{pendingText(conversation.entries)}</div>}
