@@ -11,6 +11,7 @@ import type {
 	CompletionData,
 	PermissionRequest,
 	PermissionResponse,
+	PickedInputFiles,
 	PromptRequest,
 	SaveArtifactRequest,
 	SessionSummary,
@@ -20,7 +21,6 @@ import type {
 	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
-import type { ImagePart } from "./image.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type {
@@ -49,8 +49,17 @@ export interface KamiBridge {
 	readonly newTask: () => Promise<void>;
 	/** 输入框补全数据源（@ 文件 + / 命令）。 */
 	readonly completions: () => Promise<CompletionData>;
-	/** 系统图片选择框（多选，main 读出内容返回）。取消返回 undefined。 */
-	readonly pickImageFiles: () => Promise<readonly ImagePart[] | undefined>;
+	/**
+	 * 系统文件选择框（图片 + 文档多选）。图片由 main 读出内容返回；
+	 * 文档只回路径不读内容（模型经 read_document 自取）。取消返回 undefined。
+	 */
+	readonly pickInputFiles: () => Promise<PickedInputFiles | undefined>;
+	/**
+	 * 取 File 的磁盘绝对路径。必须在 preload 实现：Electron ≥32 起 renderer 的
+	 * File 不再带 .path，webUtils.getPathForFile 只能在 preload 侧调用
+	 * （File 经 contextBridge 传入）。无磁盘来源的 File（内存位图）返回空串。
+	 */
+	readonly getFilePath: (file: File) => string;
 	/** 切换场景（work / code / design）。 */
 	readonly setScene: (sceneId: string) => Promise<void>;
 	/** 切换交互模式（ask / craft / plan / expert）。 */

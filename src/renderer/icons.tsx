@@ -6,6 +6,8 @@
  * 自己画一套风格相近的线性图标最干净。
  */
 
+import type { DocBadge } from "@shared/doc-formats.ts";
+
 interface IconProps {
 	readonly size?: number;
 	readonly className?: string;
@@ -113,6 +115,29 @@ export const IconDoc = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
 		<path d="M14 3v5h5M9 13h6M9 17h6" />
+	</Svg>
+);
+
+/**
+ * 文档附件 chip 的格式图标：文档轮廓 + 右下角格式小字标（PDF/DOC/XLS/PPT/ODF）。
+ * badge（分色族 + 字标）来自 shared/doc-formats.ts 的 docBadgeOf——扩展名到
+ * 族/字标的映射只在那一份，这里不另写（§4）；颜色由 CSS 按 doc-file-<族> 类
+ * 经 currentColor 分色（pdf 红 / word 蓝 / excel 绿 / ppt 橙）。
+ */
+export const IconDocFile = ({
+	badge,
+	size = 16,
+}: {
+	readonly badge: DocBadge;
+	readonly size?: number;
+}): React.JSX.Element => (
+	<Svg size={size} className={`doc-file-icon doc-file-${badge.family}`}>
+		<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+		<path d="M14 3v5h5" />
+		{/* 字标用 fill 而非 stroke：6px 字描边会糊成一团。 */}
+		<text x="17" y="18.5" textAnchor="end" fontSize="6" fontWeight="bold" fill="currentColor" stroke="none">
+			{badge.label}
+		</text>
 	</Svg>
 );
 

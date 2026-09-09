@@ -149,9 +149,10 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
    显示概览菜单与「选择文件以预览」空态；② 发一条长消息，用户气泡宽不超过消息流 70%；
    ③ 交付过产物的会话（本次重启后新交付的）关掉再点开，产物卡还在、点击可预览。
    注意：**重启之前交付的产物没有持久化记录，回看不会有产物卡**——只验证重启后新交付的。
-9. **文档读取（新，见下方专节）** —— 工作区里放一份真实中文 PDF 和一份 docx，
-   各问一次「总结一下这个文件」：应出现「阅读文档 → 已阅读」卡片，回答内容确实来自
-   文件正文（不是模型瞎编）。**旧会话不生效**：工具集在建会话时注入，请新建任务验证。
+9. **文档读取（新，见下方专节）** —— 把一份真实中文 PDF **拖进输入框**（或点 + 选
+   「文档」、或从资源管理器复制后粘贴）：输入框应出现 `@路径`；发送后模型应显示
+   「阅读文档 → 已阅读」卡片，回答确实来自文件正文。文件在工作区外时权限门会弹
+   低风险询问（可记住该目录）。**旧会话不生效**：工具集在建会话时注入，请新建任务验证。
 10. **对话页 6 项细节（新，见下方专节）** —— ① hover 一条助手回答，底部浮现复制按钮，
    点击变对勾、剪贴板是 Markdown 源文；② 输入区左侧出现模型名，点击可换模型；
    ③ 让模型输出一个长代码块：卡片有语言名头部 + 复制按钮，超高内部滚动；
@@ -467,6 +468,22 @@ spec：`.trae/specs/align-chat-details-workbuddy/`（用户逐条确认的 6 点
   老格式解析、RAG 知识库（MinerU 级）均列为后续。
 - 依赖只增两个纯 JS 包；唯一连带是 pdfjs v6 官方 optional prebuilt
   `@napi-rs/canvas`（Node 补 DOMMatrix，Cherry Studio 同样随包携带）。
+
+**输入框文档入口（同日补）**：工具上线后用户实测发现附件系统只收图片
+（选择框 filter 仅 Images、粘贴/拖拽 PDF 被 toast 拒）。现三入口（+ 按钮 /
+拖拽 / 粘贴）接受 pdf/docx/xlsx/pptx/odt/odp/ods——**文档不读内容**，
+把 `@绝对路径` 插入输入框光标处（与 @ 补全同约定），模型经 read_document 自取。
+扩展名集合收敛到 `shared/doc-formats.ts`（core 与 renderer 单一真相）；
+`pickImageFiles` 通道升级为 `pickInputFiles`（图片+文档合并选择框）；
+文件路径经 preload 的 `webUtils.getPathForFile`（Electron ≥32 renderer 无 File.path）。
+老格式 .doc/.xls/.ppt 只能经拖拽到达，toast 引导另存新格式。新增 20 个测试。
+
+**文档附件 chip 化（同日再补，对标 WorkBuddy）**：`@路径` 纯文本插入改为
+图标 chip——分色格式图标（pdf 红/word 蓝/excel 绿/ppt 橙，`docBadgeOf` 映射）
++ 文件名 + × 删除，与图片缩略图条同区域；textarea 不再插入路径文本，
+**发送时**经 `foldDocumentRefsIntoText` 把 `@path` 行折进消息（模型自取约定不变）。
+chip 与图片附件同为组件态不做会话持久化（已知限制，实现路径已注释）。
+`document-reference.ts` 与 `insertSnippetAtCursor` 已删干净。605 个测试全绿。
 
 另：同日规则变更——AGENTS.md §2「文档流水线一行 shell 都不许碰」放宽为
 「不许假设用户机器上有第三方命令」（允许 Windows 原生 powershell/COM 与安装包

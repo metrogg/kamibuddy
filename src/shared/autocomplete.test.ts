@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyCompletion, completionTrigger, filterItems, type CompletionItem } from "./autocomplete.ts";
+import {
+	applyCompletion,
+	completionTrigger,
+	filterItems,
+	type CompletionItem,
+} from "./autocomplete.ts";
 
 const cur = (text: string, position = text.length) => ({ text, position });
 

@@ -6,7 +6,7 @@
  * renderer 里也就不可能出现字符串字面量（AGENTS.md §4）。
  */
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type { KamiBridge, Unsubscribe } from "../shared/bridge.ts";
 import { INVOKE, PUSH } from "../shared/ipc.ts";
 
@@ -28,7 +28,9 @@ const bridge: KamiBridge = {
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
 	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
 	completions: () => ipcRenderer.invoke(INVOKE.completions),
-	pickImageFiles: () => ipcRenderer.invoke(INVOKE.pickImageFiles),
+	pickInputFiles: () => ipcRenderer.invoke(INVOKE.pickInputFiles),
+	// File 的路径只能在 preload 取（webUtils 不进 renderer），同步返回。
+	getFilePath: (file) => webUtils.getPathForFile(file),
 	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
 	setInteraction: (interactionId) =>
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),

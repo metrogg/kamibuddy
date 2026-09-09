@@ -292,8 +292,8 @@ export function App(): React.JSX.Element {
 	const [panelWidth, setPanelWidth] = useState(440);
 	/** 面板全屏态：absolute 覆盖主内容区。 */
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
-	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。 */
-	const [panelOpen, setPanelOpen] = useState(true);
+	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。默认关闭——用户进入对话后手动展开。 */
+	const [panelOpen, setPanelOpen] = useState(false);
 	/**
 	 * 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。
 	 * 默认展开：侧栏是全局导航锚（任务历史 / 空间 / 设置入口），首页与

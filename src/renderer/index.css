@@ -6,17 +6,20 @@
  */
 
 :root {
-	--bg: #ffffff;
-	--bg-sidebar: #f7f7f5;
-	--bg-hover: #eeeeeb;
-	--bg-raised: #f4f4f2;
-	--border: #e7e7e4;
-	--text: #1d2129;
-	--text-dim: #86909c;
-	--primary: #20232a;
+	/* WorkBuddy 浅色主题同款配色（safe-delete-events-vjEg4QyO.css :1749-1830 提取）。
+	   主背景用 gray-1（比纯白稍暖），侧栏 gray-3，主按钮黑 90%（不是品牌色——
+	   WorkBuddy 的 primary CTA 是黑，品牌绿只用于状态/强调点缀）。 */
+	--bg: #fafafa;
+	--bg-sidebar: #f2f2f2;
+	--bg-hover: rgba(0, 0, 0, 0.05);
+	--bg-raised: #f4f4f4;
+	--border: #e6e6e6;
+	--text: #000000;
+	--text-dim: rgba(0, 0, 0, 0.5);
+	--primary: rgba(0, 0, 0, 0.9);
 	--primary-text: #ffffff;
-	--danger: #e5534b;
-	--ok: #2ea44f;
+	--danger: #f64041;
+	--ok: #0cbf5b;
 	--radius-lg: 16px;
 	--radius-md: 10px;
 	--shadow-card: 0 6px 24px rgb(0 0 0 / 6%);
@@ -61,7 +64,8 @@ button {
 	padding: 12px;
 	background: var(--bg-sidebar);
 	border-right: 1px solid var(--border);
-	overflow-y: auto;
+	/* 滚动职责移交给 .sidebar-scroll（任务+空间区），导航项固定不动。 */
+	overflow: hidden;
 }
 
 .sidebar-brand {
@@ -120,10 +124,47 @@ button {
 }
 
 .sidebar-section {
-	margin-top: 14px;
+	margin-top: 10px;
+}
+
+/* 任务+空间滚动容器：导航项固定，只有这个区域滚动（WorkBuddy 同款）。
+   滚动条细、常态透明、hover 才显色——WorkBuddy 的滚动条方案。 */
+.sidebar-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+	transition: scrollbar-color 0.2s ease;
+}
+
+.sidebar-scroll:hover {
+	scrollbar-color: var(--border) transparent;
+}
+
+/* WebKit（Electron 走这个）同款透明/hover 显色。 */
+.sidebar-scroll::-webkit-scrollbar {
+	width: 4px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+	background: transparent;
+	border-radius: 2px;
+	transition: background 0.2s ease;
+}
+
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+	background: var(--border);
 }
 
 .section-title {
+	display: flex;
+	align-items: center;
+	gap: 4px;
 	padding: 0 8px 4px;
 	font-size: 12px;
 	color: var(--text-dim);
@@ -136,6 +177,20 @@ button {
 	border-radius: 6px;
 }
 
+.section-title-btn:hover {
+	background: var(--bg-hover);
+}
+
+/* 组头折叠箭头：展开朝下，收起旋转 -90°，与空间组内折叠箭头同语言。 */
+.section-chevron {
+	flex: none;
+	transition: transform 0.15s ease;
+}
+
+.section-chevron-collapsed {
+	transform: rotate(-90deg);
+}
+
 .section-empty {
 	margin: 0;
 	padding: 4px 8px;
@@ -143,11 +198,11 @@ button {
 	color: var(--text-dim);
 }
 
-/* 任务列表：行 = 可点击主体 + hover 浮现的行内操作钮。 */
+/* 任务列表：行 = 可点击主体 + hover 浮现的行内操作钮。
+   不再自己限高——外层 .sidebar-scroll 已接管滚动，这里只负责行结构。 */
 .task-list {
-	/* 会话多了侧栏不被撑爆：列表内部滚动，导航与底部状态始终在视口内。 */
-	max-height: 42vh;
-	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
 }
 
 .task-item {
@@ -157,6 +212,22 @@ button {
 	font-size: 13px;
 }
 
+/* WorkBuddy 同款紧凑行：标题+时间同排（标题左对齐省略，时间右对齐常驻），
+   行高压进 ~24px，侧栏在 216px 下塞更多条目。 */
+.task-item-body {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 4px 8px;
+	text-align: left;
+}
+
+.task-item:hover .task-item-body {
+	padding-right: 72px;
+}
+
+/* hover 浮现的操作钮。 */
 .task-item:hover {
 	background: var(--bg-hover);
 }
@@ -171,32 +242,20 @@ button {
 	font-weight: 600;
 }
 
-.task-item-body {
-	display: block;
-	width: 100%;
-	padding: 6px 8px;
-	text-align: left;
-}
-
-/* hover 时给浮现的操作钮让位，避免压在标题文字上（三钮 = 3×20 + 2×2 gap + 右侧 6px）。 */
-.task-item:hover .task-item-body {
-	padding-right: 72px;
-}
-
 .task-item-title {
-	display: block;
+	flex: 1;
+	min-width: 0;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
+/* 时间右对齐常驻：与标题同排，不被 hover 操作钮遮住（flex 布局天然让位）。 */
 .task-item-meta {
-	display: block;
+	flex: none;
 	font-size: 11px;
 	color: var(--text-dim);
 	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 /* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。 */
@@ -333,6 +392,12 @@ button {
 
 .space-group-collapsed .space-group-chevron {
 	transform: rotate(-90deg);
+}
+
+/* 空间组图标：文件夹标识（WorkBuddy 同款），dim 色与 chevron 同调。 */
+.space-group-icon {
+	flex: none;
+	color: var(--text-dim);
 }
 
 .space-group-name {
@@ -899,6 +964,83 @@ button {
 
 .attachment-remove:hover {
 	background: rgba(0, 0, 0, 0.78);
+}
+
+/* ── 输入区文档引用 chip（chat / home 共用，排在缩略图条之前） ────── */
+
+/* 长文件名 chip 换行比横向滚动好读（路径在 title 里，视觉只留文件名）。 */
+.document-ref-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 2px 8px;
+}
+
+.document-ref-chip {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 240px;
+	padding: 4px 6px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--bg-raised);
+	font-size: 12px;
+	line-height: 1;
+}
+
+/* 图标不参与压缩：文件名超长时省略号吃在名字上。 */
+.document-ref-chip .doc-file-icon {
+	flex: 0 0 auto;
+}
+
+/* 按族分色（族来自 shared/doc-formats.ts 的 docBadgeOf），色值走 currentColor。 */
+.doc-file-icon.doc-file-pdf {
+	color: #c94f4f;
+}
+
+.doc-file-icon.doc-file-word {
+	color: #4a7bc8;
+}
+
+.doc-file-icon.doc-file-excel {
+	color: #4b9e6b;
+}
+
+.doc-file-icon.doc-file-ppt {
+	color: #d98a3d;
+}
+
+.document-ref-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* × 平时收起，hover/聚焦 chip 时显现（与附件条的克制同一口径）；
+   focus-within 也要算——键盘 Tab 到 × 上时不能看不见它。 */
+.document-ref-remove {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	color: var(--text-dim);
+	font-size: 13px;
+	line-height: 1;
+	opacity: 0;
+}
+
+.document-ref-chip:hover .document-ref-remove,
+.document-ref-chip:focus-within .document-ref-remove {
+	opacity: 1;
+}
+
+.document-ref-remove:hover {
+	background: var(--bg-hover);
+	color: var(--text);
 }
 
 /* 非视觉模型提示：缩略图条下方一行说明（图片仍可发送，但进不了模型，

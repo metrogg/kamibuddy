@@ -11,7 +11,7 @@ import { useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { useAutocomplete } from "./autocomplete.tsx";
-import { AttachmentStrip, useImageAttachments } from "./image-attachments.tsx";
+import { AttachmentStrip, DocumentRefStrip, foldDocumentRefsIntoText, useImageAttachments } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
@@ -126,7 +126,8 @@ export function HomeView({
 	// IME 守卫与 chat-view 共用一份接线（useImeGuard）——此前各写一份漏了这里，
 	// 中文输入法选词 Enter 直接误发消息，两处同源后不会再出现这种半吊子修复。
 	const ime = useImeGuard();
-	// 图片附件（粘贴/拖拽/选择三入口），与 chat-view 共用同一份 hook。
+	// 图片/文档附件（粘贴/拖拽/选择三入口），与 chat-view 共用同一份 hook。
+	// 文档进 chip 条（documentRefs），提交时才折回文本，textarea 保持纯人写文本。
 	const img = useImageAttachments(onError);
 	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
 	const visionSupported = useModelSupportsVision(modelId);
@@ -141,7 +142,7 @@ export function HomeView({
 		setDraft("");
 		// 附件等 daemon 接收成功再清：失败时错误已由 App 落进对话页错误卡，
 		// 图留在输入区，补一句话重发即可，不必重挑文件。
-		void onSubmit(text, images.length > 0 ? images : undefined).then(
+		void onSubmit(foldDocumentRefsIntoText(text, img.documentRefs), images.length > 0 ? images : undefined).then(
 			() => img.clear(),
 			() => {},
 		);
@@ -212,6 +213,8 @@ export function HomeView({
 						onDragOver={img.bind.onDragOver}
 						onDragLeave={img.bind.onDragLeave}
 					>
+						{/* 文档 chip 条在图片缩略图条之前（与 chat-view 同序）。 */}
+						<DocumentRefStrip refs={img.documentRefs} onRemove={img.removeDocumentRefAt} />
 						<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
 						<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
 						<div className="composer-input">
@@ -232,7 +235,7 @@ export function HomeView({
 							/>
 						</div>
 						<div className="composer-bar">
-							<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片" onClick={() => void img.pickFromDialog()}>
+							<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片或文档" onClick={() => void img.pickFromDialog()}>
 								<IconPlus size={17} />
 							</button>
 							<span className="bar-spacer" />

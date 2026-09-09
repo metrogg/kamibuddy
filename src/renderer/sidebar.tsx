@@ -21,6 +21,7 @@ import {
 	IconChevronDown,
 	IconEdit,
 	IconExport,
+	IconFolder,
 	IconLibrary,
 	IconMore,
 	IconPlus,
@@ -83,13 +84,6 @@ const NAV_ITEMS = [
 /** 任务区默认露出的条数，其余收进「查看更多 (N)」。 */
 const TASKS_COLLAPSED_COUNT = 5;
 
-/** 空间标识取 cwd 末段（Windows 反斜杠与 POSIX 斜杠都认）。与 workspace-picker 的 baseName 同款。 */
-function cwdTail(cwd: string): string {
-	const trimmed = cwd.replace(/[\\/]+$/, "");
-	const at = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
-	return at === -1 ? trimmed : trimmed.slice(at + 1);
-}
-
 export function Sidebar({
 	link,
 	groups,
@@ -123,6 +117,9 @@ export function Sidebar({
 	const [menuCwd, setMenuCwd] = useState<string | undefined>(undefined);
 	const [renamingCwd, setRenamingCwd] = useState<string | undefined>(undefined);
 	const [removingCwd, setRemovingCwd] = useState<string | undefined>(undefined);
+	/** 任务区/空间区组头折叠：会话内存态，重开侧栏恢复展开。WorkBuddy 同款交互。 */
+	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
 	/**
 	 * 会话行渲染：任务区与空间组内共用同一份（标题/meta/当前高亮/hover
@@ -130,9 +127,7 @@ export function Sidebar({
 	 * JSX —— 两处行结构一旦漂移，「同一任务在两区表现不同」就是 bug。
 	 */
 	const renderTaskRow = (task: SessionSummary): React.JSX.Element => {
-		const meta = `${formatMessageTime(task.modifiedAt, Date.now())} · ${
-			task.isTempTask ? "临时任务" : cwdTail(task.cwd)
-		}`;
+		const meta = formatMessageTime(task.modifiedAt, Date.now());
 		const rowClass = task.current
 			? "task-item task-item-current"
 			: "task-item";
@@ -212,6 +207,7 @@ export function Sidebar({
 						{streamingPath === task.path && <span className="task-spinner" />}
 						{task.title}
 					</span>
+					{/* 标题+时间同排：标题左对齐省略，时间右对齐常驻（WorkBuddy 同款紧凑行）。 */}
 					<span className="task-item-meta">{meta}</span>
 				</button>
 				<span className="task-item-ops">
@@ -344,10 +340,10 @@ export function Sidebar({
 							});
 						}}
 					>
-						<IconChevronDown size={12} className="space-group-chevron" />
-						<span className="space-group-name">{group.name}</span>
-						<span className="space-group-count">{group.sessions.length}</span>
-					</button>
+						<IconFolder size={12} className="space-group-icon" />
+					<IconChevronDown size={12} className="space-group-chevron" />
+					<span className="space-group-name">{group.name}</span>
+				</button>
 					<span className="space-group-actions">
 						<button
 							type="button"
@@ -457,30 +453,49 @@ export function Sidebar({
 				</button>
 			</nav>
 
-			<div className="sidebar-section">
-				<div className="section-title">任务</div>
-				{groups.tasks.length === 0 ? (
-					<p className="section-empty">暂无历史任务</p>
-				) : (
-					<div className="task-list">
-						{visibleTasks.map(renderTaskRow)}
-						{hiddenTaskCount > 0 && (
-							<button
-								type="button"
-								className="task-list-more"
-								onClick={() => setTasksExpanded(true)}
-							>
-								查看更多 ({hiddenTaskCount})
-							</button>
-						)}
-					</div>
-				)}
-			</div>
+			{/* 任务+空间滚动区：导航项固定不动，只有这个容器滚动（WorkBuddy 同款）。 */}
+			<div className="sidebar-scroll">
+				<div className="sidebar-section">
+					<button
+						type="button"
+						className="section-title section-title-btn"
+						aria-expanded={!tasksCollapsed}
+						onClick={() => setTasksCollapsed((prev) => !prev)}
+					>
+						<IconChevronDown size={12} className={tasksCollapsed ? "section-chevron section-chevron-collapsed" : "section-chevron"} />
+						任务 ({groups.tasks.length})
+					</button>
+					{!tasksCollapsed && (groups.tasks.length === 0 ? (
+						<p className="section-empty">暂无历史任务</p>
+					) : (
+						<div className="task-list">
+							{visibleTasks.map(renderTaskRow)}
+							{hiddenTaskCount > 0 && (
+								<button
+									type="button"
+									className="task-list-more"
+									onClick={() => setTasksExpanded(true)}
+								>
+									查看更多 ({hiddenTaskCount})
+								</button>
+							)}
+						</div>
+					))}
+				</div>
 
-			<div className="sidebar-section">
-				<div className="section-title">空间</div>
-				{/* 组由会话派生：没有会话的目录不形成组，所以这里不需要空态文案。 */}
-				{groups.spaces.map(renderSpaceGroup)}
+				<div className="sidebar-section">
+					<button
+						type="button"
+						className="section-title section-title-btn"
+						aria-expanded={!spacesCollapsed}
+						onClick={() => setSpacesCollapsed((prev) => !prev)}
+					>
+						<IconChevronDown size={12} className={spacesCollapsed ? "section-chevron section-chevron-collapsed" : "section-chevron"} />
+						空间 ({groups.spaces.length})
+					</button>
+					{/* 组由会话派生：没有会话的目录不形成组，所以这里不需要空态文案。 */}
+					{!spacesCollapsed && groups.spaces.map(renderSpaceGroup)}
+				</div>
 			</div>
 
 			<div className="sidebar-footer">

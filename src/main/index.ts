@@ -23,8 +23,9 @@ import {
 	type UtilityProcess,
 } from "electron";
 import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
+import { OFFICE_EXTENSIONS, PDF_EXTENSION, docKindOf } from "../shared/doc-formats.ts";
 import { MAX_IMAGE_BYTES, type ImagePart } from "../shared/image.ts";
-import { INVOKE, PUSH, type DaemonStatus, type SaveArtifactRequest } from "../shared/ipc.ts";
+import { INVOKE, PUSH, type DaemonStatus, type DocumentReference, type SaveArtifactRequest } from "../shared/ipc.ts";
 
 /** main 自己处理、不转发给 daemon 的通道（需要 Electron API 或 main 独有状态）。 */
 const MAIN_HANDLED: readonly string[] = [
@@ -33,7 +34,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.saveArtifactAs,
 	INVOKE.pickWorkspaceDirectory,
 	INVOKE.pickSkillDirectory,
-	INVOKE.pickImageFiles,
+	INVOKE.pickInputFiles,
 	INVOKE.workspaceReveal,
 ];
 
@@ -227,17 +228,42 @@ function registerIpc(): void {
 		return canceled || filePaths.length === 0 ? undefined : filePaths[0];
 	});
 
-	// 图片多选 + 读出内容。读文件必须在 main 做：渲染进程是沙箱 web 环境，
-	// 拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
-	ipcMain.handle(INVOKE.pickImageFiles, async () => {
+	/*
+	 * 图片 + 文档合并的多选框。读文件必须在 main 做：渲染进程是沙箱 web 环境，
+	 * 拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
+	 * 选中后按扩展名分流：图片读成 ImagePart（大小守门在 readImageFile）；
+	 * 文档不读内容、只回路径——内容读取是 read_document 工具的职责
+	 * （模型按需读、有截断与续读；在这里预读会把整份大文档一次性挤进首条消息，
+	 * 且区外文件的权限门也就此被绕过）。
+	 */
+	ipcMain.handle(INVOKE.pickInputFiles, async () => {
 		if (window === undefined) return undefined;
+		const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
+		// dialog 的 extensions 不带点，从 shared 集合剥出（文档扩展名只许有一份真相）。
+		const docExts = [PDF_EXTENSION, ...OFFICE_EXTENSIONS].map((ext) => ext.slice(1));
 		const { canceled, filePaths } = await dialog.showOpenDialog(window, {
-			title: "选择图片",
+			title: "选择图片或文档",
 			properties: ["openFile", "multiSelections"],
-			filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+			filters: [
+				{ name: "所有支持的文件", extensions: [...imageExts, ...docExts] },
+				{ name: "图片", extensions: imageExts },
+				{ name: "文档", extensions: docExts },
+			],
 		});
 		if (canceled || filePaths.length === 0) return undefined;
-		return Promise.all(filePaths.map(readImageFile));
+		const images: ImagePart[] = [];
+		const documents: DocumentReference[] = [];
+		for (const path of filePaths) {
+			const kind = docKindOf(path);
+			if (kind === "pdf" || kind === "office") {
+				documents.push({ path, name: basename(path) });
+			} else {
+				// filters 已限定可选类型；filter 被绕过时 readImageFile 会响亮报错，
+				// 不在这里猜类型发出去。
+				images.push(await readImageFile(path));
+			}
+		}
+		return { images, documents };
 	});
 }
 

@@ -27,7 +27,7 @@ import {
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
-import { AttachmentStrip, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
+import { AttachmentStrip, DocumentRefStrip, foldDocumentRefsIntoText, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 import { loadDraft, navigateHistory, recordSent, saveDraft, sentHistory } from "./input-history.ts";
 import type { HistoryNavState } from "./input-history.ts";
@@ -722,12 +722,13 @@ export function ChatView({
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	// IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 不发送。
 	const ime = useImeGuard();
-	// 图片附件（粘贴/拖拽/选择三入口），与 home-view 共用同一份 hook。
-	const img = useImageAttachments(onError);
 	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
 	const visionSupported = useModelSupportsVision(conversation.state.modelId);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
+	// 图片/文档附件（粘贴/拖拽/选择三入口），与 home-view 共用同一份 hook。
+	// 文档进 chip 条（documentRefs），提交时才折回文本，textarea 保持纯人写文本。
+	const img = useImageAttachments(onError);
 	// 输入长度余量（input-limit.ts 纯函数判定）：接近上限才显示，超限禁发。
 	const chars = charCountState(draft.length);
 
@@ -837,7 +838,9 @@ export function ChatView({
 		setShowJumpToBottom(false);
 		// 附件等 daemon 接收成功再清：失败时错误卡已落进消息流，图留在
 		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
-		void onSubmit(text, images.length > 0 ? images : undefined).then(
+		// 文档引用在提交这一刻折回文本末尾（recordSent 只记用户原文，
+		// 历史翻页还原的是人写的部分）。
+		void onSubmit(foldDocumentRefsIntoText(text, img.documentRefs), images.length > 0 ? images : undefined).then(
 			() => {
 				img.clear();
 				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
@@ -1128,8 +1131,10 @@ export function ChatView({
 					onDragOver={img.bind.onDragOver}
 					onDragLeave={img.bind.onDragLeave}
 				>
+					{/* 文档 chip 条在图片缩略图条之前（与 home-view 同序）。 */}
+					<DocumentRefStrip refs={img.documentRefs} onRemove={img.removeDocumentRefAt} />
 					<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
-					<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
+				<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
 					<div className="composer-input">
 						{ac.menu}
 						<textarea
@@ -1152,7 +1157,7 @@ export function ChatView({
 						/>
 					</div>
 					<div className="composer-bar">
-						<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片" onClick={() => void img.pickFromDialog()}>
+						<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片或文档" onClick={() => void img.pickFromDialog()}>
 							<IconPlus size={17} />
 						</button>
 						{/*

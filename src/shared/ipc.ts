@@ -56,12 +56,15 @@ export const INVOKE = {
 	 */
 	completions: "session:completions",
 	/**
-	 * 弹出系统文件选择框（图片多选，png/jpeg/gif/webp 过滤），并读出所选文件
-	 * 内容返回 ImagePart 数组。由 main 本地应答（dialog 与文件读取都要 Electron/
-	 * Node 能力），用户取消返回 undefined。main 读文件的理由：渲染进程是沙箱
-	 * web 环境，拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
+	 * 弹出系统文件选择框（图片 + 文档多选，filters 分「所有支持的文件/图片/文档」三组），
+	 * 返回 PickedInputFiles：图片读出内容编码成 ImagePart，文档只回路径不读内容
+	 * （内容读取是 read_document 工具的职责，模型按需读、有截断与续读；
+	 * 在这里预读会把整份大文档一次性挤进首条消息）。
+	 * 由 main 本地应答（dialog 与文件读取都要 Electron/Node 能力），
+	 * 用户取消返回 undefined。main 读图片的理由：渲染进程是沙箱 web 环境，
+	 * 拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
 	 */
-	pickImageFiles: "session:pick-image-files",
+	pickInputFiles: "session:pick-input-files",
 	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
 	setScene: "session:set-scene",
 	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
@@ -248,7 +251,7 @@ export const PUSH = {
 
 export interface PromptRequest {
 	readonly text: string;
-	/** 本条消息携带的图片附件（pickImageFiles 选出）。无图时缺省。 */
+	/** 本条消息携带的图片附件（pickInputFiles 选出）。无图时缺省。 */
 	readonly images?: readonly ImagePart[];
 	/**
 	 * 流式期间发来的消息如何处理。
@@ -256,6 +259,21 @@ export interface PromptRequest {
 	 * 对应 pi 的 steer/followUp 语义，在 adapter 层映射。
 	 */
 	readonly whileStreaming?: "steer" | "followUp";
+}
+
+/**
+ * 一份被引用的文档附件：只有路径与文件名，不携带内容。
+ * 模型随后经 read_document 按路径自取（区外文件权限门会问，符合预期）。
+ */
+export interface DocumentReference {
+	readonly path: string;
+	readonly name: string;
+}
+
+/** pickInputFiles 的结果：图片已读成 ImagePart，文档只带路径。 */
+export interface PickedInputFiles {
+	readonly images: readonly ImagePart[];
+	readonly documents: readonly DocumentReference[];
 }
 
 export interface SaveArtifactRequest {
@@ -347,7 +365,7 @@ export interface InvokeMap {
 	[INVOKE.abort]: { args: []; result: void };
 	[INVOKE.newTask]: { args: []; result: void };
 	[INVOKE.completions]: { args: []; result: CompletionData };
-	[INVOKE.pickImageFiles]: { args: []; result: readonly ImagePart[] | undefined };
+	[INVOKE.pickInputFiles]: { args: []; result: PickedInputFiles | undefined };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };

@@ -24,6 +24,9 @@ import { dirname, extname, join } from "node:path";
 import { parseOfficeAsync } from "officeparser";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
+// 扩展名集合的唯一来源在 shared（renderer 附件分类、main 选择框 filters 也用同一份）。
+import { LEGACY_DOC_EXTENSIONS, OFFICE_EXTENSIONS, PDF_EXTENSION } from "../shared/doc-formats.ts";
+
 export type DocExtractErrorCode = "scanned" | "legacy" | "encrypted" | "corrupt" | "unsupported" | "not-found";
 
 /** 提取层统一错误：code 供工具层分支，message 是模型可读、可行动的文案。 */
@@ -44,16 +47,14 @@ export type DocKind =
 	| { readonly kind: "legacy"; readonly ext: string } // .doc/.xls/.ppt
 	| { readonly kind: "unsupported"; readonly ext: string };
 
-const OFFICE_EXTS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".odp", ".ods"]);
-const LEGACY_EXTS = new Set([".doc", ".xls", ".ppt"]);
 const SUPPORTED_LIST = "pdf / docx / xlsx / pptx / odt / odp / ods";
 
 export function detectDocKind(path: string): DocKind {
 	// 大小写不敏感：Windows 上 .PDF / .DOCX 满地都是。
 	const ext = extname(path).toLowerCase();
-	if (ext === ".pdf") return { kind: "pdf" };
-	if (OFFICE_EXTS.has(ext)) return { kind: "office" };
-	if (LEGACY_EXTS.has(ext)) return { kind: "legacy", ext };
+	if (ext === PDF_EXTENSION) return { kind: "pdf" };
+	if (OFFICE_EXTENSIONS.has(ext)) return { kind: "office" };
+	if (LEGACY_DOC_EXTENSIONS.has(ext)) return { kind: "legacy", ext };
 	return { kind: "unsupported", ext };
 }
 
