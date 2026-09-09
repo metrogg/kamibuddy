@@ -82,6 +82,12 @@ export const INVOKE = {
 	sessionRename: "session:rename",
 	/** 删除会话文件。当前活动会话由 daemon 拒删（需先新建任务）。 */
 	sessionDelete: "session:delete",
+	/**
+	 * 把当前会话导出为单文件 HTML（pi 的 AgentSession.exportToHtml）。
+	 * path 来自 SessionSummary.path 定位会话；产物落在默认根 exports/ 下，
+	 * 返回导出文件的绝对路径。
+	 */
+	sessionExport: "session:export",
 	/** 拉取当前工作空间与可选列表（默认根 + 已有子目录）。 */
 	workspaceSnapshot: "workspace:snapshot",
 	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
@@ -297,6 +303,7 @@ export interface InvokeMap {
 	[INVOKE.sessionResume]: { args: [path: string]; result: void };
 	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
+	[INVOKE.sessionExport]: { args: [path: string]; result: { outputPath: string } };
 	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
 	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };

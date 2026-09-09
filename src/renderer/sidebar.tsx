@@ -14,6 +14,7 @@ import {
 	IconAutomation,
 	IconChart,
 	IconEdit,
+	IconExport,
 	IconLibrary,
 	IconMore,
 	IconPlus,
@@ -37,6 +38,8 @@ interface SidebarProps {
 	readonly onResumeTask: (path: string) => void;
 	readonly onRenameTask: (path: string, name: string) => void;
 	readonly onDeleteTask: (path: string) => void;
+	/** 导出会话为单文件 HTML。历史会话的导出隐含「先恢复为当前会话」，由 App 侧处理，这里只透传 path。 */
+	readonly onExportTask: (path: string) => void;
 	readonly onOpenSettings: () => void;
 	readonly onOpenDiagnostics: () => void;
 	/** 「专家·技能·连接器」是真实页面（技能页已可用），不走 onTodo。 */
@@ -67,6 +70,7 @@ export function Sidebar({
 	onResumeTask,
 	onRenameTask,
 	onDeleteTask,
+	onExportTask,
 	onOpenSettings,
 	onOpenDiagnostics,
 	onOpenSkills,
@@ -196,6 +200,25 @@ export function Sidebar({
 										<span className="task-item-meta">{meta}</span>
 									</button>
 									<span className="task-item-ops">
+										{/*
+											历史会话的导出会让 daemon 先恢复该会话（当前上下文被切走），
+											这个语义必须在 tooltip 上可见，否则用户不知道点完对话就换了。
+											编辑态/删除确认态下整行被替换，本钮自然不响应（与行点击的互斥一致）。
+										*/}
+										<button
+											type="button"
+											className="task-op-btn"
+											aria-label="导出"
+											title={task.current ? "导出为 HTML" : "恢复此会话并导出 HTML"}
+											onClick={() => {
+												// 顺带收掉其他行开着的操作态：导出后列表会刷新，残留态语义脏。
+												setEditingPath(undefined);
+												setConfirmingPath(undefined);
+												onExportTask(task.path);
+											}}
+										>
+											<IconExport size={13} />
+										</button>
 										<button
 											type="button"
 											className="task-op-btn"

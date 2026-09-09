@@ -32,6 +32,7 @@ import {
 } from "../core/prompt-composer.ts";
 import { loadResources, toDescriptors } from "../core/resources.ts";
 import { importSkill, userSkillsDir } from "../core/skill-install.ts";
+import { buildExportPath } from "../core/session-export.ts";
 import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
 import { buildConversationEntries, validateSessionFilePath } from "../core/session-rebuild.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
@@ -401,6 +402,18 @@ function requestApproval(
 	request: Omit<PermissionRequest, "id">,
 ): Promise<PermissionResponse> {
 	const id = randomUUID();
+	/*
+	 * 审批请求落审计日志：出了事要能还原「当时问过什么、用户批了什么」。
+	 * 不记 details 全文 —— 路径/命令已随工具卡的 session_event 日志落盘，
+	 * 这里再抄一遍只会让审计日志体积翻倍；id 足够把两边对上。
+	 */
+	eventLog.append({
+		kind: "permission_request",
+		id,
+		toolName: request.toolName,
+		risk: request.risk,
+		summary: request.summary,
+	});
 	return new Promise<PermissionResponse>((resolve) => {
 		pendingApprovals.set(id, resolve);
 		post({
@@ -479,6 +492,9 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 								workspaceDir: cwd,
 								configDir: getConfigDir(),
 								protectedDirs: PROTECTED_DIRS,
+								// 写 KamiBuddy 自身目录永远高风险询问（policy 判定链里先于工作区放行）。
+								// dev 是项目根，打包后是安装目录 —— 都以 daemon 进程的 cwd 为准。
+								appDir: process.cwd(),
 							},
 							cwd,
 							// getter 而非快照：用户改了预设，下一次工具调用即生效。
@@ -937,6 +953,55 @@ const handlers: Record<string, Handler> = {
 		renameSync(target, join(trashDir, `${Date.now()}-${basename(target)}`));
 	},
 
+	[INVOKE.sessionExport]: async ([path]) => {
+		const target = path as string;
+
+		// 与 resume / rename / delete 同一道防线：path 来自 renderer，不可信。
+		const pathError = validateSessionFilePath(target, getSessionsDir());
+		if (pathError !== undefined) throw new Error(pathError);
+
+		/*
+		 * 目标是历史会话时「先恢复再导出」：pi 的导出能力只挂在活会话上
+		 * （AgentSession.exportToHtml），独立入口 exportFromFile 没有从包根
+		 * 导出（深引内部路径实测 ERR_PACKAGE_PATH_NOT_EXPORTED），包根导出
+		 * 面下这是唯一正路。直接复用 resumeSession 而不复制它的逻辑 ——
+		 * 流式守卫、open+header 校验、失败原子性（验证全在 dispose 旧宿主
+		 * 之前）都随之生效；resume 失败则导出中止，错误原样上抛。
+		 */
+		const currentFile = await currentSessionFile();
+		if (currentFile === undefined || resolve(currentFile) !== resolve(target)) {
+			await resumeSession(target);
+		}
+
+		// 此处目标必为当前会话：原本就是，或 resume 刚切过去（成功必设
+		// hostPromise）。这个分支现实中不可达，但 hostPromise 的类型需要
+		// 窄化；真走到就说明 resume 的语义变了 —— 响亮失败，不静默兜底。
+		if (hostPromise === undefined) {
+			throw new Error("还没有会话，没有可导出的内容");
+		}
+		const host = await hostPromise;
+
+		/*
+		 * 输出固定落默认根的 exports/（getWorkspaceDir()，不是当前工作区）：
+		 * playground 会话没有工作区，落在工作区下这部分会话就没有导出落点；
+		 * 用户也总能在一个固定地方找到自己的导出物，不用记「当时用的哪个
+		 * 工作区」（core/session-export.ts 文件头是同一决策）。
+		 */
+		const exportsDir = join(getWorkspaceDir(), "exports");
+		mkdirSync(exportsDir, { recursive: true });
+
+		// 文件名标题与会话列表同口径（命名 ?? 首条消息截断）。列表里查不到
+		// 时回退会话 id —— 刚恢复的会话列表理应含它，回退只为不留裸时间戳。
+		const resolvedTarget = resolve(target);
+		const summary = (await listSessions()).find((s) => resolve(s.path) === resolvedTarget);
+		const title = summary?.title ?? conversation.state.sessionId;
+
+		const outputPath = buildExportPath(exportsDir, title, new Date());
+		// 空会话的「该会话还没有内容可导出」由 exportHtml 抛出，自然上抛给 UI。
+		await host.exportHtml(outputPath);
+		return { outputPath };
+	},
+
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");
 		if (hostPromise === undefined) {
@@ -1130,9 +1195,18 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.permissionResponse]: async ([response]) => {
 		const answer = response as PermissionResponse;
 		const resolve = pendingApprovals.get(answer.id);
-		// 找不到通常是重复应答（用户连点两下）。静默忽略即可，不是错误。
+		// 找不到通常是重复应答（用户连点两下）。静默忽略即可，不是错误 ——
+		// 也不落审计日志：那不是一次真实的选择，记上只会污染事后还原。
 		if (resolve === undefined) return;
 		pendingApprovals.delete(answer.id);
+		// 以用户实际作出选择的位置为准落日志（而非 resolve 包装）：
+		// 审计要的是「用户批了什么」，重复应答与悬空 id 都不算选择。
+		eventLog.append({
+			kind: "permission_response",
+			id: answer.id,
+			decision: answer.decision,
+			remember: answer.remember === true,
+		});
 		resolve(answer);
 	},
 

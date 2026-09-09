@@ -7,7 +7,7 @@
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadResources, toDescriptors } from "./resources.ts";
 
@@ -109,5 +109,20 @@ describe("报错路径", () => {
 
 		writeScene("work");
 		expect(() => loadResources(dir)).toThrow(/没有任何交互模式/);
+	});
+});
+
+describe("真实 resources/ 的回归约束", () => {
+	it("craft 与 ask 的 tools 白名单必须含 present_files", () => {
+		// 防未来重构时再次漏挂（2026-09-09 事故：注册进扩展但白名单没加，
+		// 模型在真实会话里根本看不到 present_files，交付从来没发生过）。
+		// 走 getResourcesDir() 读真实目录，不是 mkdtemp 的样例。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { modes } = loadResources(realDir);
+		for (const id of ["craft", "ask"]) {
+			const mode = modes.find((m) => m.id === id);
+			expect(mode, `模式 ${id} 应存在`).toBeDefined();
+			expect(mode?.tools, `模式 ${id} 的 tools 应含 present_files`).toContain("present_files");
+		}
 	});
 });

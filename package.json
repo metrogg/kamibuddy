@@ -14,6 +14,7 @@
     "start": "node scripts/run-electron.mjs preview",
     "smoke:sdk": "tsx scripts/smoke-pi-sdk.ts",
     "smoke:session": "tsx scripts/smoke-session.ts",
+    "smoke:permission": "tsx scripts/smoke-permission-gate.ts",
     "check:deps": "tsx scripts/check-dependency-rules.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:deps",

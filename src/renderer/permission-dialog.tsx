@@ -75,10 +75,18 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 					</>
 				)}
 
+				{/*
+			 * 高风险不提供「本次会话记住」：shell 与写应用目录这类操作每次都问 ——
+			 * 一次「永远允许」shell，等于把上面所有路径保护一次性烧穿
+			 * （没有危险命令分类器时，一条命令就能 `type ~\.ssh\id_rsa`）。
+			 * medium/low 保持可记住，否则连续写同目录文件会逐个弹窗，逼人放弃使用。
+			 */}
+			{request.risk !== "high" && (
 				<label className="check permission-remember">
 					<input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
 					本次会话内不再询问同类操作
 				</label>
+			)}
 
 				<div className="permission-actions">
 					<button ref={denyRef} type="button" className="mini-btn danger" onClick={() => onDecide("deny", false)}>

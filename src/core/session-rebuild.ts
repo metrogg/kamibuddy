@@ -115,12 +115,14 @@ function detailOf(result: PiToolResultMessage): string | undefined {
 /**
  * 把 buildContextEntries() 的输出翻译成聊天视图条目。
  *
- * resolveToolLabel 把工具名翻成面向用户的标签（扩展注册的中文名），
+ * resolveToolLabel 把工具名与 outcome 翻成面向用户的标签（会话宿主的
+ * restoredToolLabel：ok 给完成态词汇，非 ok 给未完成语义 —— 恢复视图里
+ * 孤儿 toolCall 是 aborted，绝不能显示「已修改」这类完成态词汇），
  * 查不到时回落工具名原样 —— 本函数不内置映射表（标签的所有权在工具自己）。
  */
 export function buildConversationEntries(
 	entries: readonly SessionEntry[],
-	resolveToolLabel?: (toolName: string) => string,
+	resolveToolLabel?: (toolName: string, outcome: ToolOutcome) => string,
 ): ConversationEntry[] {
 	/*
 	 * toolResult 在 toolCall 之后的任意条目里（工具执行完才落盘），
@@ -179,7 +181,7 @@ export function buildConversationEntries(
 					id: block.id,
 					role: "tool",
 					toolName: block.name,
-					label: resolveToolLabel?.(block.name) ?? block.name,
+					label: resolveToolLabel?.(block.name, outcome) ?? block.name,
 					summary: summarizeCall(block),
 					outcome,
 					detail: result === undefined ? undefined : detailOf(result),

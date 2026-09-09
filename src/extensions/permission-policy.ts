@@ -17,9 +17,12 @@
  *
  * 判定链的顺序（借鉴 WorkBuddy 的 9 阶求值链，简化但同样**有序**）：
  *   1. 受保护凭据路径（读或写都拒）—— 任何模式都不能越过
- *   2. 沙箱模式的范围约束
- *   3. 工具种类（只读 / 写 / shell / 未知）
- *   4. 审批策略（ask → 弹窗；never → 确定性拒绝）
+ *   2. 只读工具：无本地路径的一律放行；有路径的在工作区内放行，
+ *      区外低风险询问（danger-full-access 不受限）
+ *   3. 沙箱模式的范围约束（read-only 拒一切写与命令）
+ *   4. 工具种类（shell 任何档都问；写工具按 应用目录内高风险询问 →
+ *      工作区内放行 → 区外询问 的顺序判；未知工具询问）
+ *   5. 审批策略（ask → 弹窗；never → 确定性拒绝）
  * 顺序本身就是语义：靠后的阶段无法放行靠前阶段已经拒掉的东西。
  *
  * 【2026-09-08 修一个回归】此前「读配置目录放行」的理由写的是
@@ -32,6 +35,15 @@
  * 渐进式披露靠模型用 read 工具加载 SKILL.md 全文（系统提示词里只放索引），
  * 全禁读让已安装技能变成「列表里有但永不可用」的死技能。
  * 所以技能子目录对**只读工具**例外放行；写仍拒（见阶段 1 注释）。
+ *
+ * 【2026-09-09 事故条目】默认工作区（空目录）+ 默认权限档下，模型经提示词里的
+ * 技能路径发现项目目录，自由读取项目源码与合规敏感素材后，对工作区外文件发起 edit。
+ * 教训一：**读侧漫游是写越界的必经入口** —— 所以 read/find/grep/ls 出工作区
+ * 改为低风险询问（阶段 2），不再一律放行。codex 的 workspace-write 同样不限读，
+ * 但它的沙箱**默认禁网**；我们有 web_fetch 外发通道（读任意文件 + 抓任意 URL
+ * = 数据外带），前提不同结论不同 —— 与上面 2026-09-08 凭据禁读是同一条推理链。
+ * 教训二：事故里模型要改的正是 KamiBuddy 自身目录 —— 所以写应用目录升为
+ * 高风险询问，且先于「工作区内放行」判定（appDir 也可能就是工作目录）。
  */
 
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -77,6 +89,13 @@ export interface PolicyPaths {
 	 * 之所以不在本文件里读 os.homedir()：这一层要保持纯函数、可单测。
 	 */
 	readonly protectedDirs?: readonly string[];
+	/**
+	 * 应用目录（dev 为项目根，打包后为安装目录）。
+	 *
+	 * 写自身目录永远高风险询问（哪怕它恰好就是工作目录）；读不特殊化，
+	 * 走通用区外读询问。可选：不传则这条规则不生效（向后兼容）；daemon 必传。
+	 */
+	readonly appDir?: string;
 }
 
 /**
@@ -103,15 +122,20 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
 }
 
 /**
- * 只读工具：不改变任何状态，放行。
+ * 只读工具：不改变任何状态。
  *
- * web_search / web_fetch 虽然访问外网，但不写本地、不改任何状态，
- * 且数据不是密钥 —— 放行。不可信内容的风险由工具层（web-tools.ts）的
- * 标记 + 本门对「后续写操作」的拦截共同兜住。
- *
+ * 其中 web_search / web_fetch / present_files 没有本地路径概念，维持一律放行：
+ * 不写本地、不改任何状态，且数据不是密钥。不可信内容的风险由工具层
+ * （web-tools.ts）的标记 + 本门对「后续写操作」的拦截共同兜住。
  * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
+ *
+ * read / find / grep / ls 有本地路径概念，**出工作区要询问**（LOCAL_READ，
+ * 见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
  */
 const READ_ONLY = new Set(["read", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]);
+
+/** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
+const LOCAL_READ = new Set(["read", "find", "grep", "ls"]);
 
 /** 会改文件的内置工具。 */
 const MUTATING = new Set(["write", "edit"]);
@@ -221,8 +245,28 @@ function decideUnderMode(
 		}
 	}
 
-	// 阶段 2：只读工具（不改变任何状态）→ 放行。
-	if (READ_ONLY.has(toolName)) return { kind: "allow" };
+	/*
+	 * 阶段 2：只读工具（不改变任何状态）。
+	 *
+	 * 无本地路径概念的（web_search / web_fetch / present_files）一律放行。
+	 * 有路径概念的（read / find / grep / ls）按归属判：
+	 *   工作区内（或无路径参数，如 ls 列 cwd）→ 放行；
+	 *   工作区外 → 低风险询问；danger-full-access 不受限，与写侧语义一致。
+	 * read-only 档同样询问 —— 读的边界就是那个模式的全部语义。
+	 * 为什么区外读也要问：见文件头【2026-09-09 事故条目】。
+	 */
+	if (READ_ONLY.has(toolName)) {
+		if (!LOCAL_READ.has(toolName)) return { kind: "allow" };
+		if (target === undefined) return { kind: "allow" };
+		if (isInside(paths.workspaceDir, target)) return { kind: "allow" };
+		if (mode === "danger-full-access") return { kind: "allow" };
+		return {
+			kind: "ask",
+			risk: "low",
+			summary: "读取工作目录之外的文件或目录",
+			details: target,
+		};
+	}
 
 	// 阶段 3：只读模式下，一切改动与命令执行都拒 —— 这是模式的全部含义。
 	if (mode === "read-only") {
@@ -260,6 +304,21 @@ function decideUnderMode(
 
 		// 完全访问模式：不再做范围约束（凭据目录已在阶段 1 拦掉）。
 		if (mode === "danger-full-access") return { kind: "allow" };
+
+		/*
+		 * 应用目录：写 KamiBuddy 自身永远高风险询问，**先于工作区放行判定** ——
+		 * appDir 也可能就是工作目录（开发时常态），而改自己的源码/合规素材
+		 * 不该享受「目录内免打扰」（2026-09-09 事故里模型要改的正是这里）。
+		 * read-only 档的拒绝在阶段 3 已生效，走不到这里，不必重复。
+		 */
+		if (paths.appDir !== undefined && isInside(paths.appDir, target)) {
+			return {
+				kind: "ask",
+				risk: "high",
+				summary: "修改 KamiBuddy 自身目录下的文件",
+				details: target,
+			};
+		}
 
 		if (isInside(paths.workspaceDir, target)) return { kind: "allow" };
 

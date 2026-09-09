@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-08（T4 会话管理落地 + 首页权限入口前置；spec：.trae/specs/home-permission-and-session-management/）
+> 最后更新：2026-09-09（权限边界加固：区外读询问 + 应用目录写保护 + 权限门端到端机械证据；spec：.trae/specs/harden-permission-boundary/）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -110,9 +110,10 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 ```
 typecheck        通过
-check:deps       96 个文件，依赖方向合规
-test             423 passed（32 个测试文件）
+check:deps       99 个文件，依赖方向合规
+test             444 passed（32 个测试文件）
 smoke:session    13/13  ← SessionHost.create() 全流程，含扩展注入实测
+smoke:permission 10/10  ← 权限门真实运行时拦截链（beforeToolCall 触发，零模型额度）
 build            三目标（main/preload/renderer）产物正常
 真机运行          真实对话已跑通（用户实测：填 Key → 选模型 → 正常回复）
 smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
@@ -133,13 +134,17 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
    绿字「连接成功」= 通；红字会给出具体原因（Key 无效 / 额度 / 超时）。
 2. **联网问答** —— 新建任务 → 问「今天嘉立创的股价」→ 应出现「联网搜索 → 已搜索」
    卡片，回答带来源链接。**旧会话不会生效**：工具集在建会话时一次性注入。
-3. **权限弹窗** —— 让它「在桌面建一个 txt」应弹审批框；写工作目录内应直接放行。
+3. **权限弹窗（链路已机械证明）** —— 让它「在桌面建一个 txt」应弹审批框；写工作目录内应直接放行；
+   让它读桌面上的文件应弹「读取工作目录之外的文件或目录」低风险审批（新行为）。
 4. **中断** —— 长任务中途点停止键。
 5. **会话管理（T4 新）** —— 侧栏「任务」列出历史会话；点击一条应恢复完整对话
    （继续追问时模型记得之前内容）；行内重命名重启后仍在；删除后进 `~/.kamibuddy/trash/`；
    关闭应用重开能找回并继续。
 6. **首页权限 chip（新）** —— 首页「默认权限 ▾」展开弹层，切「只读」后让它写文件
    应被拒并提示切换预设；切回「默认权限」恢复。设置页权限区显示应一致。
+7. **会话导出（新）** —— 侧栏当前会话行点「导出」：`~/KamiBuddy/exports/` 生成 HTML、
+   toast 给路径、浏览器自动打开且内容完整（思考 + 工具结果）；
+   历史行点「导出」：该会话被恢复并完成导出。
 
 发现问题直接告诉我现象即可。
 
@@ -230,6 +235,7 @@ npm start              # 构建产物预览
 npm run check          # typecheck + 依赖方向
 npm test               # 单元测试
 npm run smoke:session  # 会话构造冒烟（不联网、不耗额度）
+npm run smoke:permission # 权限门拦截链冒烟（不联网、不耗额度）
 npm run smoke:sdk      # pi SDK 冒烟
 ```
 
@@ -288,6 +294,51 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
 档位以旋钮反查（`presetIdFor`）为权威，组合不匹配显示「自定义」。
 分工同 ModelMenu：首页是切换器，设置页保留完整版（双旋钮 + 强制力说明），同一数据源无漂移。
 
+## 会话导出 HTML（2026-09-09）
+
+溯源证据链的最后一环：会话 JSONL / 事件日志都是机器格式，人读不了。
+侧栏任务行新增「导出」——当前会话经 pi 的 `AgentSession.exportToHtml()` 导出单文件 HTML
+（自含主题与工具渲染，含思考与工具结果全文），历史会话**先恢复再导出**。
+
+- 输出固定落 `~/KamiBuddy/exports/<标题>-<时间戳>.html`（默认根而非当前工作区：
+  playground 无工作区，用户也总能在一个地方找到导出物），成功后 toast + 系统浏览器自动打开。
+- **pi 包根导出面（已实测，勿绕）**：`exportFromFile` / `exportSessionToHtml` 未从包根导出
+  （exports 字段只暴露 4 个子路径，深路径 import 实测 `ERR_PACKAGE_PATH_NOT_EXPORTED`），
+  只有 `AgentSession.exportToHtml()` 实例方法可用。历史会话「先恢复再导出」是唯一正路，
+  复用 resume 全部守卫与失败原子性；按钮 title 写明「恢复此会话并导出 HTML」
+  （上下文切换语义可见）。
+- 空会话（未落盘）导出被拒并提示「该会话还没有内容可导出」
+  （pi 的 "Nothing to export yet" 翻译为用户语言，文案耦合已注释）。
+- 事件日志的流式 delta 维持只记长度（防撑爆）——全文在导出的 HTML 里，阅读缺口由此消解。
+
+## 权限边界加固（2026-09-09）
+
+**事故**（真实会话，事件日志为证）：默认工作区（空目录）+ 默认权限档下，模型经提示词里的
+技能路径发现项目目录，自由读取项目源码与 `docs/workbuddy分析/`（合规敏感素材）后，
+对 `src/renderer/` 两个文件发起 edit —— 用户在参数生成阶段中断，**文件实际未被改**
+（git status 干净），但恢复视图把取消的卡片显示成「已修改」，造成「它改了我项目」的感知。
+
+**根因与修复**（spec：`.trae/specs/harden-permission-boundary/`）：
+
+1. **读侧无边界是真正入口**：`read/ls/find/grep` 出工作区原一律放行 → 现改为**低风险询问**
+   （可按目录记住；`danger-full-access` 不受限；只读档同样询问）。理由写进
+   permission-policy.ts 头注释 2026-09-09 条目：codex 不限读的前提是其沙箱默认禁网，
+   我们有 web_fetch 外发通道，「读任意文件 + 抓任意 URL」是数据外带路径。
+2. **写拦截链从未被证明过**：两天事件日志 `permission:request` 为零。现有机械证据 ——
+   `npm run smoke:permission`（10/10）：真实 pi 运行时经 `session.agent.beforeToolCall`
+   触发拦截链，断言放行/询问/拒绝/高风险/不记住/完全访问各分支。它不证明真实模型会
+   发起调用（那由真机验证覆盖），但证明「链真的通」。
+3. **写应用目录升高风险**：write/edit 目标在 appDir（dev=项目根，打包=安装目录）内 →
+   高风险询问；高风险操作（shell、写应用目录）**不支持「本次会话记住」**
+   （UI 不渲染 + gate 忽略 remember，双保险）。
+4. **审批可审计**：`permission_request` / `permission_response` 落事件日志
+   （工具、风险、用户选择），事后可追溯「什么时候批准过什么」。
+5. **误导修正**：恢复视图里未完成（aborted/error/blocked）的工具卡不再用
+   「已修改/已生成」完成态词汇（edit aborted →「修改（未完成）」）。
+6. **chat 页权限入口**：composer-bar 接入与首页相同的 PermissionMenu，对话中可随时切档。
+
+判定链最新版见 ARCHITECTURE.md §4.57（表格已同步）。
+
 ## 已知坑
 
 ### pi 没有权限系统，也没有任何路径约束
@@ -297,8 +348,9 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
 pi README 自述 "does not include a built-in permission system"，它的思路是靠容器隔离整个进程。
 
 我们的对策是 `src/extensions/` 那一层（ARCHITECTURE.md §4.57）。
-**改动权限相关文件时务必跑** **`npm test`** —— 那 95 个测试是这条安全边界的唯一护栏
-（`permission-policy` 47 + `permission-gate` 21 + `project-trust` 9 + `shared/permissions` 18）。
+**改动权限相关文件时务必跑** **`npm test`** —— 那 106 个测试是这条安全边界的唯一护栏
+（`permission-policy` 57 + `permission-gate` 22 + `project-trust` 9 + `shared/permissions` 18），
+另有 `npm run smoke:permission` 的 10 条真实运行时断言。
 
 ### IDE 注入 `ELECTRON_RUN_AS_NODE=1`
 
@@ -600,8 +652,9 @@ misunderstand as a security boundary"* —— 做不到就说清楚，不假装�
 上面所有路径保护（`type ~\.ssh\id_rsa`）。既然文档里批评了 WorkBuddy broker shim
 的 fail-open，自己就不能在同一处松手。
 
-测试：**权限相关共 95 个用例** —— `shared/permissions` 18 +
-`permission-policy` 47（含 skills/ 只读例外 6 条）+ `permission-gate` 21 + `project-trust` 9。
+测试：**权限相关共 106 个用例** —— `shared/permissions` 18 +
+`permission-policy` 57（含 skills/ 只读例外、区外读询问、appDir 写高风险）+
+`permission-gate` 22 + `project-trust` 9。另有 `smoke:permission` 10 条真实运行时断言。
 其中最该留意的一条：**切到更严的档位后，先前「记住」的批准立即失效**
 （remembered 检查排在 decide 之后；若为了少弹窗把它提前，「切成只读」就成了空话）。
 

@@ -223,10 +223,18 @@ export const IconFolder = (p: IconProps): React.JSX.Element => (
 );
 
 export const IconOpenExternal = (p: IconProps): React.JSX.Element => (
-	<Svg {...p}>
-		{/* 方框 + 右上箭头：系统外部打开（浏览器/关联程序）。 */}
-		<path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
-		<path d="M14 4h6v6" />
-		<path d="M20 4 11 13" />
-	</Svg>
+<Svg {...p}>
+	{/* 方框 + 右上箭头：系统外部打开（浏览器/关联程序）。 */}
+	<path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
+	<path d="M14 4h6v6" />
+	<path d="M20 4 11 13" />
+</Svg>
+);
+
+export const IconExport = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 托盘 + 向上出去的箭头：「导出为文件」的通用隐喻（与 IconOpenExternal 的「在外部程序里打开」区分）。 */}
+	<path d="M12 15V3M7 8l5-5 5 5" />
+	<path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+</Svg>
 );

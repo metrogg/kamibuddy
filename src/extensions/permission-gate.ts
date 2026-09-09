@@ -93,11 +93,16 @@ export function createPermissionGate(options: PermissionGateOptions) {
 			});
 
 			if (response.decision === "allow") {
-				if (response.remember === true) remembered.add(key);
-				return undefined;
-			}
+			/*
+			 * 双保险：UI 已不对高风险提供「本次会话记住」选项（permission-dialog.tsx），
+			 * 但响应来自 IPC，不信任对端 —— 被篡改/写错的渲染进程发一个
+			 * remember:true 不该就把 shell 或写应用目录变成会话内免检。
+			 */
+			if (response.remember === true && decision.risk !== "high") remembered.add(key);
+			return undefined;
+		}
 
-			return { block: true, reason: "用户拒绝了这次操作" };
+		return { block: true, reason: "用户拒绝了这次操作" };
 		});
 	};
 }

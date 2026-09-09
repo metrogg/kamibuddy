@@ -173,9 +173,9 @@ button {
 	text-align: left;
 }
 
-/* hover 时给浮现的操作钮让位，避免压在标题文字上。 */
+/* hover 时给浮现的操作钮让位，避免压在标题文字上（三钮 = 3×20 + 2×2 gap + 右侧 6px）。 */
 .task-item:hover .task-item-body {
-	padding-right: 52px;
+	padding-right: 72px;
 }
 
 .task-item-title {

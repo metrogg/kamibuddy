@@ -28,6 +28,7 @@ import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { AttachmentStrip, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
+import { PermissionMenu } from "./permission-menu.tsx";
 import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
@@ -49,6 +50,8 @@ interface ChatViewProps {
 	readonly onInteractionChange: (interactionId: string) => void;
 	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
 	readonly onPreviewArtifact: (path: string) => void;
+	/** 打开设置页（权限弹层的「打开设置…」入口，与 home-view 同语义）。 */
+	readonly onOpenSettings: () => void;
 	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
 	readonly onError: (message: string) => void;
 	readonly onTodo: (feature: string) => void;
@@ -587,6 +590,7 @@ export function ChatView({
 	onAbort,
 	onInteractionChange,
 	onPreviewArtifact,
+	onOpenSettings,
 	onError,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
@@ -835,19 +839,22 @@ export function ChatView({
 				{!streaming && artifacts.length > 0 && (
 					<section className="artifacts">
 						<header className="artifacts-header">产物（{artifacts.length}）</header>
-						{artifacts.map((a) => (
-							<button
-								key={a.path}
-								type="button"
-								className="artifact-card"
-								title={`${a.path}（点击预览）`}
-								onClick={() => onPreviewArtifact(a.path)}
-							>
-								<IconDoc size={16} />
-								<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-								{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
-							</button>
-						))}
+						{artifacts.map((a) => {
+							const isUrl = /^https?:\/\//i.test(a.path);
+							return (
+								<button
+									key={a.path}
+									type="button"
+									className="artifact-card"
+									title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+									onClick={() => onPreviewArtifact(a.path)}
+								>
+									<IconDoc size={16} />
+									<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+									{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+								</button>
+							);
+						})}
 					</section>
 				)}
 				{lastError !== undefined && (
@@ -912,6 +919,12 @@ export function ChatView({
 						<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片" onClick={() => void img.pickFromDialog()}>
 							<IconPlus size={17} />
 						</button>
+						{/*
+							权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
+							时不必退回首页换档。放左侧而非右侧语音钮旁 —— 弹层左对齐
+							向上展开（300px），贴右放会溢出窗口右缘被裁掉。
+						*/}
+						<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
 						<span className="bar-spacer" />
 						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 							<IconMic size={16} />

@@ -158,11 +158,13 @@ function OverviewMenu({
 	changes,
 	cwd,
 	onOpen,
+	onOpenExternal,
 }: {
 	readonly artifacts: readonly ArtifactRef[];
 	readonly changes: readonly ChangeRef[];
 	readonly cwd: string | undefined;
 	readonly onOpen: (sel: PreviewSelection) => void;
+	readonly onOpenExternal: (path: string) => void;
 }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [files, setFiles] = useState<readonly string[] | undefined>(undefined);
@@ -200,19 +202,29 @@ function OverviewMenu({
 					<div className="preview-menu-group">
 						<header className="preview-menu-title">产物（{artifacts.length}）</header>
 						{artifacts.length === 0 && <div className="preview-menu-empty">本会话还没有产物</div>}
-						{artifacts.map((a) => (
-							<button
-								key={a.path}
-								type="button"
-								className="preview-item"
-								title={a.path}
-								onClick={() => pick({ kind: "file", path: a.path })}
-							>
-								<IconDoc size={14} />
-								<span className="preview-item-name">{baseName(a.path)}</span>
-								{a.size > 0 && <span className="preview-item-meta">{formatSize(a.size)}</span>}
-							</button>
-						))}
+						{artifacts.map((a) => {
+							const isUrl = /^https?:\/\//i.test(a.path);
+							return (
+								<button
+									key={a.path}
+									type="button"
+									className="preview-item"
+									title={isUrl ? `${a.path}（外部打开）` : a.path}
+									onClick={() => {
+										if (isUrl) {
+											setOpen(false);
+											onOpenExternal(a.path);
+										} else {
+											pick({ kind: "file", path: a.path });
+										}
+									}}
+								>
+									<IconDoc size={14} />
+									<span className="preview-item-name">{baseName(a.path)}</span>
+									{a.size > 0 && <span className="preview-item-meta">{formatSize(a.size)}</span>}
+								</button>
+							);
+						})}
 					</div>
 					<div className="preview-menu-group">
 						<header className="preview-menu-title">变更（{changes.length}）</header>
@@ -283,7 +295,7 @@ export function ArtifactPanel({
 	return (
 		<aside className="preview-panel">
 			<header className="preview-head">
-				<OverviewMenu artifacts={artifacts} changes={changes} cwd={cwd} onOpen={onOpen} />
+				<OverviewMenu artifacts={artifacts} changes={changes} cwd={cwd} onOpen={onOpen} onOpenExternal={onOpenExternal} />
 				<div className="preview-tabs-strip">
 					{tabs.map((sel) => (
 						<span

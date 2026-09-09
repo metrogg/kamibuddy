@@ -380,14 +380,14 @@ describe("产物交付", () => {
 		const view = apply([
 			{
 				type: "artifacts_presented",
-				files: [{ path: "E:/w/a.html", size: 100, html: true }],
+				files: [{ path: "E:/w/a.html", size: 100, html: true, kind: "local" }],
 				focusFile: "E:/w/a.html",
 			},
 			{
 				type: "artifacts_presented",
 				files: [
-					{ path: "E:/w/b.md", size: 50, html: false },
-					{ path: "E:/w/a.html", size: 120, html: true },
+					{ path: "E:/w/b.md", size: 50, html: false, kind: "local" },
+					{ path: "E:/w/a.html", size: 120, html: true, kind: "local" },
 				],
 				focusFile: "E:/w/b.md",
 			},

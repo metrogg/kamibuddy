@@ -23,6 +23,7 @@ import {
 	buildConversationEntries,
 	validateSessionFilePath,
 } from "./session-rebuild.ts";
+import { restoredToolLabel } from "./session-host.ts";
 
 const TS = "2026-09-01T08:00:00.000Z";
 const AT = Date.parse(TS);
@@ -273,12 +274,66 @@ describe("buildConversationEntries · 工具卡配对", () => {
 		expect(asTool(out[3]!).summary).toBe("web_search");
 	});
 
-	it("label：有 resolveToolLabel 用其返回值，没有回落工具名", () => {
+	it("label：resolveToolLabel 收到工具名与 outcome，没有则回落工具名", () => {
 		const entries = [assistantEntry("a1", [call("c1", "web_search")])];
-		const withResolver = buildConversationEntries(entries, () => "已搜索");
+		const seen: Array<[string, string]> = [];
+		const withResolver = buildConversationEntries(entries, (name, outcome) => {
+			seen.push([name, outcome]);
+			return "已搜索";
+		});
 		expect(asTool(withResolver[1]!).label).toBe("已搜索");
+		// 孤儿 toolCall 的 outcome 是 aborted —— 解析器必须拿到它才能避开完成态词汇。
+		expect(seen).toEqual([["web_search", "aborted"]]);
 		const without = buildConversationEntries(entries);
 		expect(asTool(without[1]!).label).toBe("web_search");
+	});
+
+	/*
+	 * 2026-09-09 事故的回归护栏：两个区外 edit 在参数生成阶段被中断（从未执行），
+	 * 恢复视图却显示「已修改」，用户以为文件已被改。恢复路径的 label 必须按
+	 * outcome 分派 —— 非 ok 的卡一律不许出现完成态词汇。
+	 */
+	it("restoredToolLabel：孤儿（aborted）edit 卡 label 含「未完成」、不含「已修改」", () => {
+		const out = buildConversationEntries(
+			[assistantEntry("a1", [call("c1", "edit", { path: "D:\\work\\home-view.tsx" })])],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.outcome).toBe("aborted");
+		expect(card.label).toContain("未完成");
+		expect(card.label).not.toContain("已修改");
+	});
+
+	it("restoredToolLabel：孤儿（aborted）write 卡 label 为「生成（未完成）」", () => {
+		const out = buildConversationEntries(
+			[assistantEntry("a1", [call("c1", "write", { path: "report.html" })])],
+			restoredToolLabel,
+		);
+		expect(asTool(out[1]!).label).toBe("生成（未完成）");
+	});
+
+	it("restoredToolLabel：ok 的 edit / write 卡仍是完成态词汇（已修改 / 已生成）", () => {
+		const out = buildConversationEntries(
+			[
+				assistantEntry("a1", [call("c1", "edit", { path: "a.md" }), call("c2", "write", { path: "b.md" })]),
+				toolResultEntry("r1", "c1", "ok"),
+				toolResultEntry("r2", "c2", "ok"),
+			],
+			restoredToolLabel,
+		);
+		expect(asTool(out[1]!).label).toBe("已修改");
+		expect(asTool(out[2]!).label).toBe("已生成");
+	});
+
+	it("restoredToolLabel：error 的 read 卡 label 走 doneLabel 的非 ok 形态（失败），不是「已读取」", () => {
+		const out = buildConversationEntries(
+			[assistantEntry("a1", [call("c1", "read", { path: "a.md" })]), toolResultEntry("r1", "c1", "permission denied", true)],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.outcome).toBe("error");
+		expect(card.label).toBe("失败");
+		expect(card.label).not.toContain("已读取");
 	});
 
 	it("一条 assistant 先产出消息本体，再按 toolCall 出现顺序产出其工具卡", () => {

@@ -21,6 +21,7 @@ import { Type } from "typebox";
 import {
 	classifyPresentedFiles,
 	type PresentedFile,
+	type SizeProbe,
 } from "../shared/artifacts.ts";
 
 export interface PresentFilesOptions {
@@ -55,22 +56,26 @@ export function createPresentFiles(options: PresentFilesOptions) {
 			execute: async (_toolCallId, params) => {
 				const workspaceDir = options.getWorkspaceDir();
 
-				// 文件大小只在工作区内 stat：区外路径的存在性/大小也是信息，不探测。
-				const sizeOf = (absPath: string): number | undefined => {
-					if (workspaceDir === undefined) return undefined;
+				/*
+				 * 文件大小只在工作区内 stat：区外路径的存在性/大小也是信息，不探测。
+				 * 三态语义：
+				 *   "outside"  不探测（playground 无工作区，或路径在工作区外）——不算缺失；
+				 *   "missing"  工作区内但 stat 失败（不存在/不可读）——进 warnings 让模型知道；
+				 *   number     字节数。
+				 */
+				const sizeOf = (absPath: string): SizeProbe => {
+					if (workspaceDir === undefined) return "outside";
 					const ws = resolve(workspaceDir);
 					const target = resolve(absPath);
-					if (target !== ws && !target.startsWith(ws + sep)) return undefined;
+					if (target !== ws && !target.startsWith(ws + sep)) return "outside";
 					try {
 						return statSync(target).size;
 					} catch {
-						// 模型报了个不存在的路径：大小按 0 落，警告进结果（不整单失败，
-						// 其余有效文件仍交付 —— 模型能从警告里知道哪个路径写错了）。
-						return undefined;
+						return "missing";
 					}
 				};
 
-				const { files, focusFile, invalid } = classifyPresentedFiles(params.files, sizeOf);
+				const { files, focusFile, invalid, missing } = classifyPresentedFiles(params.files, sizeOf);
 				if (invalid.length > 0) {
 					// WorkBuddy 同口径：非绝对路径整单报错，不交付任何一项。
 					throw new Error(
@@ -80,9 +85,6 @@ export function createPresentFiles(options: PresentFilesOptions) {
 
 				options.onPresent({ files, focusFile });
 
-				const missing = files
-					.filter((f) => !/^https?:\/\//i.test(f.path) && f.size === 0)
-					.map((f) => f.path);
 				return {
 					content: [
 						{
@@ -92,7 +94,7 @@ export function createPresentFiles(options: PresentFilesOptions) {
 								files: files.map((f) => f.path),
 								previewed: focusFile === undefined ? [] : [focusFile],
 								explanation: params.explanation,
-								message: "已交付，首个文件已在预览面板打开",
+								message: "已交付",
 								...(missing.length > 0
 									? { warnings: [`以下路径不存在或不可读，请核对：${missing.join("、")}`] }
 									: {}),

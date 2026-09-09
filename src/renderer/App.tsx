@@ -378,6 +378,38 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
+	 * 导出会话为单文件 HTML：成功 toast 出文件路径并用系统关联程序打开
+	 * （openArtifact 失败只 toast，文件已生成，不算导出失败）。
+	 *
+	 * 分两条路：
+	 * - 点的是当前会话行：daemon 直接导出，界面只 toast + 打开。
+	 *   不做 resync —— 快照会被同内容整体替换一遍，纯属多余切换。
+	 * - 点的是历史会话行：daemon 会先恢复该会话再导出（当前上下文被切走），
+	 *   所以必须像 resumeTask 一样重拉快照、刷新列表（current 易位）并落到对话页。
+	 */
+	const exportTask = useCallback(
+		(path: string) => {
+			const isCurrent = taskList.some((t) => t.path === path && t.current);
+			window.kami
+				.exportSession(path)
+				.then(({ outputPath }) => {
+					showToast(`已导出：${outputPath}`);
+					openArtifact(outputPath);
+					if (!isCurrent) {
+						resyncSnapshot();
+						refreshTasks();
+						setView("chat");
+					}
+				})
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[taskList, resyncSnapshot, refreshTasks, openArtifact],
+	);
+
+	/**
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
 	 * —— 否则用户配完模型回来发现对话没了。
 	 */
@@ -407,6 +439,7 @@ export function App(): React.JSX.Element {
 				onResumeTask={resumeTask}
 				onRenameTask={renameTask}
 				onDeleteTask={deleteTask}
+				onExportTask={exportTask}
 				onOpenSettings={openSettings}
 				onOpenDiagnostics={openDiagnostics}
 				onOpenSkills={() => setView("skills")}
@@ -437,7 +470,13 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
-					onPreviewArtifact={(path) => openPreview({ kind: "file", path })}
+					onPreviewArtifact={(path) => {
+					// URL 产物走外部打开（系统浏览器），不进预览面板 ——
+					// 面板只服务本地文件（静态服务根=工作区）。
+					if (/^https?:\/\//i.test(path)) openArtifact(path);
+					else openPreview({ kind: "file", path });
+				}}
+					onOpenSettings={openSettings}
 					onError={showToast}
 					onTodo={showTodo}
 				/>

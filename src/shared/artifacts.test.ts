@@ -191,22 +191,24 @@ describe("collectChanges", () => {
 });
 
 describe("classifyPresentedFiles", () => {
-	const sizeOf = (p: string) => (p.includes("big") ? 7460 : undefined);
+	const sizeOf = (p: string) => (p.includes("big") ? 7460 : "outside" as const);
 
 	it("绝对路径 → 产物卡；第一个本地文件成为 focusFile", () => {
 		const r = classifyPresentedFiles(["E:/w/snake.html", "E:/w/readme.md"], sizeOf);
 		expect(r.files).toEqual([
-			{ path: "E:/w/snake.html", size: 0, html: true },
-			{ path: "E:/w/readme.md", size: 0, html: false },
+			{ path: "E:/w/snake.html", size: 0, html: true, kind: "local" },
+			{ path: "E:/w/readme.md", size: 0, html: false, kind: "local" },
 		]);
 		expect(r.focusFile).toBe("E:/w/snake.html");
 		expect(r.invalid).toEqual([]);
+		expect(r.missing).toEqual([]);
 	});
 
 	it("http(s) URL → 只进列表不自动打开；URL 在前时 focus 落到后一个本地文件", () => {
 		const r = classifyPresentedFiles(["https://example.com/x", "E:/w/a.md"], sizeOf);
-		expect(r.files[0]).toEqual({ path: "https://example.com/x", size: 0, html: false });
+		expect(r.files[0]).toEqual({ path: "https://example.com/x", size: 0, html: false, kind: "url" });
 		expect(r.focusFile).toBe("E:/w/a.md");
+		expect(r.missing).toEqual([]);
 	});
 
 	it("非绝对路径 → invalid（调用方整单报错）", () => {
@@ -215,20 +217,40 @@ describe("classifyPresentedFiles", () => {
 		expect(r.files).toHaveLength(1);
 	});
 
+	it("file:// / javascript: / data: 都进 invalid（不匹配绝对路径/HTTP）", () => {
+		const r = classifyPresentedFiles(
+			["file:///E:/w/a.html", "javascript:alert(1)", "data:text/html,<h1>x</h1>"],
+			sizeOf,
+		);
+		expect(r.invalid).toEqual(["file:///E:/w/a.html", "javascript:alert(1)", "data:text/html,<h1>x</h1>"]);
+		expect(r.files).toHaveLength(0);
+	});
+
 	it("sizeOf 的结果进入 size；Windows 反斜杠路径同样认绝对", () => {
 		const r = classifyPresentedFiles(["E:\\w\\big.html"], sizeOf);
-		expect(r.files[0]).toEqual({ path: "E:\\w\\big.html", size: 7460, html: true });
+		expect(r.files[0]).toEqual({ path: "E:\\w\\big.html", size: 7460, html: true, kind: "local" });
+	});
+
+	it("missing 只在 sizeOf 返回 missing 时产生；outside 与 URL 不算缺失", () => {
+		const probe = (p: string) =>
+			p.includes("gone") ? ("missing" as const) : p.includes("out") ? ("outside" as const) : 100;
+		const r = classifyPresentedFiles(
+			["E:/w/gone.md", "E:/w/out.md", "https://example.com/x"],
+			probe,
+		);
+		expect(r.missing).toEqual(["E:/w/gone.md"]);
+		expect(r.files.map((f) => f.size)).toEqual([0, 0, 0]);
 	});
 });
 
 describe("mergePresentedArtifacts", () => {
 	it("多次交付按路径去重，后交付的排到末尾", () => {
-		const first = mergePresentedArtifacts([], [{ path: "a.html", size: 1, html: true }], 100);
+		const first = mergePresentedArtifacts([], [{ path: "a.html", size: 1, html: true, kind: "local" }], 100);
 		const second = mergePresentedArtifacts(
 			first,
 			[
-				{ path: "b.md", size: 2, html: false },
-				{ path: "a.html", size: 3, html: true },
+				{ path: "b.md", size: 2, html: false, kind: "local" },
+				{ path: "a.html", size: 3, html: true, kind: "local" },
 			],
 			200,
 		);

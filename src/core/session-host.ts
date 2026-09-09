@@ -124,15 +124,28 @@ function doneLabel(toolName: string, outcome: ToolOutcome): string {
 /**
  * 历史视图重建（session-rebuild.ts）的工具卡 label 解析器。
  *
- * 重建出的卡片都是完成态，label 必须与 live 卡片完成后同词汇 —— 同一张卡
+ * 重建出的卡片不再是流式态，label 必须与 live 卡片同词汇 —— 同一张卡
  * 「活的时候叫 已搜索、刷新后叫 联网搜索」这种漂移比用词不准更难看。
  * 词汇的单一来源就是本文件的 label 函数，这里只做分派，不另起映射表。
  *
  * write/edit 的完成标签依赖新建/覆盖（writeDoneLabel 要 changeType），
  * 而执行前的文件存在性不落盘，重建时已无法知道 —— 取各自的典型语义：
  * write 的主场景是生成新文档，edit 语义上就是改已有文件。
+ *
+ * outcome 必须参与分派（2026-09-09 事故的根因）：两个区外 edit 在参数流式
+ * 生成阶段被中断、执行从未发生，恢复视图却显示「已修改」，用户以为文件已被改。
+ * 非 ok 的卡（绝大多数是孤儿 toolCall —— aborted）一律不许出现完成态词汇。
+ * write/edit 不用 writeDoneLabel 的非 ok 形态（生成失败/修改失败）：「失败」
+ * 仍暗示执行发生过，而 aborted 的语义是「从没跑过」，「未完成」才是实话。
  */
-export function restoredToolLabel(toolName: string): string {
+export function restoredToolLabel(toolName: string, outcome: ToolOutcome): string {
+	if (outcome !== "ok") {
+		if (toolName === "write") return "生成（未完成）";
+		if (toolName === "edit") return "修改（未完成）";
+		// 其余工具复用 doneLabel 的非 ok 形态：词汇单一来源在 live 路径的
+		// label 函数，这里只做分派，不另起映射表（见函数头注释）。
+		return doneLabel(toolName, outcome);
+	}
 	if (toolName === "write") return writeDoneLabel("created", "ok");
 	if (toolName === "edit") return writeDoneLabel("modified", "ok");
 	return doneLabel(toolName, "ok");
@@ -476,6 +489,25 @@ export class SessionHost {
 	async compact(customInstructions?: string): Promise<void> {
 		await this.session.compact(customInstructions);
 		this.emitState();
+	}
+
+	/**
+	 * 把当前会话导出为单文件 HTML，返回导出文件的绝对路径。
+	 *
+	 * 空会话（还没有任何消息）时 pi 会抛 message 含 "Nothing to export" 的错误，
+	 * 这里改抛中文文案 —— 这是面向用户的提示，daemon 会原样透传给 UI。
+	 * 判断依赖 pi 的错误文案：pi 升级若改了文案，会落回原始英文错误，
+	 * 不会误判其他错误 —— 可接受的耦合。其余错误原样重抛。
+	 */
+	async exportHtml(outputPath: string): Promise<string> {
+		try {
+			return await this.session.exportToHtml(outputPath);
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("Nothing to export")) {
+				throw new Error("该会话还没有内容可导出");
+			}
+			throw error;
+		}
 	}
 
 	/**

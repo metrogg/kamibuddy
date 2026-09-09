@@ -76,12 +76,26 @@ function mount(options: {
 }
 
 describe("放行路径", () => {
-	it("只读工具不询问，返回 undefined（不拦）", async () => {
+	it("只读工具在工作目录内不询问，返回 undefined（不拦）", async () => {
 		const { call, asked } = mount({});
-		const result = await call({ toolName: "read", input: { path: join(HOME, "任意.txt") } });
+		const result = await call({ toolName: "read", input: { path: join(WORKSPACE, "任意.txt") } });
 
 		expect(result).toBeUndefined();
 		expect(asked).toHaveLength(0);
+	});
+
+	it("只读工具出工作区要询问（用户允许后不拦）", async () => {
+		/*
+		 * 这条用例**翻转过**（2026-09-09）。原先区外读不询问直接放行；
+		 * 当天事故证明读侧漫游是写越界的必经入口，判定链已把区外 read/find/grep/ls
+		 * 改为低风险询问（详见 permission-policy.ts 文件头事故条目）。
+		 */
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+		const result = await call({ toolName: "read", input: { path: join(HOME, "任意.txt") } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({ toolName: "read", risk: "low" });
+		expect(result).toBeUndefined();
 	});
 
 	it("写工作目录内不询问", async () => {
@@ -226,6 +240,23 @@ describe("本次会话记住", () => {
 		const result = await call({ toolName: "write", input: { path: join(CONFIG, "auth.json") } });
 
 		expect(result?.block).toBe(true);
+	});
+
+	it("高风险操作即使响应带 remember:true 也不记住 —— 每次都问", async () => {
+		/*
+		 * 双保险（permission-gate.ts ask 分支）：UI 已不对高风险提供「记住」选项，
+		 * 但响应来自 IPC，不信任对端。shell 一旦可记住就是会话内免检，
+		 * 没有危险命令分类器时等于把路径保护全部烧穿。
+		 * 这里伪造一个带 remember:true 的高风险响应（UI 不会真的发这个），
+		 * 钉住 gate 侧的忽略行为。
+		 */
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow", remember: true }) });
+
+		await call({ toolName: "bash", input: { command: "git status" } });
+		const second = await call({ toolName: "bash", input: { command: "git status" } });
+
+		expect(asked).toHaveLength(2);
+		expect(second).toBeUndefined();
 	});
 });
 

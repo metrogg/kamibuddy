@@ -66,6 +66,8 @@ export interface KamiBridge {
 	readonly renameSession: (path: string, name: string) => Promise<void>;
 	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
 	readonly deleteSession: (path: string) => Promise<void>;
+	/** 导出会话为单文件 HTML。空会话会 reject 原因；成功返回导出文件绝对路径。 */
+	readonly exportSession: (path: string) => Promise<{ outputPath: string }>;
 
 	/** 拉取当前工作空间与可选列表。 */
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;

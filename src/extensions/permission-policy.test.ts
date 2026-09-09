@@ -21,10 +21,12 @@ import type { PermissionSettings } from "../shared/permissions.ts";
 
 /** 用 resolve 构造平台正确的绝对路径，避免在 Windows 上写死 /home/... 而失真。 */
 const HOME = resolve(sep, "users", "someone");
+const APP_DIR = join(HOME, "app");
 const PATHS: PolicyPaths = {
 	workspaceDir: join(HOME, "KamiBuddy"),
 	configDir: join(HOME, ".kamibuddy"),
 	protectedDirs: defaultProtectedDirs(HOME),
+	appDir: APP_DIR,
 };
 const CWD = PATHS.workspaceDir;
 
@@ -38,9 +40,49 @@ function facts(overrides: Partial<ToolCallFacts> = {}): ToolCallFacts {
 }
 
 describe("只读工具", () => {
-	it("read / find / grep / ls / web_search / web_fetch / present_files 一律放行", () => {
-		for (const toolName of ["read", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]) {
+	it("read / find / grep / ls 在工作目录内（或无路径参数）照常放行", () => {
+		for (const toolName of ["read", "find", "grep", "ls"]) {
+			expect(decide(facts({ toolName, path: join(PATHS.workspaceDir, "a.md") }), PATHS, CWD)).toEqual({
+				kind: "allow",
+			});
+		}
+		// ls 不带路径参数 = 列 cwd，没有区外目标可判。
+		expect(decide(facts({ toolName: "ls", path: undefined }), PATHS, CWD)).toEqual({ kind: "allow" });
+	});
+
+	it("read / find / grep / ls 出工作区 → 低风险询问", () => {
+		/*
+		 * 这条用例**翻转过**（2026-09-09）。原先一律放行，理由是「只读工具不改变任何状态」。
+		 * 当天事故推翻了这个前提：默认工作区（空目录）+ 默认权限档下，模型经提示词里的
+		 * 技能路径发现项目目录，自由读取项目源码与合规敏感素材后对工作区外文件发起 edit ——
+		 * **读侧漫游是写越界的必经入口**。且 codex 不限读的前提是沙箱默认禁网，
+		 * 我们有 web_fetch 外发通道（读任意文件 + 抓任意 URL = 数据外带），
+		 * 前提不同结论就必须跟着改 —— 与上面 2026-09-08 凭据禁读的翻转同一条推理链。
+		 */
+		for (const toolName of ["read", "find", "grep", "ls"]) {
+			const target = join(HOME, "任意位置.txt");
+			expect(decide(facts({ toolName, path: target }), PATHS, CWD)).toEqual({
+				kind: "ask",
+				risk: "low",
+				summary: "读取工作目录之外的文件或目录",
+				details: target,
+			});
+		}
+	});
+
+	it("web_search / web_fetch / present_files 没有本地路径概念，区外也维持放行", () => {
+		for (const toolName of ["web_search", "web_fetch", "present_files"]) {
 			expect(decide(facts({ toolName, path: join(HOME, "任意位置.txt") }), PATHS, CWD)).toEqual({ kind: "allow" });
+		}
+	});
+
+	it("完全访问档下区外读不设限（与写侧语义一致）", () => {
+		// FULL 同时把 approval 设为 never，若这里仍判 ask 就会被转成 deny，
+		// 断言 allow 才能证明「范围约束确实解除了」。
+		for (const toolName of ["read", "find", "grep", "ls"]) {
+			expect(decide(facts({ toolName, path: join(HOME, "任意位置.txt") }), PATHS, CWD, FULL)).toEqual({
+				kind: "allow",
+			});
 		}
 	});
 
@@ -90,7 +132,8 @@ describe("受保护的凭据目录（读写都拒，任何模式都不能越过�
 
 	it("同名前缀的兄弟目录不误伤（.sshfoo 不是 .ssh）", () => {
 		const target = join(HOME, ".sshfoo", "note.txt");
-		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD)).toEqual({ kind: "allow" });
+		// 落进通用「区外读询问」而不是 deny，才证明没把它当成凭据目录。
+		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD)).toMatchObject({ kind: "ask", risk: "low" });
 	});
 });
 
@@ -290,6 +333,50 @@ describe("沙箱模式：read-only", () => {
 			});
 		}
 	});
+
+	it("区外读取同样询问 —— 读的边界就是这个模式的全部语义", () => {
+		const target = join(HOME, "任意位置.txt");
+		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD, READONLY)).toEqual({
+			kind: "ask",
+			risk: "low",
+			summary: "读取工作目录之外的文件或目录",
+			details: target,
+		});
+	});
+});
+
+describe("应用目录写保护（写自身永远高风险，哪怕它就是工作区）", () => {
+	const APP_FILE = join(APP_DIR, "src", "app.ts");
+
+	it("写应用目录 → 高风险询问", () => {
+		const result = decide(facts({ path: APP_FILE }), PATHS, CWD);
+		expect(result).toMatchObject({ kind: "ask", risk: "high" });
+		if (result.kind !== "ask") throw new Error("应为 ask");
+		expect(result.summary).toContain("自身目录");
+	});
+
+	it("edit 同样对待", () => {
+		expect(decide(facts({ toolName: "edit", path: APP_FILE }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "high",
+		});
+	});
+
+	it("应用目录在工作目录内时仍高风险 —— 判定先于「工作区内放行」", () => {
+		// 开发时常态：appDir 与工作区重叠。写自己应用不该享受「目录内免打扰」。
+		const paths: PolicyPaths = { ...PATHS, appDir: join(PATHS.workspaceDir, "app") };
+		const target = join(PATHS.workspaceDir, "app", "index.ts");
+		expect(decide(facts({ path: target }), paths, CWD)).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("只读档写应用目录 → 拒绝（阶段 3 先生效，与是否 appDir 无关）", () => {
+		expect(decide(facts({ path: APP_FILE }), PATHS, CWD, READONLY).kind).toBe("deny");
+	});
+
+	it("完全访问档写应用目录 → 放行（语义一致：完全不设限）", () => {
+		// approval=never 下若仍判 ask 会被转成 deny，断言 allow 才证明确实放行。
+		expect(decide(facts({ path: APP_FILE }), PATHS, CWD, FULL)).toEqual({ kind: "allow" });
+	});
 });
 
 describe("沙箱模式：danger-full-access", () => {
@@ -357,8 +444,16 @@ describe("向后兼容", () => {
 			"deny",
 		);
 		// 没登记就不保护 —— 这是显式契约（daemon 负责传全），不是遗漏。
-		expect(decide(facts({ toolName: "read", path: join(HOME, ".ssh", "id_rsa") }), minimal, CWD)).toEqual({
-			kind: "allow",
+		// 2026-09-09 起它落进通用「区外读询问」，而不是像旧行为那样静默放行。
+		expect(decide(facts({ toolName: "read", path: join(HOME, ".ssh", "id_rsa") }), minimal, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "low",
 		});
+	});
+
+	it("不传 appDir 时应用目录规则不生效 —— 同路径落回区外询问（medium，不是 high）", () => {
+		const minimal: PolicyPaths = { workspaceDir: PATHS.workspaceDir, configDir: PATHS.configDir };
+		const result = decide(facts({ path: join(APP_DIR, "src", "app.ts") }), minimal, CWD);
+		expect(result).toMatchObject({ kind: "ask", risk: "medium" });
 	});
 });

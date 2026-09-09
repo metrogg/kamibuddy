@@ -49,6 +49,8 @@ export interface PresentedFile {
 	readonly size: number;
 	/** .html/.htm：产物卡 + 预览双路（其余只进产物卡）。 */
 	readonly html: boolean;
+	/** 分类标签：本地文件 / URL。 */
+	readonly kind: "local" | "url";
 }
 
 /** 绝对路径判定（Windows 盘符 / UNC / posix）。hand-rolled：shared 会被 renderer 打包，不能 import node:path。 */
@@ -56,40 +58,54 @@ const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/;
 const HTTP_URL = /^https?:\/\//i;
 const HTML_FILE = /\.html?$/i;
 
+/** sizeOf 的三态返回：不探测（区外/playground）→ "outside"；stat 失败（不存在/不可读）→ "missing"；成功 → 字节数。 */
+export type SizeProbe = "outside" | "missing" | number;
+
 /**
  * present_files 入参分类（WorkBuddy handler 同口径）：
- *   http(s) URL → 只进预览列表（v1 不自动打开）；
- *   绝对路径    → 产物卡，第一个本地文件自动打开预览（focusFile）；
+ *   http(s) URL → kind "url"，size 恒 0；
+ *   绝对路径    → kind "local"，sizeOf 探测；第一个本地文件自动打开预览（focusFile）；
  *   非绝对路径  → invalid，整单报错（"all entries must be absolute"）。
  * sizeOf 由调用方注入（daemon 用 statSync 并限定工作区），本函数保持纯。
+ * missing：只有 sizeOf 返回 "missing"（工作区内 stat 失败）的本地文件进此列 ——
+ * "outside"（不探测）与 URL 都不算缺失，避免误报误导模型。
  */
 export function classifyPresentedFiles(
 	input: readonly string[],
-	sizeOf: (absPath: string) => number | undefined,
+	sizeOf: (absPath: string) => SizeProbe,
 ): {
 	readonly files: readonly PresentedFile[];
 	readonly focusFile: string | undefined;
 	readonly invalid: readonly string[];
+	readonly missing: readonly string[];
 } {
 	const invalid: string[] = [];
+	const missing: string[] = [];
 	const files: PresentedFile[] = [];
 	let focusFile: string | undefined;
 
 	for (const raw of input) {
 		if (HTTP_URL.test(raw)) {
-			files.push({ path: raw, size: 0, html: false });
+			files.push({ path: raw, size: 0, html: false, kind: "url" });
 			continue;
 		}
 		if (!ABSOLUTE_PATH.test(raw)) {
 			invalid.push(raw);
 			continue;
 		}
-		files.push({ path: raw, size: sizeOf(raw) ?? 0, html: HTML_FILE.test(raw) });
+		const probe = sizeOf(raw);
+		if (probe === "missing") missing.push(raw);
+		files.push({
+			path: raw,
+			size: probe === "outside" || probe === "missing" ? 0 : probe,
+			html: HTML_FILE.test(raw),
+			kind: "local",
+		});
 		// 顺序即推荐观看顺序，第一个本地文件自动打开（WorkBuddy：首位 = focusFile）。
 		if (focusFile === undefined) focusFile = raw;
 	}
 
-	return { files, focusFile, invalid };
+	return { files, focusFile, invalid, missing };
 }
 
 function countLines(text: string): number {

@@ -39,6 +39,7 @@ const bridge: KamiBridge = {
 	renameSession: (path, name) =>
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
+	exportSession: (path) => ipcRenderer.invoke(INVOKE.sessionExport, path),
 
 	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
 	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),
