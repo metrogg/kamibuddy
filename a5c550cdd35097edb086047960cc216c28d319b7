@@ -1,0 +1,53 @@
+resources/scenes/work/prompt.md
+  s_e14366e77609a6::t_99934112c15313 1-24
+src/core/resources.ts
+  s_e14366e77609a6::t_99934112c15313 1-112
+resources/modes/craft.md
+  s_e14366e77609a6::t_99934112c15313 1-12
+src/core/session-host.ts
+  s_e14366e77609a6::t_99934112c15313 28-29,33-34,47-56,112-117,120-126,130-138,142,162,178-189,197,201,209,214,217,220-228
+  s_e14366e77609a6::t_9a2e73a46b4c0c 268-271,274-275,281-282,284,288-290
+  s_e14366e77609a6::t_47a09779a424e2 291-292
+src/core/prompt-composer.ts
+  s_e14366e77609a6::t_99934112c15313 1-75
+src/extensions/prompt-switch.ts
+  s_e14366e77609a6::t_99934112c15313 1-31
+resources/modes/ask.md
+  s_e14366e77609a6::t_99934112c15313 1-12
+docs/STATUS.md
+  s_e14366e77609a6::t_99934112c15313 17-24,51-53,86,100,190,192-193,195,206,276,278-280,282,284-312
+src/core/config-paths.ts
+  s_e14366e77609a6::t_99934112c15313 15,55-65
+  s_e14366e77609a6::t_daea0aa93ebd96 66-67
+docs/ROADMAP.md
+  s_e14366e77609a6::t_99934112c15313 105-107,111-114,117-164
+  s_e14366e77609a6::t_b25da5fcc5faeb 102-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a5c550cdd35097edb086047960cc216c28d319b7",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "tool_name": "RunCommand",
+        "tool_use_id": "6a9e7cd54d41cfbf4a20f196",
+        "edit_kind": "bash",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "client_type": "ide",
+        "operation_id": "6a9e7cd54d41cfbf4a20f196",
+        "display_model_name": "Kimi-K3",
+        "source_scene": "agent",
+        "runtime_client": "trae-tob-git-ai",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3"
+      }
+    }
+  }
+}

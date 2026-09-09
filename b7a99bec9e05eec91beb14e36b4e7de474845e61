@@ -1,0 +1,76 @@
+docs/STATUS.md
+  s_e14366e77609a6::t_c0904df649e233 480-553
+src/extensions/permission-policy.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 17-29,33-36,38
+  s_e14366e77609a6::t_c0904df649e233 37,117-127,137-139,141,144-170,173-205,208-215,217-228,238,242-243
+  s_e14366e77609a6::t_353ac5d5527e18 65,67-97
+src/core/preferences.ts
+  s_e14366e77609a6::t_c0904df649e233 15-20,27-32,64-68,87,93,100-131
+  s_e14366e77609a6::t_bd43f03f652e3f 132-133
+docs/ROADMAP.md
+  s_e14366e77609a6::t_c0904df649e233 21,30-31,34-53
+src/preload/index.ts
+  s_e14366e77609a6::t_c0904df649e233 70-72
+src/shared/bridge.ts
+  s_e14366e77609a6::t_c0904df649e233 21,98-102
+  s_e14366e77609a6::t_e4983413e2dc87 103
+AGENTS.md
+  s_e14366e77609a6::t_c0904df649e233 41,45-52
+src/shared/permissions.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-125,141-194
+  s_e14366e77609a6::t_c0904df649e233 126-140
+src/shared/permissions.test.ts
+  s_e14366e77609a6::t_c0904df649e233 1-151
+src/renderer/stop-confirm.ts
+  s_e14366e77609a6::t_c0904df649e233 1-51
+docs/ARCHITECTURE.md
+  s_e14366e77609a6::t_c0904df649e233 168-209
+src/extensions/permission-gate.ts
+  s_e14366e77609a6::t_c0904df649e233 15,22-29,67,76-84
+src/extensions/permission-policy.test.ts
+  s_e14366e77609a6::t_c0904df649e233 5,7,13-20,27,31-35,47-54,56-92,223-323
+src/renderer/settings-view.tsx
+  s_e14366e77609a6::t_c0904df649e233 24-25,347-425,837
+  s_e14366e77609a6::t_c69be5f7c58755 838
+src/extensions/permission-gate.test.ts
+  s_e14366e77609a6::t_c0904df649e233 17,36-38,42,46,50,61,69-75,231-329
+  s_e14366e77609a6::t_9a7e017421c033 330
+src/extensions/project-trust.test.ts
+  s_e14366e77609a6::t_c0904df649e233 1-153
+src/extensions/project-trust.ts
+  s_e14366e77609a6::t_c0904df649e233 1-76
+src/daemon/index.ts
+  s_e14366e77609a6::t_c0904df649e233 14,39-48,165-180,314-336,469-473,475-476,480-494,845-874
+docs/workbuddy分析/09-sandbox-and-permissions.md
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-410
+src/shared/ipc.ts
+  s_e14366e77609a6::t_c0904df649e233 17,121-130,272-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "b7a99bec9e05eec91beb14e36b4e7de474845e61",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "runtime_client": "trae-tob-git-ai",
+        "client_type": "ide",
+        "display_model_name": "Kimi-K3",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "tool_use_id": "6a9fd90e40aae454b7481945",
+        "operation_id": "6a9fd90e40aae454b7481945",
+        "source_scene": "agent",
+        "tool_name": "RunCommand",
+        "edit_kind": "bash"
+      }
+    }
+  }
+}

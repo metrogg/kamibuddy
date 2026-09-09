@@ -1,0 +1,32 @@
+.gitignore
+  s_c7d699acb32bf7::t_4f9e4c3fdcea18 1-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "5b211b7874c7763af5caee9ce40262c41e5da831",
+  "prompts": {},
+  "sessions": {
+    "s_c7d699acb32bf7": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e0e244d41cfbf4a20efef",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "source_scene": "unknown",
+        "edit_kind": "file_edit",
+        "session_id": "6a9e0e244d41cfbf4a20efef",
+        "operation_id": "6a9e2bff4d41cfbf4a20f069",
+        "tool_use_id": "6a9e2bff4d41cfbf4a20f069",
+        "tool_id": "apply_patch",
+        "dedupe_key": "6a9e0e244d41cfbf4a20efef:6a9e2bff4d41cfbf4a20f069:afterEdit:c98a2b3f",
+        "external_session_id": "6a9e0e244d41cfbf4a20efef",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}

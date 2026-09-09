@@ -1,0 +1,36 @@
+docs/workbuddy分析/07-tools.md
+  s_e14366e77609a6::t_4f8107fee3aee3 1-53
+docs/ROADMAP.md
+  s_e14366e77609a6::t_4f8107fee3aee3 8-12,174,176-179,181-182,184,187-188,191,193-195,221,223-224
+  s_e14366e77609a6::t_c5f6cff37d3c25 225-226
+docs/workbuddy分析/08-builtin-tools-reference.md
+  s_e14366e77609a6::t_4f8107fee3aee3 1-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "e5d3786c24743ffa8950caa4ad6f14804957feb0",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "runtime_client": "trae-tob-git-ai",
+        "tool_use_id": "6a9f6a2c4d41cfbf4a20f2a4",
+        "operation_id": "6a9f6a2c4d41cfbf4a20f2a4",
+        "client_type": "ide",
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "tool_name": "RunCommand",
+        "display_model_name": "Kimi-K3",
+        "edit_kind": "bash",
+        "source_scene": "agent"
+      }
+    }
+  }
+}

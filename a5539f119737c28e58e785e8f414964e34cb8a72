@@ -1,0 +1,85 @@
+src/renderer/index.css
+  s_e14366e77609a6::t_83b47d7cd34ebb 722-731,741-777,823-878,881-926,938,944,946,949-950,953-956,959-960,963-965,969,973,987,995,1009,2051,2053,2055,2058-2061,2066,2069,2072,2075-2076,2079,2081-2082,2085,2089,2093-2094,2097-2099,2101,2105,2107,2111,2115
+  s_e14366e77609a6::t_a4b6f1203e27bf 935-937
+  s_e14366e77609a6::t_cc374c3d45ae70 939-943
+  s_e14366e77609a6::t_825b1f46904364 945
+  s_e14366e77609a6::t_3d5ea0eb2b7702 947-948
+  s_e14366e77609a6::t_d563a3620f802e 951-952
+  s_e14366e77609a6::t_d2dbd8df518005 957-958
+  s_e14366e77609a6::t_b966f98795cd08 961-962
+  s_e14366e77609a6::t_68fe426d7e5013 966-968
+  s_e14366e77609a6::t_2f501cba73102d 970-972
+  s_e14366e77609a6::t_80ea550cb8f5bf 974-976,984-986
+  s_e14366e77609a6::t_709aa69b23e357 988-990,992-994
+  s_e14366e77609a6::t_b601634666dd19 996-998
+  s_e14366e77609a6::t_ec1bb1c0983a0d 1006-1008
+  s_e14366e77609a6::t_f0dc21012c6a14 2052
+  s_e14366e77609a6::t_0e2503bcb1aa84 2054
+  s_e14366e77609a6::t_f77b6cdd24d103 2056-2057
+  s_e14366e77609a6::t_d3cbb5361059d1 2062-2065
+  s_e14366e77609a6::t_b5dca49acbbf69 2067-2068
+  s_e14366e77609a6::t_638d8193d7b34b 2070-2071
+  s_e14366e77609a6::t_c75d48a550f525 2073-2074
+  s_e14366e77609a6::t_c1141742c0a43f 2077-2078
+  s_e14366e77609a6::t_a71634da0e287e 2080
+  s_e14366e77609a6::t_b2371246acba0e 2083-2084
+  s_e14366e77609a6::t_08bc6167c8d211 2086-2088
+  s_e14366e77609a6::t_00fd61668e85c3 2090-2092
+  s_e14366e77609a6::t_8f0e613594434a 2095-2096
+  s_e14366e77609a6::t_61904796c6b166 2100
+  s_e14366e77609a6::t_a9487bfa845ef9 2102-2104
+  s_e14366e77609a6::t_d4dc0735781d9d 2106
+  s_e14366e77609a6::t_93726cf1bef5c8 2108-2110
+  s_e14366e77609a6::t_b4ca61c3ead983 2112-2114
+  s_e14366e77609a6::t_666577dbe05567 2116-2118
+src/shared/session-events.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 92-110
+.trae/specs/align-chat-ui-workbuddy/tasks.md
+  s_e14366e77609a6::t_83b47d7cd34ebb 29-38
+  s_e14366e77609a6::t_9c2266da88046e 39-41
+src/shared/message-time.test.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-43
+src/shared/message-time.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-42
+src/shared/metafold.test.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-270
+src/renderer/icons.tsx
+  s_e14366e77609a6::t_83b47d7cd34ebb 188-195,204,207-208
+  s_e14366e77609a6::t_2d43be3d2321be 203
+  s_e14366e77609a6::t_f18eea79218ce4 205-206
+  s_e14366e77609a6::t_dffb783c774be3 209-210
+src/shared/conversation.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 160,167-173
+src/renderer/chat-view.tsx
+  s_e14366e77609a6::t_83b47d7cd34ebb 8,10-12,14-25,85-207,259-295,535-537,560-571,579-600,603,606-615,620-623,627-633,652-656,658-705,711,714,717-718,720-741,778-801
+src/shared/metafold.ts
+  s_e14366e77609a6::t_83b47d7cd34ebb 1-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a5539f119737c28e58e785e8f414964e34cb8a72",
+  "prompts": {},
+  "sessions": {
+    "s_e14366e77609a6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9e67a54d41cfbf4a20f0d3",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "client_type": "ide",
+        "edit_kind": "bash",
+        "display_model_name": "Kimi-K3",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_name": "RunCommand",
+        "tool_use_id": "6a9fc76440aae454b74818f4",
+        "operation_id": "6a9fc76440aae454b74818f4",
+        "external_session_id": "6a9e67a54d41cfbf4a20f0d3",
+        "source_scene": "agent"
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+docs/workbuddy分析/05-capabilities.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-296
+docs/workbuddy分析/06-tencent-integration.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-150
+docs/workbuddy-agent-research.html
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-1416
+docs/workbuddy分析/03-plugins-skills.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-300
+docs/workbuddy分析/02-prompts.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-324
+docs/workbuddy分析/WorkBuddy-全面解剖分析报告.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-451
+docs/workbuddy分析/04-cli-core.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-342
+docs/workbuddy分析/01-architecture.md
+  s_4b9f934d91a0c6::t_f60bc96a5f5fc5 1-349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "4a11d075f1e6ca44dd5c91aae4cdf5b6c1b5ccbf",
+  "prompts": {},
+  "sessions": {
+    "s_4b9f934d91a0c6": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9ab24428c79154df39d94b",
+        "model": "glm-5.3-flash__max"
+      },
+      "human_author": "metrogg <www19770210@126.com>",
+      "custom_attributes": {
+        "display_model_name": "GLM-5.3-Flash",
+        "tool_name": "RunCommand",
+        "runtime_client": "trae-tob-git-ai",
+        "external_session_id": "6a9ab24428c79154df39d94b",
+        "tool_use_id": "6a9ab4aa64e5ba9c359aa2d3",
+        "edit_kind": "bash",
+        "source_scene": "agent",
+        "client_type": "ide",
+        "session_id": "6a9ab24428c79154df39d94b",
+        "operation_id": "6a9ab4aa64e5ba9c359aa2d3"
+      }
+    }
+  }
+}
