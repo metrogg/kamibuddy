@@ -57,7 +57,17 @@ function CodeBlockCard({ children }: { readonly children?: React.ReactNode }): R
 	);
 }
 
-export function Markdown({ text }: { readonly text: string }): React.JSX.Element {
+export function Markdown({
+	text,
+	resolveImageSrc,
+}: {
+	readonly text: string;
+	/**
+	 * 图片 src 重写（预览面板把 markdown 里的相对路径转 preview-server URL）。
+	 * 对话里的模型输出没有可信的本地基准目录，不传则图片走默认渲染。
+	 */
+	readonly resolveImageSrc?: (src: string) => string;
+}): React.JSX.Element {
 	return (
 		<div className="markdown">
 			<ReactMarkdown
@@ -78,6 +88,14 @@ export function Markdown({ text }: { readonly text: string }): React.JSX.Element
 							{children}
 						</a>
 					),
+					// resolver 存在才覆盖 img：对话页不传时保持默认渲染，一个组件两种场景。
+					...(resolveImageSrc === undefined
+						? {}
+						: {
+								img: ({ src, alt }) => (
+									<img src={typeof src === "string" ? resolveImageSrc(src) : src} alt={alt ?? ""} />
+								),
+							}),
 				}}
 			>
 				{text}

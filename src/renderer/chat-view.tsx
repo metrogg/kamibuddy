@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
+import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
@@ -20,23 +21,17 @@ import {
 	IconCopy,
 	IconDoc,
 	IconMic,
-	IconSend,
-	IconStop,
+	IconAssistant,
 } from "./icons.tsx";
-import { useAutocomplete } from "./autocomplete.tsx";
+import { Composer } from "./composer.tsx";
+import type { ComposerHandle } from "./composer.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
-import { AttachmentStrip, DocumentRefStrip, foldDocumentRefsIntoText, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
+import { imageDataUrl } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
-import { loadDraft, navigateHistory, recordSent, saveDraft, sentHistory } from "./input-history.ts";
-import type { HistoryNavState } from "./input-history.ts";
-import { charCountState } from "./input-limit.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
-import { stopConfirmExpired, stopConfirmIdle, triggerStop } from "./stop-confirm.ts";
-import type { StopConfirmState } from "./stop-confirm.ts";
-import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
@@ -148,11 +143,11 @@ function UserBubble({
 					</div>
 				)}
 			</div>
-			<div className="user-toolbar">
+			<div className="entry-toolbar entry-toolbar-right">
 				<span className="user-time">{formatMessageTime(at, Date.now())}</span>
 				<button
 					type="button"
-					className="user-copy"
+					className="entry-icon-btn"
 					aria-label="复制消息内容"
 					title={copied ? "已复制" : "复制"}
 					onClick={() => void copy(text)}
@@ -174,7 +169,7 @@ function UserBubble({
 
 /**
  * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条）。
- * 与 user-toolbar 同款「常驻占位、hover 切透明度」模式，理由相同：
+ * 与用户气泡工具条同款「常驻占位、hover 切透明度」模式（.entry-toolbar），理由相同：
  * hover 才插入 DOM 会推搡下方消息流。流式中的末条也渲染 —— 复制部分内容无害。
  *
  * 「执行计划」是 plan→craft 的衔接入口：plan 模式产出的计划只在末条
@@ -193,7 +188,7 @@ function AssistantActions({
 	const { copied, copy } = useCopyWithTick();
 
 	return (
-		<div className="assistant-toolbar">
+		<div className="entry-toolbar entry-toolbar-left">
 			{showExecutePlan && (
 				<button type="button" className="assistant-execute" onClick={onExecutePlan}>
 					执行计划
@@ -201,7 +196,7 @@ function AssistantActions({
 			)}
 			<button
 				type="button"
-				className="assistant-copy"
+				className="entry-icon-btn"
 				aria-label="复制回答"
 				title={copied ? "已复制" : "复制回答"}
 				onClick={() => void copy(text)}
@@ -512,13 +507,6 @@ function formatDuration(ms: number): string {
 	return m === 0 ? `${s}s` : `${m}m${s}s`;
 }
 
-/** 文件大小格式化：WorkBuddy 产物卡口径（7.3 KB）。0（URL/不可 stat）不显示。 */
-function formatSize(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	const kb = bytes / 1024;
-	return kb < 100 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
-}
-
 /**
  * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」）。
  *
@@ -553,8 +541,13 @@ function TurnHeader({
 
 	return (
 		<div className="turn-header">
-			<span className="turn-agent">KamiBuddy</span>
-			<span className="turn-duration">{duration}</span>
+			<div className="turn-avatar" aria-hidden="true">
+				<IconAssistant size={16} />
+			</div>
+			<div className="turn-meta">
+				<span className="turn-agent">KamiBuddy</span>
+				<span className="turn-duration">{duration}</span>
+			</div>
 		</div>
 	);
 }
@@ -574,13 +567,13 @@ function ModeSwitch({ interactions, currentId, onChange, onTodo }: ModeSwitchPro
 	const current = interactions.find((m) => m.id === currentId);
 
 	return (
-		<div className="mode-switch">
+		<div className="menu-zone">
 			<button type="button" className="bar-btn bar-btn-text" onClick={() => setOpen((v) => !v)}>
 				{current?.label ?? currentId}
 				<IconChevronDown size={13} />
 			</button>
 			{open && (
-				<div className="mode-menu">
+				<div className="pop-menu mode-menu">
 					{interactions.map((mode) => (
 						<button
 							key={mode.id}
@@ -723,38 +716,15 @@ export function ChatView({
 	onSaveToWorkspace,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
-	// 草稿按 sessionId 存进模块级 Map（input-history.ts）：视图切换卸载组件后
-	// 切回仍能还原。挂载时先还原一次，之后 sessionId 变化由下方 effect 接续。
-	const [draft, setDraft] = useState(() => loadDraft(conversation.state.sessionId) ?? "");
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
 	// 「保存到工作空间」命名弹层的开合；输入态由弹层组件自持（关掉即重置）。
 	const [saveOpen, setSaveOpen] = useState(false);
-	// 停止的二次确认状态（stop-confirm.ts 状态机）：idle → 首次触发武装 pending
-	// → 窗口内再触发才 confirmed 调 onAbort。只持状态，计时与判定都在纯函数里。
-	const [stopConfirm, setStopConfirm] = useState<StopConfirmState>(stopConfirmIdle);
-	// Alt+↑/↓ 历史导航状态：undefined = 不在导航中（输入框是用户自己的草稿）。
-	const [historyNav, setHistoryNav] = useState<HistoryNavState | undefined>(undefined);
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	// IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 不发送。
-	const ime = useImeGuard();
-	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
-	const visionSupported = useModelSupportsVision(conversation.state.modelId);
+	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）。
+	const composerRef = useRef<ComposerHandle>(null);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
-	// 图片/文档附件（粘贴/拖拽/选择三入口），与 home-view 共用同一份 hook。
-	// 文档进 chip 条（documentRefs），提交时才折回文本，textarea 保持纯人写文本。
-	const img = useImageAttachments(onError);
-	// 输入长度余量（input-limit.ts 纯函数判定）：接近上限才显示，超限禁发。
-	const chars = charCountState(draft.length);
-
-	// 会话切换（含挂载后 sessionId 才就位）时还原该会话的草稿；
-	// 历史导航态一并复位 —— 旧会话翻到的位置对新会话没有意义。
-	useEffect(() => {
-		setDraft(loadDraft(sessionId) ?? "");
-		setHistoryNav(undefined);
-	}, [sessionId]);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
 	// MetaFold 折叠单元的展开状态：按单元 id 记忆。块流每次渲染由纯函数
@@ -773,8 +743,6 @@ export function ChatView({
 	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
 	const lastEntry = conversation.entries[conversation.entries.length - 1];
 	const awaitingFirstResponse = streaming && (lastEntry === undefined || lastEntry.role === "user");
-	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
-	const ac = useAutocomplete(draft, setDraft, textareaRef, conversation.state.cwd);
 
 	// 滚动跟随（对标 WorkBuddy）：在底部时新内容自动贴底；用户上滚离开底部
 	// 即停止跟随，浮现「回到底部」按钮；回到底部后恢复跟随。
@@ -813,58 +781,15 @@ export function ChatView({
 		node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
 	};
 
-	/** 停止按钮与 Esc 共用的二次确认入口：只有 confirmed 那次才真正中断。 */
-	const requestStop = (): void => {
-		const result = triggerStop(stopConfirm, Date.now());
-		setStopConfirm(result.state);
-		if (result.confirmed) onAbort();
-	};
-
-	// 待确认窗口截止自动复原。定时器到点再用 stopConfirmExpired 复核：
-	// 用户在旧定时器到期前重新武装过时，新 pending 尚未过期，不能被旧定时器误清。
-	useEffect(() => {
-		if (stopConfirm.phase !== "pending") return;
-		const timer = window.setTimeout(
-			() => {
-				setStopConfirm((current) => (stopConfirmExpired(current, Date.now()) ? stopConfirmIdle : current));
-			},
-			Math.max(0, stopConfirm.deadline - Date.now()),
-		);
-		return () => window.clearTimeout(timer);
-	}, [stopConfirm]);
-
-	// 流式结束（完成/已中断）时若还挂着待确认，直接复原 —— 停止键随流式态消失，
-	// 状态不收回去会卡在下一次流式开始时的按钮上。
-	useEffect(() => {
-		if (!streaming) setStopConfirm((current) => (current.phase === "pending" ? stopConfirmIdle : current));
-	}, [streaming]);
-
-	const submit = (): void => {
-		const text = draft.trim();
-		// 超限双闸之一：发送按钮已 disabled，这里拦快捷键（Enter）路径。
-		if (charCountState(draft.length).over) return;
-		if (text === "" || !ready) return;
-		const images = img.attachments;
-		setDraft("");
-		// 发送即清掉该会话的暂存草稿（已发出不再是草稿），并退出历史导航态。
-		saveDraft(sessionId, "");
-		setHistoryNav(undefined);
-		// 发新消息强制贴底（WorkBuddy 同行为）：回显经 daemon 确认后才进 entries，
-		// 这里先把跟随打开，entries 变化的 effect 落地时自然贴底。
+	/**
+	 * Composer 的提交出口：发新消息强制贴底（WorkBuddy 同行为）——
+	 * 回显经 daemon 确认后才进 entries，这里先把跟随打开，entries
+	 * 变化的 effect 落地时自然贴底。retrySubmit / executePlan 不经过这里。
+	 */
+	const handleComposerSubmit = (text: string, images?: readonly ImagePart[]): Promise<void> => {
 		followRef.current = true;
 		setShowJumpToBottom(false);
-		// 附件等 daemon 接收成功再清：失败时错误卡已落进消息流，图留在
-		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
-		// 文档引用在提交这一刻折回文本末尾（recordSent 只记用户原文，
-		// 历史翻页还原的是人写的部分）。
-		void onSubmit(foldDocumentRefsIntoText(text, img.documentRefs), images.length > 0 ? images : undefined).then(
-			() => {
-				img.clear();
-				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
-				recordSent(text);
-			},
-			() => {},
-		);
+		return onSubmit(text, images);
 	};
 
 	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
@@ -889,44 +814,6 @@ export function ChatView({
 			},
 			(error: unknown) => onError(error instanceof Error ? error.message : String(error)),
 		);
-	};
-
-	/**
-	 * 输入框按键。ac 先行：补全打开时 Enter=选中、Esc=关闭补全（均 preventDefault），
-	 * 之后的守卫一律不插手它的消费（e.defaultPrevented 直接 return）。
-	 * IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
-	 */
-	const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-		ac.bind.onKeyDown(e);
-		if (e.defaultPrevented) return;
-		// Esc 停止只在流式期间生效，且走二次确认（误碰一次不中断长任务）；
-		// 非流式 Esc 无任何效果。
-		if (e.key === "Escape") {
-			if (streaming) {
-				e.preventDefault();
-				requestStop();
-			}
-			return;
-		}
-		if (e.key !== "Enter" && !(e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown"))) return;
-		// IME 选词期间 Enter 是确认候选、方向键是移动候选条，都归输入法，守卫一律吞。
-		if (ime.shouldSwallowNow()) {
-			e.preventDefault();
-			return;
-		}
-		if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-			e.preventDefault();
-			const nav = navigateHistory(historyNav, sentHistory(), e.key === "ArrowUp" ? "up" : "down", draft);
-			setHistoryNav(nav.state);
-			setDraft(nav.text);
-			// 导航结果同步进草稿 Map：导航中切走再切回，还原的就是离开前框里的内容。
-			saveDraft(sessionId, nav.text);
-			return;
-		}
-		if (!e.shiftKey) {
-			e.preventDefault();
-			submit();
-		}
 	};
 
 	const toggleFold = (id: string): void => {
@@ -1164,112 +1051,57 @@ export function ChatView({
 			</div>
 
 			<footer className="chat-composer">
+			{/*
+				输入卡机制（拖放/附件/IME/补全/历史/草稿/字数闸/停止确认）
+				全部在 Composer 内部；这里只注入 chat 的差异面。
+				流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
+			*/}
+			<Composer
+				ref={composerRef}
+				ready={ready}
+				placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
+				rows={2}
+				cwd={conversation.state.cwd}
+				modelId={conversation.state.modelId}
+				onSubmit={handleComposerSubmit}
+				onError={onError}
+				draftKey={sessionId}
+				enableHistory
+				streaming={streaming}
+				onAbort={onAbort}
+			>
 				{/*
-					拖放三件套（onDragOver/onDragLeave/onDrop）挂在输入卡而非 textarea 上：
-					整个卡片（含按钮行）都是放置目标，命中区大得多。悬停高亮由
-					img.dragOver 驱动（进 drag-over 类），拖文本片段不亮（见 hook 注释）。
+					「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
+					触发 Composer 内部的附件选择框）+ 模式子菜单（与头部 ModeSwitch
+					同一数据源）+ 专家/技能/连接器占位。
+					弹层向上、左对齐，与下方 PermissionMenu 同一约定。
 				*/}
-				<div
-					className={`composer-card${img.dragOver ? " drag-over" : ""}`}
-					onDrop={img.bind.onDrop}
-					onDragOver={img.bind.onDragOver}
-					onDragLeave={img.bind.onDragLeave}
-				>
-					{/* 文档 chip 条在图片缩略图条之前（与 home-view 同序）。 */}
-					<DocumentRefStrip refs={img.documentRefs} onRemove={img.removeDocumentRefAt} />
-					<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
-				<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
-					<div className="composer-input">
-						{ac.menu}
-						<textarea
-							ref={textareaRef}
-							value={draft}
-							onChange={(e) => {
-								ac.bind.onChange(e);
-								saveDraft(sessionId, e.target.value);
-							}}
-							onSelect={ac.bind.onSelect}
-							onBlur={ac.bind.onBlur}
-							onPaste={img.bind.onPaste}
-							onCompositionStart={ime.bind.onCompositionStart}
-							onCompositionEnd={ime.bind.onCompositionEnd}
-							onKeyDown={handleComposerKeyDown}
-							// 流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
-							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
-							disabled={!ready}
-							rows={2}
-						/>
-					</div>
-					<div className="composer-bar">
-					{/*
-						「+」菜单：添加文件（原图片/文档选择流程挪进菜单项）+ 模式子菜单
-						（与头部 ModeSwitch 同一数据源）+ 专家/技能/连接器占位。
-						弹层向上、左对齐，与下方 PermissionMenu 同一约定。
-					*/}
-					<PlusMenu
-						modes={conversation.availableModes}
-						currentId={conversation.state.interactionId}
-						onInteractionChange={onInteractionChange}
-						onPickFiles={() => void img.pickFromDialog()}
-						onTodo={onTodo}
-					/>
-						{/*
-							权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
-							时不必退回首页换档。放左侧而非右侧语音钮旁 —— 弹层左对齐
-							向上展开（300px），贴右放会溢出窗口右缘被裁掉。
-						*/}
-						<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
-						{/*
-							模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
-							推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
-							两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
-							向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
-						*/}
-						<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
-						<span className="bar-spacer" />
-						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-							<IconMic size={16} />
-						</button>
-						{/* 输入余量：接近上限才出现（等宽数字），超限变红。 */}
-						{chars.show && (
-							<span
-								className={chars.over ? "char-remaining over" : "char-remaining"}
-								title={chars.over ? "已超出输入长度上限" : "剩余可输入字符数"}
-							>
-								{chars.remaining}
-							</span>
-						)}
-						{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
-						{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
-						{/*
-							流式期间发送键变中断键。
-							没有中断入口时，模型跑偏或长任务只能干等，甚至杀进程 —— 这是必须有的逃生门。
-						*/}
-						{streaming ? (
-							// 二次确认：首次点击武装 3s 窗口（按钮内容换 Esc 徽章），
-							// 窗口内再点（或再按 Esc）才真正中断，超时自动复原。
-							<button
-								type="button"
-								className="send-btn stop"
-								aria-label="停止"
-								title={stopConfirm.phase === "pending" ? "再按一次确认停止" : "停止生成"}
-								onClick={requestStop}
-							>
-								{stopConfirm.phase === "pending" ? <kbd className="stop-confirm-kbd">Esc</kbd> : <IconStop size={14} />}
-							</button>
-						) : (
-							<button
-								type="button"
-								className="send-btn"
-								aria-label="发送"
-								onClick={submit}
-								disabled={!ready || draft.trim() === "" || chars.over}
-							>
-								<IconSend size={16} />
-							</button>
-						)}
-					</div>
-				</div>
+				<PlusMenu
+					modes={conversation.availableModes}
+					currentId={conversation.state.interactionId}
+					onInteractionChange={onInteractionChange}
+					onPickFiles={() => void composerRef.current?.pickFiles()}
+					onTodo={onTodo}
+				/>
+				{/*
+					权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
+					时不必退回首页换档。弹层左对齐向上展开（300px），
+					贴右放会溢出窗口右缘被裁掉。
+				*/}
+				<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+				{/*
+					模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
+					推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
+					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
+					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
+				*/}
+				<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
+				<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+					<IconMic size={16} />
+				</button>
+				{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
+				{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
+			</Composer>
 		</footer>
 		{saveOpen && (
 			<SaveToWorkspaceDialog

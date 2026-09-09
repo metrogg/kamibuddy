@@ -16,6 +16,13 @@
 
 import type { ConversationEntry } from "./session-events.ts";
 
+/**
+ * 预览面板的超大文件阈值（与 WorkBuddy 一致）：≥10MB 不预览，给占位 + 下载引导。
+ * 只在整读进内存的文本分支强制执行（artifact-panel.tsx TextPreview）；
+ * 图/视/音经静态服务流式加载，浏览器自己扛大文件，不重复设限。
+ */
+export const ARTIFACT_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+
 /** 一次写文件操作的增删行统计。 */
 export interface FileChange {
 	readonly path: string;

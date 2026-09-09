@@ -56,6 +56,34 @@ describe("PreviewServer", () => {
 		expect(r.status).toBe(404);
 	});
 
+	it("音/视频扩展名按 MIME 表回 Content-Type", async () => {
+		writeFileSync(join(base, "a.webm"), "x");
+		writeFileSync(join(base, "a.wav"), "x");
+		writeFileSync(join(base, "a.ogg"), "x");
+		await server.setRoot(base);
+		expect((await fetch(`${server.baseUrl}/a.webm`)).headers.get("content-type")).toBe("video/webm");
+		expect((await fetch(`${server.baseUrl}/a.wav`)).headers.get("content-type")).toBe("audio/wav");
+		// .ogg 内容未知，按 RFC 5334 回 application/ogg（媒体元素自行嗅探）。
+		expect((await fetch(`${server.baseUrl}/a.ogg`)).headers.get("content-type")).toBe("application/ogg");
+	});
+
+	it("?download 回 Content-Disposition: attachment（跨源 <a download> 不生效，靠它落盘）", async () => {
+		writeFileSync(join(base, "报告 第一章.txt"), "x");
+		await server.setRoot(base);
+		const plain = await fetch(`${server.baseUrl}/snake.html`);
+		expect(plain.headers.get("content-disposition")).toBeNull();
+
+		const r = await fetch(`${server.baseUrl}/snake.html?download`);
+		expect(r.status).toBe(200);
+		expect(r.headers.get("content-disposition")).toBe(`attachment; filename*=UTF-8''${encodeURIComponent("snake.html")}`);
+
+		// 非 ASCII 文件名走 RFC 5987 filename* 百分号编码。
+		const zh = await fetch(`${server.baseUrl}/${encodeURIComponent("报告 第一章.txt")}?download`);
+		expect(zh.headers.get("content-disposition")).toBe(
+			`attachment; filename*=UTF-8''${encodeURIComponent("报告 第一章.txt")}`,
+		);
+	});
+
 	it("setRoot(undefined) 停止服务（无可预览目录）", async () => {
 		await server.setRoot(base);
 		const url = server.baseUrl;

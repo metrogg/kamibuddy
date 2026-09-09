@@ -8,13 +8,26 @@
 
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
 
-type Handler = (event: unknown) => Promise<{ systemPrompt?: string } | undefined>;
+type Handler = (event: {
+	readonly systemPromptOptions: {
+		contextFiles?: PromptContextOptions["contextFiles"];
+		toolSnippets?: PromptContextOptions["toolSnippets"];
+		promptGuidelines?: PromptContextOptions["promptGuidelines"];
+	};
+}) => Promise<{ systemPrompt?: string } | undefined>;
+
+const EMPTY_EVENT = { systemPromptOptions: {} } as Parameters<Handler>[0];
 
 function mount(options: {
 	readonly axes: { sceneId: string; interactionId: string };
-	readonly compose: (sceneId: string, interactionId: string) => Promise<string>;
+	readonly compose: (
+		sceneId: string,
+		interactionId: string,
+		piContext: PromptContextOptions,
+	) => Promise<string>;
 }): Handler {
 	let captured: Handler | undefined;
 	const fakePi = {
@@ -38,7 +51,7 @@ describe("before_agent_start 接缝", () => {
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "组装后的提示词",
 		});
-		const result = await handler({});
+		const result = await handler(EMPTY_EVENT);
 		expect(result?.systemPrompt).toBe("组装后的提示词");
 	});
 
@@ -53,9 +66,9 @@ describe("before_agent_start 接缝", () => {
 			},
 		});
 
-		await handler({});
+		await handler(EMPTY_EVENT);
 		axes.interactionId = "ask";
-		const second = await handler({});
+		const second = await handler(EMPTY_EVENT);
 
 		expect(seen).toEqual(["work/craft", "work/ask"]);
 		expect(second?.systemPrompt).toBe("work/ask");
@@ -69,6 +82,6 @@ describe("before_agent_start 接缝", () => {
 				throw new Error("资源坏了");
 			},
 		});
-		await expect(handler({})).rejects.toThrow("资源坏了");
+		await expect(handler(EMPTY_EVENT)).rejects.toThrow("资源坏了");
 	});
 });

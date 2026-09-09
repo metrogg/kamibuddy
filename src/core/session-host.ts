@@ -52,7 +52,8 @@ import { join, resolve } from "node:path";
  *
  * 理由不是保守，是 pi 在 Windows 上找不到 bash 会直接抛异常（utils/shell.ts:100），
  * 而目标用户（行政 / 产品 / 销售）机器上不会装 Git for Windows。
- * 文档流水线本来就全走 Node 自定义工具（AGENTS.md §2），不需要 shell。
+ * 文档流水线的 Python venv 是进程内受控调用，不经 agent 的自由 shell 工具，
+ * 见 ARCHITECTURE.md §4.4 —— 因此这里仍不把 bash/powershell 放进默认工具集。
  *
  * D4-5 起由 resources/modes/<id>.md 的 frontmatter 驱动，届时本常量退化为兜底。
  */

@@ -93,10 +93,10 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 **流式期间发送键变停止键**。没有中断入口时，模型跑偏或长任务只能干等甚至杀进程。
 
-**权限门**（`extensions/permission-policy.ts` + `permission-gate.ts`，62 个测试）：
+**权限门**（`extensions/permission-policy.ts` + `permission-gate.ts`，83 个测试）：
 判定主轴是路径归属而非工具种类，详见 ARCHITECTURE.md §4.57。
 工作目录内放行、目录外询问、**凭据目录直接拒且不给「允许」选项**（禁读也禁写）。
-2026-09-08 起加了权限档位与项目信任，见下方「权限模型」一节（权限相关共 89 个测试）。
+2026-09-08 起加了权限档位与项目信任，见下方「权限模型」一节（权限相关共 110 个测试）。
 
 审批队列而非单槽 —— pi 默认并行执行工具，同批可能来多条请求，覆盖会让工具永久挂住。
 
@@ -110,8 +110,8 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 ```
 typecheck        通过
-check:deps       99 个文件，依赖方向合规
-test             444 passed（32 个测试文件）
+check:deps       123 个文件，依赖方向合规
+test             607 passed（44 个测试文件）
 smoke:session    13/13  ← SessionHost.create() 全流程，含扩展注入实测
 smoke:permission 10/10  ← 权限门真实运行时拦截链（beforeToolCall 触发，零模型额度）
 build            三目标（main/preload/renderer）产物正常
@@ -509,9 +509,9 @@ spec：`.trae/specs/add-plan-mode-and-plus-menu/`。机制学 pi 官方示例扩
 chip 与图片附件同为组件态不做会话持久化（已知限制，实现路径已注释）。
 `document-reference.ts` 与 `insertSnippetAtCursor` 已删干净。605 个测试全绿。
 
-另：同日规则变更——AGENTS.md §2「文档流水线一行 shell 都不许碰」放宽为
-「不许假设用户机器上有第三方命令」（允许 Windows 原生 powershell/COM 与安装包
-自带二进制），决策记录见 ARCHITECTURE.md §4.4 修订注。
+另：同日规则变更——AGENTS.md §2「文档流水线」改为按 WorkBuddy 用 Python venv
+（托管 `~/.venv-html-to-docx` + `uv` 独立 Python 3.12），不再要求用户预装
+Python / Git for Windows，决策记录见 ARCHITECTURE.md §4.4。
 
 ## 已知坑
 
@@ -522,8 +522,8 @@ chip 与图片附件同为组件态不做会话持久化（已知限制，实现
 pi README 自述 "does not include a built-in permission system"，它的思路是靠容器隔离整个进程。
 
 我们的对策是 `src/extensions/` 那一层（ARCHITECTURE.md §4.57）。
-**改动权限相关文件时务必跑** **`npm test`** —— 那 106 个测试是这条安全边界的唯一护栏
-（`permission-policy` 57 + `permission-gate` 22 + `project-trust` 9 + `shared/permissions` 18），
+**改动权限相关文件时务必跑** **`npm test`** —— 那 110 个测试是这条安全边界的唯一护栏
+（`permission-policy` 60 + `permission-gate` 23 + `project-trust` 9 + `shared/permissions` 18），
 另有 `npm run smoke:permission` 的 10 条真实运行时断言。
 
 ### IDE 注入 `ELECTRON_RUN_AS_NODE=1`
@@ -825,9 +825,9 @@ misunderstand as a security boundary"* —— 做不到就说清楚，不假装�
 上面所有路径保护（`type ~\.ssh\id_rsa`）。既然文档里批评了 WorkBuddy broker shim
 的 fail-open，自己就不能在同一处松手。
 
-测试：**权限相关共 106 个用例** —— `shared/permissions` 18 +
-`permission-policy` 57（含 skills/ 只读例外、区外读询问、appDir 写高风险）+
-`permission-gate` 22 + `project-trust` 9。另有 `smoke:permission` 10 条真实运行时断言。
+测试：**权限相关共 110 个用例** —— `shared/permissions` 18 +
+`permission-policy` 60（含 skills/ 只读例外、区外读询问、appDir 写高风险）+
+`permission-gate` 23 + `project-trust` 9。另有 `smoke:permission` 10 条真实运行时断言。
 其中最该留意的一条：**切到更严的档位后，先前「记住」的批准立即失效**
 （remembered 检查排在 decide 之后；若为了少弹窗把它提前，「切成只读」就成了空话）。
 

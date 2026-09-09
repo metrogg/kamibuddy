@@ -18,7 +18,7 @@
 | 约束 | 原因 |
 |---|---|
 | `npm run check && npm test` 必须绿才算完成 | `check:deps` 机械拦截依赖方向违规，靠自觉守不住 |
-| **不要动权限相关的 89 个测试** | 唯一的安全边界护栏，见 §0.1。分布：`extensions/permission-policy` 41 + `permission-gate` 21 + `project-trust` 9 + `shared/permissions` 18 |
+| **不要动权限相关的 110 个测试** | 唯一的安全边界护栏，见 §0.1。分布：`extensions/permission-policy` 60 + `permission-gate` 23 + `project-trust` 9 + `shared/permissions` 18 |
 | 不 fork pi，只依赖 `@earendil-works/pi-coding-agent` 一个包 | 装 pi 内部包（如 pi-ai）会造出第二份拷贝，已踩过 |
 | 查 pi 的 API 去读 `开源项目/pi/` 源码，不要凭记忆猜 | 那份 clone 就是留着当参考的；pi 0.85.x 迭代快 |
 | 提示词 / 模板 / 技能正文一律自己写 | 合规红线（AGENTS.md §6）：机制可学，**文字不许从 WorkBuddy 原文复制** |
@@ -76,8 +76,10 @@ pi README 自述 "does not include a built-in permission system" —— 它的�
 - `session.setActiveToolsByName(names)` 切换工具集，"Changes take effect on the next agent turn"。
 - 内置工具只有 8 个：`read` / `write` / `edit` / `find` / `grep` / `ls` / `bash` / `powershell`。
 - 自定义工具经 `pi.registerTool()` 注册（扩展内），或 `createAgentSession({ customTools })`。
-- **不给模型 `bash` / `powershell`**：pi 在 Windows 找不到 bash 会直接抛异常，
-  而目标用户机器上不会装 Git for Windows（ARCHITECTURE.md §4.4）。
+- **不给模型 `bash` / `powershell`**：pi 在 Windows 找不到 bash 会直接抛异常
+  （`utils/shell.ts:100`），而目标用户机器上不会装 Git for Windows。
+  这只管 agent 的自由 shell 工具；文档流水线的 Python venv 是进程内受控调用，
+  见 ARCHITECTURE.md §4.4。
 
 ### 扩展
 

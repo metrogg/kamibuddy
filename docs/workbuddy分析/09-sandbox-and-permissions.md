@@ -334,6 +334,11 @@ AGENTS.md §2 原本写"**一行 shell 都不许碰**"，理由是 pi 在 Window
 
 **AGENTS.md §2 与 ARCHITECTURE.md 需同步改，并写明改动理由**（否则后人会以为约定被随意破坏）。
 
+> **2026-09-09 追加**：AGENTS.md §2 里「文档流水线」部分已由用户拍板改为
+> 按 WorkBuddy 用 Python venv（托管 `~/.venv-html-to-docx` + `uv` 独立 Python 3.12），
+> 不再要求用户预装 Python / Git for Windows。这只放宽**文档流水线的受控运行环境**；
+> 本节的「agent 自由 shell 决策 A」不变：`bash` 仍禁、PowerShell 需危险命令检查器。
+
 ### 决策 B：OS 沙箱本轮搁置 ✅
 
 **搁置理由是成本与排期，不是"做不到"**（见事实 4：codex 与 dsh 各有一份 Windows 实现）：

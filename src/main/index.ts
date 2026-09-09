@@ -123,12 +123,16 @@ function callDaemon(channel: string, args: readonly unknown[]): Promise<unknown>
  * 生产环境没有这个包袱，收到最紧。
  */
 function installCsp(isDev: boolean): void {
+	// connect-src 放行 127.0.0.1:*：PDF 预览的 pdf.js 用 fetch 从 preview-server
+	// 拉文件（img/frame 只是嵌资源，fetch 受 connect-src 管）。
 	const policy = isDev
 		? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' ws://localhost:* http://localhost:*; " +
+			"img-src 'self' data: blob: http://127.0.0.1:*; " +
+			"connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*; " +
 			"frame-src http://127.0.0.1:*"
 		: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self'; frame-src http://127.0.0.1:*";
+			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
+			"frame-src http://127.0.0.1:*";
 
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
 		callback({

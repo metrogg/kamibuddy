@@ -59,14 +59,14 @@ export function ModelMenu({ modelId, onOpenSettings, onError }: ModelMenuProps):
 	const available: readonly ModelInfo[] = (snapshot?.models ?? []).filter((m) => m.available);
 
 	return (
-		<div className="model-menu-zone">
+		<div className="menu-zone">
 			<button type="button" className="bar-btn bar-btn-text" title={modelId ?? "尚未选择模型"} onClick={toggle}>
 				{shortModelName(modelId)}
 				<IconChevronDown size={13} />
 			</button>
 
 			{open && (
-				<div className="model-menu">
+				<div className="pop-menu model-menu">
 					{snapshot === undefined ? (
 						<p className="model-menu-empty">正在读取模型…</p>
 					) : available.length === 0 ? (

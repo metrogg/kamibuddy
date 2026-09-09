@@ -34,7 +34,7 @@ export function PlusMenu({ modes, currentId, onInteractionChange, onPickFiles, o
 	};
 
 	return (
-		<div className="plus-menu-zone">
+		<div className="menu-zone">
 			<button
 				type="button"
 				className="bar-btn"
@@ -49,7 +49,7 @@ export function PlusMenu({ modes, currentId, onInteractionChange, onPickFiles, o
 				<>
 					{/* 透明 backdrop：点菜单外任意处关闭，与同区 PermissionMenu 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={close} />
-					<div className="plus-menu">
+					<div className="pop-menu plus-menu">
 						<button
 							type="button"
 							className="plus-menu-item"

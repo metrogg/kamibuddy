@@ -430,20 +430,13 @@ button {
 	visibility: visible;
 }
 
-/* ⋯ 弹层：参照 .permission-menu 的视觉（圆角卡片 + 边框 + 阴影），向下展开。 */
+/* ⋯ 弹层：卡片视觉复用 .pop-menu（圆角 = --radius-md 10px，与旧硬编码一致），向下展开。 */
 .space-menu {
-	position: absolute;
 	top: 100%;
 	right: 4px;
 	z-index: 20;
-	display: flex;
-	flex-direction: column;
 	min-width: 140px;
 	padding: 6px;
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	box-shadow: var(--shadow-card);
 }
 
 .space-menu-item {
@@ -1297,10 +1290,13 @@ button {
 }
 
 .stream > * {
-	max-width: 760px;
+	/* WorkBuddy 内容宽口径 832px，比此前的 760 更舒展。 */
+	max-width: 832px;
 }
 
 .entry {
+	/* 浮动操作条（.entry-toolbar）的定位锚点。 */
+	position: relative;
 	padding: 10px 14px;
 	border-radius: 12px;
 	/* pre-wrap 只留给纯文本消息（用户气泡、错误）。
@@ -1316,15 +1312,37 @@ button {
 /* 回合头部：agent 名 + 「已处理 Ns / 已完成」（WorkBuddy 同位置，名字下挂计时）。 */
 .turn-header {
 	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	/* 贴齐消息正文左缘（entry 有 14px 内边距）。 */
+	margin: -4px 0 0 0;
+	padding-bottom: 4px;
+}
+
+.turn-avatar {
+	/* WorkBuddy 助手身份块：24px 圆形头像。 */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	color: var(--text-dim);
+	flex: 0 0 auto;
+	margin-top: 2px;
+}
+
+.turn-meta {
+	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	/* 贴齐消息正文左缘（entry 有 14px 内边距）。 */
-	margin: -4px 0 -6px 14px;
 }
 
 .turn-agent {
 	font-size: 14px;
-	font-weight: 500;
+	font-weight: 600;
 }
 
 .turn-duration {
@@ -1357,10 +1375,14 @@ button {
 	align-items: center;
 	gap: 6px;
 	width: 100%;
-	padding: 4px 14px;
+	padding: 8px 12px;
 	font-size: 15px;
 	color: var(--text-dim);
 	text-align: left;
+	/* 折叠行是「过程在此」的可见入口，给一个轻量卡片底避免它像一行灰字一样被忽略。 */
+	background: var(--bg-raised);
+	border-radius: 8px;
+	border: 1px solid var(--border);
 }
 
 .metafold-row:hover {
@@ -1378,7 +1400,7 @@ button {
 /* 收起态箭头朝右（-90°），展开态旋回朝下（0°）。 */
 .metafold-caret {
 	flex: 0 0 auto;
-	opacity: 0;
+	opacity: 1;
 	transform: rotate(-90deg);
 	transition:
 		opacity 0.15s ease,
@@ -1409,10 +1431,10 @@ button {
 	width: fit-content;
 	/* WorkBuddy 用户气泡宽度口径：明显短于消息流宽（约 70%），长消息折行而非占满。 */
 	max-width: 70%;
-	/* WorkBuddy 用户气泡排版口径：padding 8/12、字号 13、行高 19。 */
-	padding: 8px 12px;
-	font-size: 13px;
-	line-height: 19px;
+	/* WorkBuddy 用户气泡排版口径：上下 32px 的舒展留白、字号 15。 */
+	padding: 32px 16px;
+	font-size: 15px;
+	line-height: 1.6;
 	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
 	background: var(--bg-raised);
 	/* 超高消息内部滚动，不让一条长消息占满整个消息流（WorkBuddy 同口径 310px）。 */
@@ -1439,34 +1461,77 @@ button {
 	cursor: zoom-in;
 }
 
-/* hover 工具条：常驻占位只切透明度（避免 hover 插入 DOM 推搡下方消息流），
-   负 margin 把占位高度吃进 .stream 的 12px 间距里，平时几乎不占额外高度。 */
-.user-toolbar {
+/* hover 工具条（user / assistant 共用基类）：常驻占位只切透明度，
+   避免 hover 插入 DOM 推搡下方消息流。 */
+.entry-toolbar {
+	/* WorkBuddy 底部浮动操作条：绝对定位、居中浮在消息下方，不占布局高度，
+	   避免 hover 插入/显示时推搡消息流。 */
+	position: absolute;
+	left: 50%;
+	bottom: -14px;
+	z-index: 20;
+	transform: translateX(-50%);
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	height: 18px;
-	margin: -8px 4px -4px 0;
+	height: 32px;
 	opacity: 0;
 	transition: opacity 0.2s ease;
+	pointer-events: none;
+}
+
+.entry:hover .entry-toolbar {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* 用户侧（右对齐贴气泡）：负 margin 把占位高度吃进 .stream 的 12px 间距里，
+   平时几乎不占额外高度。 */
+.entry-toolbar-right {
+	left: auto;
+	right: 0;
+	transform: none;
+}
+
+.entry-toolbar-left {
+	left: 14px;
+	transform: none;
+}
+
+/* 时间戳文字（仅用户侧工具条有）。原从 .user-toolbar 继承字号与颜色，
+   合并基类后收归自身。 */
+.user-time {
+	/* 与浮动圆钮同族的时间戳胶囊：白底 + 阴影，hover 时一并浮现。 */
+	display: inline-flex;
+	align-items: center;
+	height: 32px;
+	padding: 0 10px;
 	font-size: 11px;
 	color: var(--text-dim);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	box-shadow: var(--shadow-card);
 }
 
-.entry.user:hover .user-toolbar {
-	opacity: 1;
-}
-
-.user-copy {
+.entry-icon-btn {
+	/* 浮动圆钮：白底 + 卡片阴影（WorkBuddy 消息工具条同款）。 */
 	display: flex;
 	align-items: center;
-	padding: 2px;
-	border-radius: 4px;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-card);
 	color: var(--text-dim);
+	padding: 2px;
+	pointer-events: auto;
 }
 
-.user-copy:hover {
-	background: var(--bg-hover);
+.entry-icon-btn:hover {
+	background: var(--bg-raised);
 	color: var(--text);
 }
 
@@ -1503,52 +1568,34 @@ button {
 	line-height: 20px;
 }
 
-/* 助手回答底部操作条（仅复制）：与 user-toolbar 同款常驻占位、hover 切透明度，
-   理由相同（hover 插入 DOM 会推搡下方消息流）。左对齐贴正文 —— assistant
-   消息在左，与 user-toolbar 的右对齐相反。 */
-.assistant-toolbar {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	height: 18px;
+/* 助手侧：左对齐贴正文 —— assistant 消息在左，与用户气泡的右对齐相反。 */
+.entry-toolbar-left {
 	margin-top: 4px;
-	opacity: 0;
-	transition: opacity 0.2s ease;
-}
-
-.entry.assistant:hover .assistant-toolbar {
-	opacity: 1;
-}
-
-.assistant-copy {
-	display: flex;
-	align-items: center;
-	padding: 2px;
-	border-radius: 4px;
-	color: var(--text-dim);
-}
-
-.assistant-copy:hover {
-	background: var(--bg-hover);
-	color: var(--text);
 }
 
 /*
- * 「执行计划」文字按钮：与 .assistant-copy 同族（同一条 hover 工具条），
+ * 「执行计划」文字按钮：与 .entry-icon-btn 同族（同一条 hover 工具条），
  * 用文字不用图标 —— 「执行计划」这个动作没有不言自明的图标可表达。
  * line-height 收紧是为了不撑破工具条 18px 的常驻占位高度。
  */
 .assistant-execute {
-	padding: 1px 6px;
-	border-radius: 4px;
-	color: var(--text-dim);
+	/* 与浮动操作条里的圆钮同族：同白底、同阴影、同 32px 高。 */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 32px;
+	padding: 0 12px;
+	border-radius: 999px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-card);
+	color: var(--text);
 	font-size: 12px;
-	line-height: 1.3;
+	line-height: 1;
 }
 
 .assistant-execute:hover {
-	background: var(--bg-hover);
-	color: var(--text);
+	background: var(--bg-raised);
 }
 
 /* ── 错误卡（内嵌于消息流，run 异常或提交失败时展示）───────────────
@@ -1771,7 +1818,7 @@ button {
 	color: var(--text-dim);
 }
 
-/* 与 .user-copy 同一风格的图标按钮：三级灰，hover 加深。 */
+/* 与 .entry-icon-btn 同一风格的图标按钮：三级灰，hover 加深。 */
 .code-block-copy {
 	display: flex;
 	align-items: center;
@@ -1836,6 +1883,16 @@ button {
 	border-left: 2px solid var(--border);
 	font-size: 13px;
 	white-space: normal;
+	border-radius: 8px;
+	border-left-width: 2px;
+	border-left-style: solid;
+	border-left-color: var(--border);
+}
+
+/* WorkBuddy 工具卡执行中外圈脉冲：outline + border-ping，是「正在干活」的最直观信号。 */
+.entry.tool:has(.tool-dot.running) {
+	outline: 2px solid color-mix(in srgb, var(--text-dim) 35%, transparent);
+	animation: border-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 .entry.tool-error {
@@ -1884,6 +1941,13 @@ button {
 @keyframes tool-pulse {
 	50% {
 		opacity: 0.25;
+	}
+}
+
+@keyframes border-ping {
+	75%,
+	100% {
+		outline-color: transparent;
 	}
 }
 
@@ -2173,6 +2237,74 @@ button {
 	color: var(--danger);
 }
 
+/* 目录树：flattenTree 输出的一维行，缩进由行内 style 给（padding-left = 8 + depth*12，
+   文件行再 +18 补 chevron 位）。行级 hover/selected 与 preview-item 同口径。 */
+.file-tree-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 4px 8px;
+	border-radius: 6px;
+	text-align: left;
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.file-tree-row:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+/* 当前预览的文件行高亮（VSCode 资源管理器的 active file 语义）。 */
+.file-tree-row.selected {
+	background: var(--bg-raised);
+	color: var(--text);
+}
+
+.file-tree-row svg {
+	flex: 0 0 auto;
+}
+
+/* chevron 折叠朝右（-90°）、展开朝下，旋转过渡给展开一个可感知的方向变化。 */
+.file-tree-chevron {
+	transform: rotate(-90deg);
+	transition: transform 0.15s ease;
+}
+
+.file-tree-chevron.expanded {
+	transform: rotate(0deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.file-tree-chevron {
+		transition: none;
+	}
+}
+
+.file-tree-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 文件夹「加载中」转圈：复用 task-spin keyframes，不另写一份（§4 防重复）。 */
+.file-tree-spinner {
+	flex: 0 0 auto;
+	margin-left: auto;
+	width: 11px;
+	height: 11px;
+	border: 2px solid var(--border);
+	border-top-color: var(--text-dim);
+	border-radius: 50%;
+	animation: task-spin 0.8s linear infinite;
+}
+
+/* 单击预览的暂态 tab 标题斜体（VSCode 语义，WorkBuddy 同款）；双击固定后转正。 */
+.preview-tab-item.preview .preview-tab-label {
+	font-style: italic;
+}
+
 /* tab 条：概览下拉右侧，横向滚动，每个 tab 是「文件名 + 关闭」的胶囊。 */
 .preview-tabs-strip {
 	flex: 1 1 auto;
@@ -2239,6 +2371,58 @@ button {
 	background: var(--bg-raised);
 }
 
+/* 视频：与 .preview-image 同款撑满 + object-fit 信箱；黑底是视频信箱的通用底色。 */
+.preview-video {
+	flex: 1 1 auto;
+	object-fit: contain;
+	background: #000;
+}
+
+/* 音频：无画面只有控制条，flex 容器里 margin:auto 双向居中。 */
+.preview-audio {
+	margin: auto;
+	width: min(420px, 90%);
+}
+
+/* 预览占位（暂不支持 / 超大 / 不可播）：图标 + 文案 + 操作组，垂直居中。
+   .preview-unsupported 与 .preview-oversized 目前视觉一致，类名分开留语义口子。 */
+.preview-unsupported,
+.preview-oversized {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 24px;
+	color: var(--text-dim);
+}
+
+.preview-placeholder-message {
+	margin: 0;
+	font-size: 13px;
+}
+
+.preview-actions {
+	display: flex;
+	gap: 8px;
+}
+
+/* 占位里的操作按钮/链接同款：描边胶囊，button 与 a 视觉对齐。 */
+.preview-action {
+	padding: 6px 14px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--text);
+	font-size: 13px;
+	text-decoration: none;
+}
+
+.preview-action:hover {
+	background: var(--bg-hover);
+}
+
 .preview-text {
 	flex: 1 1 auto;
 	margin: 0;
@@ -2248,6 +2432,26 @@ button {
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+/* 代码预览（Monaco）：编辑器挂的宿主 div 必须有确定高度——flex 撑满
+   .preview-body，min-height: 0 防止内容把 flex 项撑破（resize 跟随靠
+   automaticLayout，不用 CSS 管）。 */
+.preview-code {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* markdown 预览：富文本渲染容器，排版样式在 .markdown，这里只管布局。 */
+.preview-markdown {
+	flex: 1 1 auto;
+	padding: 12px 16px;
+	overflow: auto;
+}
+
+/* 图片宽过面板时收进容器，别撑破滚动区。 */
+.preview-markdown img {
+	max-width: 100%;
 }
 
 /* 变更预览：unified diff 按前缀着色。 */
@@ -2279,6 +2483,167 @@ button {
 
 .diff-hunk {
 	color: var(--text-dim);
+}
+
+/*
+ * PDF 预览：工具栏（翻页/缩放）+ 灰底居中画布。
+ * 画布区用 --bg-raised 灰底衬出白纸页，是 PDF 阅读器的通用语言。
+ */
+.preview-pdf {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.preview-pdf-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.preview-pdf-pages {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.preview-pdf-page-input {
+	width: 3em;
+	padding: 2px 4px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-size: 12px;
+	text-align: center;
+	color: var(--text);
+}
+
+.preview-pdf-sep {
+	width: 1px;
+	height: 16px;
+	margin: 0 4px;
+	background: var(--border);
+}
+
+.preview-pdf-zoom {
+	min-width: 4.5em;
+	text-align: center;
+}
+
+.preview-pdf-body {
+	flex: 1 1 auto;
+	overflow: auto;
+	padding: 16px;
+	background: var(--bg-raised);
+}
+
+/* 单页白纸居中；react-pdf 的 canvas 与文本层都由它定位。 */
+.preview-pdf-body .react-pdf__Page {
+	margin: 0 auto;
+	box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
+	background: #fff;
+}
+
+/*
+ * Office 预览：工具栏（文件名 + 下载/外部打开）+ 内容区。
+ * 布局骨架与 .preview-pdf 同口径；三个格式的内容滚动由各容器自管。
+ */
+.preview-office {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.preview-office-bar {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+/* 文件名占满剩余宽度并省略号截断，把操作按钮挤到最右。 */
+.preview-office-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.preview-office-content {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-raised);
+}
+
+/* docx：灰底衬白纸页。块布局 + margin auto 居中——比纸窄时溢出只向右，滚动可达
+   （flex 居中会把左半溢出推出滚动区，老坑）。 */
+.office-docx-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
+
+.office-docx .docx-wrapper {
+	display: block;
+	background: transparent;
+	padding: 16px;
+}
+
+.office-docx .docx-wrapper > section.docx {
+	background: #fff;
+	box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
+	margin: 0 auto 16px;
+}
+
+/* xlsx：fortune-sheet 根节点是 100%×100%，容器给死尺寸并禁滚动（表格内部自己滚）。 */
+.office-sheet-host {
+	overflow: hidden;
+}
+
+/* pptx：纵向滚动整条幻灯片；缩放到面板宽由组件里的 zoom 完成。 */
+.office-pptx-wrap {
+	position: relative;
+}
+
+.office-pptx-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
+
+/* 加载/错误浮层：盖在常显的渲染宿主上（echarts canvas 需要宿主始终有尺寸）。 */
+.office-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: 13px;
+	text-align: center;
+}
+
+.office-pptx {
+	padding: 16px 0;
+}
+
+/* 库的 wrapper 默认黑底（放映场景的语言），嵌进预览面板要透明底（WorkBuddy 同款覆盖）。 */
+.office-pptx .pptx-preview-wrapper {
+	background: transparent !important;
 }
 
 .preview-fallback {
@@ -2489,30 +2854,78 @@ button {
 
 /* ── 全局轻提示 ───────────────────────────────────────────────── */
 
-.toast {
+.toast-stack {
 	position: fixed;
 	left: 50%;
-	bottom: 28px;
+	top: 20px;
 	transform: translateX(-50%);
-	padding: 8px 16px;
-	background: var(--primary);
-	color: var(--primary-text);
-	border-radius: 999px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	/* 盖住一切内容。 */
+	z-index: 100;
+	pointer-events: none;
+}
+
+.toast {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: min(420px, 80vw);
+	padding: 8px 14px;
+	background: var(--bg);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 10px;
 	font-size: 13px;
 	box-shadow: var(--shadow-card);
-	/* 盖住一切内容，包括对话页输入区。 */
-	z-index: 100;
+	pointer-events: auto;
 	animation: toast-in 0.16s ease-out;
+}
+
+.toast-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+}
+
+.toast-success .toast-icon {
+	color: var(--ok);
+}
+
+.toast-error .toast-icon {
+	color: var(--danger);
+}
+
+.toast-warning .toast-icon {
+	color: #d9822b;
+}
+
+.toast-spinner {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid var(--border);
+	border-top-color: var(--text-dim);
+	animation: toast-spin 0.8s linear infinite;
 }
 
 @keyframes toast-in {
 	from {
 		opacity: 0;
-		transform: translate(-50%, 6px);
+		transform: translateY(-6px);
 	}
 	to {
 		opacity: 1;
-		transform: translate(-50%, 0);
+		transform: translateY(0);
+	}
+}
+
+@keyframes toast-spin {
+	to {
+		transform: rotate(360deg);
 	}
 }
 
@@ -3052,26 +3465,35 @@ button {
 	color: var(--text);
 }
 
-/* ── 交互模式切换（对话页右上角）─────────────────────────────── */
-
-.mode-switch {
-	position: relative;
-	flex: 0 0 auto;
-}
-
-.mode-menu {
+/* ── 弹层菜单公共卡片 ─────────────────────────────────────────
+   mode / model / permission / plus 四个弹层同一组卡片视觉
+   （底色 / 边框 / 圆角 / 阴影同一组变量），各菜单类只保留差异：
+   定位、z-index、宽度、padding。 */
+.pop-menu {
 	position: absolute;
-	top: calc(100% + 4px);
-	right: 0;
-	z-index: 20;
 	display: flex;
 	flex-direction: column;
-	min-width: 220px;
-	padding: 4px;
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-card);
+}
+
+/* 弹层锚点：相对定位建立包含块，自身不随 flex 行拉伸。
+   mode / model / plus 菜单的触发器外壳同用；permission-menu-zone 无 flex 约束，维持原样。 */
+.menu-zone {
+	position: relative;
+	flex: 0 0 auto;
+}
+
+/* ── 交互模式切换（对话页右上角）─────────────────────────────── */
+
+.mode-menu {
+	top: calc(100% + 4px);
+	right: 0;
+	z-index: 20;
+	min-width: 220px;
+	padding: 4px;
 }
 
 .mode-menu-item {
@@ -3503,26 +3925,14 @@ button {
 
 /* ── 主页模型快捷切换 ─────────────────────────────────────────── */
 
-.model-menu-zone {
-	position: relative;
-	flex: 0 0 auto;
-}
-
 .model-menu {
-	position: absolute;
 	top: calc(100% + 6px);
 	right: 0;
 	z-index: 30;
-	display: flex;
-	flex-direction: column;
 	min-width: 250px;
 	max-height: 320px;
 	overflow-y: auto;
 	padding: 4px;
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
 }
 
 .model-menu-empty {
@@ -3592,18 +4002,13 @@ button {
 }
 
 .permission-menu {
-	position: absolute;
 	left: 0;
 	bottom: calc(100% + 8px);
 	z-index: 20;
-	display: flex;
-	flex-direction: column;
 	width: 300px;
 	padding: 6px;
-	background: var(--bg);
-	border: 1px solid var(--border);
+	/* 圆角比公共卡片大一档（12px vs --radius-md 10px），向上展开的大卡片视觉。 */
 	border-radius: 12px;
-	box-shadow: var(--shadow-card);
 }
 
 .permission-menu-empty {
@@ -3681,26 +4086,14 @@ button {
 /*
  * 与 composer 区其他弹层同一约定：向上展开、左对齐（弹层贴右放会溢出
  * 窗口右缘被裁掉，理由见 .composer-bar .model-menu 的覆写注释）。
- * 卡片视觉复用 model-menu 的档位（底色/边框/圆角/阴影同一组变量）。
+ * 卡片视觉复用 .pop-menu 公共卡片（底色/边框/圆角/阴影同一组变量）。
  */
-.plus-menu-zone {
-	position: relative;
-	flex: 0 0 auto;
-}
-
 .plus-menu {
-	position: absolute;
 	left: 0;
 	bottom: calc(100% + 8px);
 	z-index: 30;
-	display: flex;
-	flex-direction: column;
 	min-width: 180px;
 	padding: 4px;
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
 }
 
 .plus-menu-item {

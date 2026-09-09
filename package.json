@@ -21,17 +21,24 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@corbe30/fortune-excel": "^2.3.3",
     "@earendil-works/pi-coding-agent": "0.85.1",
+    "@fortune-sheet/react": "^1.0.4",
     "@mozilla/readability": "^0.6.0",
+    "docx-preview": "^0.4.0",
     "linkedom": "^0.18.13",
+    "monaco-editor": "^0.56.0",
     "officeparser": "4.2.0",
     "pdfjs-dist": "6.3.289",
+    "pptx-preview": "^1.0.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",
+    "react-pdf": "10.5.0",
     "remark-gfm": "4.0.1",
     "turndown": "^7.2.4",
-    "typebox": "^1.3.7"
+    "typebox": "^1.3.7",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@pdf-lib/fontkit": "1.1.1",

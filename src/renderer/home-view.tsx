@@ -10,22 +10,19 @@
 import { useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
-import { useAutocomplete } from "./autocomplete.tsx";
-import { AttachmentStrip, DocumentRefStrip, foldDocumentRefsIntoText, useImageAttachments } from "./image-attachments.tsx";
-import { useImeGuard } from "./ime-guard.ts";
+import { Composer } from "./composer.tsx";
+import type { ComposerHandle } from "./composer.tsx";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
-import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
+import { PlusMenu } from "./plus-menu.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
 	IconClose,
 	IconDoc,
 	IconMic,
-	IconPlus,
 	IconRefresh,
 	IconResearch,
-	IconSend,
 	IconSlide,
 	IconWeb,
 	IconWorkspace,
@@ -44,6 +41,10 @@ interface HomeViewProps {
 	readonly modelId: string | undefined;
 	/** 当前工作空间目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态。 */
 	readonly cwd: string | undefined;
+	/** 交互轴选项（「+」菜单的模式子菜单数据源），与对话页头部 ModeSwitch 同源。 */
+	readonly interactions: readonly ModeDescriptor[];
+	readonly interactionId: string;
+	readonly onInteractionChange: (interactionId: string) => void;
 	readonly onSceneChange: (sceneId: string) => void;
 	readonly onOpenSettings: () => void;
 	/** 主页就地操作（切模型等）失败时的提示出口。 */
@@ -111,6 +112,9 @@ export function HomeView({
 	sceneId,
 	modelId,
 	cwd,
+	interactions,
+	interactionId,
+	onInteractionChange,
 	onSceneChange,
 	onOpenSettings,
 	onError,
@@ -118,52 +122,12 @@ export function HomeView({
 	onWorkspaceChanged,
 	onTodo,
 }: HomeViewProps): React.JSX.Element {
-	const [draft, setDraft] = useState("");
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值。
-	// cwd 作为刷新键：切换工作空间后重拉文件列表，否则 @ 停留在旧空间的列表。
-	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd);
-	// IME 守卫与 chat-view 共用一份接线（useImeGuard）——此前各写一份漏了这里，
-	// 中文输入法选词 Enter 直接误发消息，两处同源后不会再出现这种半吊子修复。
-	const ime = useImeGuard();
-	// 图片/文档附件（粘贴/拖拽/选择三入口），与 chat-view 共用同一份 hook。
-	// 文档进 chip 条（documentRefs），提交时才折回文本，textarea 保持纯人写文本。
-	const img = useImageAttachments(onError);
-	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
-	const visionSupported = useModelSupportsVision(modelId);
+	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）；
+	// 案例卡片点击填充提示词也经句柄（setText）—— 草稿状态已内化进 Composer。
+	const composerRef = useRef<ComposerHandle>(null);
 	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
 	const [caseOffset, setCaseOffset] = useState(0);
 	const [casesVisible, setCasesVisible] = useState(true);
-
-	const submit = (): void => {
-		const text = draft.trim();
-		if (text === "" || !ready) return;
-		const images = img.attachments;
-		setDraft("");
-		// 附件等 daemon 接收成功再清：失败时错误已由 App 落进对话页错误卡，
-		// 图留在输入区，补一句话重发即可，不必重挑文件。
-		void onSubmit(foldDocumentRefsIntoText(text, img.documentRefs), images.length > 0 ? images : undefined).then(
-			() => img.clear(),
-			() => {},
-		);
-	};
-
-	/**
-	 * 输入框按键。ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
-	 * Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
-	 */
-	const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-		ac.bind.onKeyDown(e);
-		if (e.key !== "Enter" || e.defaultPrevented) return;
-		if (ime.shouldSwallowNow()) {
-			e.preventDefault();
-			return;
-		}
-		if (!e.shiftKey) {
-			e.preventDefault();
-			submit();
-		}
-	};
 
 	const visibleCases = Array.from(
 		{ length: Math.min(PAGE_SIZE, PRACTICE_CASES.length) },
@@ -203,58 +167,38 @@ export function HomeView({
 
 				<div className="composer-zone">
 					{/*
-						拖放三件套（onDragOver/onDragLeave/onDrop）挂在输入卡而非 textarea 上：
-						整个卡片（含按钮行）都是放置目标，命中区大得多。悬停高亮由
-						img.dragOver 驱动（进 drag-over 类），拖文本片段不亮（见 hook 注释）。
-					*/}
-					<div
-						className={`composer-card${img.dragOver ? " drag-over" : ""}`}
-						onDrop={img.bind.onDrop}
-						onDragOver={img.bind.onDragOver}
-						onDragLeave={img.bind.onDragLeave}
+					输入卡机制（拖放/附件/IME/补全/字数闸）全部在 Composer 内部，
+					与对话页同一份实现 —— 此前两份手写重复，「+」菜单漏改即实例。
+					首页语义差异：不开输入历史、不开草稿持久（发送即跳对话页），
+					故不传 draftKey / enableHistory / streaming。
+				*/}
+					<Composer
+						ref={composerRef}
+						ready={ready}
+						placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
+						rows={3}
+						cwd={cwd}
+						modelId={modelId}
+						onSubmit={onSubmit}
+						onError={onError}
 					>
-						{/* 文档 chip 条在图片缩略图条之前（与 chat-view 同序）。 */}
-						<DocumentRefStrip refs={img.documentRefs} onRemove={img.removeDocumentRefAt} />
-						<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
-						<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
-						<div className="composer-input">
-							{ac.menu}
-							<textarea
-								ref={textareaRef}
-								value={draft}
-								onChange={ac.bind.onChange}
-								onSelect={ac.bind.onSelect}
-								onBlur={ac.bind.onBlur}
-								onPaste={img.bind.onPaste}
-								onCompositionStart={ime.bind.onCompositionStart}
-								onCompositionEnd={ime.bind.onCompositionEnd}
-								onKeyDown={handleComposerKeyDown}
-								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
-								disabled={!ready}
-								rows={3}
-							/>
-						</div>
-						<div className="composer-bar">
-							<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片或文档" onClick={() => void img.pickFromDialog()}>
-								<IconPlus size={17} />
-							</button>
-							<span className="bar-spacer" />
-							{/* 就地快捷切换；管理与填 Key 在设置页（菜单底部有入口）。 */}
-							<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
-							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-								<IconMic size={16} />
-							</button>
-							<button
-								type="button"
-								className="send-btn"
-								aria-label="发送"
-								onClick={submit}
-								disabled={!ready || draft.trim() === ""}
-							>
-								<IconSend size={16} />
-							</button>
-						</div>
-					</div>
+						{/*
+						「+」菜单与对话页同一个 PlusMenu：添加文件（经 composerRef 触发
+						Composer 内部的附件选择框）+ 模式子菜单 + 专家/技能/连接器占位。
+					*/}
+						<PlusMenu
+							modes={interactions}
+							currentId={interactionId}
+							onInteractionChange={onInteractionChange}
+							onPickFiles={() => void composerRef.current?.pickFiles()}
+							onTodo={onTodo}
+						/>
+						{/* 就地快捷切换；管理与填 Key 在设置页（菜单底部有入口）。 */}
+						<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
+						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+							<IconMic size={16} />
+						</button>
+					</Composer>
 					<Mascot />
 				</div>
 
@@ -278,7 +222,7 @@ export function HomeView({
 						</header>
 						<div className="case-grid">
 							{visibleCases.map((c) => (
-								<button key={c.title} type="button" className="case-card" onClick={() => setDraft(c.prompt)}>
+								<button key={c.title} type="button" className="case-card" onClick={() => composerRef.current?.setText(c.prompt)}>
 									<span className={`case-cover case-cover-${c.cover}`} />
 									<span className="case-title">{c.title}</span>
 								</button>

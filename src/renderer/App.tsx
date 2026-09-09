@@ -31,7 +31,7 @@ import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
-import { Toast, type ToastMessage } from "./toast.tsx";
+import { Toast, type ToastMessage, type ToastType } from "./toast.tsx";
 
 type View = "home" | "chat" | "settings" | "skills" | "diagnostics";
 
@@ -75,8 +75,7 @@ export function App(): React.JSX.Element {
 	/** 关闭设置页后要回到的视图。见下方 openSettings 的理由。 */
 	const [returnView, setReturnView] = useState<"home" | "chat">("home");
 	const [lastError, setLastError] = useState<string | undefined>(undefined);
-	const [toast, setToast] = useState<ToastMessage | undefined>(undefined);
-	const toastTimer = useRef<number | undefined>(undefined);
+	const [toasts, setToasts] = useState<readonly ToastMessage[]>([]);
 	/**
 	 * 待审批队列，而不是单个槽位。
 	 *
@@ -210,22 +209,31 @@ export function App(): React.JSX.Element {
 		};
 	}, []);
 
-	// 新 toast 顶掉旧的，计时器也重置 —— 连续点不同入口时提示不会闪没。
-	useEffect(() => {
-		if (toast === undefined) return;
-		window.clearTimeout(toastTimer.current);
-		toastTimer.current = window.setTimeout(() => setToast(undefined), 2200);
-		return () => window.clearTimeout(toastTimer.current);
-	}, [toast]);
-
-	/** 轻提示的统一出口（区别于 showTodo 的「待做」语义，这里是真实的错误/状态反馈）。 */
-	const showToast = useCallback((text: string) => {
-		setToast({ id: Date.now(), text });
+	/** 出队一条 toast（自动关闭或用户点掉都走这里）。 */
+	const dismissToast = useCallback((id: number) => {
+		setToasts((list) => list.filter((item) => item.id !== id));
 	}, []);
+
+	/**
+	 * 轻提示的统一出口（区别于 showTodo 的「待做」语义，这里是真实的错误/状态反馈）。
+	 * 顶部居中堆叠、上限 10 条（超出驱逐最旧）。同 type+text 去重由调用方决定，
+	 * 这里只保证堆叠有界、每条 2.2s 自动关闭。
+	 */
+	const showToast = useCallback(
+		(text: string, type: ToastType = "info") => {
+			const id = Date.now() + Math.floor(Math.random() * 1_000);
+			setToasts((list) => {
+				const next = [...list, { id, text, type }];
+				return next.length > 10 ? next.slice(next.length - 10) : next;
+			});
+			window.setTimeout(() => dismissToast(id), 2200);
+		},
+		[dismissToast],
+	);
 
 	const showTodo = useCallback((feature: string) => {
-		setToast({ id: Date.now(), text: `「${feature}」待做，随版本迭代开放` });
-	}, []);
+		showToast(`「${feature}」待做，随版本迭代开放`, "info");
+	}, [showToast]);
 
 	const submit = useCallback(
 		(text: string, images?: readonly ImagePart[]): Promise<void> => {
@@ -302,9 +310,31 @@ export function App(): React.JSX.Element {
 	 */
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 
-	/** 打开/激活预览对象：不在 tab 集合里自动补 tab（概览下拉与产物卡的唯一入口）。 */
+	/**
+	 * 单击预览（VSCode 语义，概览下拉与产物卡的统一入口）：
+	 * 已有同 path tab 仅激活；否则保证全局唯一预览 tab——存在其他
+	 * isPreview tab 时原位替换它（VSCode：新预览顶掉旧预览，位置不动），
+	 * 没有则新建 isPreview tab。双击转正走 openFile。
+	 */
 	const openPreview = useCallback((sel: PreviewSelection) => {
-		setPreviewTabs((tabs) => (tabs.some((t) => sameSelection(t, sel)) ? tabs : [...tabs, sel]));
+		setPreviewTabs((tabs) => {
+			if (tabs.some((t) => sameSelection(t, sel))) return tabs;
+			const oldPreview = tabs.find((t) => t.isPreview === true);
+			if (oldPreview !== undefined) {
+				return tabs.map((t) => (sameSelection(t, oldPreview) ? { ...sel, isPreview: true } : t));
+			}
+			return [...tabs, { ...sel, isPreview: true }];
+		});
+		setPreviewActive(sel);
+	}, []);
+
+	/** 双击固定：已有同 path tab 激活并转正（isPreview=false），没有则新建固定 tab。 */
+	const openFile = useCallback((sel: PreviewSelection) => {
+		setPreviewTabs((tabs) =>
+			tabs.some((t) => sameSelection(t, sel))
+				? tabs.map((t) => (sameSelection(t, sel) ? { ...t, isPreview: false } : t))
+				: [...tabs, { ...sel, isPreview: false }],
+		);
 		setPreviewActive(sel);
 	}, []);
 
@@ -483,7 +513,7 @@ export function App(): React.JSX.Element {
 			window.kami
 				.exportSession(path)
 				.then(({ outputPath }) => {
-					showToast(`已导出：${outputPath}`);
+					showToast(`已导出：${outputPath}`, "success");
 					openArtifact(outputPath);
 					if (!isCurrent) {
 						resyncSnapshot();
@@ -571,7 +601,7 @@ export function App(): React.JSX.Element {
 			window.kami.saveToWorkspace(name).then(() => {
 				resyncSnapshot();
 				refreshTasks();
-				showToast("已保存到工作空间");
+				showToast("已保存到工作空间", "success");
 			}),
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[resyncSnapshot, refreshTasks],
@@ -646,6 +676,9 @@ export function App(): React.JSX.Element {
 					sceneId={conversation.state.sceneId}
 					modelId={conversation.state.modelId}
 					cwd={conversation.state.cwd}
+					interactions={conversation.availableModes}
+					interactionId={conversation.state.interactionId}
+					onInteractionChange={changeInteraction}
 					onSceneChange={changeScene}
 					onOpenSettings={openSettings}
 					onError={showToast}
@@ -711,6 +744,7 @@ export function App(): React.JSX.Element {
 					onWidthChange={setPanelWidth}
 					onToggleFullscreen={() => setPanelFullscreen((v) => !v)}
 					onOpen={openPreview}
+					onPin={openFile}
 					onCloseTab={closePreviewTab}
 					onOpenExternal={openArtifact}
 					onError={showToast}
@@ -766,7 +800,7 @@ export function App(): React.JSX.Element {
 					}}
 				/>
 			)}
-			<Toast message={toast} />
+			<Toast messages={toasts} />
 		</div>
 	);
 }

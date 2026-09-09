@@ -149,39 +149,33 @@ WorkBuddy 自己就是这条路（`doc-typeset` → HTML → `html-to-docx` → 
   → 导出器
 ```
 
-### 4.4 文档流水线不碰 shell
+### 4.4 文档流水线按 WorkBuddy 跑 Python venv
 
-pi 在 Windows 上找不到 bash 会**直接抛异常**，不是降级
-（`utils/shell.ts:100`，查找顺序：`settings.shellPath` → `%ProgramFiles%\Git\bin\bash.exe` → PATH 上的 `bash.exe`）。
-目标用户（行政 / 产品 / 销售）机器上不会装 Git for Windows。
+文档生成的 S3「HTML→docx」照 WorkBuddy 的 `tencent-docx` 来：不要求用户机器
+预装 Python / Git for Windows，而是自托管一套运行时（决策由用户拍板，替代 2026-09-08
+的「不碰 shell / 不假设第三方命令」旧方案）。
 
-WorkBuddy 的解法是自带用户态：`vendor/brokered-bin/` 30 个 toybox 替身、
-`vendor/toybox-macos`、`sitecustomize.py`，Python 侧靠 SessionStart hook 预热 venv。
-代价是 287MB 安装包和一个团队。
+环境准备抄 WorkBuddy 的 `setup-html-to-docx.sh` 机制：
 
-我们的解法是不产生依赖：文档流水线全部做成 Node 自定义工具，在进程内完成。
-机制与 WorkBuddy 一致，运行时从 Python 换成 Node。
+- 幂等脚本，已就绪秒退；首次联网三步：装 `uv`（`astral.sh`）→
+  `uv python install 3.12` 拉独立 Python 发行版（`python-build-standalone`）→
+  建 `~/.venv-html-to-docx` → `--only-binary=:all:` 装 wheel。
+- 强制 `--only-binary=:all:` 是刻意的：绕开 lxml 在无 libxml2/libxslt 时源码构建失败。
+- 私有化 / 无外网：`UV_INDEX_URL` + `UV_PYTHON_INSTALL_MIRROR` 指向内网镜像，
+  或运维预置 `uv` 与离线 wheel；未配置时首跑必然失败——这是明确交付前置条件，
+  不是静默降级。
+- SessionStart hook 后台异步预热（超时 5s 不阻塞），首次冷启动不卡会话。
+- 转换失败降级 Markdown；单个组件/图片失败只跳过或占位，不整篇崩。
 
-`shellPath` 作为配置项预留。若后续需要 `bash` 工具或 command hook，
-打包 MinGit（约 50MB）指向它即可，不改代码。
-
-**本节的范围是文档流水线**（2026-09-08 补注）。它不等于"agent 永远不能执行命令"——
-那是另一个决策，见 §4.4a。上面的论证只否掉 `bash`（Windows 上的依赖问题），
-没有否掉 Windows 原生的 `powershell`。
-
-**2026-09-09 修订（用户拍板）**：从"一行 shell 都不许碰"放宽为
-"不许假设用户机器上有第三方命令"——允许调用两类存在性有保证的命令：
-① Windows 原生 powershell（及经它可达的 COM，如 Word/WPS 自动化）；
-② 安装包自带二进制（体积权衡随包评审）。其余处理仍走进程内 Node 工具。
-上面的依赖问题论证不变（`bash` 仍禁），只是把规则从"禁用 shell"
-精确化为"禁无保证的依赖"。Word COM 自动化是办公场景的实在收益：
-目标用户机器普遍装着 Word/WPS，文档转换/回填可借力而不必自研全套 OOXML 写入。
+这套 venv 是文档流水线的进程内受控调用，**不等于把 `bash` 作为 agent 的自由
+shell 工具暴露出去**——agent 的 shell 能力是另一个决策，见 §4.4a。
 
 ### 4.4a agent 的 shell 能力：用 powershell，不用 bash
 
 决策日期 2026-09-08，四方调研见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
 
-- **不用 bash**：§4.4 的理由不变（找不到就抛异常，目标用户不装 Git for Windows）；
+- **不用 bash**：pi 在 Windows 找不到 bash 会直接抛异常（`utils/shell.ts:100`），
+  目标用户不装 Git for Windows；见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
 - **用 powershell**：pi 内置该工具，Windows 原生、零额外依赖，绕开了上述问题；
 - **前置条件（尚未满足）**：必须先有危险命令检查器 ——
   `iex` / `Invoke-Expression` / `Add-Type` / `-EncodedCommand` / 递归删除 / 下载执行…
@@ -269,7 +263,7 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 
 对办公产品不可接受：试用同事会让它「整理我的文档」，一次路径失误就可能覆盖别的文件。
 
-判定主轴是路径归属而非工具种类（`src/extensions/permission-policy.ts`，57 个测试）。
+判定主轴是路径归属而非工具种类（`src/extensions/permission-policy.ts`，60 个测试）。
 判定链**有序**（借鉴 WorkBuddy 的 9 阶求值链）：靠后的阶段无法放行靠前阶段已拒的东西。
 
 | 阶段 | 目标 | 判定 | 理由 |
@@ -320,11 +314,11 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 
 | 缝 | 第二实现（已知，非假想） |
 |---|---|
-| pi SDK 边界（`core/adapter.ts`） | pi 破坏性升级；将来换内核 |
+| pi SDK 边界（`core/session-host.ts`） | pi 破坏性升级；将来换内核 |
 | UI 传输（`ExtensionUIContext`） | 已验证：TUI / RPC / Electron 三套 |
 | 配置解析（`config.get`） | 本地文件 → 云端下发 |
 | 导出器（`(html, opts) => Buffer`） | PDF、docx 立刻就有两个 |
-| shell 策略（`getShellConfig`） | 无 shell → MinGit |
+| agent shell 策略（`getShellConfig`） | 无 agent shell → MinGit |
 
 明确不抽象：LLM provider（`pi-ai` 已是）、插件加载器（pi 有 packages + Skills）、
 会话存储（`SessionManager` 已给 JSONL / 内存两种）、多租户、事件 schema 版本号。

@@ -95,7 +95,7 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 				<>
 					{/* 透明 backdrop：点面板外任意处关闭，与同区 WorkspacePicker 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
-					<div className="permission-menu">
+					<div className="pop-menu permission-menu">
 						{info === undefined ? (
 							<p className="permission-menu-empty">正在读取权限…</p>
 						) : (

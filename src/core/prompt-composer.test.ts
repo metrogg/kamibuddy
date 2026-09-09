@@ -59,6 +59,42 @@ describe("报错路径", () => {
 	});
 });
 
+describe("补回 pi 上下文与工具提示", () => {
+	it("把 pi 已加载的项目上下文文件拼进最终提示词", () => {
+		const out = composePrompt({
+			...BASE,
+			piContext: {
+				contextFiles: [
+					{ path: "C:\\project\\AGENTS.md", content: "这是项目约定" },
+				],
+			},
+		});
+		expect(out).toContain("<project_context>");
+		expect(out).toContain('path="C:\\project\\AGENTS.md"');
+		expect(out).toContain("这是项目约定");
+		expect(out).toContain("</project_context>");
+	});
+
+	it("把工具 snippet 与 guidelines 拼进最终提示词", () => {
+		const out = composePrompt({
+			...BASE,
+			piContext: {
+				toolSnippets: { web_search: "需要实时信息时先搜索" },
+				promptGuidelines: ["一次搜索失败可换措辞重试一次"],
+			},
+		});
+		expect(out).toContain("Available tools:");
+		expect(out).toContain("- web_search: 需要实时信息时先搜索");
+		expect(out).toContain("Guidelines:");
+		expect(out).toContain("- 一次搜索失败可换措辞重试一次");
+	});
+
+	it("没有上下文与工具提示时不追加任何段落（保持现状兼容）", () => {
+		expect(composePrompt(BASE)).not.toContain("<project_context>");
+		expect(composePrompt(BASE)).not.toContain("Available tools:");
+	});
+});
+
 describe("formatSkillsSection", () => {
 	it("无技能返回空串（零 token）", () => {
 		expect(formatSkillsSection([])).toBe("");

@@ -7,6 +7,30 @@
 KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面端，对标腾讯 WorkBuddy。
 逆向调研素材在 `docs/workbuddy分析/`，**当规格书读，不当代码抄**（见下方合规红线）。
 
+### 参考物与来历
+
+- WorkBuddy：经批准解包后的安装目录（`开源项目/WorkBuddy/`，非 git 仓库），
+  逆向笔记在 `docs/workbuddy分析/`，**当规格书读，不当代码抄**。
+- pi：官方仓库 clone（`开源项目/pi/`），查 API 时直接读源码，不凭记忆猜。
+- codex / deepseek-harness：同类 Agent 实现的参考 clone。
+- opencode：先 fork 到个人仓库再拉的（`开源项目/opencode/`）。
+
+## 选型与实现顺序（动手前先走这一遍）
+
+先复刻 WorkBuddy，但**能借力就不要自研**。遇到某一块要动手，按下面的顺序决定怎么做：
+
+1. **市面已有成熟实现 → 直接用。** 成熟库能覆盖的（文档解析、格式转换、图表等），
+   不自己写，避免堆出不可维护的私货。可扩展、可维护优先于「自己造」。
+2. **不确定 → 先看 WorkBuddy 怎么实现的。** 它就在 `开源项目/WorkBuddy/` 里。
+   能直接照它的实现做，就直接做。
+3. **WorkBuddy 的实现走不通**（比如依赖云端 / 腾讯内部能力等），
+   **去找同类型的别家实现或市面上的开源库** 看他们怎么解决。
+4. **pi 自身的插件 / 扩展生态也要看**（`开源项目/pi/` 的 packages 与 examples），
+   不少能力 pi 已有现成参考或可直接复用。
+5. **还是定不下来 → 来问我。** 拿不定主意先问，不要擅自选一条路硬写。
+
+上面这条原则不变；它凌驾于「我先按文档写的做」之上——文档写得和它冲突时，以它为优先并回来确认。
+
 ## 一、依赖方向（最重要，违反即返工）
 
 依赖只能单向流动：
@@ -38,16 +62,20 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
 
 - **HTML 是唯一中间态。** 内容先渲染成 HTML，导出器再把 HTML 转成目标格式。
   不许出现"直接拼 docx 对象"的第二条路径——那样预览、PDF、图表全要另做一遍。
-- **不许假设用户机器上有任何第三方命令。** 行政/产品/销售的电脑上没有
-  Git for Windows / Python / pdftotext / LibreOffice——pi 在 Windows 找不到 bash
-  会**直接抛异常**（`utils/shell.ts:100`）。WorkBuddy 靠自带 287MB 用户态解决。
-  允许调用的外部命令只有两类（存在性有保证）：
-  ① Windows 原生的 powershell（及经它可达的 COM，如 Word/WPS 自动化）；
-  ② 安装包自带的二进制（存在性由安装器保证；每加一个都要过体积权衡）。
-  其余处理一律走 Node 自定义工具在进程内完成。
-  外部命令调用失败必须响亮报错（§7），不许静默降级掩盖"命令不存在"。
-  （2026-09-09 由"文档流水线一行 shell 都不许碰"放宽而来，决策记录见
-  `docs/ARCHITECTURE.md` §4.4 修订注。）
+- **文档流水线按 WorkBuddy 的方式跑 Python，不再禁止 bash/python。**
+  S3「HTML→docx」用 Python 引擎（`python-docx` / `html-for-docx` /
+  beautifulsoup4 / lxml / Pillow），环境用「托管 venv + `uv` 装独立 Python 3.12」
+  解决，不要求用户机器上预装 Python / Git for Windows。
+- **环境准备照 WorkBuddy 的 `setup-html-to-docx.sh` 抄机制**：
+  - 幂等脚本，已就绪秒退；首次联网装 `uv` → `uv python install 3.12` 拉独立发行版
+    → 建 `~/.venv-html-to-docx` → `--only-binary=:all:` 装 wheel（绕开 lxml 无
+    libxml2/libxslt 时源码编译失败的坑）→ import 冒烟。
+  - 私有化/无外网：`UV_INDEX_URL` + `UV_PYTHON_INSTALL_MIRROR` 指向内网镜像，
+    或运维预置 `uv` 与离线 wheel。
+  - 会话启动后台预热（SessionStart hook，超时不阻塞），首次冷启动不卡会话。
+  - 转换失败降级 Markdown；组件/图片失败只跳过或占位，不整篇崩。
+  - 这套 venv 是进程内受控调用，不等于把 `bash` 暴露给 agent 当自由 shell
+    工具（agent 的 shell 能力见下一节）。
 - **agent 的 shell 能力另有决策**：`bash` 仍然不用（上面那条理由不变），
   但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已决定启用**
   （决策记录见 `docs/workbuddy分析/09-sandbox-and-permissions.md` §6 决策 A）。
@@ -55,6 +83,8 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
   `-EncodedCommand` / 递归删除 / 下载执行…）。当前**尚未实现，工具面里也还没有
   powershell** —— 在检查器落地之前不要打开它：没有 OS 沙箱时，一条命令就能绕开
   权限门的全部路径保护（`type ~\.ssh\id_rsa`）。
+- 外部命令调用失败必须响亮报错（§7），不许静默降级掩盖"命令不存在"。
+  （文档流水线内、受控的转换失败降级 Markdown 是明确设计，不属"静默掩盖"。）
 - 导出器统一签名 `(html, opts) => Promise<Buffer>`，新增格式就是新增一个文件。
 
 ## 三、能力是数据，不是代码

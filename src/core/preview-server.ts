@@ -32,8 +32,13 @@ const MIME: Record<string, string> = {
 	".jpeg": "image/jpeg",
 	".gif": "image/gif",
 	".webp": "image/webp",
+	".pdf": "application/pdf",
 	".mp3": "audio/mpeg",
 	".mp4": "video/mp4",
+	".webm": "video/webm",
+	// .ogg 容器音视频两栖，内容未知时 RFC 5334 推荐 application/ogg（媒体元素会嗅探）。
+	".ogg": "application/ogg",
+	".wav": "audio/wav",
 	".woff": "font/woff",
 	".woff2": "font/woff2",
 	".txt": "text/plain; charset=utf-8",
@@ -110,13 +115,22 @@ export class PreviewServer {
 	}
 
 	private handle(url: string, res: import("node:http").ServerResponse): void {
-		const path = this.resolveWithinRoot(url.split("?")[0] ?? "/");
+		const q = url.indexOf("?");
+		const path = this.resolveWithinRoot(q === -1 ? url : url.slice(0, q));
 		// 越界与不存在一个口径（404）：不对外透露目录结构。
 		if (path === undefined || !existsSync(path) || !statSync(path).isFile()) {
 			res.writeHead(404).end("not found");
 			return;
 		}
-		res.writeHead(200, { "content-type": mimeOf(path) });
+		const headers: Record<string, string> = { "content-type": mimeOf(path) };
+		// ?download = 强制落盘：预览面板与本服务不同源（127.0.0.1:随机端口），
+		// <a download> 属性跨源被 Chromium 忽略、会变成整窗导航，
+		// 只有 Content-Disposition: attachment 可靠（filename* 兜非 ASCII 文件名，RFC 5987）。
+		if (q !== -1 && url.slice(q + 1).split("&").includes("download")) {
+			const name = path.slice(path.lastIndexOf(sep) + 1);
+			headers["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+		}
+		res.writeHead(200, headers);
 		createReadStream(path).pipe(res);
 	}
 }

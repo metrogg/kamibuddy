@@ -599,7 +599,7 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 					sceneId: conversation.state.sceneId,
 					interactionId: conversation.state.interactionId,
 				}),
-				compose: async (sceneId, interactionId) => {
+				compose: async (sceneId, interactionId, piContext) => {
 					const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
 					const mode = RESOURCES.modes.find((m) => m.id === interactionId);
 					if (scene === undefined || mode === undefined) {
@@ -613,12 +613,17 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 						description: s.description,
 						filePath: s.filePath,
 					}));
-					const skillsSection = formatSkillsSection(skills);
+					// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
+					// 的工具（read / bash）时，不注入技能段 —— 否则会让模型去调用
+					// 一个并不存在的 read 工具（plan 模式就是这个坑）。
+					const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
+					const skillsSection = hasSkillReader ? formatSkillsSection(skills) : "";
 					const prompt = composePrompt({
 						sceneBody: scene.body,
 						modeBody: mode.body,
 						skillsSection,
 						cwd,
+						piContext,
 					});
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。

@@ -375,7 +375,7 @@ export function Sidebar({
 								aria-label="关闭"
 								onClick={() => setMenuCwd(undefined)}
 							/>
-							<div className="space-menu">
+							<div className="pop-menu space-menu">
 								<button
 									type="button"
 									className="space-menu-item"

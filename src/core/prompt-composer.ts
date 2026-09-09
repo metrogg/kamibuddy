@@ -11,7 +11,16 @@
  *      正文是我们自己的资源文件，出现槽位就是笔误。
  */
 
-import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+import {
+	formatSkillsForPrompt,
+	type BuildSystemPromptOptions,
+} from "@earendil-works/pi-coding-agent";
+
+/** 从 pi 的结构化选项里取出上下文组装还需要的那几块。 */
+export type PromptContextOptions = Pick<
+	BuildSystemPromptOptions,
+	"contextFiles" | "toolSnippets" | "promptGuidelines"
+>;
 
 export interface SkillDescriptor {
 	readonly name: string;
@@ -30,6 +39,8 @@ export interface ComposePromptInput {
 	readonly cwd: string;
 	/** 模型显示名。骨架未使用 {{model}} 时可省。 */
 	readonly model?: string;
+	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
+	readonly piContext?: PromptContextOptions;
 }
 
 const SLOT = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;
@@ -63,7 +74,53 @@ export function composePrompt(input: ComposePromptInput): string {
 	}
 
 	// 空槽位（如无技能）会留下连续空行，压平；trim 掉首尾。
-	return filled.replace(/\n{3,}/g, "\n\n").trim();
+	const composed = filled.replace(/\n{3,}/g, "\n\n").trim();
+	return appendPiContext(composed, input);
+}
+
+/**
+ * 把 pi 已经算好的上下文文件与工具提示段拼回最终提示词。
+ *
+ * before_agent_start 的整体替换会让 pi 不再自动附加这些（system-prompt.ts
+ * 的 customPrompt 分支也只处理 contextFiles / skills / cwd），而工具
+ * snippet 与 guidelines 是我们自己的工具注册时提供的（extensions/*.ts），
+ * 不拼回来模型就看不到「该在什么时候用哪个工具」。格式与 pi 的
+ * buildSystemPrompt 对齐，避免同一份数据两处漂移。
+ */
+function appendPiContext(composed: string, input: ComposePromptInput): string {
+	const sections: string[] = [];
+
+	const contextFiles = input.piContext?.contextFiles ?? [];
+	if (contextFiles.length > 0) {
+		const blocks = contextFiles
+			.map(
+				({ path, content }) =>
+					`<project_instructions path="${path}">\n${content}\n</project_instructions>`,
+			)
+			.join("\n\n");
+		sections.push(
+			`<project_context>\n\nProject-specific instructions and guidelines:\n\n${blocks}\n</project_context>`,
+		);
+	}
+
+	const toolSnippets = input.piContext?.toolSnippets ?? {};
+	const snippetEntries = Object.entries(toolSnippets).filter(
+		([name, snippet]) => name !== "" && snippet !== "",
+	);
+	if (snippetEntries.length > 0) {
+		sections.push(
+			`Available tools:\n${snippetEntries
+				.map(([name, snippet]) => `- ${name}: ${snippet}`)
+				.join("\n")}`,
+		);
+	}
+
+	const guidelines = (input.piContext?.promptGuidelines ?? []).filter((g) => g.trim() !== "");
+	if (guidelines.length > 0) {
+		sections.push(`Guidelines:\n${guidelines.map((g) => `- ${g}`).join("\n")}`);
+	}
+
+	return sections.length === 0 ? composed : `${composed}\n\n${sections.join("\n\n")}`;
 }
 
 /**

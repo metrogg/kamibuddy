@@ -183,6 +183,24 @@ export const IconChevronDown = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+export const IconChevronLeft = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="m15 18-6-6 6-6" />
+	</Svg>
+);
+
+export const IconChevronRight = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="m9 18 6-6-6-6" />
+	</Svg>
+);
+
+export const IconMinus = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="M5 12h14" />
+	</Svg>
+);
+
 export const IconSettings = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		<circle cx="12" cy="12" r="3" />
@@ -247,6 +265,38 @@ export const IconFolder = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+export const IconCode = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 双尖括号：代码文件的通用隐喻（</> 去斜杠，线性套里斜杠易与路径混淆）。 */}
+		<path d="m8 6-6 6 6 6M16 6l6 6-6 6" />
+	</Svg>
+);
+
+export const IconImage = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 相框 + 太阳 + 山脊：位图/矢量图共用。 */}
+		<rect x="3" y="4" width="18" height="16" rx="2" />
+		<circle cx="9" cy="9.5" r="1.6" />
+		<path d="m21 16-4.8-4.8L7 20" />
+	</Svg>
+);
+
+export const IconMedia = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 圆内播放三角：音/视频不细分（预览面板对二者同样走外部打开）。 */}
+		<circle cx="12" cy="12" r="9" />
+		<path d="M10 8.5v7l6-3.5z" />
+	</Svg>
+);
+
+export const IconFile = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 纯文档轮廓（无文字行）：未知类型的兜底，与 IconDoc（已知文本类）区分。 */}
+		<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+		<path d="M14 3v5h5" />
+	</Svg>
+);
+
 export const IconOpenExternal = (p: IconProps): React.JSX.Element => (
 <Svg {...p}>
 	{/* 方框 + 右上箭头：系统外部打开（浏览器/关联程序）。 */}
@@ -280,6 +330,14 @@ export const IconExport = (p: IconProps): React.JSX.Element => (
 <Svg {...p}>
 	{/* 托盘 + 向上出去的箭头：「导出为文件」的通用隐喻（与 IconOpenExternal 的「在外部程序里打开」区分）。 */}
 	<path d="M12 15V3M7 8l5-5 5 5" />
+	<path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+</Svg>
+);
+
+export const IconDownload = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 托盘 + 向下落入的箭头：「下载到本地」（与 IconExport 的向上导出方向相反）。 */}
+	<path d="M12 3v12M7 10l5 5 5-5" />
 	<path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
 </Svg>
 );
