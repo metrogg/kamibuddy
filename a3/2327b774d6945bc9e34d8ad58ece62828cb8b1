@@ -1,0 +1,202 @@
+.trae/specs/upgrade-preview-panel-and-cards/spec.md
+  s_02a19f96eca1d5::t_574f43aea2f1c6 1-100
+src/main/index.ts
+  s_c4023de03b1ef1::t_7e0078c2c4f1ae 189-202
+  s_c4023de03b1ef1::t_a1e8be8dd54eaa 37
+src/core/workspace-registry.ts
+  s_c4023de03b1ef1::t_665a56b8e2f7e3 1-107
+src/renderer/index.css
+  s_c4023de03b1ef1::t_f19af776e89b4c 277-426
+  s_02a19f96eca1d5::t_1d6f3560269ab4 1225-1228
+  s_02a19f96eca1d5::t_cc7a61fa7d0fe5 1223-1224
+  s_02a19f96eca1d5::t_4268b7ed9858ba 1687-1697,1699,1707,1718-1755
+  s_02a19f96eca1d5::t_b1cb8601fecc29 1309-1316
+  s_02a19f96eca1d5::t_676314fcddbeed 1761,1764,1767-1803
+src/core/session-host.ts
+  s_02a19f96eca1d5::t_5c114f049a1af8 532-536
+src/renderer/session-groups.test.ts
+  s_c4023de03b1ef1::t_6ae1128f5b4b6b 1-151
+src/shared/session-events.ts
+  s_02a19f96eca1d5::t_aec3e30f5de8d3 113-122
+.trae/specs/fix-panel-bubble-history/tasks.md
+  s_02a19f96eca1d5::t_79addf666651a6 3-13,15,22-23,29-30
+  s_02a19f96eca1d5::t_98c4fc170d3bf9 14,16-19
+  s_02a19f96eca1d5::t_ef1663668ee3f6 1-2,20-21,24-28
+.trae/specs/fix-panel-bubble-history/spec.md
+  s_02a19f96eca1d5::t_13aa4c029670a0 1-78
+src/shared/bridge.ts
+  s_c4023de03b1ef1::t_6de36abcc5be0a 19
+  s_c4023de03b1ef1::t_860a07626b1fc0 81-88
+.trae/specs/upgrade-preview-panel-and-cards/tasks.md
+  s_02a19f96eca1d5::t_03aa4d7d7f0d55 3-7,9-12,14-17,19-21
+  s_02a19f96eca1d5::t_31b3d44aa6e708 1-2,8,13,18,22-28
+.trae/specs/align-chat-messages-and-toggles/checklist.md
+  s_02a19f96eca1d5::t_244e98dc4368bd 1-2
+  s_02a19f96eca1d5::t_3038e8819a60ea 3-9
+src/renderer/chat-view.tsx
+  s_02a19f96eca1d5::t_60cdea665b4759 620-621
+  s_02a19f96eca1d5::t_0431d467f81e5d 27-46
+  s_02a19f96eca1d5::t_4d7800945ea6a7 619
+  s_02a19f96eca1d5::t_3fc08cd3906d29 927,930
+  s_02a19f96eca1d5::t_5b34e1a1187520 758-775
+  s_02a19f96eca1d5::t_6c584112ff9311 75-78
+  s_02a19f96eca1d5::t_698c7b585cfaa6 894-926,928-929,931-933
+  s_02a19f96eca1d5::t_a0aff46aa8b601 73-74
+  s_02a19f96eca1d5::t_c603991b4a7e14 827-834
+src/shared/ipc.ts
+  s_c4023de03b1ef1::t_0f9334c0e2c7a6 316-318,320-322
+  s_c4023de03b1ef1::t_d635f7f35f67d6 105-129
+  s_c4023de03b1ef1::t_c8ab5502ea760d 315,319
+  s_c4023de03b1ef1::t_b3268cc6f7c6e7 344-347
+src/shared/conversation.test.ts
+  s_02a19f96eca1d5::t_aa6066f4cd82da 427-469
+  s_02a19f96eca1d5::t_0392f16640f180 11-24
+src/renderer/session-groups.ts
+  s_c4023de03b1ef1::t_8d4e06d9801d95 1-94
+src/shared/conversation.ts
+  s_02a19f96eca1d5::t_d99050e7e053c1 298-311
+src/renderer/icons.tsx
+  s_02a19f96eca1d5::t_9fa8a3b7362928 234-253
+docs/STATUS.md
+  s_c4023de03b1ef1::t_0f2ca560994214 301-320
+  s_02a19f96eca1d5::t_9397c9f264ee00 366-383
+  s_02a19f96eca1d5::t_ea4232dd6f1601 3
+  s_02a19f96eca1d5::t_c6c9c2f5d5658c 148-151
+.trae/specs/upgrade-preview-panel-and-cards/checklist.md
+  s_02a19f96eca1d5::t_1e75eb6e3702fb 1-2
+  s_02a19f96eca1d5::t_2468cb2dca095c 3-10
+.trae/specs/rework-sidebar-task-space/tasks.md
+  s_c4023de03b1ef1::t_07bf234e1e931e 1-4,17-19,33-35,39-54
+  s_c4023de03b1ef1::t_c9bb256c5fcc46 20-22
+  s_c4023de03b1ef1::t_18376ac47d832d 23-28
+  s_c4023de03b1ef1::t_a6d212bc99c561 5-11
+  s_c4023de03b1ef1::t_3810f30a2c1180 29-32,36-38
+  s_c4023de03b1ef1::t_32c35362345ea4 12-16
+.trae/specs/rework-sidebar-task-space/checklist.md
+  s_c4023de03b1ef1::t_d5661e0aed81c3 1-4,9-11,14-16,21-23,26-28,31-33
+  s_c4023de03b1ef1::t_97bb71bd6b7231 5-8,12-13,17-20,24-25,29-30,34-37
+src/renderer/sidebar.tsx
+  s_c4023de03b1ef1::t_24556989291d65 3,7-10,16,21,41-52,59-66,83-85,95-97,103-106,118-427,462,466-475,481-483
+.trae/specs/fix-panel-bubble-history/checklist.md
+  s_02a19f96eca1d5::t_083e4b8bfa8184 1-2
+  s_02a19f96eca1d5::t_9cd788cc15cde6 3-10
+src/core/session-rebuild.ts
+  s_02a19f96eca1d5::t_0e35b97ed624cc 199-219
+  s_02a19f96eca1d5::t_d76b822e24fd06 33
+src/core/session-rebuild.test.ts
+  s_02a19f96eca1d5::t_9ac5ff9ed45d80 406-444
+src/daemon/index.ts
+  s_c4023de03b1ef1::t_5d366180960415 13
+  s_02a19f96eca1d5::t_c3f039498960a0 533-539,541-545,730,1301
+  s_02a19f96eca1d5::t_be16e4d9a22bcf 65
+  s_c4023de03b1ef1::t_f2e04403bad03c 82
+  s_c4023de03b1ef1::t_136c9ac31ca9ff 731-765
+  s_02a19f96eca1d5::t_e6a718bbee16c2 540
+  s_c4023de03b1ef1::t_c0d0fc75593793 39-44
+  s_02a19f96eca1d5::t_4bee5e01294d7d 840-842,844,847,851
+  s_c4023de03b1ef1::t_aeb18b1524eaf5 1242-1300
+  s_c4023de03b1ef1::t_a7377432df6a01 1007
+.trae/specs/align-chat-messages-and-toggles/tasks.md
+  s_02a19f96eca1d5::t_148bb84a4b2316 1-2,6,12,16-21
+  s_02a19f96eca1d5::t_bb5c986e67f28e 3-5,7-11,13-15
+src/renderer/App.tsx
+  s_02a19f96eca1d5::t_4ea0a2e3dd3686 390-392,399-404
+  s_c4023de03b1ef1::t_bc9b530155024f 578
+  s_c4023de03b1ef1::t_c53d8e5e7dbc94 579
+  s_c4023de03b1ef1::t_00ac4698d41023 11
+  s_02a19f96eca1d5::t_cd4c44d59f1ce5 275-278
+  s_c4023de03b1ef1::t_422da9593f2e16 582
+  s_02a19f96eca1d5::t_3740afeadf6b41 654
+  s_02a19f96eca1d5::t_5181c469243c83 627-631
+  s_02a19f96eca1d5::t_dfe60c2ff7168a 136-140
+  s_c4023de03b1ef1::t_d80bafdef7cdf1 70-85,88,92-93,97
+  s_c4023de03b1ef1::t_153501212811d4 567
+  s_c4023de03b1ef1::t_bf74af70c72de4 580
+  s_c4023de03b1ef1::t_4692c72a16e5c3 584
+  s_c4023de03b1ef1::t_e62aeb8c6fa1b8 478-535
+  s_02a19f96eca1d5::t_76b9853da0b665 591-595
+  s_c4023de03b1ef1::t_dcfb9caacea74b 557,560,565-566,568-572
+  s_02a19f96eca1d5::t_7aab62a3699668 589
+  s_02a19f96eca1d5::t_54f1f19cbac52a 271-274,300,477
+  s_c4023de03b1ef1::t_98ceb255feff94 558-559,561-564
+  s_02a19f96eca1d5::t_9fac2fe6d8bb74 575-577
+  s_02a19f96eca1d5::t_9a9d54a19e9e79 363-365
+  s_c4023de03b1ef1::t_3aa0364afc2078 581
+  s_c4023de03b1ef1::t_aae554907170be 587
+  s_02a19f96eca1d5::t_43a8192c7dab2c 664-667
+  s_c4023de03b1ef1::t_78552481167c43 583
+  s_c4023de03b1ef1::t_cf391cb9820ffe 585
+  s_c4023de03b1ef1::t_77f106d36487f3 12-17
+  s_c4023de03b1ef1::t_d4ac5b11ace777 586
+  s_c4023de03b1ef1::t_7b20e76911cddd 25
+  s_c4023de03b1ef1::t_37bace7ba3783f 143-160
+  s_c4023de03b1ef1::t_50b96ab90b02df 590
+  s_02a19f96eca1d5::t_c7014be08cdf9d 632-634
+  s_02a19f96eca1d5::t_6c36600879adb7 655-656
+  s_c4023de03b1ef1::t_1ba58f6b1a9803 588
+.trae/specs/rework-sidebar-task-space/spec.md
+  s_c4023de03b1ef1::t_fb32dfae95f60d 1-134
+src/renderer/artifact-panel.tsx
+  s_02a19f96eca1d5::t_7c63cf28b156c6 407-462
+  s_02a19f96eca1d5::t_7d9c263e686e1f 291-294,307-337,340-353,383-391
+  s_02a19f96eca1d5::t_f8de7de3086086 302,304-305
+  s_02a19f96eca1d5::t_0b77bb65ab2297 16,306
+  s_02a19f96eca1d5::t_0369a613f63827 89-90
+  s_02a19f96eca1d5::t_e551b93da02ad7 360,397-400
+  s_02a19f96eca1d5::t_31a05475467695 91-98
+src/preload/index.ts
+  s_c4023de03b1ef1::t_3b60044ab77944 49-53
+src/core/workspace-registry.test.ts
+  s_c4023de03b1ef1::t_ef491388a94f48 1-124
+.trae/specs/align-chat-messages-and-toggles/spec.md
+  s_02a19f96eca1d5::t_5123fe8e9b90ba 1-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "a32327b774d6945bc9e34d8ad58ece62828cb8b1",
+  "prompts": {},
+  "sessions": {
+    "s_02a19f96eca1d5": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa039a5f850234b77c2f872",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_name": "RunCommand",
+        "edit_kind": "bash",
+        "tool_use_id": "6aa1003df850234b77c3127e",
+        "source_scene": "agent",
+        "external_session_id": "6aa039a5f850234b77c2f872",
+        "display_model_name": "Kimi-K3",
+        "runtime_client": "trae-tob-git-ai",
+        "client_type": "ide",
+        "operation_id": "6aa1003df850234b77c3127e",
+        "session_id": "6aa039a5f850234b77c2f872"
+      }
+    },
+    "s_c4023de03b1ef1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9feadcc981c232faa34c0c",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "source_scene": "unknown",
+        "client_type": "ide",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_type": "agent",
+        "external_session_id": "6a9feadcc981c232faa34c0c",
+        "dedupe_key": "6a9feadcc981c232faa34c0c:6aa101dbf850234b77c312eb:afterEdit:c7a5c65f",
+        "tool_use_id": "6aa101dbf850234b77c312eb",
+        "tool_id": "Edit",
+        "edit_kind": "file_edit",
+        "operation_id": "6aa101dbf850234b77c312eb",
+        "session_id": "6a9feadcc981c232faa34c0c"
+      }
+    }
+  }
+}
