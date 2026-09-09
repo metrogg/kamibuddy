@@ -274,6 +274,156 @@ button {
 	color: var(--danger);
 }
 
+/* 「查看更多」：任务区默认只露前 5 条，点击展开全部（展开态是内存态）。 */
+.task-list-more {
+	display: block;
+	width: 100%;
+	padding: 5px 8px;
+	border-radius: 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+	text-align: left;
+}
+
+.task-list-more:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+/* ── 空间组（按 cwd 分组的工作空间会话） ────────────────────────── */
+
+/* 组头是 ⋯ 弹层的定位锚点，position 留在这里。 */
+.space-group-header {
+	position: relative;
+	display: flex;
+	align-items: center;
+	border-radius: 8px;
+}
+
+.space-group-header:hover {
+	background: var(--bg-hover);
+}
+
+.space-group-header-main {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	padding: 5px 6px;
+	text-align: left;
+}
+
+/* hover 操作钮会占右侧宽度，主按钮提前让位，避免计数被压住。 */
+.space-group-header:hover .space-group-header-main {
+	padding-right: 48px;
+}
+
+/* 折叠箭头：展开朝下，收起旋转 -90°，纯 CSS 过渡。 */
+.space-group-chevron {
+	flex: none;
+	color: var(--text-dim);
+	transition: transform 0.15s ease;
+}
+
+.space-group-collapsed .space-group-chevron {
+	transform: rotate(-90deg);
+}
+
+.space-group-name {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.space-group-count {
+	flex: none;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+/* 组级操作（+ 与 ⋯）：与任务行同款的 hover 浮现模式。 */
+.space-group-actions {
+	display: flex;
+	gap: 2px;
+	padding-right: 4px;
+	opacity: 0;
+	visibility: hidden;
+}
+
+.space-group-header:hover .space-group-actions,
+.space-group-actions:focus-within {
+	opacity: 1;
+	visibility: visible;
+}
+
+/* ⋯ 弹层：参照 .permission-menu 的视觉（圆角卡片 + 边框 + 阴影），向下展开。 */
+.space-menu {
+	position: absolute;
+	top: 100%;
+	right: 4px;
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	min-width: 140px;
+	padding: 6px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	box-shadow: var(--shadow-card);
+}
+
+.space-menu-item {
+	padding: 6px 10px;
+	border-radius: 6px;
+	font-size: 12px;
+	text-align: left;
+}
+
+.space-menu-item:hover {
+	background: var(--bg-hover);
+}
+
+.space-menu-danger {
+	color: var(--danger);
+}
+
+/* 移除确认文案较长（13 字 + 两钮），216px 侧栏一行放不下，允许换行。 */
+.space-group-confirm {
+	flex-wrap: wrap;
+}
+
+/* 任务行状态指示：未读绿点 + 执行中转圈。都压在标题文本之前，
+   放在行尾会被 text-overflow 省略号裁掉。 */
+.task-unread-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin-right: 6px;
+	border-radius: 50%;
+	background: var(--ok);
+}
+
+.task-spinner {
+	display: inline-block;
+	width: 11px;
+	height: 11px;
+	margin-right: 6px;
+	border: 2px solid var(--border);
+	border-top-color: var(--text-dim);
+	border-radius: 50%;
+	animation: task-spin 0.8s linear infinite;
+}
+
+@keyframes task-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 .sidebar-footer {
 	margin-top: auto;
 	display: flex;
@@ -1070,8 +1220,12 @@ button {
 
 .user-bubble {
 	width: fit-content;
-	max-width: calc(100% - 32px);
-	padding: 10px 14px;
+	/* WorkBuddy 用户气泡宽度口径：明显短于消息流宽（约 70%），长消息折行而非占满。 */
+	max-width: 70%;
+	/* WorkBuddy 用户气泡排版口径：padding 8/12、字号 13、行高 19。 */
+	padding: 8px 12px;
+	font-size: 13px;
+	line-height: 19px;
 	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
 	background: var(--bg-raised);
 	/* 超高消息内部滚动，不让一条长消息占满整个消息流（WorkBuddy 同口径 310px）。 */
@@ -1152,7 +1306,14 @@ button {
 
 .entry.assistant {
 	align-self: flex-start;
-	background: var(--bg-raised);
+	/* assistant 无气泡：纯文本流（WorkBuddy _assistantTextContent 同口径：
+	   background transparent、padding 0、border-radius 0）。覆盖 .entry 的
+	   padding/border-radius，让正文与 turn-header 左缘对齐。 */
+	background: transparent;
+	border-radius: 0;
+	padding: 0 14px;
+	font-size: 14px;
+	line-height: 20px;
 }
 
 /* ── 错误卡（内嵌于消息流，run 异常或提交失败时展示）───────────────
@@ -1523,7 +1684,19 @@ button {
 	margin-bottom: 6px;
 }
 
+/* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。 */
+.artifacts-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 6px;
+}
+
+.artifacts-grid:has(> :only-child) {
+	grid-template-columns: 1fr;
+}
+
 .artifact-card {
+	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -1531,6 +1704,7 @@ button {
 	padding: 7px 10px;
 	border-radius: 8px;
 	text-align: left;
+	font-size: 13px;
 }
 
 .artifact-card:hover {
@@ -1541,17 +1715,92 @@ button {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	flex: 1;
+	min-width: 0;
+}
+
+/* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。 */
+.artifact-preview-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	font-size: 13px;
+	line-height: 1;
+	flex-shrink: 0;
+}
+
+.artifact-preview-btn:hover {
+	background: var(--bg-raised);
+}
+
+/* 聚合入口：卡区下方两个文字按钮（三级灰 12px、右箭头）。 */
+.artifacts-footer {
+	display: flex;
+	gap: 16px;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border);
+}
+
+.artifacts-more {
+	color: var(--text-dim);
+	font-size: 12px;
+	padding: 0;
+}
+
+.artifacts-more:hover {
+	color: var(--text);
 }
 
 /* ── 产物预览面板（右侧栏） ────────────────────────────────────── */
 
 .preview-panel {
-	flex: 0 0 42%;
+	position: relative;
 	display: flex;
 	flex-direction: column;
+	flex-shrink: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg);
-	min-width: 320px;
+	/* 宽度过渡：sash 拖拽与全屏切换共用（WorkBuddy 240ms ease 同参数）。 */
+	transition: width 0.24s ease;
+}
+
+/* 全屏：absolute 覆盖主内容区，宽由定位撑满（非 width，避免与 transition 打架）。 */
+.preview-panel.fullscreen {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	z-index: 30;
+	border-left: 0;
+	box-shadow: -8px 0 24px rgb(0 0 0 / 6%);
+	transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.preview-panel {
+		transition: none;
+	}
+}
+
+/* sash 拖拽手柄：左缘 4px 热区，视觉上是 border 的一部分，hover 才显色。 */
+.preview-sash {
+	position: absolute;
+	top: 0;
+	left: -2px;
+	bottom: 0;
+	width: 4px;
+	cursor: col-resize;
+	z-index: 1;
+}
+
+.preview-sash:hover,
+.preview-sash:active {
+	background: var(--border);
 }
 
 .preview-head {

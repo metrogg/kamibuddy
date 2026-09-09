@@ -102,6 +102,31 @@ export const INVOKE = {
 	 * 用户取消返回 undefined。
 	 */
 	pickWorkspaceDirectory: "workspace:pick-directory",
+	/**
+	 * 空间分组元数据列表：侧栏「空间」区的组头信息。
+	 * 组集合由 daemon 从会话文件的 cwd 去重派生，这里只额外携带显示名覆盖。
+	 */
+	workspaceGroups: "workspace:groups",
+	/**
+	 * 重命名空间组。只写显示名覆盖（workspaces.json），不动真实目录——
+	 * 真实目录可能有会话/进程占用，改名会引发路径失效；显示名覆盖零风险。
+	 * 名称经 daemon 校验（validateDisplayName），非法时 reject 原因。
+	 */
+	workspaceRename: "workspace:rename",
+	/**
+	 * 从列表移除空间组：该 cwd 下全部会话文件移入回收目录（trash），
+	 * 同时清掉显示名覆盖。不删真实目录本身。
+	 */
+	workspaceRemove: "workspace:remove",
+	/**
+	 * 在系统文件管理器中打开空间目录（main 侧 shell.openPath）。
+	 *
+	 * 路径必须在 daemon 侧校验「是已知工作空间」后才能放行：
+	 * renderer 是半可信环境，若不校验，任意网页/XSS 都能让 main 对
+	 * 任意路径调 shell.openPath（弹 ~\.ssh、系统目录等）。校验放 daemon
+	 * 而不是 main，是因为「已知工作空间」的知识只在 daemon（会话文件集合）。
+	 */
+	workspaceReveal: "workspace:reveal",
 	/** 应答 daemon 发来的 UI 请求（确认框/选择框/输入框）。 */
 	uiResponse: "ui:response",
 	/** 应答权限审批。 */
@@ -287,6 +312,14 @@ export interface SessionSummary {
 	readonly current: boolean;
 }
 
+/** 「空间」分组的元数据：一个工作目录一条。组本身由会话文件派生（磁盘真相），这里只承载名称覆盖。 */
+export interface WorkspaceGroupMeta {
+	/** 工作空间目录。与 SessionSummary.cwd 同源（同一 SessionManager resolve 后的绝对路径）。 */
+	readonly cwd: string;
+	/** 用户给该空间起的显示名；未命名为 undefined，不要用空串。UI 回退到目录 basename。 */
+	readonly displayName?: string;
+}
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -308,6 +341,10 @@ export interface InvokeMap {
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
 	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };
 	[INVOKE.pickWorkspaceDirectory]: { args: []; result: string | undefined };
+	[INVOKE.workspaceGroups]: { args: []; result: WorkspaceGroupMeta[] };
+	[INVOKE.workspaceRename]: { args: [cwd: string, name: string]; result: void };
+	[INVOKE.workspaceRemove]: { args: [cwd: string]; result: void };
+	[INVOKE.workspaceReveal]: { args: [cwd: string]; result: void };
 	[INVOKE.uiResponse]: { args: [UiResponse]; result: void };
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };

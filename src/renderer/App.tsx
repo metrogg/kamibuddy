@@ -8,8 +8,13 @@
  * 所以渲染在视图之外，任何页面下都必须可见可作答。
  */
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { PermissionRequest, PromptRequest, SessionSummary } from "@shared/ipc.ts";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type {
+	PermissionRequest,
+	PromptRequest,
+	SessionSummary,
+	WorkspaceGroupMeta,
+} from "@shared/ipc.ts";
 import type { ImagePart } from "@shared/image.ts";
 import type { SessionEvent, SessionSnapshot } from "@shared/session-events.ts";
 import {
@@ -17,6 +22,7 @@ import {
 	initialConversation,
 } from "@shared/conversation.ts";
 import { Sidebar, type LinkState } from "./sidebar.tsx";
+import { groupSessions } from "./session-groups.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
@@ -61,15 +67,34 @@ export function App(): React.JSX.Element {
 	const [approvals, setApprovals] = useState<readonly PermissionRequest[]>([]);
 	/** 侧栏「任务」区的历史会话列表（daemon 组装好 title/current，UI 不推导）。 */
 	const [taskList, setTaskList] = useState<readonly SessionSummary[]>([]);
+	/** 「空间」组的名称覆盖元数据（workspaces.json），组本身由会话派生。 */
+	const [groupMetas, setGroupMetas] = useState<readonly WorkspaceGroupMeta[]>([]);
+	/**
+	 * 未读会话 path 集合（标题前绿点）。渲染进程内存态，重启清零 ——
+	 * 持久化未读是规格书明确留后续的事，这里不兜底。
+	 */
+	const [unreadPaths, setUnreadPaths] = useState<ReadonlySet<string>>(new Set());
+	/**
+	 * run_finished 监听只注册一次，闭包里的 view/taskList 永远是初值，
+	 * 未读判定需要的最新值必须走 ref（同 autocomplete.tsx 的 openRef 模式，
+	 * 渲染期赋值换取事件回调里的当下值）。
+	 */
+	const viewRef = useRef(view);
+	viewRef.current = view;
+	const taskListRef = useRef(taskList);
+	taskListRef.current = taskList;
 
 	/**
-	 * 历史会话列表刷新。
+	 * 历史会话列表刷新（同时重拉空间元数据）。
 	 *
 	 * 拉取失败静默吞掉：列表只是侧栏的导航入口，拿不到不影响会话本体
 	 * （对话照常进行）。为辅助信息弹 toast 反而打扰，下一个触发点会再拉。
+	 * metas 与 sessions 独立拉取（不 Promise.all）：一条失败不该拖死另一条，
+	 * 组名回退 basename 后列表仍可用。
 	 */
 	const refreshTasks = useCallback(() => {
 		window.kami.listSessions().then(setTaskList).catch(() => {});
+		window.kami.listWorkspaceGroups().then(setGroupMetas).catch(() => {});
 	}, []);
 
 	useEffect(() => {
@@ -108,12 +133,31 @@ export function App(): React.JSX.Element {
 		// 先注册监听，再主动查状态：顺序反了会漏掉两者之间到达的事件。
 		const offEvent = window.kami.onSessionEvent((event: SessionEvent) => {
 			dispatch({ type: "event", event });
-			// present_files 交付：首个本地文件自动在预览面板打开（WorkBuddy：第一个自动打开）。
-			if (event.type === "artifacts_presented" && event.focusFile !== undefined) {
-				openPreview({ kind: "file", path: event.focusFile });
+			// present_files 交付：首个本地文件自动在预览面板打开，且面板自动展开
+			//（WorkBuddy：第一个自动打开 + 交付时面板若收起则展开）。
+			if (event.type === "artifacts_presented") {
+				setPanelOpen(true);
+				if (event.focusFile !== undefined) openPreview({ kind: "file", path: event.focusFile });
 			}
 			// 列表里的标题/时间/消息数只在 run 结束时才可能变，只在这个事件刷新。
-			if (event.type === "run_finished") refreshTasks();
+			if (event.type === "run_finished") {
+				refreshTasks();
+				// 未读：用户不在对话页看着它完成时，给当前会话打绿点。
+				// 单 daemon 单会话，run_finished 一定属于当前活动会话 ——
+				// 取列表里的 current 项即可；极端竞态（列表还没刷出 current）
+				// 取不到就不加，下一次 refreshTasks 后列表本身已是最新，不漏信息。
+				if (viewRef.current !== "chat") {
+					const currentPath = taskListRef.current.find((t) => t.current)?.path;
+					if (currentPath !== undefined) {
+						setUnreadPaths((prev) => {
+							if (prev.has(currentPath)) return prev;
+							const next = new Set(prev);
+							next.add(currentPath);
+							return next;
+						});
+					}
+				}
+			}
 		});
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
 			if (!disposed) setLink({ kind: "down", reason });
@@ -224,6 +268,14 @@ export function App(): React.JSX.Element {
 	const [previewActive, setPreviewActive] = useState<PreviewSelection | undefined>(undefined);
 	/** 静态服务 baseUrl，随工作空间快照刷新（playground 为 undefined）。 */
 	const [previewBaseUrl, setPreviewBaseUrl] = useState<string | undefined>(undefined);
+	/** 面板宽度（px，WorkBuddy 默认 440、sash 拖拽 clamp [340, 800]）。 */
+	const [panelWidth, setPanelWidth] = useState(440);
+	/** 面板全屏态：absolute 覆盖主内容区。 */
+	const [panelFullscreen, setPanelFullscreen] = useState(false);
+	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。 */
+	const [panelOpen, setPanelOpen] = useState(true);
+	/** 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。 */
+	const [sidebarOpen, setSidebarOpen] = useState(true);
 
 	/** 打开/激活预览对象：不在 tab 集合里自动补 tab（概览下拉与产物卡的唯一入口）。 */
 	const openPreview = useCallback((sel: PreviewSelection) => {
@@ -245,6 +297,7 @@ export function App(): React.JSX.Element {
 	const closePreviewPanel = useCallback(() => {
 		setPreviewTabs([]);
 		setPreviewActive(undefined);
+		setPanelFullscreen(false);
 	}, []);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
@@ -307,6 +360,9 @@ export function App(): React.JSX.Element {
 	 * 不只是切页面 —— 旧会话的消息历史必须由 daemon 真正作废，
 	 * 否则两个任务共享 pi 的上下文，正是要根治的「任务干扰」。
 	 * 工作空间选择保留（在哪个空间就在哪个空间开新任务）。
+	 *
+	 * 旧会话的未读点保留：未读属于「那个会话完成了但你没看」的事实，
+	 * 当前会话换了并不消灭这个事实 —— 点回那行时才清。
 	 */
 	const newTask = useCallback(() => {
 		if (link.kind !== "ready") {
@@ -331,12 +387,21 @@ export function App(): React.JSX.Element {
 	 * 恢复历史会话：成功后重拉快照（会话整体换新，以服务端为准）并刷新
 	 * 列表（current 标记易位）。失败 toast 且留在原视图 —— 恢复失败时
 	 * daemon 侧的活动会话没变，界面不应假装已经切过去了。
+	 *
+	 * 侧栏所有行点击（含当前行回对话页）都汇到这一个入口，所以未读
+	 * 也只在这里清 —— 用户看到了，绿点就该消失。
 	 */
 	const resumeTask = useCallback(
 		(path: string) => {
 			window.kami
 				.resumeSession(path)
 				.then(() => {
+					setUnreadPaths((prev) => {
+						if (!prev.has(path)) return prev;
+						const next = new Set(prev);
+						next.delete(path);
+						return next;
+					});
 					resyncSnapshot();
 					refreshTasks();
 					setView("chat");
@@ -410,6 +475,65 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
+	 * 空间组「+」：先把工作空间切到该 cwd，再复用 newTask 开新会话。
+	 * 顺序不能反 —— newTask 在当前 cwd 建会话，先建再切就会落错空间。
+	 * 切空间失败则不新建：否则任务落在原空间，与用户在界面上点选的位置不符。
+	 */
+	const newTaskInSpace = useCallback(
+		(cwd: string) => {
+			window.kami
+				.setWorkspace(cwd)
+				.then(() => newTask())
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[newTask],
+	);
+
+	/** 重命名空间：仅改显示名覆盖（workspaces.json），成功刷列表重拉 metas。 */
+	const renameWorkspace = useCallback(
+		(cwd: string, name: string) => {
+			window.kami
+				.renameWorkspace(cwd, name)
+				.then(() => refreshTasks())
+				.catch((error: unknown) => {
+					// daemon 的校验错误串（重名/未知空间等）直接透出。
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[refreshTasks],
+	);
+
+	/**
+	 * 从列表移除空间：该 cwd 全部会话移入回收目录（可反悔），成功刷列表。
+	 * 当前会话属于该空间时 daemon 侧已拒（错误串直接 toast），这里无需处理
+	 * 视图切换 —— 能走到成功分支时，当前视图必然不属于被移除的空间。
+	 */
+	const removeWorkspace = useCallback(
+		(cwd: string) => {
+			window.kami
+				.removeWorkspace(cwd)
+				.then(() => refreshTasks())
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[refreshTasks],
+	);
+
+	/** 系统文件管理器打开空间目录（daemon 侧校验是已知工作空间，防任意路径）。 */
+	const revealWorkspace = useCallback((cwd: string) => {
+		window.kami.revealWorkspace(cwd).catch((error: unknown) => {
+			showToast(error instanceof Error ? error.message : String(error));
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	/**
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
 	 * —— 否则用户配完模型回来发现对话没了。
 	 */
@@ -430,21 +554,45 @@ export function App(): React.JSX.Element {
 	const title =
 		firstUserText === undefined ? undefined : taskTitle(firstUserText);
 
+	/**
+	 * 侧栏两区分组：组由会话派生（session-groups.ts 头注释有理由），
+	 * groupMetas 只承载显示名覆盖，回退目录 basename。
+	 */
+	const sidebarGroups = useMemo(
+		() => groupSessions(taskList, groupMetas),
+		[taskList, groupMetas],
+	);
+	/**
+	 * 转圈行 = 当前会话行且流式中（单 daemon 单会话，两个条件本地可判，
+	 * 无需新增状态）。
+	 */
+	const streamingPath = conversation.state.isStreaming
+		? taskList.find((t) => t.current)?.path
+		: undefined;
+
 	return (
 		<div className="app">
-			<Sidebar
-				link={link}
-				taskList={taskList}
-				onNewTask={newTask}
-				onResumeTask={resumeTask}
-				onRenameTask={renameTask}
-				onDeleteTask={deleteTask}
-				onExportTask={exportTask}
-				onOpenSettings={openSettings}
-				onOpenDiagnostics={openDiagnostics}
-				onOpenSkills={() => setView("skills")}
-				onTodo={showTodo}
-			/>
+			{sidebarOpen && (
+				<Sidebar
+					link={link}
+					groups={sidebarGroups}
+					streamingPath={streamingPath}
+					unreadPaths={unreadPaths}
+					onNewTask={newTask}
+					onResumeTask={resumeTask}
+					onRenameTask={renameTask}
+					onDeleteTask={deleteTask}
+					onExportTask={exportTask}
+					onNewTaskInSpace={newTaskInSpace}
+					onRenameWorkspace={renameWorkspace}
+					onRemoveWorkspace={removeWorkspace}
+					onRevealWorkspace={revealWorkspace}
+					onOpenSettings={openSettings}
+					onOpenDiagnostics={openDiagnostics}
+					onOpenSkills={() => setView("skills")}
+					onTodo={showTodo}
+				/>
+			)}
 			{view === "home" && (
 				<HomeView
 					ready={link.kind === "ready"}
@@ -476,6 +624,14 @@ export function App(): React.JSX.Element {
 					if (/^https?:\/\//i.test(path)) openArtifact(path);
 					else openPreview({ kind: "file", path });
 				}}
+					onOpenPanelGroup={(_group) => {
+					// 聚合入口：打开面板（无激活项时用第一个产物），概览菜单
+					// 的分组展开由 OverviewMenu 的 open 状态自持，打开面板即展开。
+					const first = conversation.artifacts[0];
+					if (first !== undefined) openPreview({ kind: "file", path: first.path });
+				}}
+					onTogglePanel={() => setPanelOpen((v) => !v)}
+					onToggleSidebar={() => setSidebarOpen((v) => !v)}
 					onOpenSettings={openSettings}
 					onError={showToast}
 					onTodo={showTodo}
@@ -495,8 +651,9 @@ export function App(): React.JSX.Element {
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />
 			)}
-			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。 */}
-			{previewActive !== undefined && (
+			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。
+			   panelOpen 即渲染（无激活文件时显示空态），收起才隐藏。 */}
+			{panelOpen && (
 				<ArtifactPanel
 					artifacts={conversation.artifacts}
 					changes={collectChanges(conversation.entries)}
@@ -504,6 +661,10 @@ export function App(): React.JSX.Element {
 					previewBaseUrl={previewBaseUrl}
 					tabs={previewTabs}
 					active={previewActive}
+					width={panelWidth}
+					fullscreen={panelFullscreen}
+					onWidthChange={setPanelWidth}
+					onToggleFullscreen={() => setPanelFullscreen((v) => !v)}
 					onOpen={openPreview}
 					onCloseTab={closePreviewTab}
 					onOpenExternal={openArtifact}

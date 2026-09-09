@@ -34,6 +34,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.pickWorkspaceDirectory,
 	INVOKE.pickSkillDirectory,
 	INVOKE.pickImageFiles,
+	INVOKE.workspaceReveal,
 ];
 
 let window: BrowserWindow | undefined;
@@ -182,6 +183,20 @@ function registerIpc(): void {
 
 	ipcMain.handle(INVOKE.openArtifact, async (_event, path: string) => {
 		const error = await shell.openPath(path);
+		if (error !== "") throw new Error(error);
+	});
+
+	/*
+	 * 「打开空间目录」与 openArtifact 的关键差别：路径必须先过 daemon 校验。
+	 * 「是否已知工作空间」的知识只在 daemon（组由会话文件派生），main 不知道；
+	 * renderer 是半可信环境，若像 openArtifact 那样「传什么开什么」，
+	 * 任意网页/XSS 都能让 main 对任意路径 shell.openPath（弹 ~\.ssh、系统目录）。
+	 * 所以先转发 daemon 校验（不通过则 reject，openPath 不会执行），通过后才开。
+	 * shell 是 Electron API，daemon 不 import electron，执行只能在这里。
+	 */
+	ipcMain.handle(INVOKE.workspaceReveal, async (_event, cwd: string) => {
+		await callDaemon(INVOKE.workspaceReveal, [cwd]);
+		const error = await shell.openPath(cwd);
 		if (error !== "") throw new Error(error);
 	});
 

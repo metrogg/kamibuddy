@@ -529,6 +529,11 @@ export class SessionHost {
 		this.session.sessionManager.appendSessionInfo(name);
 	}
 
+	/** 产物清单持久化（appendCustomEntry），恢复历史会话时重建产物卡。 */
+	persistArtifacts(files: readonly unknown[], focusFile: string | undefined): void {
+		this.session.sessionManager.appendCustomEntry("artifacts_presented", { files, focusFile });
+	}
+
 	/**
 	 * 当前会话文件名。daemon 用它标会话列表的 current、判定 rename/delete
 	 * 的目标是不是这个活会话。in-memory 会话为 undefined —— 本应用的会话

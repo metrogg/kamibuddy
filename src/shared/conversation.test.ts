@@ -8,8 +8,20 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, SessionEvent, SessionSnapshot, ToolCard } from "./session-events.ts";
-import { conversationReducer, initialConversation, type ConversationView } from "./conversation.ts";
+import type {
+	AssistantMessage,
+	ConversationEntry,
+	SessionEvent,
+	SessionSnapshot,
+	ToolCard,
+} from "./session-events.ts";
+import type { PresentedFile } from "./artifacts.ts";
+import {
+	artifactsFromEntries,
+	conversationReducer,
+	initialConversation,
+	type ConversationView,
+} from "./conversation.ts";
 
 /** 依次应用一串事件，返回最终视图。 */
 function apply(events: readonly SessionEvent[], from: ConversationView = initialConversation): ConversationView {
@@ -409,6 +421,49 @@ describe("产物交付", () => {
 		};
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 		expect(view.artifacts).toEqual([{ path: "E:/w/a.html", size: 100, at: 7 }]);
+	});
+});
+
+describe("artifactsFromEntries · resume 路径产物恢复", () => {
+	const local = (path: string, size: number): PresentedFile => ({ path, size, html: false, kind: "local" });
+	const presented = (id: string, files: readonly PresentedFile[], at: number): ConversationEntry => ({
+		id,
+		role: "artifacts_presented",
+		files,
+		focusFile: undefined,
+		at,
+	});
+
+	it("空 entries 与无 artifacts_presented 条目都返回空清单", () => {
+		expect(artifactsFromEntries([])).toEqual([]);
+		expect(artifactsFromEntries([{ id: "u1", role: "user", text: "hi", at: 1 }])).toEqual([]);
+	});
+
+	it("单条 artifacts_presented 条目折叠为其 files（at 取条目落盘时间）", () => {
+		const out = artifactsFromEntries([presented("p1", [local("E:/w/a.html", 100)], 7)]);
+		expect(out).toEqual([{ path: "E:/w/a.html", size: 100, at: 7 }]);
+	});
+
+	it("多条交付按路径去重，后交付的覆盖并排到末尾（与 mergePresentedArtifacts 同语义）", () => {
+		const out = artifactsFromEntries([
+			presented("p1", [local("E:/w/a.html", 100)], 7),
+			presented("p2", [local("E:/w/b.md", 50), local("E:/w/a.html", 120)], 9),
+		]);
+		expect(out).toEqual([
+			{ path: "E:/w/b.md", size: 50, at: 9 },
+			{ path: "E:/w/a.html", size: 120, at: 9 },
+		]);
+	});
+
+	it("user / assistant / tool / error 条目不影响折叠结果", () => {
+		const entries: ConversationEntry[] = [
+			{ id: "u1", role: "user", text: "hi", at: 1 },
+			{ id: "a1", role: "assistant", text: "ok", at: 2 },
+			toolCard(),
+			{ id: "e1", role: "error", message: "中断", runId: "r1", at: 3 },
+			presented("p1", [local("E:/w/a.html", 100)], 7),
+		];
+		expect(artifactsFromEntries(entries)).toEqual([{ path: "E:/w/a.html", size: 100, at: 7 }]);
 	});
 });
 

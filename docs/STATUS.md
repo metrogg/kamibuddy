@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（权限边界加固：区外读询问 + 应用目录写保护 + 权限门端到端机械证据；spec：.trae/specs/harden-permission-boundary/）
+> 最后更新：2026-09-09（面板常态展开 + 用户气泡 70% + 历史会话产物恢复；spec：.trae/specs/fix-panel-bubble-history/）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -145,6 +145,10 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
 7. **会话导出（新）** —— 侧栏当前会话行点「导出」：`~/KamiBuddy/exports/` 生成 HTML、
    toast 给路径、浏览器自动打开且内容完整（思考 + 工具结果）；
    历史行点「导出」：该会话被恢复并完成导出。
+8. **面板 / 气泡 / 历史产物（新，见下方专节）** —— ① 无文件时点头栏面板开关可展开，
+   显示概览菜单与「选择文件以预览」空态；② 发一条长消息，用户气泡宽不超过消息流 70%；
+   ③ 交付过产物的会话（本次重启后新交付的）关掉再点开，产物卡还在、点击可预览。
+   注意：**重启之前交付的产物没有持久化记录，回看不会有产物卡**——只验证重启后新交付的。
 
 发现问题直接告诉我现象即可。
 
@@ -294,6 +298,26 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
 档位以旋钮反查（`presetIdFor`）为权威，组合不匹配显示「自定义」。
 分工同 ModelMenu：首页是切换器，设置页保留完整版（双旋钮 + 强制力说明），同一数据源无漂移。
 
+## 侧栏任务 × 空间重构（2026-09-09）
+
+侧栏从「全部会话平铺一栏 + 空间死按钮」重构为两区（spec：`.trae/specs/rework-sidebar-task-space/`）：
+
+- **任务区**：仅 playground 会话（无工作空间的任务）。倒序，>5 条显示前 5 条 +「查看更多 (N)」。
+- **空间区**：工作空间会话**按 cwd 分组**（组由会话文件派生，磁盘真相——没有会话的目录不形成组）：
+  组头 = 折叠箭头 + 名称（显示名覆盖 ?? 目录 basename）+ 计数 +「+」（在该空间新建任务，
+  复用 setWorkspace+newTask 原语）+「⋯」菜单。
+- **空间菜单**：打开文件夹（daemon 校验「已知空间」后才 `shell.openPath`——不复制
+  openArtifact「传什么开什么」的已知问题）；重命名（**仅改显示名**，存 `workspaces.json`，
+  不动真实目录——WorkBuddy 同款，其 locale 原文取证；校验：非空/非法字符/255/同级重名/保留名）；
+  从列表移除（确认后该 cwd 全部会话文件移 trash——**用可反悔机制替代 WorkBuddy 的真删**；
+  当前任务所在空间拒删）。
+- **状态指示**：当前会话流式中行内转圈（单 daemon 单会话，同时只有一个 run）；
+  run 完成且用户未查看（不在对话页）→ 未读绿点（点击清除；renderer 内存态，重启清零）。
+
+**WorkBuddy 机制取证**（app.asar 内 locale/bundle）：重命名仅改显示名；移除空间连带删除任务；
+临时任务落默认存储路径且可「保存到工作空间」转正（**我们不做**——playground 无文件工具是
+安全设计，语义不变；转正涉及文件迁移，留作未来 spec）。置顶任务与任务搜索留后续。
+
 ## 会话导出 HTML（2026-09-09）
 
 溯源证据链的最后一环：会话 JSONL / 事件日志都是机器格式，人读不了。
@@ -338,6 +362,24 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
 6. **chat 页权限入口**：composer-bar 接入与首页相同的 PermissionMenu，对话中可随时切档。
 
 判定链最新版见 ARCHITECTURE.md §4.57（表格已同步）。
+
+## 面板常态展开 + 气泡宽度 + 历史产物恢复（2026-09-09）
+
+对标 WorkBuddy 实测差距的三件修复（spec：`.trae/specs/fix-panel-bubble-history/`）：
+
+1. **右侧面板常态可展开**：渲染条件从 `previewActive !== undefined && panelOpen` 改为
+   `panelOpen`——没文件也能点开，显示概览菜单（产物/变更/工作区文件，无内容显示"暂无"）
+   与「选择文件以预览」空态；有交付时 `artifacts_presented` 事件自动展开并打开首个文件。
+2. **用户气泡 70% 宽**：`max-width: calc(100% - 32px)` → `70%`，长消息折行而非占满。
+3. **历史会话产物恢复**：交付时 daemon 用 pi 的 `appendCustomEntry("artifacts_presented",
+   { files, focusFile })` 把产物清单落进会话 JSONL；恢复时 `buildConversationEntries`
+   把 custom 条目翻译成 `artifacts_presented` 条目，再经新增的
+   `artifactsFromEntries`（shared/conversation.ts）折叠回 snapshot 的 `artifacts`。
+   **验证时抓到一个断链**：resume 路径原先 `artifacts: []` 把翻译结果晾在一边，
+   产物卡仍恢复不出——若只测 buildConversationEntries 发现不了，链式检查才暴露。
+   教训：**跨进程数据链（落盘 → 重建 → snapshot → reducer → 渲染）要逐段核对交接点**。
+
+限制：持久化从本次落地起生效，**此前交付的产物没有落盘记录，回看不会有产物卡**。
 
 ## 已知坑
 

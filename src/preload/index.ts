@@ -46,6 +46,11 @@ const bridge: KamiBridge = {
 	setWorkspace: (path) => ipcRenderer.invoke(INVOKE.setWorkspace, path),
 	pickWorkspaceDirectory: () =>
 		ipcRenderer.invoke(INVOKE.pickWorkspaceDirectory),
+	listWorkspaceGroups: () => ipcRenderer.invoke(INVOKE.workspaceGroups),
+	renameWorkspace: (cwd, name) =>
+		ipcRenderer.invoke(INVOKE.workspaceRename, cwd, name),
+	removeWorkspace: (cwd) => ipcRenderer.invoke(INVOKE.workspaceRemove, cwd),
+	revealWorkspace: (cwd) => ipcRenderer.invoke(INVOKE.workspaceReveal, cwd),
 
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
 	respondToPermission: (response) =>

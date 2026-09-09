@@ -403,6 +403,45 @@ describe("buildConversationEntries · 跳过项", () => {
 	});
 });
 
+describe("buildConversationEntries · 产物恢复", () => {
+	// 形状与「跳过项」里的 custom 条目一致：appendCustomEntry 落盘的 { customType, data }。
+	function artifactsEntry(id: string, data: unknown): SessionEntry {
+		return { type: "custom", id, parentId: null, timestamp: TS, customType: "artifacts_presented", data };
+	}
+
+	const files = [
+		{ path: "E:/w/a.html", size: 100, html: true, kind: "local" as const },
+		{ path: "E:/w/b.md", size: 50, html: false, kind: "local" as const },
+	];
+
+	it("artifacts_presented custom 条目翻译成产物条目：files/focusFile 取自 data，at 为条目时间戳", () => {
+		const out = buildConversationEntries([
+			artifactsEntry("p1", { files, focusFile: "E:/w/a.html" }),
+		]);
+		expect(out).toHaveLength(1);
+		expect(out[0]).toEqual({
+			id: "p1",
+			role: "artifacts_presented",
+			files,
+			focusFile: "E:/w/a.html",
+			at: AT,
+		});
+	});
+
+	it("data 缺 files 键的 artifacts_presented 条目跳过不产出", () => {
+		const out = buildConversationEntries([artifactsEntry("p1", { focusFile: "E:/w/a.html" })]);
+		expect(out).toEqual([]);
+	});
+
+	it("产物条目单独扫尾追加，出现在消息条目之后（与落盘位置无关）", () => {
+		const out = buildConversationEntries([
+			artifactsEntry("p1", { files, focusFile: "E:/w/a.html" }),
+			userEntry("u1", "hi"),
+		]);
+		expect(out.map((e) => e.role)).toEqual(["user", "artifacts_presented"]);
+	});
+});
+
 describe("validateSessionFilePath", () => {
 	const DIR = resolve("fake-sessions");
 

@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
@@ -36,6 +36,12 @@ import { buildExportPath } from "../core/session-export.ts";
 import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
 import { buildConversationEntries, validateSessionFilePath } from "../core/session-rebuild.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
+import {
+	readDisplayNames,
+	removeDisplayName,
+	setDisplayName,
+	validateDisplayName,
+} from "../core/workspace-registry.ts";
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
@@ -56,6 +62,7 @@ import type { WebSearchConfig } from "../core/web-search.ts";
 import { buildContextUsage } from "../shared/context-usage.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
 import {
+	artifactsFromEntries,
 	conversationReducer,
 	type ConversationView,
 } from "../shared/conversation.ts";
@@ -72,6 +79,7 @@ import {
 	type ArtifactContent,
 	type PromptRequest,
 	type SessionSummary,
+	type WorkspaceGroupMeta,
 } from "../shared/ipc.ts";
 import {
 	isWebSearchProviderId,
@@ -522,8 +530,19 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 			// 但交付动作本身无害（区外路径不 stat，见 extensions/present-files.ts）。
 			createPresentFiles({
 				getWorkspaceDir: () => workspaceDir,
-				onPresent: ({ files, focusFile }) =>
-					emitSessionEvent({ type: "artifacts_presented", files, focusFile }),
+				onPresent: ({ files, focusFile }) => {
+					emitSessionEvent({ type: "artifacts_presented", files, focusFile });
+					// 产物清单持久化到会话文件（appendCustomEntry），恢复历史会话时
+					// buildConversationEntries 把它翻译回 artifacts_presented 事件，
+					// 产物卡与交付时状态一致。playground 无 sessionManager，跳过。
+					if (hostPromise !== undefined) {
+						void hostPromise.then((host) => {
+							host.persistArtifacts(files, focusFile);
+						}).catch(() => {
+							// 持久化失败不影响交付本身（产物已在内存里），日志走 eventLog。
+						});
+					}
+				},
 			}),
 			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
 			// 两轴的权威状态经 conversation 折叠镜像读取；技能段取自宿主的 loader 发现结果。
@@ -709,6 +728,42 @@ async function listSessions(): Promise<SessionSummary[]> {
 }
 
 /**
+ * 把一个会话文件移入 trash（不真删：可人工找回，对齐 pi 避免永久删除的取向）。
+ * sessionDelete 与 workspaceRemove 共用，别在调用点各写一遍。
+ *
+ * 时间戳前缀防同名覆盖（同一会话删两次、不同会话同文件名）。批量移除空间时
+ * 同一毫秒可能连移多个同名文件，Date.now() 前缀会撞 —— libuv 的 rename 带
+ * MOVEFILE_REPLACE_EXISTING，直接覆盖就把先移进去的抹掉了，trash 是找回兜底，
+ * 被覆盖等于真丢。撞名时追加序号，序号本身不需要持久语义。
+ */
+function moveToTrash(filePath: string): void {
+	const trashDir = join(getConfigDir(), "trash");
+	mkdirSync(trashDir, { recursive: true });
+	const stamp = Date.now();
+	let candidate = join(trashDir, `${stamp}-${basename(filePath)}`);
+	for (let i = 1; existsSync(candidate); i++) {
+		candidate = join(trashDir, `${stamp}-${i}-${basename(filePath)}`);
+	}
+	renameSync(filePath, candidate);
+}
+
+/**
+ * 空间组集合：非 playground 会话的 cwd 去重，合并显示名覆盖。
+ *
+ * 组由会话文件派生（磁盘真相）：没有会话的目录不形成组，被移除的空间
+ * 若再开任务会自然重现。显示名只是视图层覆盖（workspaces.json），
+ * 注册表里没有的键不回补。组顺序无所谓 —— 排序是 renderer 的事（契约注释）。
+ */
+async function listWorkspaceGroups(): Promise<WorkspaceGroupMeta[]> {
+	const names = readDisplayNames();
+	const cwds = new Set<string>();
+	for (const session of await listSessions()) {
+		if (!session.isPlayground) cwds.add(session.cwd);
+	}
+	return [...cwds].map((cwd): WorkspaceGroupMeta => ({ cwd, displayName: names[cwd] }));
+}
+
+/**
  * 恢复历史会话为当前活动会话。编排与 applyWorkspace 同构：
  * 守卫 → 作废旧宿主 → 恢复工作空间语义 → 重建宿主 → 重建本地历史。
  *
@@ -782,15 +837,18 @@ async function resumeSession(path: string): Promise<void> {
 
 	// 本地历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
 	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。usageDetail / turn /
-	// cancelledTurns / artifacts 属于旧会话，清空；state 保留现值 ——
+	// cancelledTurns 属于旧会话，清空；artifacts 从落盘的 artifacts_presented
+	// custom 条目恢复（buildConversationEntries 翻译 → artifactsFromEntries 折叠，
+	// 清成 [] 会让恢复出的会话丢掉产物卡）；state 保留现值 ——
 	// 它刚被 createHost 的 session_state 换成新会话的权威值。
+	const rebuilt = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
 	conversation = {
 		...conversation,
-		entries: buildConversationEntries(manager.buildContextEntries(), restoredToolLabel),
+		entries: rebuilt,
 		usageDetail: undefined,
 		turn: undefined,
 		cancelledTurns: [],
-		artifacts: [],
+		artifacts: artifactsFromEntries(rebuilt),
 	};
 }
 
@@ -946,11 +1004,7 @@ const handlers: Record<string, Handler> = {
 		const pathError = validateSessionFilePath(target, getSessionsDir());
 		if (pathError !== undefined) throw new Error(pathError);
 
-		// 移入 trash 而不是真删：可人工找回，对齐 pi 避免永久删除的取向。
-		// 时间戳前缀防同名覆盖（同一会话删两次、不同会话同文件名）。
-		const trashDir = join(getConfigDir(), "trash");
-		mkdirSync(trashDir, { recursive: true });
-		renameSync(target, join(trashDir, `${Date.now()}-${basename(target)}`));
+		moveToTrash(target);
 	},
 
 	[INVOKE.sessionExport]: async ([path]) => {
@@ -1184,6 +1238,66 @@ const handlers: Record<string, Handler> = {
 		applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
 
 	[INVOKE.setWorkspace]: async ([path]) => applyWorkspace(path as string),
+
+	[INVOKE.workspaceGroups]: async () => listWorkspaceGroups(),
+
+	[INVOKE.workspaceRename]: async ([cwd, name]) => {
+		const target = cwd as string;
+		const trimmed = (name as string).trim();
+
+		// siblings 取「用户眼里其他空间的名字」：显示名覆盖优先，没覆盖的用目录名。
+		// 校验语义是界面上不许出现两个同名空间（validateDisplayName 注释同口径），
+		// 与真实目录是否重名无关 —— 显示名只是覆盖表，不改目录。
+		const groups = await listWorkspaceGroups();
+		const resolvedTarget = resolve(target);
+		const siblings = groups
+			.filter((g) => resolve(g.cwd) !== resolvedTarget)
+			.map((g) => g.displayName ?? basename(g.cwd));
+		const error = validateDisplayName(trimmed, siblings);
+		if (error !== undefined) throw new Error(error);
+
+		setDisplayName(target, trimmed);
+	},
+
+	[INVOKE.workspaceRemove]: async ([cwd]) => {
+		const target = cwd as string;
+		const resolvedTarget = resolve(target);
+
+		// 一份列表同时服务守卫与收集：listSessions 的 current 标记与 cwd
+		// 都来自会话文件头部（磁盘真相），与组的派生口径一致。
+		const sessions = await listSessions();
+
+		// 当前任务所在空间拒删：宿主还持有该会话文件的活写者，移走后续写会失败，
+		// 且用户正在看的对话会凭空消失（sessionDelete 拒删当前会话的同一理由）。
+		// 判定按 header.cwd 而不是文件位置 —— 会话文件全部平铺在 sessions/ 下
+		// （SessionManager.create 传的是显式 sessionDir），与空间目录没有位置关系。
+		const current = sessions.find((s) => s.current);
+		if (current !== undefined && resolve(current.cwd) === resolvedTarget) {
+			throw new Error("这是当前任务所在空间，请先新建任务再移除");
+		}
+
+		for (const session of sessions) {
+			if (session.isPlayground || resolve(session.cwd) !== resolvedTarget) continue;
+			moveToTrash(session.path);
+		}
+
+		// 空间目录本身不动：里面可能有用户自己的文件，我们只管会话文件。
+		removeDisplayName(target);
+	},
+
+	/**
+	 * 只校验不执行：renderer 是半可信环境，「已知空间」的知识又只在 daemon
+	 * （组由会话文件派生），所以校验放这里；真正的 shell.openPath 在 main 侧
+	 * —— main 的本地 handler 先把本通道转发到这里，通过后才 openPath。
+	 * 若不校验，任意网页/XSS 都能让 main 打开任意路径（~\.ssh、系统目录）。
+	 */
+	[INVOKE.workspaceReveal]: async ([cwd]) => {
+		const resolvedTarget = resolve(cwd as string);
+		const groups = await listWorkspaceGroups();
+		if (!groups.some((g) => resolve(g.cwd) === resolvedTarget)) {
+			throw new Error("不是已知的工作空间");
+		}
+	},
 
 	/* ── 产物 ─────────────────────────────────────────────────────── */
 

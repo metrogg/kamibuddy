@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from "react";
 import type { ArtifactRef, ChangeRef } from "@shared/artifacts.ts";
-import { IconChevronDown, IconClose, IconDoc, IconOpenExternal } from "./icons.tsx";
+import { IconChevronDown, IconClose, IconDoc, IconExpand, IconOpenExternal, IconShrink } from "./icons.tsx";
 
 /** 预览对象：文件本身，或某文件的变更 diff。 */
 export type PreviewSelection =
@@ -86,8 +86,16 @@ interface ArtifactPanelProps {
 	readonly previewBaseUrl: string | undefined;
 	/** 已打开的 tab（顺序即显示顺序）。 */
 	readonly tabs: readonly PreviewSelection[];
-	/** 当前激活的 tab。 */
-	readonly active: PreviewSelection;
+	/** 当前激活的 tab。undefined 表示常态展开但无激活文件（空态）。 */
+	readonly active: PreviewSelection | undefined;
+	/** 面板宽度（px）。 */
+	readonly width: number;
+	/** 全屏态。 */
+	readonly fullscreen: boolean;
+	/** 拖拽调宽回调。 */
+	readonly onWidthChange: (width: number) => void;
+	/** 全屏切换回调。 */
+	readonly onToggleFullscreen: () => void;
 	/** 打开/激活一个预览对象（不在 tabs 里会自动补 tab）。 */
 	readonly onOpen: (sel: PreviewSelection) => void;
 	readonly onCloseTab: (sel: PreviewSelection) => void;
@@ -280,6 +288,10 @@ export function ArtifactPanel({
 	previewBaseUrl,
 	tabs,
 	active,
+	width,
+	fullscreen,
+	onWidthChange,
+	onToggleFullscreen,
 	onOpen,
 	onCloseTab,
 	onOpenExternal,
@@ -287,20 +299,65 @@ export function ArtifactPanel({
 }: ArtifactPanelProps): React.JSX.Element {
 	const servable = previewBaseUrl !== undefined && cwd !== undefined;
 	const activeChange =
-		active.kind === "change" ? changes.find((c) => c.path === active.path) : undefined;
+		active?.kind === "change" ? changes.find((c) => c.path === active.path) : undefined;
 
-	const rel = toRelative(active.path, cwd);
-	const kind = kindOf(rel);
+	const rel = active === undefined ? "" : toRelative(active.path, cwd);
+	const kind = active === undefined ? "unsupported" : kindOf(rel);
+
+	// sash 拖拽调宽（WorkBuddy colleague-artifact-provider 同口径：
+	// mousedown 记起点与起始宽，mousemove clamp [340, 800]，拖拽时 body cursor/user-select）。
+	const handleSashMouseDown = (event: React.MouseEvent): void => {
+		event.preventDefault();
+		const startX = event.clientX;
+		const startWidth = width;
+		const onMouseMove = (moveEvent: MouseEvent): void => {
+			const delta = startX - moveEvent.clientX;
+			onWidthChange(Math.min(Math.max(startWidth + delta, 340), 800));
+		};
+		const onMouseUp = (): void => {
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+		};
+		document.addEventListener("mousemove", onMouseMove);
+		document.addEventListener("mouseup", onMouseUp);
+		document.body.style.cursor = "col-resize";
+		document.body.style.userSelect = "none";
+	};
+
+	// Esc 退出全屏（监听挂在全屏态上，非全屏不注册）。
+	useEffect(() => {
+		if (!fullscreen) return;
+		const onKeyDown = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") onToggleFullscreen();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [fullscreen, onToggleFullscreen]);
 
 	return (
-		<aside className="preview-panel">
+		<aside
+			className={`preview-panel${fullscreen ? " fullscreen" : ""}`}
+			style={fullscreen ? undefined : { width: `${width}px` }}
+		>
+			{/* 拖拽手柄：仅非全屏时可用（全屏宽由容器撑满，拖拽无意义）。 */}
+			{!fullscreen && (
+				<div
+					className="preview-sash"
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="拖拽调整面板宽度"
+					onMouseDown={handleSashMouseDown}
+				/>
+			)}
 			<header className="preview-head">
 				<OverviewMenu artifacts={artifacts} changes={changes} cwd={cwd} onOpen={onOpen} onOpenExternal={onOpenExternal} />
 				<div className="preview-tabs-strip">
 					{tabs.map((sel) => (
 						<span
 							key={`${sel.kind}:${sel.path}`}
-							className={`preview-tab-item${sameSelection(sel, active) ? " active" : ""}`}
+							className={`preview-tab-item${active !== undefined && sameSelection(sel, active) ? " active" : ""}`}
 						>
 							<button
 								type="button"
@@ -326,63 +383,83 @@ export function ArtifactPanel({
 				<button
 					type="button"
 					className="bar-btn"
+					title={fullscreen ? "退出全屏" : "全屏"}
+					aria-label={fullscreen ? "退出全屏" : "全屏"}
+					onClick={onToggleFullscreen}
+				>
+					{fullscreen ? <IconShrink size={14} /> : <IconExpand size={14} />}
+				</button>
+				<button
+					type="button"
+					className="bar-btn"
 					title="外部打开"
 					aria-label="外部打开"
-					onClick={() => onOpenExternal(active.path)}
+					disabled={active === undefined}
+					onClick={() => {
+						if (active !== undefined) onOpenExternal(active.path);
+					}}
 				>
 					<IconOpenExternal size={14} />
 				</button>
 			</header>
 
 			<div className="preview-body">
-				{active.kind === "change" && (
-					activeChange?.diff !== undefined ? (
-						<DiffView diff={activeChange.diff} />
-					) : (
-						<div className="preview-fallback">
-							{activeChange === undefined
-								? "该变更记录已不存在"
-								: activeChange.changeType === "created"
-									? "新创建的文件，改动为全文新增"
-									: "文件过大，只统计了增删行数"}
-							{activeChange !== undefined && (
-								<>
-									{"，"}
-									<button
-										type="button"
-										className="preview-link"
-										onClick={() => onOpen({ kind: "file", path: activeChange.path })}
-									>
-										查看文件本身
-									</button>
-								</>
-							)}
-						</div>
-					)
-				)}
-				{active.kind === "file" && !servable && (
-					<div className="preview-fallback">选择工作空间后可预览文件</div>
-				)}
-				{active.kind === "file" && servable && kind === "html" && (
-					<iframe
-						className="preview-frame"
-						title={baseName(rel)}
-						src={previewUrl(previewBaseUrl, rel)}
-						// 与宿主不同源（127.0.0.1:端口），allow-same-origin 只给它自己
-						// 源的 localStorage（游戏存档类需要），够不着我们的状态。
-						sandbox="allow-scripts allow-same-origin allow-forms"
-					/>
-				)}
-				{active.kind === "file" && servable && kind === "image" && (
-					<img className="preview-image" src={previewUrl(previewBaseUrl, rel)} alt={baseName(rel)} />
-				)}
-				{active.kind === "file" && servable && kind === "text" && (
-					<TextPreview path={rel} onError={onError} />
-				)}
-				{active.kind === "file" && servable && kind === "unsupported" && (
-					<div className="preview-fallback">
-						暂不支持预览此类型，<button type="button" className="preview-link" onClick={() => onOpenExternal(active.path)}>外部打开</button>
-					</div>
+				{active === undefined ? (
+					/* 空态：常态展开但无激活文件（WorkBuddy 无文件也能展开面板，
+					   显示「暂无内容」占位）。 */
+					<div className="preview-fallback">选择文件以预览</div>
+				) : (
+					<>
+						{active.kind === "change" && (
+							activeChange?.diff !== undefined ? (
+								<DiffView diff={activeChange.diff} />
+							) : (
+								<div className="preview-fallback">
+									{activeChange === undefined
+										? "该变更记录已不存在"
+										: activeChange.changeType === "created"
+											? "新创建的文件，改动为全文新增"
+											: "文件过大，只统计了增删行数"}
+									{activeChange !== undefined && (
+										<>
+											{"，"}
+											<button
+												type="button"
+												className="preview-link"
+												onClick={() => onOpen({ kind: "file", path: activeChange.path })}
+											>
+												查看文件本身
+											</button>
+										</>
+									)}
+								</div>
+							)
+						)}
+						{active.kind === "file" && !servable && (
+							<div className="preview-fallback">选择工作空间后可预览文件</div>
+						)}
+						{active.kind === "file" && servable && kind === "html" && (
+							<iframe
+								className="preview-frame"
+								title={baseName(rel)}
+								src={previewUrl(previewBaseUrl, rel)}
+								// 与宿主不同源（127.0.0.1:端口），allow-same-origin 只给它自己
+								// 源的 localStorage（游戏存档类需要），够不着我们的状态。
+								sandbox="allow-scripts allow-same-origin allow-forms"
+							/>
+						)}
+						{active.kind === "file" && servable && kind === "image" && (
+							<img className="preview-image" src={previewUrl(previewBaseUrl, rel)} alt={baseName(rel)} />
+						)}
+						{active.kind === "file" && servable && kind === "text" && (
+							<TextPreview path={rel} onError={onError} />
+						)}
+						{active.kind === "file" && servable && kind === "unsupported" && (
+							<div className="preview-fallback">
+								暂不支持预览此类型，<button type="button" className="preview-link" onClick={() => onOpenExternal(active.path)}>外部打开</button>
+							</div>
+						)}
+					</>
 				)}
 			</div>
 		</aside>

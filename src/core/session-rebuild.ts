@@ -30,6 +30,7 @@ import type {
 	ToolOutcome,
 	UserMessage,
 } from "../shared/session-events.ts";
+import type { PresentedFile } from "../shared/artifacts.ts";
 import type { TokenUsage } from "../shared/observability.ts";
 import type { ImagePart } from "../shared/image.ts";
 
@@ -195,6 +196,27 @@ export function buildConversationEntries(
 		// 其余 message 角色（toolResult / bashExecution / custom / branchSummary /
 		// compactionSummary）跳过：toolResult 已配对消费，其余不是本应用的展示内容。
 	}
+
+	/*
+	 * 产物清单恢复：appendCustomEntry("artifacts_presented") 落盘的 custom 条目
+	 * 不参与 message 遍历（上面 continue 掉了），单独扫一遍翻译成 artifacts_presented
+	 * 事件，reducer 折叠后产物清单与交付时一致（多次交付按路径去重、后交付排末尾，
+	 * 语义由 mergePresentedArtifacts 保证，不在此重复实现）。
+	 */
+	for (const entry of entries) {
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== "artifacts_presented") continue;
+		const data = entry.data as { files?: PresentedFile[]; focusFile?: string } | undefined;
+		if (data?.files === undefined) continue;
+		out.push({
+			id: entry.id,
+			role: "artifacts_presented",
+			files: data.files,
+			focusFile: data.focusFile,
+			at: Date.parse(entry.timestamp),
+		});
+	}
+
 	return out;
 }
 

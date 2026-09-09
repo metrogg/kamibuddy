@@ -295,3 +295,17 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			};
 	}
 }
+
+/**
+ * 从重建 entries 折叠产物清单（resume 路径用：artifacts_presented 条目按序 fold）。
+ * entry.at 是落盘时的交付时间，保序/去重语义与 live 路径一致 —— 两条路径都走
+ * mergePresentedArtifacts，不在此重写合并逻辑（一处语义，两处复用，否则必然漂移）。
+ */
+export function artifactsFromEntries(entries: readonly ConversationEntry[]): readonly ArtifactRef[] {
+	let acc: readonly ArtifactRef[] = [];
+	for (const entry of entries) {
+		if (entry.role !== "artifacts_presented") continue;
+		acc = mergePresentedArtifacts(acc, entry.files, entry.at);
+	}
+	return acc;
+}

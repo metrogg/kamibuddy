@@ -16,6 +16,7 @@ import type {
 	SessionSummary,
 	UiRequest,
 	UiResponse,
+	WorkspaceGroupMeta,
 	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
@@ -77,6 +78,14 @@ export interface KamiBridge {
 	readonly setWorkspace: (path: string) => Promise<string | undefined>;
 	/** 系统目录选择框。取消返回 undefined。 */
 	readonly pickWorkspaceDirectory: () => Promise<string | undefined>;
+	/** 空间分组元数据（侧栏「空间」区组头；组集合由会话 cwd 派生）。 */
+	readonly listWorkspaceGroups: () => Promise<WorkspaceGroupMeta[]>;
+	/** 重命名空间组（只写显示名覆盖，不动真实目录）。名称非法时 reject 原因。 */
+	readonly renameWorkspace: (cwd: string, name: string) => Promise<void>;
+	/** 从列表移除空间组（会话文件移入回收目录，不删真实目录）。 */
+	readonly removeWorkspace: (cwd: string) => Promise<void>;
+	/** 在系统文件管理器中打开空间目录。cwd 经 daemon 校验为已知工作空间，否则 reject。 */
+	readonly revealWorkspace: (cwd: string) => Promise<void>;
 
 	readonly respondToUi: (response: UiResponse) => Promise<void>;
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;

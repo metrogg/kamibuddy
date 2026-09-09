@@ -24,6 +24,26 @@ import {
 	IconSend,
 	IconStop,
 } from "./icons.tsx";
+
+/** 产物面板开关图标（右侧栏隐喻：三条竖线，右条加粗表示面板）。 */
+function IconPanelRight({ size = 16 }: { readonly size?: number }): React.JSX.Element {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+			<path d="M10.5 2.5v11" />
+		</svg>
+	);
+}
+
+/** 侧栏开关图标（左侧栏隐喻：三条竖线，左条加粗表示侧栏）。 */
+function IconPanelLeft({ size = 16 }: { readonly size?: number }): React.JSX.Element {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+			<path d="M5.5 2.5v11" />
+		</svg>
+	);
+}
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { AttachmentStrip, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
@@ -50,6 +70,12 @@ interface ChatViewProps {
 	readonly onInteractionChange: (interactionId: string) => void;
 	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
 	readonly onPreviewArtifact: (path: string) => void;
+	/** 产物/变更聚合入口：打开预览面板并展开概览菜单对应分组。 */
+	readonly onOpenPanelGroup: (group: "artifacts" | "changes") => void;
+	/** 产物面板展开/收起切换（chat-header 右侧常态按钮）。 */
+	readonly onTogglePanel: () => void;
+	/** 左侧栏展开/收起切换（chat-header 右侧常态按钮）。 */
+	readonly onToggleSidebar: () => void;
 	/** 打开设置页（权限弹层的「打开设置…」入口，与 home-view 同语义）。 */
 	readonly onOpenSettings: () => void;
 	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
@@ -590,6 +616,9 @@ export function ChatView({
 	onAbort,
 	onInteractionChange,
 	onPreviewArtifact,
+	onOpenPanelGroup,
+	onTogglePanel,
+	onToggleSidebar,
 	onOpenSettings,
 	onError,
 	onTodo,
@@ -726,6 +755,24 @@ export function ChatView({
 					onChange={onInteractionChange}
 					onTodo={onTodo}
 				/>
+				<button
+					type="button"
+					className="bar-btn"
+					title="侧栏"
+					aria-label="侧栏"
+					onClick={onToggleSidebar}
+				>
+					<IconPanelLeft size={16} />
+				</button>
+				<button
+					type="button"
+					className="bar-btn"
+					title="产物面板"
+					aria-label="产物面板"
+					onClick={onTogglePanel}
+				>
+					<IconPanelRight size={16} />
+				</button>
 			</header>
 
 			{/*
@@ -777,9 +824,14 @@ export function ChatView({
 							return <ToolEntry key={entry.id} card={entry} />;
 						}
 						// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
-					if (entry.role === "user") {
-						return <UserBubble key={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
-					}
+						if (entry.role === "user") {
+							return <UserBubble key={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+						}
+						// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
+						// conversation.artifacts，产物卡在消息流底部统一展示）。
+						if (entry.role === "artifacts_presented") {
+							return null;
+						}
 						return (
 							<div key={entry.id} className={`entry ${entry.role}`}>
 								{/*
@@ -839,22 +891,46 @@ export function ChatView({
 				{!streaming && artifacts.length > 0 && (
 					<section className="artifacts">
 						<header className="artifacts-header">产物（{artifacts.length}）</header>
-						{artifacts.map((a) => {
-							const isUrl = /^https?:\/\//i.test(a.path);
-							return (
-								<button
-									key={a.path}
-									type="button"
-									className="artifact-card"
-									title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
-									onClick={() => onPreviewArtifact(a.path)}
-								>
-									<IconDoc size={16} />
-									<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-									{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
-								</button>
-							);
-						})}
+						<div className="artifacts-grid">
+							{artifacts.map((a) => {
+								const isUrl = /^https?:\/\//i.test(a.path);
+								const isHtml = /\.html?$/i.test(a.path);
+								return (
+									<button
+										key={a.path}
+										type="button"
+										className="artifact-card"
+										title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+										onClick={() => onPreviewArtifact(a.path)}
+									>
+										<IconDoc size={16} />
+										<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+										{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+										{isHtml && !isUrl && (
+											<span
+												className="artifact-preview-btn"
+												role="button"
+												title="在预览面板打开"
+												onClick={(event) => {
+													event.stopPropagation();
+													onPreviewArtifact(a.path);
+												}}
+											>
+												🌐
+											</span>
+										)}
+									</button>
+								);
+							})}
+						</div>
+						<div className="artifacts-footer">
+							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
+								查看所有产物 ({artifacts.length}) ›
+							</button>
+							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
+								查看所有变更 ›
+							</button>
+						</div>
 					</section>
 				)}
 				{lastError !== undefined && (

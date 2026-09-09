@@ -110,7 +110,16 @@ export interface ErrorEntry {
 	readonly at: number;
 }
 
-export type ConversationEntry = UserMessage | AssistantMessage | ToolCard | ErrorEntry;
+export type ConversationEntry = UserMessage | AssistantMessage | ToolCard | ErrorEntry | ArtifactsPresentedEntry;
+
+/** 产物交付条目（artifacts_presented 折叠而来，恢复会话时由 custom 条目翻译）。 */
+export interface ArtifactsPresentedEntry {
+	readonly id: MessageId;
+	readonly role: "artifacts_presented";
+	readonly files: readonly PresentedFile[];
+	readonly focusFile: string | undefined;
+	readonly at: number;
+}
 
 /**
  * 生成中卡片的标签（WorkBuddy tool.writeFile 词汇表：生成中/修改中）。
