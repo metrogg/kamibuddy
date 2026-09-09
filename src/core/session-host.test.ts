@@ -39,6 +39,7 @@ function createHost(session: unknown, emit: (event: SessionEvent) => void): Sess
 		catalog: {} as unknown as ModelCatalog,
 		modelKey: undefined,
 		cwd: "C:\\test",
+		isTempTask: false,
 		sceneId: "work",
 		interactionId: "craft",
 		emit,

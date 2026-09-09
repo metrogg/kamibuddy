@@ -24,6 +24,8 @@
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.13",
+    "officeparser": "4.2.0",
+    "pdfjs-dist": "6.3.289",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "10.1.0",
@@ -32,6 +34,7 @@
     "typebox": "^1.3.7"
   },
   "devDependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.4",
@@ -39,6 +42,8 @@
     "@vitejs/plugin-react": "5.2.0",
     "electron": "44.2.0",
     "electron-vite": "5.0.0",
+    "jszip": "3.10.2",
+    "pdf-lib": "1.17.1",
     "tsx": "4.22.1",
     "typescript": "5.9.3",
     "vite": "7.3.6",

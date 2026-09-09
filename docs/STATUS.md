@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（面板常态展开 + 用户气泡 70% + 历史会话产物恢复；spec：.trae/specs/fix-panel-bubble-history/）
+> 最后更新：2026-09-09（文档读取能力 read_document：PDF/Office → 文本，模型可读 PDF 了；spec：.trae/specs/add-document-reading/）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -149,6 +149,16 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
    显示概览菜单与「选择文件以预览」空态；② 发一条长消息，用户气泡宽不超过消息流 70%；
    ③ 交付过产物的会话（本次重启后新交付的）关掉再点开，产物卡还在、点击可预览。
    注意：**重启之前交付的产物没有持久化记录，回看不会有产物卡**——只验证重启后新交付的。
+9. **文档读取（新，见下方专节）** —— 工作区里放一份真实中文 PDF 和一份 docx，
+   各问一次「总结一下这个文件」：应出现「阅读文档 → 已阅读」卡片，回答内容确实来自
+   文件正文（不是模型瞎编）。**旧会话不生效**：工具集在建会话时注入，请新建任务验证。
+10. **对话页 6 项细节（新，见下方专节）** —— ① hover 一条助手回答，底部浮现复制按钮，
+   点击变对勾、剪贴板是 Markdown 源文；② 输入区左侧出现模型名，点击可换模型；
+   ③ 让模型输出一个长代码块：卡片有语言名头部 + 复制按钮，超高内部滚动；
+   ④ 流式中点一次停止：按钮变 Esc 徽章 3 秒不中断，3 秒内再点（或按 Esc）才真正停；
+   ⑤ 发几条消息后 Alt+↑ 逐条翻回、Alt+↓ 翻回到底再按一次恢复半截草稿，
+   切到设置再切回对话页草稿还在；⑥ 粘贴超长文本：剩余 <1000 字符时右侧出余量，
+   超 10 万变红且发不出去。
 
 发现问题直接告诉我现象即可。
 
@@ -298,11 +308,37 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
 档位以旋钮反查（`presetIdFor`）为权威，组合不匹配显示「自定义」。
 分工同 ModelMenu：首页是切换器，设置页保留完整版（双旋钮 + 强制力说明），同一数据源无漂移。
 
+## 临时任务模型对齐 WorkBuddy（2026-09-09，playground 退役）
+
+**更正记录**：此前代码与文档里「playground = WorkBuddy 的 `cwd=""` 同语义」的背书，
+经全面取证（`docs/workbuddy分析/` + app.asar 的 `main/server.js`、locale）**查无实据，予以删除**。
+WorkBuddy 的真实模型：默认工作空间根（设置项 `defaultWorkspacePath`，兜底 `~/WorkBuddy`），
+**临时任务落 `<根>/Claw` 共享目录、工具齐全、权限照常**，可「保存到工作空间」转正。
+playground（无目录、无文件工具）是我们自己的发明，用户决策全部对齐（spec：
+`.trae/specs/align-temp-task-workspace-model/`）。
+
+落地后（BREAKING，`isPlayground` → `isTempTask` 全仓改名，无兼容 shim）：
+
+- **新建任务默认 = 临时任务**：cwd = `<生效根>/临时任务`（共享临时目录，对齐 `<root>/Claw`），
+  完整工具集 + 权限门 + 预览服务全装。picker 不再有「不使用工作空间」。
+  `PLAYGROUND_TOOLS` 与 configDir/playground 占位目录逻辑一并删除。
+- **生效根分层**：env `KAMIBUDDY_WORKSPACE_DIR` > 设置项 `defaultWorkspacePath` > `~/KamiBuddy`
+  （WorkBuddy 同款）。设置页新增「默认存储路径」区块（修改/还原默认；
+  修改不影响已有会话——locale 取证同款语义）。
+- **保存到工作空间**：临时任务的对话页头部按钮 → 命名（validateDisplayName 同族校验 +
+  目录存在即拒）→ 根下建目录 → 会话以新 cwd 重建（pi 的 `SessionManager.open` 不落盘 cwd，
+  补了 JSONL 首行 header.cwd 重写——否则空间分组派生失效）→ 归入空间区。
+  历史文件留临时目录不搬（共享目录无法干净归属，WorkBuddy 同结构）。
+- **分组键**：任务区 = isTempTask（cwd=临时目录 / 默认根本身 / 旧 playground 占位目录）；
+  旧 playground 会话恢复时 cwd 映射到临时目录（归类迁移，不改会话文件）。
+- **权限前提已变**：当初 playground 不给文件工具是因为没有读取边界；
+  区外读/写询问 + 凭据禁读写 + 应用目录写高风险落地后，默认根方案的安全水位不低于 playground。
+
 ## 侧栏任务 × 空间重构（2026-09-09）
 
 侧栏从「全部会话平铺一栏 + 空间死按钮」重构为两区（spec：`.trae/specs/rework-sidebar-task-space/`）：
 
-- **任务区**：仅 playground 会话（无工作空间的任务）。倒序，>5 条显示前 5 条 +「查看更多 (N)」。
+- **任务区**：仅临时任务会话（`isTempTask`：未选空间默认落 `<生效根>/临时任务`）。倒序，>5 条显示前 5 条 +「查看更多 (N)」。
 - **空间区**：工作空间会话**按 cwd 分组**（组由会话文件派生，磁盘真相——没有会话的目录不形成组）：
   组头 = 折叠箭头 + 名称（显示名覆盖 ?? 目录 basename）+ 计数 +「+」（在该空间新建任务，
   复用 setWorkspace+newTask 原语）+「⋯」菜单。
@@ -380,6 +416,61 @@ pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessi
    教训：**跨进程数据链（落盘 → 重建 → snapshot → reducer → 渲染）要逐段核对交接点**。
 
 限制：持久化从本次落地起生效，**此前交付的产物没有落盘记录，回看不会有产物卡**。
+
+## 对话页 6 项细节对齐（2026-09-09）
+
+spec：`.trae/specs/align-chat-details-workbuddy/`（用户逐条确认的 6 点，① 明确只用复制）。
+其中 4 项与 `align-chat-ui-workbuddy` 批三/批四同源，其 tasks.md 的 Task 10/11/12/14 已同步勾选；
+模式 chip、编辑重发、免责声明等其余项用户明确不做。
+
+1. **助手回答底部操作条（仅复制）**：`AssistantActions` 组件挂在每条 assistant 消息的
+   Markdown 下方，常驻 DOM 占位、hover 切透明度（与 UserBubble 工具条同模式——hover 才
+   插入 DOM 会推动消息流抖动）。复制 Markdown 源文，对勾 2s。
+2. **对话页模型快捷切换**：首页 `ModelMenu` 直接落 composer-bar 左侧（PermissionMenu 旁），
+   同组件同数据源零新逻辑；弹层向上展开左对齐（300px 弹层贴右会溢出窗口右缘）。
+3. **代码块卡片化**：react-markdown 自定义 `pre` 组件 `CodeBlockCard`——头部（语言名 +
+   复制按钮）+ body 60vh 限高。语言/文本提取在 `markdown-code.ts` 纯函数（12 用例）。
+   注意 pre 覆盖必须用独立函数组件（要用 `useCopyWithTick` hook），不能写进 components
+   字面量里就地调 hook。
+4. **停止二次确认接入**：`stop-confirm.ts` 状态机此前写好但从未接线。现停止按钮与 Esc
+   统一走 `triggerStop`：首次触发武装 3s（按钮变 Esc 徽章），窗口内再触发才 `onAbort`，
+   超时复原。Esc 只在流式期间生效、排在 autocomplete 之后（defaultPrevented 不插手）。
+5. **输入历史 + 按会话草稿**：`input-history.ts` 纯函数模块级存储——Alt+↑/↓ 翻本进程
+   已发送消息（首次上翻暂存草稿，到底再 ↓ 恢复）；草稿按 sessionId 存 Map，视图切换
+   （chat↔home↔settings）后还原。
+6. **字数限制与余量**：`input-limit.ts`——10 万上限，剩余 <1000 时 composer-bar 右侧
+   显示等宽余量，超限变红 + 发送按钮 disabled + `submit()` 内双闸。
+
+顺带完成的积压修正：复制 hook 上移 `copy-tick.ts`（三处共用）；右面板开关按钮的
+半完成重构补齐（`IconPanelRight` 从 chat-view 移到 App.tsx——按钮早已钉在 App 层右上角，
+图标与 props 解构还留在原地，typecheck 当时是红的）。
+
+## 文档读取 read_document（2026-09-09 落地）
+
+模型此前读不了 PDF/Office（pi 的 read 只支持文本+图片，PDF 读出乱码）。
+调研后走「本地抽取派」（Cline/Roo Code 与 Cherry Studio 量产验证的路线；
+模型原生派 document block 在 pi 与国内模型下走不通。反直觉情报：
+**WorkBuddy 对 PDF 的支持其实很差**，本地无一等通道，这条我们反超了）。
+
+- **新工具 `read_document`**（spec：`.trae/specs/add-document-reading/`）：
+  PDF 走 `pdfjs-dist@6.3.289`（按页提取、页级分页、24k 截断续读）；
+  docx/xlsx/pptx/odt/odp/ods 走 `officeparser@4.2.0`（Cherry Studio 同款 v4 稳定线）。
+  两层结构同 web 工具：`core/doc-extract.ts` 纯逻辑（23 个单测）+ `extensions/doc-read-tool.ts` 注册。
+- **中文防乱码的根因与解法（spike 实证，`scripts/probe-doc-extract.ts` 头注释）**：
+  真实中文 PDF 主流是 CID-keyed 不嵌字体，不配 `cMapUrl` 提取为空串——
+  `cMapUrl`/`cMapPacked`/`standardFontDataUrl` 三个路径必须用 createRequire 拼包内绝对路径。
+  pdfjs v6 的 API 变更（destroy 移到 loadingTask、isEvalSupported 删除）也记录在案。
+- **错误协议**：扫描件（无文本层）/老格式 .doc/.xls/.ppt（引导另存新格式）/加密/损坏/
+  不支持格式，全部给模型可行动的明确文案（六类错误码，mock 测试钉住 encrypted/corrupt）。
+- **权限门**：与 read 完全同语义（区内放行、区外低风险询问、凭据目录禁读，3 个新测试）。
+- **边界**：playground 不开放（安全模型不变更，单独决策）；扫描件 OCR、
+  老格式解析、RAG 知识库（MinerU 级）均列为后续。
+- 依赖只增两个纯 JS 包；唯一连带是 pdfjs v6 官方 optional prebuilt
+  `@napi-rs/canvas`（Node 补 DOMMatrix，Cherry Studio 同样随包携带）。
+
+另：同日规则变更——AGENTS.md §2「文档流水线一行 shell 都不许碰」放宽为
+「不许假设用户机器上有第三方命令」（允许 Windows 原生 powershell/COM 与安装包
+自带二进制），决策记录见 ARCHITECTURE.md §4.4 修订注。
 
 ## 已知坑
 
@@ -509,7 +600,6 @@ T4 会话管理已于 2026-09-08 落地（见上方「会话管理」一节）�
 
 - 会话树分支（/tree /fork /clone）、会话自动命名（LLM 起标题）：spec 明确不做（见
   `.trae/specs/home-permission-and-session-management/spec.md` 范围外清单）。
-  「保存到工作空间」（playground 任务事后落为正式空间）未做。
 
 - 记忆（T5）、子代理（T8）、Plan 模式（T9）未做。
 
@@ -531,7 +621,7 @@ T4 会话管理已于 2026-09-08 落地（见上方「会话管理」一节）�
 
 - 切换即作废旧会话（cwd 在建会话时一次性注入 pi 工具集），daemon 清空历史、renderer 重拉快照。
 
-## 会话隔离 + playground（2026-09-07 落地）
+## 会话隔离 + playground（2026-09-07 落地）【已废弃，2026-09-09 起由「临时任务模型」取代，见上方对应章节】
 
 根治「任务干扰」：此前未选空间会用 `~/KamiBuddy` 兜底，且所有消息复用同一个 AgentSession，
 导致不同任务共享上下文与文件目录。现对齐 WorkBuddy 模型：
@@ -553,7 +643,7 @@ T4 会话管理已于 2026-09-08 落地（见上方「会话管理」一节）�
 
 - 会话仍是懒建（首次 prompt 才建 SessionHost），新建任务只作废 + 清空，下次 prompt 自然建新会话。
 
-待做：「保存到工作空间」（playground 任务事后落为正式空间）。
+「保存到工作空间」已落地（见上方「临时任务模型对齐 WorkBuddy」一节）。
 会话列表/恢复/重命名/删除已落地，见上方「会话管理（2026-09-08 落地，T4）」。
 
 ## 输入框补全 @ / （2026-09-08 落地）

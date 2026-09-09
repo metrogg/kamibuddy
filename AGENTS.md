@@ -38,11 +38,16 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
 
 - **HTML 是唯一中间态。** 内容先渲染成 HTML，导出器再把 HTML 转成目标格式。
   不许出现"直接拼 docx 对象"的第二条路径——那样预览、PDF、图表全要另做一遍。
-- **文档流水线一行 shell 都不许碰。** 全部走 Node 自定义工具在进程内完成。
-  原因：pi 在 Windows 找不到 bash 会**直接抛异常**（`utils/shell.ts:100`），
-  而目标用户（行政/产品/销售）机器上不会装 Git for Windows。
-  WorkBuddy 靠自带 287MB 用户态解决，我们靠不产生依赖解决。
-  这条**只约束文档流水线**（本节的范围），不是全局禁令 —— 见下一条。
+- **不许假设用户机器上有任何第三方命令。** 行政/产品/销售的电脑上没有
+  Git for Windows / Python / pdftotext / LibreOffice——pi 在 Windows 找不到 bash
+  会**直接抛异常**（`utils/shell.ts:100`）。WorkBuddy 靠自带 287MB 用户态解决。
+  允许调用的外部命令只有两类（存在性有保证）：
+  ① Windows 原生的 powershell（及经它可达的 COM，如 Word/WPS 自动化）；
+  ② 安装包自带的二进制（存在性由安装器保证；每加一个都要过体积权衡）。
+  其余处理一律走 Node 自定义工具在进程内完成。
+  外部命令调用失败必须响亮报错（§7），不许静默降级掩盖"命令不存在"。
+  （2026-09-09 由"文档流水线一行 shell 都不许碰"放宽而来，决策记录见
+  `docs/ARCHITECTURE.md` §4.4 修订注。）
 - **agent 的 shell 能力另有决策**：`bash` 仍然不用（上面那条理由不变），
   但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已决定启用**
   （决策记录见 `docs/workbuddy分析/09-sandbox-and-permissions.md` §6 决策 A）。

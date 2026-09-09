@@ -10,7 +10,8 @@
  * 安全红线：
  *   - 只绑 127.0.0.1，外网与局域网都摸不到；
  *   - 根目录固定为当前工作区，resolve 后必须在根内（防 ../ 穿越）；
- *   - playground（无工作区）不起服务 —— 没有目录就没有可预览的东西。
+ *   - 无工作区时不起服务 —— 没有目录就没有可预览的东西。
+ *     （临时任务模型下工作区恒存在，这只覆盖启动前的瞬态。）
  */
 
 import { createReadStream, existsSync, statSync } from "node:fs";
@@ -61,7 +62,7 @@ export class PreviewServer {
 	}
 
 	/**
-	 * 切换服务根目录。undefined 表示停止服务（playground）。
+	 * 切换服务根目录。undefined 表示停止服务（当前无可预览目录）。
 	 * 同根重复调用是 no-op —— 不重启服务，正在预览的页面不掉线。
 	 */
 	async setRoot(dir: string | undefined): Promise<void> {

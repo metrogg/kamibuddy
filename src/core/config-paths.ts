@@ -66,7 +66,7 @@ export function getResourcesDir(): string {
 }
 
 /**
- * 会话工作目录 —— AI 读写文件、生成文档产物的地方。
+ * 内置默认工作空间根（~/KamiBuddy）—— AI 读写文件、生成文档产物的地方。
  *
  * 三个候选与取舍：
  *   process.cwd()      不行。daemon 的 cwd 是应用安装目录，
@@ -76,8 +76,28 @@ export function getResourcesDir(): string {
  *
  * 刻意不放进配置目录：配置是程序的东西（用户不该手动翻），
  * 产物是用户的东西（必须一眼能找到）。两者混在一起会让用户误删配置。
+ *
+ * 注意：本函数给出的只是**内置默认根**（带 KAMIBUDDY_WORKSPACE_DIR env 覆盖），
+ * 不是「生效根」的完整答案。生效根 = env > 设置项 defaultWorkspacePath > 内置默认，
+ * 分层合成在 preferences.ts 的 getEffectiveWorkspaceRoot() —— 放在那边是因为
+ * 本文件被 preferences.ts import（getConfigDir），反向 import 即成循环依赖。
+ * 对齐 WorkBuddy：其 resolveDefaultWorkspaceRoot()（main/server.js）同样是
+ * 设置项优先、兜底 ~/{appName}。
  */
 export function getWorkspaceDir(): string {
 	const override = process.env["KAMIBUDDY_WORKSPACE_DIR"];
 	return override !== undefined && override !== "" ? override : join(homedir(), "KamiBuddy");
+}
+
+/**
+ * 临时任务共享目录：`<工作空间根>/临时任务`。
+ *
+ * 对齐 WorkBuddy 的临时任务模型（main/server.js：临时任务 cwd = <根>/Claw，
+ * 所有临时任务共享单一目录、工具齐全），目录名用我们自己的词。
+ * 中文目录名在 Node/Windows 无障碍（现有测试里就有中文路径）。
+ *
+ * 只拼路径不建目录：本文件是纯路径推导层，创建时机在会话建立处（递归 mkdir）。
+ */
+export function getTempTasksDir(root: string): string {
+	return join(root, "临时任务");
 }

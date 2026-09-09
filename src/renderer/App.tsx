@@ -38,6 +38,26 @@ type View = "home" | "chat" | "settings" | "skills" | "diagnostics";
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
 
+/** 产物面板开关图标（右侧栏隐喻：三条竖线，右条加粗表示面板）。随开关按钮从 chat-header 移到 App 层右上角。 */
+function IconPanelRight({ size = 16 }: { readonly size?: number }): React.JSX.Element {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+			<path d="M10.5 2.5v11" />
+		</svg>
+	);
+}
+
+/** 侧栏开关图标（左侧栏隐喻：左条加粗表示侧栏）。随开关按钮从 chat-header 移到 App 层左上角。 */
+function IconPanelLeft({ size = 16 }: { readonly size?: number }): React.JSX.Element {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+			<path d="M5.5 2.5v11" />
+		</svg>
+	);
+}
+
 function taskTitle(text: string): string {
 	const oneLine = text.replace(/\s+/g, " ").trim();
 	return oneLine.length > TITLE_MAX
@@ -119,7 +139,7 @@ export function App(): React.JSX.Element {
 				})
 				.catch(fail);
 			refreshTasks();
-			// 预览服务 baseUrl 的初值（playground 启动时为 undefined）。
+			// 预览服务 baseUrl 的初值（静态服务未起时为 undefined）。
 			window.kami
 				.workspaceSnapshot()
 				.then((snap) => {
@@ -266,7 +286,7 @@ export function App(): React.JSX.Element {
 	/** 预览面板的 tab 集合与激活项（对标 WorkBuddy DetailPanel 的多 tab）。空数组 = 面板关闭。 */
 	const [previewTabs, setPreviewTabs] = useState<readonly PreviewSelection[]>([]);
 	const [previewActive, setPreviewActive] = useState<PreviewSelection | undefined>(undefined);
-	/** 静态服务 baseUrl，随工作空间快照刷新（playground 为 undefined）。 */
+	/** 静态服务 baseUrl，随工作空间快照刷新（服务未起为 undefined）。 */
 	const [previewBaseUrl, setPreviewBaseUrl] = useState<string | undefined>(undefined);
 	/** 面板宽度（px，WorkBuddy 默认 440、sash 拖拽 clamp [340, 800]）。 */
 	const [panelWidth, setPanelWidth] = useState(440);
@@ -274,7 +294,12 @@ export function App(): React.JSX.Element {
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
 	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。 */
 	const [panelOpen, setPanelOpen] = useState(true);
-	/** 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。 */
+	/**
+	 * 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。
+	 * 默认展开：侧栏是全局导航锚（任务历史 / 空间 / 设置入口），首页与
+	 * 对话页都常驻（WorkBuddy 同款）—— 收起后唯一的展开入口是窗口
+	 * 左上角的悬浮开关，默认收起会让首页用户找不到历史与设置。
+	 */
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 
 	/** 打开/激活预览对象：不在 tab 集合里自动补 tab（概览下拉与产物卡的唯一入口）。 */
@@ -534,6 +559,25 @@ export function App(): React.JSX.Element {
 	}, []);
 
 	/**
+	 * 临时任务转正：daemon 建目录、重写归组键并以新 cwd 重建当前会话。
+	 * 成功后按 resume 同口径重拉快照（cwd/isTempTask 易位、预览根变了）
+	 * 并刷列表（该任务从任务区挪进新空间组）。
+	 *
+	 * 失败不在这里 toast：promise 原样 reject 给对话页的命名弹层，
+	 * 校验错误（重名/非法字符/保留名…）在输入框下原位显示，用户改完重试。
+	 */
+	const saveToWorkspace = useCallback(
+		(name: string): Promise<void> =>
+			window.kami.saveToWorkspace(name).then(() => {
+				resyncSnapshot();
+				refreshTasks();
+				showToast("已保存到工作空间");
+			}),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[resyncSnapshot, refreshTasks],
+	);
+
+	/**
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
 	 * —— 否则用户配完模型回来发现对话没了。
 	 */
@@ -572,7 +616,9 @@ export function App(): React.JSX.Element {
 
 	return (
 		<div className="app">
-			{sidebarOpen && (
+			{/* 侧栏常驻、与视图无关（WorkBuddy 的真实布局）：首页与对话页都有，
+		    收起后由窗口左上角的悬浮开关再展开（开关在 App 层，不随本组件卸载）。 */}
+		{sidebarOpen && (
 				<Sidebar
 					link={link}
 					groups={sidebarGroups}
@@ -625,18 +671,17 @@ export function App(): React.JSX.Element {
 					else openPreview({ kind: "file", path });
 				}}
 					onOpenPanelGroup={(_group) => {
-					// 聚合入口：打开面板（无激活项时用第一个产物），概览菜单
-					// 的分组展开由 OverviewMenu 的 open 状态自持，打开面板即展开。
-					const first = conversation.artifacts[0];
-					if (first !== undefined) openPreview({ kind: "file", path: first.path });
-				}}
-					onTogglePanel={() => setPanelOpen((v) => !v)}
-					onToggleSidebar={() => setSidebarOpen((v) => !v)}
-					onOpenSettings={openSettings}
-					onError={showToast}
-					onTodo={showTodo}
-				/>
-			)}
+				// 聚合入口：打开面板（无激活项时用第一个产物），概览菜单
+				// 的分组展开由 OverviewMenu 的 open 状态自持，打开面板即展开。
+				const first = conversation.artifacts[0];
+				if (first !== undefined) openPreview({ kind: "file", path: first.path });
+			}}
+				onOpenSettings={openSettings}
+				onError={showToast}
+				onSaveToWorkspace={saveToWorkspace}
+				onTodo={showTodo}
+			/>
+		)}
 			{/* 设置页自持滚动与返回按钮，不复用对话页的框架。 */}
 			{view === "skills" && (
 				<SkillsView
@@ -651,9 +696,9 @@ export function App(): React.JSX.Element {
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />
 			)}
-			{/* 产物预览面板：右侧常驻，与视图并列（对标 WorkBuddy 的 DetailPanel）。
-			   panelOpen 即渲染（无激活文件时显示空态），收起才隐藏。 */}
-			{panelOpen && (
+			{/* 产物预览面板：只在对话任务里出现（WorkBuddy：预览属于任务上下文），
+		   首页是引导页，右侧没有面板。panelOpen 即渲染（无激活文件时显示空态）。 */}
+		{view === "chat" && panelOpen && (
 				<ArtifactPanel
 					artifacts={conversation.artifacts}
 					changes={collectChanges(conversation.entries)}
@@ -671,6 +716,41 @@ export function App(): React.JSX.Element {
 					onError={showToast}
 				/>
 			)}
+			{/*
+			左栏开关：App 层常驻、absolute 钉在窗口左上角（WorkBuddy 同款，
+			独立于侧栏开合）。不能放进 Sidebar 组件内部 —— 侧栏收起时组件
+			卸载，展开入口就没了。侧栏展开时它落在侧栏 brand 行左侧，
+			brand 行已左让位（见 index.css .sidebar-brand）。
+		*/}
+		<button
+			type="button"
+			className={`bar-btn sidebar-toggle-btn${sidebarOpen ? " active" : ""}`}
+			aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"}
+			aria-pressed={sidebarOpen}
+			title={sidebarOpen ? "收起侧栏" : "展开侧栏"}
+			onClick={() => setSidebarOpen((v) => !v)}
+		>
+			<IconPanelLeft size={16} />
+		</button>
+		{/*
+			右面板开关：App 层、absolute 钉在窗口右上角 —— 面板开合 /
+			sash 拖拽 / 宽度过渡都不推移它（放 chat-header 行尾时会被面板
+			「推着走」，面板全屏 z 30 还会盖住它）。渲染范围与 ArtifactPanel
+			一致（只在对话任务里；按钮与面板共存亡，但必须在面板组件
+			之外 —— 面板收起时要靠它再展开）。
+		*/}
+		{view === "chat" && (
+			<button
+				type="button"
+				className={`bar-btn panel-toggle-btn${panelOpen ? " active" : ""}`}
+				aria-label={panelOpen ? "收起产物面板" : "展开产物面板"}
+				aria-pressed={panelOpen}
+				title={panelOpen ? "收起产物面板" : "展开产物面板"}
+				onClick={() => setPanelOpen((v) => !v)}
+			>
+				<IconPanelRight size={16} />
+			</button>
+		)}
 			{/*
 				一次只展示队首那条：并行工具可能同时来好几条，
 				全都堆在屏幕上用户无从判断哪条对应哪个操作。

@@ -5,7 +5,7 @@
  * 把纯逻辑接到受控 textarea 上（光标位置、键盘导航、点击选中），并渲染下拉。
  *
  * 数据源经 window.kami.completions() 拉取（daemon 聚合：文件=当前工作空间、
- * 命令=技能+自有）。playground 下文件列表为空，@ 下拉自然不出。
+ * 命令=技能+自有）。临时任务的共享目录通常没有文件，@ 下拉自然不出。
  *
  * 选中后 `@` / `/` 以纯文本插入（按需求，不做内容注入）——
  * 文件内容靠模型的 read 工具去读，命令由 pi 的 prompt 自动展开。
@@ -63,7 +63,7 @@ export function useAutocomplete(
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>,
 	/**
 	 * 数据源刷新键：工作空间（cwd）切换后文件列表必须重拉，
-	 * 否则 @ 永远停留在挂载时（很可能是 playground 的空列表）。
+	 * 否则 @ 永远停留在挂载时那份旧空间的列表。
 	 * 调用方传当前 cwd 即可；新建任务后组件随父级重挂载，也会自然刷新。
 	 */
 	refreshKey?: unknown,

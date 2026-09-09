@@ -48,7 +48,7 @@ describe("snapshot", () => {
 			state: {
 				sessionId: "s1",
 				cwd: "E:/demo",
-				isPlayground: false,
+				isTempTask: false,
 				sceneId: "work",
 				interactionId: "ask",
 				modelId: "m1",

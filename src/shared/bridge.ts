@@ -59,7 +59,7 @@ export interface KamiBridge {
 
 	/* ── 会话管理（历史会话） ────────────────────────────────────── */
 
-	/** 历史会话列表（全部目录，含 playground；current 标记活动会话）。 */
+	/** 历史会话列表（全部目录，含临时任务；current 标记活动会话）。 */
 	readonly listSessions: () => Promise<SessionSummary[]>;
 	/** 恢复指定历史会话为当前活动会话。path 来自 SessionSummary.path。 */
 	readonly resumeSession: (path: string) => Promise<void>;
@@ -69,12 +69,14 @@ export interface KamiBridge {
 	readonly deleteSession: (path: string) => Promise<void>;
 	/** 导出会话为单文件 HTML。空会话会 reject 原因；成功返回导出文件绝对路径。 */
 	readonly exportSession: (path: string) => Promise<{ outputPath: string }>;
+	/** 把当前临时任务「保存到工作空间」转正。名称非法/重名、或当前会话非临时任务时 reject 原因。 */
+	readonly saveToWorkspace: (name: string) => Promise<void>;
 
 	/** 拉取当前工作空间与可选列表。 */
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;
 	/** 在默认根下新建工作空间并切换。名称非法或重名时 reject 原因。 */
 	readonly createWorkspace: (name: string) => Promise<string>;
-	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。传空串 = 不使用工作空间（playground）。 */
+	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。传空串 = 临时任务（落共享临时目录）。 */
 	readonly setWorkspace: (path: string) => Promise<string | undefined>;
 	/** 系统目录选择框。取消返回 undefined。 */
 	readonly pickWorkspaceDirectory: () => Promise<string | undefined>;
@@ -120,6 +122,17 @@ export interface KamiBridge {
 	readonly setWebSearchConfig: (input: WebSearchConfigInput) => Promise<void>;
 	readonly clearWebSearchConfig: () => Promise<void>;
 	readonly testWebSearch: () => Promise<WebSearchTestResult>;
+
+	/* ── 默认存储路径 ─────────────────────────────────────────────── */
+
+	/** 读默认存储路径（生效根 / 用户设置项 / 是否内置默认）。 */
+	readonly getDefaultWorkspacePath: () => Promise<{
+		effective: string;
+		custom: string | undefined;
+		isDefault: boolean;
+	}>;
+	/** 设置默认存储路径；传空串 = 还原内置默认。只影响之后新建的任务与工作空间。 */
+	readonly setDefaultWorkspacePath: (path: string) => Promise<{ effective: string }>;
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 

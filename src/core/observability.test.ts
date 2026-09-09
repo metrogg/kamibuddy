@@ -29,7 +29,7 @@ function stateEvent(): SessionEvent {
 		state: {
 			sessionId: "s1",
 			cwd: "/w",
-			isPlayground: false,
+			isTempTask: false,
 			sceneId: "work",
 			interactionId: "craft",
 			modelId: "deepseek/chat",

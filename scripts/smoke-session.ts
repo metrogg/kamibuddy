@@ -71,7 +71,7 @@ check("自定义服务商可用（含凭据）", catalog.isUsable(MODEL_KEY), `i
 let probeFactoryRan = false;
 let probeRegisteredHandler = false;
 
-const cwd = getWorkspaceDir();
+const cwd = join(getWorkspaceDir(), "smoke-space");
 mkdirSync(cwd, { recursive: true });
 
 const events: string[] = [];
@@ -79,7 +79,10 @@ const events: string[] = [];
 const host = await SessionHost.create({
 	catalog,
 	modelKey: MODEL_KEY,
+	// 用根下子目录模拟正式工作空间：临时任务与正式空间同构造路径，
+	// isTempTask 只是透传给 state 的归类标记（判定规则在 daemon 的 isTempCwd）。
 	cwd,
+	isTempTask: false,
 	sceneId: "work",
 	interactionId: "craft",
 	emit: (event) => events.push(event.type),
@@ -119,6 +122,7 @@ check(
 const state = host.state;
 check("sessionId 非空", state.sessionId !== "", `sessionId = ${state.sessionId || "(空)"}`);
 check("cwd 指向工作目录", state.cwd === cwd, `cwd = ${state.cwd}`);
+check("临时任务标记透传", state.isTempTask === false, `isTempTask = ${state.isTempTask}`);
 check("modelId 与选中的一致", state.modelId === MODEL_KEY, `modelId = ${state.modelId ?? "(无)"}`);
 check("初始不在流式中", !state.isStreaming, `isStreaming = ${state.isStreaming}`);
 check("两轴状态保留", state.sceneId === "work" && state.interactionId === "craft", `${state.sceneId} / ${state.interactionId}`);

@@ -24,7 +24,7 @@ export interface SpaceGroup {
 }
 
 export interface SessionGroups {
-	/** 「任务」区：playground 会话，modifiedAt 倒序。 */
+	/** 「任务」区：临时任务会话，modifiedAt 倒序。 */
 	readonly tasks: readonly SessionSummary[];
 	/** 「空间」区：按 cwd 分组，latestAt 倒序。 */
 	readonly spaces: readonly SpaceGroup[];
@@ -45,7 +45,7 @@ export function groupSessions(
 	const tasks: SessionSummary[] = [];
 	const buckets = new Map<string, { sessions: SessionSummary[]; latestAt: number }>();
 	for (const session of summaries) {
-		if (session.isPlayground) {
+		if (session.isTempTask) {
 			tasks.push(session);
 			continue;
 		}

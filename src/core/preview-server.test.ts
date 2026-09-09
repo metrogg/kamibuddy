@@ -56,7 +56,7 @@ describe("PreviewServer", () => {
 		expect(r.status).toBe(404);
 	});
 
-	it("setRoot(undefined) 停止服务（playground 没有可预览的目录）", async () => {
+	it("setRoot(undefined) 停止服务（无可预览目录）", async () => {
 		await server.setRoot(base);
 		const url = server.baseUrl;
 		expect(url).toBeDefined();

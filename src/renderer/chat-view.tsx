@@ -24,31 +24,18 @@ import {
 	IconSend,
 	IconStop,
 } from "./icons.tsx";
-
-/** 产物面板开关图标（右侧栏隐喻：三条竖线，右条加粗表示面板）。 */
-function IconPanelRight({ size = 16 }: { readonly size?: number }): React.JSX.Element {
-	return (
-		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-			<path d="M10.5 2.5v11" />
-		</svg>
-	);
-}
-
-/** 侧栏开关图标（左侧栏隐喻：三条竖线，左条加粗表示侧栏）。 */
-function IconPanelLeft({ size = 16 }: { readonly size?: number }): React.JSX.Element {
-	return (
-		<svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-			<rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-			<path d="M5.5 2.5v11" />
-		</svg>
-	);
-}
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
+import { useCopyWithTick } from "./copy-tick.ts";
 import { AttachmentStrip, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
+import { loadDraft, navigateHistory, recordSent, saveDraft, sentHistory } from "./input-history.ts";
+import type { HistoryNavState } from "./input-history.ts";
+import { charCountState } from "./input-limit.ts";
+import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
+import { stopConfirmExpired, stopConfirmIdle, triggerStop } from "./stop-confirm.ts";
+import type { StopConfirmState } from "./stop-confirm.ts";
 import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
@@ -72,14 +59,15 @@ interface ChatViewProps {
 	readonly onPreviewArtifact: (path: string) => void;
 	/** 产物/变更聚合入口：打开预览面板并展开概览菜单对应分组。 */
 	readonly onOpenPanelGroup: (group: "artifacts" | "changes") => void;
-	/** 产物面板展开/收起切换（chat-header 右侧常态按钮）。 */
-	readonly onTogglePanel: () => void;
-	/** 左侧栏展开/收起切换（chat-header 右侧常态按钮）。 */
-	readonly onToggleSidebar: () => void;
 	/** 打开设置页（权限弹层的「打开设置…」入口，与 home-view 同语义）。 */
 	readonly onOpenSettings: () => void;
 	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
 	readonly onError: (message: string) => void;
+	/**
+	 * 临时任务转正（保存到工作空间）。resolve = 转正完成（成功 toast 由 App 给）；
+	 * reject 的 message 是 daemon 的校验原因，命名弹层原位透出。
+	 */
+	readonly onSaveToWorkspace: (name: string) => Promise<void>;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -121,30 +109,6 @@ function ThinkingBlock({
 }
 
 /* ── 用户消息气泡 ────────────────────────────────────────────────── */
-
-/** 复制成功后对勾停留时长（对标 WorkBuddy 的反馈节奏）。 */
-const COPY_TICK_MS = 2_000;
-
-/**
- * 复制 + 对勾反馈（UserBubble 与错误卡共用同一节奏）。
- * 对勾还原定时器走 ref：连续点击时清掉上一个重计，不需要为重渲染进 state。
- */
-function useCopyWithTick(): {
-	readonly copied: boolean;
-	readonly copy: (text: string) => Promise<void>;
-} {
-	const [copied, setCopied] = useState(false);
-	const timerRef = useRef<number | undefined>(undefined);
-	useEffect(() => () => window.clearTimeout(timerRef.current), []);
-
-	const copy = async (text: string): Promise<void> => {
-		await navigator.clipboard.writeText(text);
-		setCopied(true);
-		window.clearTimeout(timerRef.current);
-		timerRef.current = window.setTimeout(() => setCopied(false), COPY_TICK_MS);
-	};
-	return { copied, copy };
-}
 
 /**
  * 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，hover 时下方浮现工具条
@@ -202,6 +166,31 @@ function UserBubble({
 					<img src={imageDataUrl(preview)} alt="" draggable={false} />
 				</div>
 			)}
+		</div>
+	);
+}
+
+/* ── 助手消息操作条 ──────────────────────────────────────────────── */
+
+/**
+ * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条，只做复制）。
+ * 与 user-toolbar 同款「常驻占位、hover 切透明度」模式，理由相同：
+ * hover 才插入 DOM 会推搡下方消息流。流式中的末条也渲染 —— 复制部分内容无害。
+ */
+function AssistantActions({ text }: { readonly text: string }): React.JSX.Element {
+	const { copied, copy } = useCopyWithTick();
+
+	return (
+		<div className="assistant-toolbar">
+			<button
+				type="button"
+				className="assistant-copy"
+				aria-label="复制回答"
+				title={copied ? "已复制" : "复制回答"}
+				onClick={() => void copy(text)}
+			>
+				{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+			</button>
 		</div>
 	);
 }
@@ -601,6 +590,101 @@ function ModeSwitch({ interactions, currentId, onChange, onTodo }: ModeSwitchPro
 	);
 }
 
+/* ── 保存到工作空间（命名弹层） ──────────────────────────────────── */
+
+/**
+ * 临时任务转正的命名弹层。
+ *
+ * 命名即建真实目录（daemon 在生效根下创建同名目录并把当前会话切过去），
+ * 所以名称校验的权威在 daemon（兄弟目录/空间组的知识只在那边）——
+ * renderer 不另写一份规则，两份必漂移（AGENTS.md §4），校验错误串原位透出。
+ * 中文名选词确认的 Enter 不能误提交，IME 守卫与输入框同一份接线（ime-guard.ts）。
+ */
+function SaveToWorkspaceDialog({
+	onSave,
+	onClose,
+}: {
+	/** resolve = 转正完成（弹层随之关闭）；reject 的 message 原位透出。 */
+	readonly onSave: (name: string) => Promise<void>;
+	/** 取消与成功共用同一个关法：成功后弹层没有留着的意义。 */
+	readonly onClose: () => void;
+}): React.JSX.Element {
+	const [name, setName] = useState("");
+	const [error, setError] = useState<string | undefined>(undefined);
+	const [submitting, setSubmitting] = useState(false);
+	const ime = useImeGuard();
+
+	const submit = (): void => {
+		const trimmed = name.trim();
+		if (trimmed === "" || submitting) return;
+		setSubmitting(true);
+		setError(undefined);
+		onSave(trimmed).then(
+			() => onClose(),
+			(saveError: unknown) => {
+				setError(saveError instanceof Error ? saveError.message : String(saveError));
+				setSubmitting(false);
+			},
+		);
+	};
+
+	// Esc 关闭（提交中不关：daemon 正在切换会话，弹层关了用户无从知道结果）。
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape" && !submitting) onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose, submitting]);
+
+	return (
+		<div className="modal-backdrop">
+			<div className="save-space-card" role="dialog" aria-modal="true" aria-label="保存到工作空间">
+				<p className="save-space-title">保存到工作空间</p>
+				<p className="save-space-desc">
+					会以该名称创建空间目录，当前任务迁入其中继续；之后的对话与产物都归到这个空间，
+					随时可以从侧栏回来。
+				</p>
+				<input
+					className="save-space-input"
+					value={name}
+					// 弹层里唯一的输入框，自动聚焦即预期（同侧栏重命名行）。
+					autoFocus
+					placeholder="空间名称"
+					disabled={submitting}
+					onChange={(e) => {
+						setName(e.target.value);
+						// 输入变了旧的错误就失效：留着会让用户以为新名字也有同样问题。
+						setError(undefined);
+					}}
+					onCompositionStart={ime.bind.onCompositionStart}
+					onCompositionEnd={ime.bind.onCompositionEnd}
+					onKeyDown={(e) => {
+						if (e.key !== "Enter" || e.defaultPrevented) return;
+						e.preventDefault();
+						if (ime.shouldSwallowNow()) return;
+						submit();
+					}}
+				/>
+				{error !== undefined && <p className="save-space-error">{error}</p>}
+				<div className="save-space-actions">
+					<button type="button" className="mini-btn" disabled={submitting} onClick={onClose}>
+						取消
+					</button>
+					<button
+						type="button"
+						className="primary-btn"
+						disabled={submitting || name.trim() === ""}
+						onClick={submit}
+					>
+						保存
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 /* ── 主体 ────────────────────────────────────────────────────────── */
 
 /** 距底多少像素内算「在底部」：覆盖子像素与平滑滚动的末段抖动。 */
@@ -617,15 +701,23 @@ export function ChatView({
 	onInteractionChange,
 	onPreviewArtifact,
 	onOpenPanelGroup,
-	onTogglePanel,
-	onToggleSidebar,
 	onOpenSettings,
 	onError,
+	onSaveToWorkspace,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
-	const [draft, setDraft] = useState("");
+	// 草稿按 sessionId 存进模块级 Map（input-history.ts）：视图切换卸载组件后
+	// 切回仍能还原。挂载时先还原一次，之后 sessionId 变化由下方 effect 接续。
+	const [draft, setDraft] = useState(() => loadDraft(conversation.state.sessionId) ?? "");
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
+	// 「保存到工作空间」命名弹层的开合；输入态由弹层组件自持（关掉即重置）。
+	const [saveOpen, setSaveOpen] = useState(false);
+	// 停止的二次确认状态（stop-confirm.ts 状态机）：idle → 首次触发武装 pending
+	// → 窗口内再触发才 confirmed 调 onAbort。只持状态，计时与判定都在纯函数里。
+	const [stopConfirm, setStopConfirm] = useState<StopConfirmState>(stopConfirmIdle);
+	// Alt+↑/↓ 历史导航状态：undefined = 不在导航中（输入框是用户自己的草稿）。
+	const [historyNav, setHistoryNav] = useState<HistoryNavState | undefined>(undefined);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	// IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 不发送。
@@ -635,6 +727,16 @@ export function ChatView({
 	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
 	const visionSupported = useModelSupportsVision(conversation.state.modelId);
 	const streaming = conversation.state.isStreaming;
+	const sessionId = conversation.state.sessionId;
+	// 输入长度余量（input-limit.ts 纯函数判定）：接近上限才显示，超限禁发。
+	const chars = charCountState(draft.length);
+
+	// 会话切换（含挂载后 sessionId 才就位）时还原该会话的草稿；
+	// 历史导航态一并复位 —— 旧会话翻到的位置对新会话没有意义。
+	useEffect(() => {
+		setDraft(loadDraft(sessionId) ?? "");
+		setHistoryNav(undefined);
+	}, [sessionId]);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
 	// MetaFold 折叠单元的展开状态：按单元 id 记忆。块流每次渲染由纯函数
@@ -693,11 +795,42 @@ export function ChatView({
 		node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
 	};
 
+	/** 停止按钮与 Esc 共用的二次确认入口：只有 confirmed 那次才真正中断。 */
+	const requestStop = (): void => {
+		const result = triggerStop(stopConfirm, Date.now());
+		setStopConfirm(result.state);
+		if (result.confirmed) onAbort();
+	};
+
+	// 待确认窗口截止自动复原。定时器到点再用 stopConfirmExpired 复核：
+	// 用户在旧定时器到期前重新武装过时，新 pending 尚未过期，不能被旧定时器误清。
+	useEffect(() => {
+		if (stopConfirm.phase !== "pending") return;
+		const timer = window.setTimeout(
+			() => {
+				setStopConfirm((current) => (stopConfirmExpired(current, Date.now()) ? stopConfirmIdle : current));
+			},
+			Math.max(0, stopConfirm.deadline - Date.now()),
+		);
+		return () => window.clearTimeout(timer);
+	}, [stopConfirm]);
+
+	// 流式结束（完成/已中断）时若还挂着待确认，直接复原 —— 停止键随流式态消失，
+	// 状态不收回去会卡在下一次流式开始时的按钮上。
+	useEffect(() => {
+		if (!streaming) setStopConfirm((current) => (current.phase === "pending" ? stopConfirmIdle : current));
+	}, [streaming]);
+
 	const submit = (): void => {
 		const text = draft.trim();
+		// 超限双闸之一：发送按钮已 disabled，这里拦快捷键（Enter）路径。
+		if (charCountState(draft.length).over) return;
 		if (text === "" || !ready) return;
 		const images = img.attachments;
 		setDraft("");
+		// 发送即清掉该会话的暂存草稿（已发出不再是草稿），并退出历史导航态。
+		saveDraft(sessionId, "");
+		setHistoryNav(undefined);
 		// 发新消息强制贴底（WorkBuddy 同行为）：回显经 daemon 确认后才进 entries，
 		// 这里先把跟随打开，entries 变化的 effect 落地时自然贴底。
 		followRef.current = true;
@@ -705,7 +838,11 @@ export function ChatView({
 		// 附件等 daemon 接收成功再清：失败时错误卡已落进消息流，图留在
 		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
 		void onSubmit(text, images.length > 0 ? images : undefined).then(
-			() => img.clear(),
+			() => {
+				img.clear();
+				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
+				recordSent(text);
+			},
 			() => {},
 		);
 	};
@@ -716,14 +853,35 @@ export function ChatView({
 	};
 
 	/**
-	 * 输入框按键。ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
+	 * 输入框按键。ac 先行：补全打开时 Enter=选中、Esc=关闭补全（均 preventDefault），
+	 * 之后的守卫一律不插手它的消费（e.defaultPrevented 直接 return）。
 	 * IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
 	 */
 	const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
 		ac.bind.onKeyDown(e);
-		if (e.key !== "Enter" || e.defaultPrevented) return;
+		if (e.defaultPrevented) return;
+		// Esc 停止只在流式期间生效，且走二次确认（误碰一次不中断长任务）；
+		// 非流式 Esc 无任何效果。
+		if (e.key === "Escape") {
+			if (streaming) {
+				e.preventDefault();
+				requestStop();
+			}
+			return;
+		}
+		if (e.key !== "Enter" && !(e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown"))) return;
+		// IME 选词期间 Enter 是确认候选、方向键是移动候选条，都归输入法，守卫一律吞。
 		if (ime.shouldSwallowNow()) {
 			e.preventDefault();
+			return;
+		}
+		if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+			e.preventDefault();
+			const nav = navigateHistory(historyNav, sentHistory(), e.key === "ArrowUp" ? "up" : "down", draft);
+			setHistoryNav(nav.state);
+			setDraft(nav.text);
+			// 导航结果同步进草稿 Map：导航中切走再切回，还原的就是离开前框里的内容。
+			saveDraft(sessionId, nav.text);
 			return;
 		}
 		if (!e.shiftKey) {
@@ -743,36 +901,34 @@ export function ChatView({
 	return (
 		<main className="chat">
 			<header className="chat-header">
-				<button type="button" className="bar-btn" aria-label="返回首页" onClick={onBack}>
-					<IconBack size={17} />
-				</button>
+			<button type="button" className="bar-btn" aria-label="返回首页" onClick={onBack}>
+				<IconBack size={17} />
+			</button>
 				<span className="chat-title" title={title}>
-					{title}
-				</span>
-				<ModeSwitch
+				{title}
+			</span>
+			{/*
+				临时任务的转正入口（对标 WorkBuddy 头部「保存到工作空间」）。
+				只有临时任务显示：命名空间的会话不需要再转一次。
+				流式中禁用 —— daemon 也会拒，但按钮置灰比弹层里报错直观。
+			*/}
+			{conversation.state.isTempTask === true && (
+				<button
+					type="button"
+					className="bar-btn bar-btn-text"
+					disabled={!ready || streaming}
+					title={streaming ? "任务进行中，停止后可保存" : "保存到工作空间"}
+					onClick={() => setSaveOpen(true)}
+				>
+					保存到工作空间
+				</button>
+			)}
+			<ModeSwitch
 					interactions={conversation.availableModes}
 					currentId={conversation.state.interactionId}
 					onChange={onInteractionChange}
 					onTodo={onTodo}
 				/>
-				<button
-					type="button"
-					className="bar-btn"
-					title="侧栏"
-					aria-label="侧栏"
-					onClick={onToggleSidebar}
-				>
-					<IconPanelLeft size={16} />
-				</button>
-				<button
-					type="button"
-					className="bar-btn"
-					title="产物面板"
-					aria-label="产物面板"
-					onClick={onTogglePanel}
-				>
-					<IconPanelRight size={16} />
-				</button>
 			</header>
 
 			{/*
@@ -846,8 +1002,9 @@ export function ChatView({
 									/>
 								)}
 								{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-								<Markdown text={entry.text} />
-							</div>
+							<Markdown text={entry.text} />
+							<AssistantActions text={entry.text} />
+						</div>
 						);
 					}
 					case "error": {
@@ -978,7 +1135,10 @@ export function ChatView({
 						<textarea
 							ref={textareaRef}
 							value={draft}
-							onChange={ac.bind.onChange}
+							onChange={(e) => {
+								ac.bind.onChange(e);
+								saveDraft(sessionId, e.target.value);
+							}}
 							onSelect={ac.bind.onSelect}
 							onBlur={ac.bind.onBlur}
 							onPaste={img.bind.onPaste}
@@ -1001,10 +1161,26 @@ export function ChatView({
 							向上展开（300px），贴右放会溢出窗口右缘被裁掉。
 						*/}
 						<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+						{/*
+							模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
+							推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
+							两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
+							向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
+						*/}
+						<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
 						<span className="bar-spacer" />
 						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 							<IconMic size={16} />
 						</button>
+						{/* 输入余量：接近上限才出现（等宽数字），超限变红。 */}
+						{chars.show && (
+							<span
+								className={chars.over ? "char-remaining over" : "char-remaining"}
+								title={chars.over ? "已超出输入长度上限" : "剩余可输入字符数"}
+							>
+								{chars.remaining}
+							</span>
+						)}
 						{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
 						{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						{/*
@@ -1012,8 +1188,16 @@ export function ChatView({
 							没有中断入口时，模型跑偏或长任务只能干等，甚至杀进程 —— 这是必须有的逃生门。
 						*/}
 						{streaming ? (
-							<button type="button" className="send-btn stop" aria-label="停止" title="停止生成" onClick={onAbort}>
-								<IconStop size={14} />
+							// 二次确认：首次点击武装 3s 窗口（按钮内容换 Esc 徽章），
+							// 窗口内再点（或再按 Esc）才真正中断，超时自动复原。
+							<button
+								type="button"
+								className="send-btn stop"
+								aria-label="停止"
+								title={stopConfirm.phase === "pending" ? "再按一次确认停止" : "停止生成"}
+								onClick={requestStop}
+							>
+								{stopConfirm.phase === "pending" ? <kbd className="stop-confirm-kbd">Esc</kbd> : <IconStop size={14} />}
 							</button>
 						) : (
 							<button
@@ -1021,14 +1205,20 @@ export function ChatView({
 								className="send-btn"
 								aria-label="发送"
 								onClick={submit}
-								disabled={!ready || draft.trim() === ""}
+								disabled={!ready || draft.trim() === "" || chars.over}
 							>
 								<IconSend size={16} />
 							</button>
 						)}
 					</div>
 				</div>
-			</footer>
-		</main>
-	);
+		</footer>
+		{saveOpen && (
+			<SaveToWorkspaceDialog
+				onSave={onSaveToWorkspace}
+				onClose={() => setSaveOpen(false)}
+			/>
+		)}
+	</main>
+);
 }

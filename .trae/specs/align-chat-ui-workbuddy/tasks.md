@@ -43,18 +43,18 @@
 
 ## 批三 · 输入区补齐
 
-- [ ] Task 10: 停止二次确认
-  - [ ] 10.1 首次点击/Esc 进 3s 待确认态（按钮变 Esc 徽章），再确认才调 onAbort，超时复原
-  - [ ] 10.2 状态机抽纯函数 + 单测
-- [ ] Task 11: 输入历史与草稿
-  - [ ] 11.1 Alt+↑/↓ 翻本进程历史（发送成功时记录），到底再按恢复草稿
-  - [ ] 11.2 按 sessionId 存草稿，视图切换还原
-- [ ] Task 12: 字数限制与余量（10 万上限；<1000 显示余量；超限变红禁发）
+- [x] Task 10: 停止二次确认（随 align-chat-details-workbuddy 落地，2026-09-09）
+  - [x] 10.1 首次点击/Esc 进 3s 待确认态（按钮变 Esc 徽章），再确认才调 onAbort，超时复原
+  - [x] 10.2 状态机抽纯函数 + 单测
+- [x] Task 11: 输入历史与草稿（随 align-chat-details-workbuddy 落地）
+  - [x] 11.1 Alt+↑/↓ 翻本进程历史（发送成功时记录），到底再按恢复草稿
+  - [x] 11.2 按 sessionId 存草稿，视图切换还原
+- [x] Task 12: 字数限制与余量（随 align-chat-details-workbuddy 落地：10 万上限；<1000 显示余量；超限变红禁发）
 - [ ] Task 13: 非默认交互模式 chip（输入区工具栏显示模式名，hover 变 × 回落 craft；复用现有 onInteractionChange）
 
 ## 批四 · 增强
 
-- [ ] Task 14: 代码块卡片化（markdown.tsx：圆角容器 + 头部语言名 + 复制按钮 + body 60vh 限高；react-markdown 自定义 pre/code 组件）
+- [x] Task 14: 代码块卡片化（随 align-chat-details-workbuddy 落地：markdown.tsx 自定义 pre 组件，圆角容器 + 头部语言名 + 复制按钮 + body 60vh 限高）
 - [ ] Task 15: 用户消息编辑重发
   - [ ] 15.1 先核查 pi（开源项目/pi/packages/coding-agent/）的会话历史截断能力，记录结论到 tasks.md 本任务下
   - [ ] 15.2 可行：daemon IPC（截断 + 重发）；不可行：降级「文本回填输入框」

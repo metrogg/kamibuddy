@@ -13,8 +13,49 @@
  * GFM（remark-gfm）：表格、删除线、任务列表 —— 办公报告里表格出现率很高。
  */
 
+import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useCopyWithTick } from "./copy-tick.ts";
+import { IconCheck, IconCopy } from "./icons.tsx";
+import { codeLanguage, codeText } from "./markdown-code.ts";
+
+/**
+ * 围栏代码块的卡片形态：头部（语言名 + 复制按钮）+ 限高可滚动的代码体。
+ *
+ * 必须是独立函数组件而不是 components 字面量里的就地箭头 —— 复制反馈用
+ * useCopyWithTick hook，写进字面量属性里就违反 hooks 规则。
+ * pre 的 children 就是那个 code 元素：className 给语言名，children 给复制文本。
+ */
+function CodeBlockCard({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
+	const { copied, copy } = useCopyWithTick();
+
+	let language = "text";
+	let text = "";
+	if (React.isValidElement(children)) {
+		const props = children.props as { className?: unknown; children?: unknown };
+		language = codeLanguage(typeof props.className === "string" ? props.className : undefined);
+		text = codeText(props.children);
+	}
+
+	return (
+		<div className="code-block">
+			<div className="code-block-head">
+				<span className="code-block-lang">{language}</span>
+				<button
+					type="button"
+					className="code-block-copy"
+					aria-label={copied ? "已复制" : "复制代码"}
+					title={copied ? "已复制" : "复制代码"}
+					onClick={() => void copy(text)}
+				>
+					{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+				</button>
+			</div>
+			<pre>{children}</pre>
+		</div>
+	);
+}
 
 export function Markdown({ text }: { readonly text: string }): React.JSX.Element {
 	return (
@@ -22,6 +63,8 @@ export function Markdown({ text }: { readonly text: string }): React.JSX.Element
 			<ReactMarkdown
 				remarkPlugins={[remarkGfm]}
 				components={{
+					// 只覆盖 pre（围栏块）成行卡片；行内 code 走默认渲染，样式不动。
+					pre: CodeBlockCard,
 					// 链接一律交给主进程白名单（window.open → openWindowHandler → openExternal）。
 					a: ({ href, children }) => (
 						<a

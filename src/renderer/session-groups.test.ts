@@ -6,7 +6,7 @@ function summary(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
 	return {
 		path: `C:\\sessions\\${overrides.id}.jsonl`,
 		title: overrides.id,
-		isPlayground: false,
+		isTempTask: false,
 		createdAt: 0,
 		modifiedAt: 0,
 		messageCount: 1,
@@ -20,15 +20,15 @@ function names(groups: readonly { readonly name: string }[]): string[] {
 }
 
 describe("groupSessions：分桶", () => {
-	it("playground 进 tasks，工作空间会话按 cwd 分桶进 spaces", () => {
-		const playground = summary({ id: "pg", cwd: "C:\\cfg\\playground", isPlayground: true, modifiedAt: 1 });
+	it("临时任务进 tasks，工作空间会话按 cwd 分桶进 spaces", () => {
+		const tempTask = summary({ id: "tmp", cwd: "C:\\KamiBuddy\\临时任务", isTempTask: true, modifiedAt: 1 });
 		const a1 = summary({ id: "a1", cwd: "D:\\ws\\a", modifiedAt: 2 });
 		const a2 = summary({ id: "a2", cwd: "D:\\ws\\a", modifiedAt: 3 });
 		const b1 = summary({ id: "b1", cwd: "D:\\ws\\b", modifiedAt: 4 });
 
-		const groups = groupSessions([playground, a1, a2, b1], []);
+		const groups = groupSessions([tempTask, a1, a2, b1], []);
 
-		expect(groups.tasks.map((s) => s.id)).toEqual(["pg"]);
+		expect(groups.tasks.map((s) => s.id)).toEqual(["tmp"]);
 		expect(groups.spaces).toHaveLength(2);
 		const groupA = groups.spaces.find((g) => g.cwd === "D:\\ws\\a");
 		expect(groupA?.sessions.map((s) => s.id)).toEqual(["a2", "a1"]);
@@ -39,18 +39,18 @@ describe("groupSessions：分桶", () => {
 	});
 
 	it("current 标记不影响分组归属", () => {
-		const currentPlayground = summary({
-			id: "pg",
-			cwd: "C:\\cfg\\playground",
-			isPlayground: true,
+		const currentTempTask = summary({
+			id: "tmp",
+			cwd: "C:\\KamiBuddy\\临时任务",
+			isTempTask: true,
 			current: true,
 			modifiedAt: 1,
 		});
 		const currentSpace = summary({ id: "ws", cwd: "D:\\ws\\a", modifiedAt: 2 });
 
-		const groups = groupSessions([currentPlayground, currentSpace], []);
+		const groups = groupSessions([currentTempTask, currentSpace], []);
 
-		expect(groups.tasks.map((s) => s.id)).toEqual(["pg"]);
+		expect(groups.tasks.map((s) => s.id)).toEqual(["tmp"]);
 		expect(groups.spaces).toHaveLength(1);
 		expect(groups.spaces[0]?.sessions.map((s) => s.id)).toEqual(["ws"]);
 	});
@@ -58,8 +58,8 @@ describe("groupSessions：分桶", () => {
 
 describe("groupSessions：排序", () => {
 	it("tasks 内按 modifiedAt 倒序", () => {
-		const older = summary({ id: "old", cwd: "C:\\cfg\\playground", isPlayground: true, modifiedAt: 10 });
-		const newer = summary({ id: "new", cwd: "C:\\cfg\\playground", isPlayground: true, modifiedAt: 20 });
+		const older = summary({ id: "old", cwd: "C:\\KamiBuddy\\临时任务", isTempTask: true, modifiedAt: 10 });
+		const newer = summary({ id: "new", cwd: "C:\\KamiBuddy\\临时任务", isTempTask: true, modifiedAt: 20 });
 
 		const groups = groupSessions([older, newer], []);
 

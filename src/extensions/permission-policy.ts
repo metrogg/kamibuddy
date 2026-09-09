@@ -129,13 +129,15 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
  * （web-tools.ts）的标记 + 本门对「后续写操作」的拦截共同兜住。
  * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
  *
- * read / find / grep / ls 有本地路径概念，**出工作区要询问**（LOCAL_READ，
- * 见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
+ * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
+ * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
+ * read_document 与 read 完全同语义（工作区内放行、区外低风险询问、凭据目录禁读）：
+ * 它只是换了种解析方式，读的还是本地文件，边界不该因文件格式不同而不同。
  */
-const READ_ONLY = new Set(["read", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]);
+const READ_ONLY = new Set(["read", "read_document", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]);
 
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
-const LOCAL_READ = new Set(["read", "find", "grep", "ls"]);
+const LOCAL_READ = new Set(["read", "read_document", "find", "grep", "ls"]);
 
 /** 会改文件的内置工具。 */
 const MUTATING = new Set(["write", "edit"]);
@@ -167,8 +169,8 @@ function isInside(base: string, target: string): boolean {
  * **恰好等于引入沙箱模式之前的行为** —— 所以加这个参数不改变任何既有调用点。
  *
  * 不写「未知工具一律放行」也不写「一律拒绝」：
- * 未知工具（含我们后面自研的文档工具）按 ask 处理，
- * 让人来决定 —— 这是 fail-safe 的默认，且不会悄悄阻断新能力。
+ * 未知工具按 ask 处理，让人来决定 —— 这是 fail-safe 的默认，
+ * 且不会悄悄阻断新能力。
  */
 export function decide(
 	facts: ToolCallFacts,
@@ -249,7 +251,7 @@ function decideUnderMode(
 	 * 阶段 2：只读工具（不改变任何状态）。
 	 *
 	 * 无本地路径概念的（web_search / web_fetch / present_files）一律放行。
-	 * 有路径概念的（read / find / grep / ls）按归属判：
+	 * 有路径概念的（read / read_document / find / grep / ls）按归属判：
 	 *   工作区内（或无路径参数，如 ls 列 cwd）→ 放行；
 	 *   工作区外 → 低风险询问；danger-full-access 不受限，与写侧语义一致。
 	 * read-only 档同样询问 —— 读的边界就是那个模式的全部语义。
@@ -330,7 +332,7 @@ function decideUnderMode(
 		};
 	}
 
-	// 未登记的工具（含将来自研的文档工具、MCP 工具）：交给人判断。
+	// 未登记的工具（如将来的 MCP 工具）：交给人判断。
 	return {
 		kind: "ask",
 		risk: "medium",

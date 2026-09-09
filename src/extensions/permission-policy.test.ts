@@ -99,6 +99,34 @@ describe("只读工具", () => {
 	});
 });
 
+describe("read_document（与 read 同语义：它只是换了解析方式，读的还是本地文件）", () => {
+	it("工作区内的文档 → 放行", () => {
+		const target = join(PATHS.workspaceDir, "报表.pdf");
+		expect(decide(facts({ toolName: "read_document", path: target }), PATHS, CWD)).toEqual({ kind: "allow" });
+	});
+
+	it("工作区外的文档 → 低风险询问", () => {
+		const target = join(HOME, "任意位置.pdf");
+		expect(decide(facts({ toolName: "read_document", path: target }), PATHS, CWD)).toEqual({
+			kind: "ask",
+			risk: "low",
+			summary: "读取工作目录之外的文件或目录",
+			details: target,
+		});
+	});
+
+	it("配置目录与凭据目录内的文档 → 直接拒绝（不给允许选项，与 read 同一层拦截）", () => {
+		// 凭据目录对只读工具是「直接拒」而不是询问：提示注入可以骗用户点允许，
+		// 这类内容一旦经 web_fetch 外发就是账号级损失（见 policy 阶段 1 注释）。
+		expect(
+			decide(facts({ toolName: "read_document", path: join(PATHS.configDir, "备份.pdf") }), PATHS, CWD).kind,
+		).toBe("deny");
+		expect(
+			decide(facts({ toolName: "read_document", path: join(HOME, ".ssh", "说明.pdf") }), PATHS, CWD).kind,
+		).toBe("deny");
+	});
+});
+
 describe("受保护的凭据目录（读写都拒，任何模式都不能越过）", () => {
 	const cases = [".ssh", ".gnupg", ".aws", ".kube", ".docker"];
 

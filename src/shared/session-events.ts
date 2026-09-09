@@ -225,15 +225,22 @@ export type SessionEvent =
 export interface SessionState {
 	readonly sessionId: string;
 	/**
-	 * 会话工作目录。playground 会话（isPlayground=true）为 undefined：
-	 * 不绑定任何本地目录，也不加载文件工具（WorkBuddy 的 cwd="" 同语义）。
+	 * 会话工作目录。临时任务会话（isTempTask=true）的 cwd 为
+	 * 「<生效根>/临时任务」共享临时目录（对齐 WorkBuddy 的 <root>/Claw），
+	 * 或默认根本身（与临时目录同等待遇，都是「非命名空间」）。
+	 * undefined 仅出现在会话尚未建立的初始瞬态。
 	 */
 	readonly cwd: string | undefined;
 	/**
-	 * 是否为 playground 会话（WorkBuddy 的「不使用工作空间」）。
-	 * 每次新建任务默认进入 playground —— 不选空间时不该默认写进某个公共目录。
+	 * 是否为临时任务会话（未绑定命名工作空间）。
+	 *
+	 * 每次新建任务默认即临时任务：落共享临时目录、加载完整工具集、权限门照常 ——
+	 * 不再存在「不绑定目录、无文件工具」的 playground 模式（经全面取证，
+	 * 那是我们自己的发明，WorkBuddy 并无 cwd="" 语义；其真实模型见 asar
+	 * main/server.js 的 resolveDefaultWorkspaceRoot/Claw 目录与
+	 * locale 的 workspaceStorage.description）。
 	 */
-	readonly isPlayground: boolean;
+	readonly isTempTask: boolean;
 	/** 场景 id，对应 resources/scenes/<id>/。决定根代理与可用能力面。 */
 	readonly sceneId: string;
 	/** 交互模式 id，对应 resources/modes/<id>.md。决定工具白名单与行为片段。 */

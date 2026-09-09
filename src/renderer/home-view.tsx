@@ -42,7 +42,7 @@ interface HomeViewProps {
 	readonly sceneId: string;
 	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
 	readonly modelId: string | undefined;
-	/** 当前工作空间目录（session_state.cwd）。playground 会话为 undefined。 */
+	/** 当前工作空间目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态。 */
 	readonly cwd: string | undefined;
 	readonly onSceneChange: (sceneId: string) => void;
 	readonly onOpenSettings: () => void;
@@ -121,7 +121,7 @@ export function HomeView({
 	const [draft, setDraft] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值。
-	// cwd 作为刷新键：切换工作空间后重拉文件列表，否则 @ 停留在旧空间（或 playground 空列表）。
+	// cwd 作为刷新键：切换工作空间后重拉文件列表，否则 @ 停留在旧空间的列表。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd);
 	// IME 守卫与 chat-view 共用一份接线（useImeGuard）——此前各写一份漏了这里，
 	// 中文输入法选词 Enter 直接误发消息，两处同源后不会再出现这种半吊子修复。

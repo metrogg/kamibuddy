@@ -40,6 +40,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
 	exportSession: (path) => ipcRenderer.invoke(INVOKE.sessionExport, path),
+	saveToWorkspace: (name) => ipcRenderer.invoke(INVOKE.saveToWorkspace, name),
 
 	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
 	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),
@@ -79,6 +80,11 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.setWebSearchConfig, input),
 	clearWebSearchConfig: () => ipcRenderer.invoke(INVOKE.clearWebSearchConfig),
 	testWebSearch: () => ipcRenderer.invoke(INVOKE.testWebSearch),
+
+	getDefaultWorkspacePath: () =>
+		ipcRenderer.invoke(INVOKE.getDefaultWorkspacePath),
+	setDefaultWorkspacePath: (path) =>
+		ipcRenderer.invoke(INVOKE.setDefaultWorkspacePath, path),
 
 	getPermissions: () => ipcRenderer.invoke(INVOKE.getPermissions),
 	setPermissions: (settings) => ipcRenderer.invoke(INVOKE.setPermissions, settings),

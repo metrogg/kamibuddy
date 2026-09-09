@@ -1,6 +1,8 @@
 /**
  * 工作空间选择器。机制对标 WorkBuddy 的 WorkspacePicker：
- * 空间 = 目录；不使用工作空间（playground）/ 默认根 / 根下已有子目录 / 新建 / 打开本地文件夹。
+ * 空间 = 目录；默认根 / 根下已有子目录 / 新建 / 打开本地文件夹。
+ * 未显式选择时即临时任务（cwd = <生效根>/临时任务 共享目录），
+ * 不再有「不使用工作空间」——playground 语义已退役（经取证是我们自己的发明）。
  *
  * 安全校验在 daemon（core/workspace.ts）：配置目录 / 应用目录会被拒，
  * 这里只负责把原因展示出来。
@@ -14,7 +16,7 @@ import type { WorkspaceSnapshot } from "@shared/ipc.ts";
 import { IconChevronDown, IconPlus, IconWorkspace } from "./icons.tsx";
 
 interface WorkspacePickerProps {
-	/** 当前生效目录（session_state.cwd）。playground 会话为 undefined，按「未选择」处理。 */
+	/** 当前生效目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态，按临时任务显示。 */
 	readonly cwd: string | undefined;
 	/** 切换成功后调用：daemon 已重置会话，UI 需要重拉快照。 */
 	readonly onChanged: () => void;
@@ -51,9 +53,10 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 		setBusy(false);
 	};
 
-	/** 统一切换入口。空串 = 不使用工作空间（playground）。 */
+	/** 统一切换入口。空串 = 临时任务（daemon 映射到共享临时目录），本组件已不提供该入口。 */
 	const switchTo = (path: string): void => {
-		// 规范化当前值与目标值：playground 都用空串表示，避免 ""/undefined 不相等误判。
+		// 规范化当前值与目标值：初始瞬态 cwd 为 undefined，与空串同按「未选择」处理，
+		// 避免 ""/undefined 不相等误判。
 		const current = cwd ?? "";
 		if (path === current) {
 			setOpen(false);
@@ -107,12 +110,14 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 			<button
 				type="button"
 				className="context-chip"
-				title={cwd ?? "不使用工作空间（仅问答）"}
+				title={cwd ?? "临时任务"}
 				onClick={() => setOpen((v) => !v)}
 				aria-expanded={open}
 			>
 				<IconWorkspace size={14} />
-				{cwd === undefined || cwd === "" ? "不使用工作空间" : baseName(cwd)}
+				{/* 临时任务的 cwd 是 <根>/临时任务，baseName 天然显示「临时任务」；
+				    undefined/空串是尚未显式选择的默认态，同样显示「临时任务」。 */}
+				{cwd === undefined || cwd === "" ? "临时任务" : baseName(cwd)}
 				<IconChevronDown size={12} />
 			</button>
 
@@ -125,11 +130,6 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 							{snapshot === undefined && error === undefined && <div className="ws-hint">加载中…</div>}
 							{snapshot !== undefined && (
 								<>
-									<button type="button" className="ws-item" disabled={busy} onClick={() => switchTo("")}>
-										<span className="ws-item-name">不使用工作空间</span>
-										<span className="ws-item-path">仅问答，不读写本地文件</span>
-										{cwd === undefined && <span className="ws-current">当前</span>}
-									</button>
 									<button type="button" className="ws-item" disabled={busy} onClick={() => switchTo(snapshot.defaultRoot)}>
 										<span className="ws-item-name">默认工作空间</span>
 										<span className="ws-item-path">{snapshot.defaultRoot}</span>

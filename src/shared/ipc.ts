@@ -69,8 +69,8 @@ export const INVOKE = {
 	/** 切换模型。 */
 	setModel: "session:set-model",
 	/**
-	 * 历史会话列表（全部工作目录，含 playground）。
-	 * title / isPlayground 等展示字段由 daemon 组装好，UI 不再推导。
+	 * 历史会话列表（全部工作目录，含临时任务）。
+	 * title / isTempTask 等展示字段由 daemon 组装好，UI 不再推导。
 	 */
 	sessionList: "session:list",
 	/**
@@ -88,13 +88,20 @@ export const INVOKE = {
 	 * 返回导出文件的绝对路径。
 	 */
 	sessionExport: "session:export",
+	/**
+	 * 把当前临时任务会话「保存到工作空间」转正：以 name 在默认根下创建目录、
+	 * 会话以新 cwd 重建并归入新空间组；已生成文件留在临时目录不动
+	 * （共享临时目录无法干净归属单个任务的文件，WorkBuddy 同结构）。
+	 * name 经 daemon 校验（工作空间命名规则）；当前会话非临时任务时由 daemon 拒绝。
+	 */
+	saveToWorkspace: "session:save-to-workspace",
 	/** 拉取当前工作空间与可选列表（默认根 + 已有子目录）。 */
 	workspaceSnapshot: "workspace:snapshot",
 	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
 	createWorkspace: "workspace:create",
 	/**
 	 * 切换到指定目录。目录经 daemon 校验（配置目录/应用目录会拒）。返回生效的目录路径。
-	 * 传空字符串表示「不使用工作空间」（playground，cwd 为 undefined）。
+	 * 传空字符串表示临时任务（不选命名空间，cwd 落共享临时目录）。
 	 */
 	setWorkspace: "workspace:set",
 	/**
@@ -170,6 +177,18 @@ export const INVOKE = {
 	clearWebSearchConfig: "settings:clear-web-search-config",
 	/** 测试联网搜索：用已存的配置真实搜索一次，返回可展示的结果。 */
 	testWebSearch: "settings:test-web-search",
+	/**
+	 * 读默认存储路径。effective 为生效根（env KAMIBUDDY_WORKSPACE_DIR > 设置项 > 内置默认
+	 * ~/KamiBuddy，分层对标 WorkBuddy 的 resolveDefaultWorkspaceRoot）；custom 为用户设置项
+	 * （未设置时为 undefined）；isDefault 标记 effective 是否就是内置默认。
+	 */
+	getDefaultWorkspacePath: "settings:get-default-workspace-path",
+	/**
+	 * 设置默认存储路径。传空字符串 = 还原内置默认（清除设置项）。
+	 * 只影响之后新建的任务与工作空间，已有会话 cwd 不变
+	 * （对齐 WorkBuddy「修改后不影响已有数据」）。
+	 */
+	setDefaultWorkspacePath: "settings:set-default-workspace-path",
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 
@@ -254,7 +273,7 @@ export type DaemonStatus =
 
 /** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
 export interface WorkspaceSnapshot {
-	/** 当前生效的工作空间目录。playground（不使用工作空间）时为 undefined。 */
+	/** 当前生效的工作空间目录。临时任务时为共享临时目录路径；undefined 仅出现在会话尚未建立的瞬态。 */
 	readonly current: string | undefined;
 	/** 默认根目录（「新建工作空间」都建在它下面）。 */
 	readonly defaultRoot: string;
@@ -262,7 +281,7 @@ export interface WorkspaceSnapshot {
 	readonly workspaces: readonly string[];
 	/**
 	 * 产物预览静态服务的 baseUrl（http://127.0.0.1:端口，根=当前工作区）。
-	 * playground 为 undefined —— 没有目录就没有可预览的东西。
+	 * 临时任务会话同样起服务（根=共享临时目录）；undefined 仅出现在尚无工作目录的瞬态。
 	 */
 	readonly previewBaseUrl: string | undefined;
 }
@@ -285,7 +304,7 @@ export interface CommandItem {
 
 /** 输入框补全数据源。 */
 export interface CompletionData {
-	/** `@` 可选文件：当前工作空间内的相对路径（posix 分隔）。playground 时为空。 */
+	/** `@` 可选文件：当前工作空间内的相对路径（posix 分隔）。临时任务时列共享临时目录内容。 */
 	readonly files: readonly string[];
 	/** `/` 可选命令。 */
 	readonly commands: readonly CommandItem[];
@@ -300,10 +319,10 @@ export interface SessionSummary {
 	readonly title: string;
 	/** 用户命名（appendSessionInfo）；未命名为 undefined，不要用空串。 */
 	readonly name?: string;
-	/** 会话启动时的工作目录（pi header.cwd）。playground 会话为占位目录路径。 */
+	/** 会话启动时的工作目录（pi header.cwd）。临时任务会话为共享临时目录（或默认根本身）。 */
 	readonly cwd: string;
-	/** 是否 playground 会话（daemon 按 cwd===配置目录/playground 判定好，UI 不推导）。 */
-	readonly isPlayground: boolean;
+	/** 是否临时任务会话（daemon 按 cwd===临时任务目录/默认根本身 判定好，UI 不推导）。 */
+	readonly isTempTask: boolean;
 	/** epoch ms。 */
 	readonly createdAt: number;
 	readonly modifiedAt: number;
@@ -337,6 +356,7 @@ export interface InvokeMap {
 	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
 	[INVOKE.sessionExport]: { args: [path: string]; result: { outputPath: string } };
+	[INVOKE.saveToWorkspace]: { args: [name: string]; result: void };
 	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
 	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };
@@ -363,6 +383,11 @@ export interface InvokeMap {
 	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
 	[INVOKE.clearWebSearchConfig]: { args: []; result: void };
 	[INVOKE.testWebSearch]: { args: []; result: WebSearchTestResult };
+	[INVOKE.getDefaultWorkspacePath]: {
+		args: [];
+		result: { effective: string; custom: string | undefined; isDefault: boolean };
+	};
+	[INVOKE.setDefaultWorkspacePath]: { args: [path: string]; result: { effective: string } };
 	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
 

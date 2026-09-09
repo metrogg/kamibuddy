@@ -59,20 +59,6 @@ import { join, resolve } from "node:path";
 const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 
 /**
- * playground 会话的工具集：**一个文件工具都不给，只留联网**。
- *
- * 为什么不只把 cwd 置空就算完事：pi 的内置工具支持绝对路径，
- * 模型给出绝对路径照样能写硬盘任意位置。所以 playground 的安全边界
- * 不是「没有目录」，而是「根本不注册这些工具」——工具不在模型可见的工具
- * 清单里，它连调用都发不出来。
- *
- * web_search / web_fetch 是仅有的例外：只读、无路径、不碰本地文件，
- * 且「不选工作空间的问答」正是联网能力的主场景（问新闻、查资料），
- * 不给它即砍掉产品最常用的入口。
- */
-const PLAYGROUND_TOOLS = ["web_search", "web_fetch"] as const;
-
-/**
  * 工具卡片的状态标签（对齐 WorkBuddy 的 tool.* 词汇表，见 lib-chat-ui 的
  * tool.readFile/listFile/executeCommand 等条目）：每个工具一组「执行中 → 已完成」，
  * write/edit 另按新建/覆盖走 generatingLabel / writeDoneLabel。
@@ -82,6 +68,7 @@ const PLAYGROUND_TOOLS = ["web_search", "web_fetch"] as const;
  */
 const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	read: "读取中",
+	read_document: "阅读文档",
 	ls: "列出中",
 	grep: "搜索中",
 	find: "查找中",
@@ -94,6 +81,7 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	read: "已读取",
+	read_document: "已阅读",
 	ls: "已列出",
 	grep: "已搜索",
 	find: "已查找",
@@ -253,20 +241,19 @@ export interface SessionHostOptions {
 	/** 选中的模型标识（`provider/model`）。undefined 表示让 pi 自己挑第一个可用的。 */
 	readonly modelKey: string | undefined;
 	/**
-	 * 会话工作目录。playground（不使用工作空间）为 undefined：
-	 * 不加载本地文件工具，模型只能做问答。pi 侧的技术 cwd 用配置目录下的
-	 * playground 占位目录（资源发现需要真实目录，但绝不作为产物落点）。
+	 * 会话工作目录。临时任务模型下**必有值**：临时任务就是普通 cwd 会话
+	 * （cwd = 生效根下的共享临时目录），不再有「无目录」的会话形态，
+	 * 工具集、权限门、预览服务与正式工作空间完全同待遇。
 	 */
-	readonly cwd: string | undefined;
+	readonly cwd: string;
 	readonly sceneId: string;
 	readonly interactionId: string;
 	/**
-	 * 是否为 playground 会话（WorkBuddy 的「不使用工作空间」）。
-	 * true 时 state.cwd 下发 undefined，且建会话时不注册任何本地文件工具
-	 * （PLAYGROUND_TOOLS 为空）——安全边界是「工具不在模型可见清单里」，
-	 * 而不是「没有目录」。缺省 false（正式工作空间）。
+	 * 是否临时任务会话（cwd 落在任务区：临时目录 / 生效根本身 / 旧 playground 占位）。
+	 * 判定规则的唯一来源在 daemon（isTempCwd）——生效根分层合成、旧占位目录
+	 * 归类都是 daemon 的知识，本文件只负责透传，不在此处回推，免得两处规则漂移。
 	 */
-	readonly isPlayground?: boolean;
+	readonly isTempTask: boolean;
 	/** 领域事件出口。 */
 	readonly emit: (event: SessionEvent) => void;
 	/**
@@ -313,8 +300,7 @@ export class SessionHost {
 		{ change: FileChange | undefined; changeType: "created" | "modified" }
 	>();
 	/**
-	 * 会话的技术 cwd（playground 时为配置目录下的占位目录）。
-	 * 解析模型给的相对路径、读 write/edit 的旧内容都用它。
+	 * 会话的技术 cwd（= options.cwd）。解析模型给的相对路径、读 write/edit 的旧内容都用它。
 	 */
 	private sessionCwd = "";
 	/**
@@ -367,15 +353,13 @@ export class SessionHost {
 		const agentDir = getConfigDir();
 
 		/*
-		 * playground 的技术 cwd：pi 的 DefaultResourceLoader / SettingsManager /
-		 * SessionManager 都需要一个真实存在的目录做资源发现，但 playground 语义上
-		 * 不绑定任何用户目录。用配置目录下的 playground 占位目录 —— 它在配置目录内，
-		 * 权限门本来就禁写，模型也拿不到文件工具，双保险。
-		 * 正式工作空间则直接用用户选的目录。
+		 * 临时任务就是普通 cwd 会话：调用方（daemon）直接给出真实目录
+		 * （正式空间或共享临时目录），本文件不再做任何 cwd 推导。
+		 * playground 时代的「configDir/playground 技术占位」已退役 —— 占位目录
+		 * 存在的前提是「不注册文件工具就当安全」，权限门全量落地后这个前提消失，
+		 * 会话需要一个真实产物落点（临时目录）而不是假目录。
 		 */
-		const playground = options.isPlayground === true;
-		const cwd = playground ? join(agentDir, "playground") : options.cwd;
-		if (cwd === undefined) throw new Error("正式工作空间会话必须提供 cwd");
+		const cwd = options.cwd;
 		mkdirSync(cwd, { recursive: true });
 
 		/*
@@ -390,7 +374,6 @@ export class SessionHost {
 		// 扩展要经 ResourceLoader 注入，且必须 reload 后才生效（同 sdk.ts:185-188）。
 		// additionalSkillPaths：随应用内置的技能（resources/skills/）；
 		// 用户的技能（agentDir/skills/）pi 会自动发现。
-		// cwd 用上面算好的值而不是 options.cwd：playground 时是占位目录。
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
@@ -418,11 +401,7 @@ export class SessionHost {
 			sessionManager: options.sessionManager ?? SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
-			tools: playground
-				? [...PLAYGROUND_TOOLS]
-				: mode === undefined
-					? [...DEFAULT_TOOLS]
-					: [...mode.tools],
+			tools: mode === undefined ? [...DEFAULT_TOOLS] : [...mode.tools],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
@@ -583,12 +562,11 @@ export class SessionHost {
 	get state(): SessionState {
 		const usage = this.session.getContextUsage();
 		const model = this.session.model;
-		const playground = this.options.isPlayground === true;
 		return {
 			sessionId: this.session.sessionId,
-			// playground 会话不绑定目录（shared/session-events.ts 的字段契约）。
-			...(playground ? { cwd: undefined } : { cwd: this.options.cwd }),
-			isPlayground: playground,
+			// 临时任务也是真实 cwd（共享临时目录）——契约不再用 undefined 表达「无目录」。
+			cwd: this.options.cwd,
+			isTempTask: this.options.isTempTask,
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
 			modelId:

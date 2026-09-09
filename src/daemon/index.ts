@@ -10,7 +10,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
@@ -18,12 +26,17 @@ import {
 	getConfigDir,
 	getResourcesDir,
 	getSessionsDir,
+	getTempTasksDir,
 	getWorkspaceDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
 import { ModelCatalog } from "../core/model-catalog.ts";
-import { estimateComposition, estimateTokens, ObservabilityStore } from "../core/observability.ts";
-import { readPreferences, writePreferences } from "../core/preferences.ts";
+import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
+import {
+	getEffectiveWorkspaceRoot,
+	readPreferences,
+	writePreferences,
+} from "../core/preferences.ts";
 import { PreviewServer } from "../core/preview-server.ts";
 import {
 	composePrompt,
@@ -55,11 +68,11 @@ import {
 	type PermissionInfo,
 	type PermissionSettings,
 } from "../shared/permissions.ts";
+import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
-import { buildContextUsage } from "../shared/context-usage.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
 import {
 	artifactsFromEntries,
@@ -94,6 +107,7 @@ import type {
 	SessionState,
 } from "../shared/session-events.ts";
 import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
+import { deriveContextUsageDetail } from "./context-usage-detail.ts";
 
 /* ── 与父进程的通道 ───────────────────────────────────────────────── */
 
@@ -224,14 +238,44 @@ function listSkills(): SkillInfo[] {
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
- * 当前工作空间。undefined = playground（WorkBuddy 的「不使用工作空间」）：
- * 不绑定任何本地目录、不注册文件工具。这是新建任务的默认状态——
- * 不选空间时不该默认写进某个公共目录。
+ * 当前工作空间（会话 cwd）。临时任务模型下**必有值**：
+ * 新建任务默认 = 临时任务，cwd 是生效根下的共享临时目录（`<根>/临时任务`），
+ * 工具集、权限门、预览服务与正式工作空间完全同待遇。
  *
  * 会话与 cwd 终身绑定（cwd 在建会话时一次性注入 pi 的工具集），
  * 所以换空间 = 作废当前会话重开，见 applyWorkspace。
  */
-let workspaceDir: string | undefined = undefined;
+let workspaceDir: string = tempTasksDir();
+
+/**
+ * 临时任务的共享目录。**现算不缓存**：生效根 = env > 设置项 > 内置默认
+ * （getEffectiveWorkspaceRoot 每次现读偏好文件），用户改默认存储路径后，
+ * 下一次新建/切换临时任务即刻用新根。
+ */
+function tempTasksDir(): string {
+	return getTempTasksDir(getEffectiveWorkspaceRoot());
+}
+
+/**
+ * 「该 cwd 归任务区（临时任务）」的判定。三种 true：
+ *
+ *   1. 临时任务共享目录（<生效根>/临时任务）—— 新模型的默认任务形态；
+ *   2. 生效根本身 —— 根目录是「任务区」不是空间组（WorkBuddy 同：根不成组）；
+ *   3. 配置目录下的 playground 旧占位目录 —— playground 时代存量会话的技术 cwd，
+ *      归类到任务区（resume 时会把 cwd 迁移到临时目录，见 resumeSession）。
+ *
+ * 用**当前**生效根判定（WorkBuddy isClawRuntimeCwd 同款局限）：
+ * 用户改默认根后，旧根下的临时会话不再识别为临时、归空间区 —— 可接受的归类漂移。
+ */
+function isTempCwd(cwd: string): boolean {
+	const root = getEffectiveWorkspaceRoot();
+	return (
+		cwd === getTempTasksDir(root) ||
+		cwd === root ||
+		// 旧 playground 占位目录：只用于**存量会话归类**，新会话不再产生这个 cwd。
+		cwd === join(getConfigDir(), "playground")
+	);
+}
 
 /**
  * 会话历史。用 shared 的 reducer 折叠，与渲染进程**同一份实现** ——
@@ -242,8 +286,9 @@ let workspaceDir: string | undefined = undefined;
 let conversation: ConversationView = {
 	state: {
 		sessionId: "",
-		cwd: undefined,
-		isPlayground: true,
+		// 启动即临时任务：cwd 是共享临时目录（真实路径），不再是「无目录」。
+		cwd: workspaceDir,
+		isTempTask: true,
 		sceneId: "work",
 		interactionId: "craft",
 		modelId: activeModelKey,
@@ -270,7 +315,8 @@ const observability = new ObservabilityStore();
 
 /**
  * 产物预览静态服务（根 = 当前工作区，core/preview-server.ts 的注释是安全契约）。
- * playground 不起服务；换工作空间时随 applyWorkspace 换根。
+ * 临时任务也起服务（根 = 共享临时目录）—— 有产物就该能预览。
+ * 换工作空间时随 applyWorkspace 换根。
  */
 const previewServer = new PreviewServer();
 
@@ -284,9 +330,6 @@ const ARTIFACT_TEXT_MAX = 512 * 1024;
  * 绝不能经这条通道被读出来）。
  */
 function readArtifactContent(path: string): ArtifactContent {
-	if (workspaceDir === undefined) {
-		throw new Error("playground 没有工作区，无可读取的产物");
-	}
 	const abs = resolve(workspaceDir, path);
 	if (abs !== workspaceDir && !abs.startsWith(workspaceDir + sep)) {
 		throw new Error("路径超出当前工作区");
@@ -362,18 +405,14 @@ function emitSessionEvent(event: SessionEvent): void {
 
 /** 组装并发出上下文用量明细（分类是估算值，UI 必须标注，见 shared/context-usage.ts）。 */
 function emitContextUsageDetail(contextUsage: { usedTokens: number; maxTokens: number }): void {
-	const composition = estimateComposition(conversation.entries, lastSystemPromptTokens);
-	if (composition === undefined) return;
-	emitSessionEvent({
-		type: "context_usage",
-		usage: buildContextUsage({
-			used: contextUsage.usedTokens,
-			total: contextUsage.maxTokens,
-			systemPromptTokens: lastSystemPromptTokens,
-			skillsTokens: lastSkillsTokens,
-			composition,
-		}),
+	const usage = deriveContextUsageDetail({
+		entries: conversation.entries,
+		contextUsage,
+		systemPromptTokens: lastSystemPromptTokens,
+		skillsTokens: lastSkillsTokens,
 	});
+	if (usage === undefined) return;
+	emitSessionEvent({ type: "context_usage", usage });
 }
 
 /**
@@ -472,16 +511,16 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 		);
 	}
 
-	// playground 的 cwd 为 undefined；正式空间才需要在建会话前确保目录存在
+	// 临时任务模型下 cwd 必有值（正式空间或共享临时目录）。建会话前确保目录存在
 	//（SessionHost.create 里也会 mkdir，但权限门要先拿到一个已确定存在的目录）。
 	const cwd = workspaceDir;
-	if (cwd !== undefined) mkdirSync(cwd, { recursive: true });
+	mkdirSync(cwd, { recursive: true });
 
 	const host = await SessionHost.create({
 		catalog,
 		modelKey: activeModelKey,
 		cwd,
-		isPlayground: cwd === undefined,
+		isTempTask: isTempCwd(cwd),
 		sceneId: conversation.state.sceneId,
 		interactionId: conversation.state.interactionId,
 		emit: emitSessionEvent,
@@ -489,52 +528,54 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
 		// （依赖方向是 extensions → core，见 AGENTS.md §1）。
-		// playground（workspaceDir 为 undefined）不装权限门 —— 文件工具根本没注册，
-		// 没有可拦的调用；装了反而要用一个假 cwd 做路径解析，徒增歧义。
 		extensions: [
-			...(cwd === undefined
-				? []
-				: [
-						createPermissionGate({
-							paths: {
-								workspaceDir: cwd,
-								configDir: getConfigDir(),
-								protectedDirs: PROTECTED_DIRS,
-								// 写 KamiBuddy 自身目录永远高风险询问（policy 判定链里先于工作区放行）。
-								// dev 是项目根，打包后是安装目录 —— 都以 daemon 进程的 cwd 为准。
-								appDir: process.cwd(),
-							},
-							cwd,
-							// getter 而非快照：用户改了预设，下一次工具调用即生效。
-							getSettings: () => activePermissions,
-							requestApproval,
-						}),
-					]),
 			/*
-			 * 项目信任：**所有会话都装**（与权限门不同）。
+			 * 权限门：**所有会话全量装，含临时任务**。
+			 *
+			 * playground 时代曾有不装权限门的分支 —— 那时的安全前提是「不注册
+			 * 文件工具即无可拦」。权限加固（权限门 + 项目信任）落地后这个前提
+			 * 已消失：临时任务就是普通 cwd 会话，文件工具全量注册，写操作必须
+			 * 与正式空间过同一道判定链，不存在「安全靠缺席」的第二种会话形态。
+			 */
+			createPermissionGate({
+				paths: {
+					workspaceDir: cwd,
+					configDir: getConfigDir(),
+					protectedDirs: PROTECTED_DIRS,
+					// 写 KamiBuddy 自身目录永远高风险询问（policy 判定链里先于工作区放行）。
+					// dev 是项目根，打包后是安装目录 —— 都以 daemon 进程的 cwd 为准。
+					appDir: process.cwd(),
+				},
+				cwd,
+				// getter 而非快照：用户改了预设，下一次工具调用即生效。
+				getSettings: () => activePermissions,
+				requestApproval,
+			}),
+			/*
+			 * 项目信任：**所有会话都装**（与权限门同理）。
 			 *
 			 * 理由：项目级资源的加载发生在工具层之前 —— `.pi/extensions` 是
 			 * TypeScript 模块，以本进程权限执行任意代码，权限门根本拦不到它
-			 * （那不是工具调用）。所以哪怕 playground 也要把这道闸挂上。
+			 * （那不是工具调用）。所以临时任务也要把这道闸挂上。
 			 *
-			 * 自家目录（~/KamiBuddy 与配置目录下的 playground 占位）直接信任：
+			 * 自家目录（生效根及其下的一切，含临时目录，与配置目录）直接信任：
 			 * 内容都由本机产出，没有"别人塞进来的扩展"这个来源；
 			 * 每次新建任务都弹框会让用户条件反射点同意，那这道防线就废了。
+			 * 生效根现读：用户改默认存储路径后，新根下的空间不该再弹信任框。
 			 */
 			createProjectTrust({
 				isOwnWorkspace: (dir) =>
-					isPathInside(getWorkspaceDir(), dir) || isPathInside(getConfigDir(), dir),
+					isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
 			}),
 			// 产物交付：present_files 是产物的唯一入口（WorkBuddy 同构）。
-			// 只读工具，playground 也注册 —— 模型在 playground 没有写工具，
-			// 但交付动作本身无害（区外路径不 stat，见 extensions/present-files.ts）。
+			// 只读工具，所有会话都注册（区外路径不 stat，见 extensions/present-files.ts）。
 			createPresentFiles({
 				getWorkspaceDir: () => workspaceDir,
 				onPresent: ({ files, focusFile }) => {
 					emitSessionEvent({ type: "artifacts_presented", files, focusFile });
 					// 产物清单持久化到会话文件（appendCustomEntry），恢复历史会话时
 					// buildConversationEntries 把它翻译回 artifacts_presented 事件，
-					// 产物卡与交付时状态一致。playground 无 sessionManager，跳过。
+					// 产物卡与交付时状态一致。
 					if (hostPromise !== undefined) {
 						void hostPromise.then((host) => {
 							host.persistArtifacts(files, focusFile);
@@ -570,8 +611,7 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 						sceneBody: scene.body,
 						modeBody: mode.body,
 						skillsSection,
-						// playground 无工作目录，提示词里如实说明，免得模型去找一个不存在的路径。
-						cwd: cwd ?? "（未选择工作空间，无本地文件目录）",
+						cwd,
 					});
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
@@ -580,7 +620,7 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 					return prompt;
 				},
 			}),
-			// 联网工具：所有会话都装（playground 无文件工具，也正是问答主场景）。
+			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
 			createWebTools({
 				getSearchConfig: () => {
@@ -600,6 +640,9 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 					return config;
 				},
 			}),
+			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
+			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
+			createDocReadTool(),
 		],
 	});
 
@@ -627,19 +670,21 @@ async function resetSession(): Promise<void> {
 }
 
 /**
- * 切换工作空间。空串表示「不使用工作空间」（playground）。
+ * 切换工作空间。空串表示「临时任务」（共享临时目录，新建任务的默认态）。
  *
  * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
  * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
+ * 临时目录是自家构造（生效根下），不过这道校验 —— 同 getEffectiveWorkspaceRoot
+ * 的回退语义，非法根在那一层已被忽略。
  *
  * 换空间 = 作废当前会话：cwd 在建会话时一次性注入 pi 的工具集，
  * 不存在「换目录继续聊」（WorkBuddy 同样如此，它的 cwd 在 session.create 时绑定）。
  * 旧会话的本地历史一并清掉——它属于上一个空间，留着会让 UI 显示别处的对话。
  */
-async function applyWorkspace(dir: string): Promise<string | undefined> {
-	// 空串 = playground，无需路径校验（本就不绑定任何目录）。
-	const next = dir === "" ? undefined : dir;
-	if (next !== undefined) {
+async function applyWorkspace(dir: string): Promise<string> {
+	// 空串 = 临时任务。现算不缓存：改默认存储路径后，下一次切临时任务即刻用新根。
+	const next = dir === "" ? tempTasksDir() : dir;
+	if (dir !== "") {
 		const error = validateWorkspacePath(next, {
 			configDir: getConfigDir(),
 			appDir: process.cwd(),
@@ -650,15 +695,15 @@ async function applyWorkspace(dir: string): Promise<string | undefined> {
 	if (conversation.state.isStreaming)
 		throw new Error("任务进行中，请先停止当前任务再切换工作空间");
 
-	if (next !== undefined) mkdirSync(next, { recursive: true });
+	mkdirSync(next, { recursive: true });
 	workspaceDir = next;
 
-	// 预览服务随工作区换根（playground 时停掉）。先于 resetSession：
+	// 预览服务随工作区换根（临时任务同样起服务：有产物就该能预览）。先于 resetSession：
 	// 服务换根失败（如端口异常）时工作区切换应该响亮失败，而不是带病继续。
 	await previewServer.setRoot(next);
 
 	await resetSession();
-	updateStateLocally({ cwd: next, isPlayground: next === undefined });
+	updateStateLocally({ cwd: next, isTempTask: isTempCwd(next) });
 	return next;
 }
 
@@ -706,7 +751,6 @@ async function listSessions(): Promise<SessionSummary[]> {
 		throw error;
 	}
 	const currentFile = await currentSessionFile();
-	const playgroundDir = join(getConfigDir(), "playground");
 	return infos
 		.map((info): SessionSummary => {
 			return {
@@ -715,7 +759,8 @@ async function listSessions(): Promise<SessionSummary[]> {
 				title: sessionTitle(info.name, info.firstMessage),
 				name: info.name,
 				cwd: info.cwd,
-				isPlayground: info.cwd === playgroundDir,
+				// 任务区判定收在 isTempCwd 一处（临时目录 / 生效根本身 / 旧 playground 占位）。
+				isTempTask: isTempCwd(info.cwd),
 				createdAt: info.created.getTime(),
 				modifiedAt: info.modified.getTime(),
 				messageCount: info.messageCount,
@@ -748,17 +793,51 @@ function moveToTrash(filePath: string): void {
 }
 
 /**
- * 空间组集合：非 playground 会话的 cwd 去重，合并显示名覆盖。
+ * 改写会话文件头部（首行 JSON）的 cwd —— 转正后归组的前提。
  *
- * 组由会话文件派生（磁盘真相）：没有会话的目录不形成组，被移除的空间
- * 若再开任务会自然重现。显示名只是视图层覆盖（workspaces.json），
- * 注册表里没有的键不回补。组顺序无所谓 —— 排序是 renderer 的事（契约注释）。
+ * 空间分组派生自会话文件 header.cwd（listSessions → listWorkspaceGroups），
+ * 而 pi 的 SessionManager.open(cwdOverride) 只改内存值、不落盘：不改首行，
+ * 侧栏刷新后该会话仍挂任务区，「归入空间区」不成立。首行即 SessionHeader
+ * （pi docs/session-format.md），整文件重写只动这一个键，其余条目原样保留。
+ *
+ * 调用时持有该文件的宿主必须已 dispose：pi 的 SessionManager 各自缓存
+ * entries，同一文件两个活写者会互相覆盖（sessionRename 注释的同一结论）。
+ */
+function rewriteSessionHeaderCwd(filePath: string, cwd: string): void {
+	const content = readFileSync(filePath, "utf8");
+	const newline = content.indexOf("\n");
+	const firstLine = newline === -1 ? content : content.slice(0, newline);
+	const header: unknown = JSON.parse(firstLine);
+	if (
+		typeof header !== "object" ||
+		header === null ||
+		(header as { type?: unknown }).type !== "session"
+	) {
+		throw new Error("会话文件缺少头部，无法保存到工作空间");
+	}
+	// newline === -1（文件只有一行头）时补一个换行，保持 JSONL 行尾约定。
+	const rest = newline === -1 ? "\n" : content.slice(newline);
+	writeFileSync(
+		filePath,
+		JSON.stringify({ ...(header as Record<string, unknown>), cwd }) + rest,
+		"utf8",
+	);
+}
+
+/**
+ * 空间组集合：非临时任务会话的 cwd 去重，合并显示名覆盖。
+ *
+ * 临时任务（临时目录、生效根本身、旧 playground 占位）归任务区、不成组 ——
+ * 它们不是用户经营的空间。组由会话文件派生（磁盘真相）：没有会话的目录
+ * 不形成组，被移除的空间若再开任务会自然重现。显示名只是视图层覆盖
+ * （workspaces.json），注册表里没有的键不回补。
+ * 组顺序无所谓 —— 排序是 renderer 的事（契约注释）。
  */
 async function listWorkspaceGroups(): Promise<WorkspaceGroupMeta[]> {
 	const names = readDisplayNames();
 	const cwds = new Set<string>();
 	for (const session of await listSessions()) {
-		if (!session.isPlayground) cwds.add(session.cwd);
+		if (!session.isTempTask) cwds.add(session.cwd);
 	}
 	return [...cwds].map((cwd): WorkspaceGroupMeta => ({ cwd, displayName: names[cwd] }));
 }
@@ -799,14 +878,17 @@ async function resumeSession(path: string): Promise<void> {
 	const header = manager.getHeader();
 	if (header === null) throw new Error("会话文件缺少头部，无法恢复");
 
-	// 从 header.cwd 推导目标工作空间，只算值不赋值：playground 占位目录
-	// → playground；否则按工作空间校验同一套规则把关（会话本身没问题但
-	// 目录不合法时拒，如指向配置目录的旧会话）。目录可能已被用户删掉，
-	// 补建与新建会话同口径 —— mkdir 幂等且不碰任何会话状态，可安全提前。
-	const playgroundDir = join(getConfigDir(), "playground");
-	let nextWorkspaceDir: string | undefined;
-	if (header.cwd === playgroundDir) {
-		nextWorkspaceDir = undefined;
+	// 从 header.cwd 推导目标工作空间，只算值不赋值：
+	//   - 旧 playground 占位目录（playground 时代的技术 cwd）→ 迁移到共享临时目录。
+	//     占位目录里本就不可能有产物（当时不注册文件工具），映射只改归类、不丢数据；
+	//     会话文件 header 不改写 —— 下次 resume 仍走这条映射，判定收在 isTempCwd 一处。
+	//   - 其余按工作空间校验同一套规则把关（会话本身没问题但目录不合法时拒，
+	//     如指向配置目录的旧会话）。目录可能已被用户删掉，补建与新建会话同口径
+	//     —— mkdir 幂等且不碰任何会话状态，可安全提前。
+	let nextWorkspaceDir: string;
+	if (header.cwd === join(getConfigDir(), "playground")) {
+		nextWorkspaceDir = tempTasksDir();
+		mkdirSync(nextWorkspaceDir, { recursive: true });
 	} else {
 		const wsError = validateWorkspacePath(header.cwd, {
 			configDir: getConfigDir(),
@@ -826,30 +908,154 @@ async function resumeSession(path: string): Promise<void> {
 
 	workspaceDir = nextWorkspaceDir;
 
-	// 预览服务随工作区换根（playground 时停掉），与 applyWorkspace 同口径。
+	// 预览服务随工作区换根（临时任务同样起服务），与 applyWorkspace 同口径。
 	await previewServer.setRoot(workspaceDir);
 
 	// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择），
 	// 只换 sessionManager。createHost 末尾会发 session_state，
-	// cwd / isPlayground / sessionId 随之同步给 UI。
+	// cwd / isTempTask / sessionId 随之同步给 UI。
 	const host = await createHost(manager);
 	hostPromise = Promise.resolve(host);
 
 	// 本地历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
-	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。usageDetail / turn /
-	// cancelledTurns 属于旧会话，清空；artifacts 从落盘的 artifacts_presented
+	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。turn / cancelledTurns
+	// 属于旧 run 的瞬态，清空；artifacts 从落盘的 artifacts_presented
 	// custom 条目恢复（buildConversationEntries 翻译 → artifactsFromEntries 折叠，
 	// 清成 [] 会让恢复出的会话丢掉产物卡）；state 保留现值 ——
 	// 它刚被 createHost 的 session_state 换成新会话的权威值。
+	//
+	// usageDetail 不在清空之列：它描述「当前上下文占用多少」而不是旧 run 的
+	// 瞬态 —— resume 后 pi 从落盘消息重建了上下文，getContextUsage() 仍然
+	// 有效，圆环理应立即恢复（曾经无条件 undefined，恢复后圆环消失、要等
+	// 下一次模型响应才回来）。contextUsage 缺失（压缩后无响应的空窗）时派生
+	// 结果为 undefined，圆环隐藏才是正确语义（shared/conversation.ts 的
+	// reducer 对 session_state 同口径）。派生必须等 entries 重建之后：
+	// createHost 末尾那次 session_state 已触发过一轮 emitContextUsageDetail，
+	// 彼时 conversation.entries 还是旧会话的 —— 那轮派生出的是旧会话成分
+	// （时序坑），下方补发的事件在顺序上后发覆盖它。
 	const rebuilt = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
+	const contextUsage = host.state.contextUsage;
+	const usageDetail = deriveContextUsageDetail({
+		entries: rebuilt,
+		contextUsage,
+		systemPromptTokens: lastSystemPromptTokens,
+		skillsTokens: lastSkillsTokens,
+	});
 	conversation = {
 		...conversation,
 		entries: rebuilt,
-		usageDetail: undefined,
+		usageDetail,
 		turn: undefined,
 		cancelledTurns: [],
 		artifacts: artifactsFromEntries(rebuilt),
 	};
+
+	// 补发一次 context_usage：reducer 对它直接覆盖 usageDetail（事件顺序上
+	// 后发的胜出），把 createHost 早发那轮旧会话成分派生顶掉，renderer 不必
+	// 等 resyncSnapshot 圆环就位。emitContextUsageDetail 读闭包里的
+	// conversation.entries —— 此刻已是重建结果，派生值与上面这份 usageDetail
+	// 一致（同一纯函数、同一输入）。
+	if (contextUsage !== undefined) {
+		emitContextUsageDetail(contextUsage);
+	}
+}
+
+/**
+ * 「保存到工作空间」：临时任务转正为命名空间。
+ *
+ * 编排与 resumeSession 同构（守卫 → 验证全做完 → dispose → 换 cwd 重建宿主），
+ * 但有一个关键差别：**这不是 open 别人的会话文件，而是当前会话原地换 cwd** ——
+ * 会话文件不动位置、消息历史不动、sessionId 不变，只重写 header.cwd（归组键）
+ * 并以新 cwd 重建宿主（cwd 在建会话时一次性注入工具集，见 applyWorkspace 注释）。
+ * 所以本地 conversation 视图原样保留，不需要 resume 那套 entries 重建。
+ *
+ * 失败原子性与 resumeSession 同口径：守卫 / 名称校验 / 目录占用检查全部在
+ * dispose 之前完成；dispose 之后进入同款非原子窗口（setRoot / createHost
+ * 失败时旧宿主已销毁，见 resumeSession 注释）。
+ *
+ * 已生成文件留在临时目录不动（spec 决策）：共享临时目录是所有临时任务共用的，
+ * 无法干净归属单个任务的文件，强行搬迁会带走别的任务的产物 ——
+ * WorkBuddy 同为共享目录结构（spec：align-temp-task-workspace-model）。
+ */
+async function saveToWorkspace(name: string): Promise<void> {
+	if (conversation.state.isStreaming)
+		throw new Error("任务进行中，请先停止当前任务");
+	if (hostPromise === undefined)
+		throw new Error("还没有会话，请先开始任务");
+	// 会话与 cwd 终身绑定，当前 cwd 即会话身份；临时判定用 reducer 折叠出的权威值。
+	if (!isTempCwd(conversation.state.cwd ?? workspaceDir))
+		throw new Error("只有临时任务可以保存到工作空间");
+
+	const root = getEffectiveWorkspaceRoot();
+
+	/*
+	 * siblings = 生效根下现有子目录名 + 现有外部空间组名（显示名覆盖优先）。
+	 * 复用显示名校验是因为命名规则同族（非空/非法字符/255/重名/保留名），
+	 * 但这里创建的是**真实目录**不是显示名覆盖 —— 所以根下子目录必须在
+	 * siblings 里（显示名校验只看组名的话，根下已有的非组目录会漏网）。
+	 * 根不存在按空数组：走到这里临时目录已建过（createHost 的 mkdir），根
+	 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续，
+	 * 下面的 mkdir 会把根连带补建。
+	 */
+	let dirNames: string[] = [];
+	try {
+		dirNames = readdirSync(root, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	const groupNames = (await listWorkspaceGroups()).map(
+		(g) => g.displayName ?? basename(g.cwd),
+	);
+	const trimmed = name.trim();
+	const nameError = validateDisplayName(trimmed, [...dirNames, ...groupNames]);
+	if (nameError !== undefined) throw new Error(nameError);
+
+	/*
+	 * 「存在即拒」而非静默复用：validateDisplayName 的重名只查 sibling 名，
+	 * 根下存在同名**文件**（不是目录，readdir 过滤掉了）或校验后竞态冒出的
+	 * 占用都会漏过去。静默复用别人/别的任务的目录比报错更糟 —— 产物会
+	 * 混进一堆陌生文件里，用户以为是自己任务的成果。
+	 */
+	const target = join(root, trimmed);
+	if (existsSync(target)) throw new Error("该名称的目录已存在");
+
+	/* ── 切换前：做完所有可能失败的验证，此刻会话毫发无损 ── */
+
+	const host = await hostPromise;
+	const sessionFile = host.sessionFilePath;
+	// 本应用的会话都是持久化的（SessionManager.create 走 sessions 目录），
+	// undefined 只出现在 pi 的 in-memory 形态 —— 真遇到就是上游语义变了，响亮失败。
+	if (sessionFile === undefined)
+		throw new Error("会话尚未落盘，无法保存到工作空间");
+
+	mkdirSync(target, { recursive: true });
+
+	/* ── 切换点：此后失败即进入 resumeSession 注释所述的非原子窗口 ── */
+
+	host.dispose();
+	hostPromise = undefined;
+
+	// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
+	rewriteSessionHeaderCwd(sessionFile, target);
+
+	workspaceDir = target;
+
+	// 预览服务随工作区换根，与 applyWorkspace / resumeSession 同口径。
+	await previewServer.setRoot(target);
+
+	// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择），
+	// 只换 cwd（createHost 读模块级 workspaceDir，上面已赋值）。
+	// SessionManager.open 重新打开同一文件：header 已是新 cwd，内存值随之正确。
+	const manager = SessionManager.open(sessionFile, getSessionsDir());
+	const nextHost = await createHost(manager);
+	hostPromise = Promise.resolve(nextHost);
+
+	// createHost 末尾的 session_state 已带权威值（cwd=target、isTempTask=false），
+	// 这里再显式声明一次落点，与 applyWorkspace 末尾同口径 —— 工作空间语义的
+	// 落点不依赖 createHost 那次顺带同步。
+	updateStateLocally({ cwd: target, isTempTask: false });
 }
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
@@ -1037,9 +1243,9 @@ const handlers: Record<string, Handler> = {
 
 		/*
 		 * 输出固定落默认根的 exports/（getWorkspaceDir()，不是当前工作区）：
-		 * playground 会话没有工作区，落在工作区下这部分会话就没有导出落点；
-		 * 用户也总能在一个固定地方找到自己的导出物，不用记「当时用的哪个
-		 * 工作区」（core/session-export.ts 文件头是同一决策）。
+		 * 临时任务的 cwd 是所有临时任务共享的目录，导出物落在其下会混进
+		 * 别的任务的产物堆里；固定落点让用户总能在一个地方找到自己的导出物，
+		 * 不用记「当时用的哪个工作区」（core/session-export.ts 文件头是同一决策）。
 		 */
 		const exportsDir = join(getWorkspaceDir(), "exports");
 		mkdirSync(exportsDir, { recursive: true });
@@ -1055,6 +1261,9 @@ const handlers: Record<string, Handler> = {
 		await host.exportHtml(outputPath);
 		return { outputPath };
 	},
+
+	// 临时任务转正：命名 → 根下建目录 → 当前会话以新 cwd 重建（见 saveToWorkspace）。
+	[INVOKE.saveToWorkspace]: async ([name]) => saveToWorkspace(name as string),
 
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");
@@ -1194,11 +1403,40 @@ const handlers: Record<string, Handler> = {
 		return buildPermissionInfo(settings);
 	},
 
+	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
+
+	[INVOKE.getDefaultWorkspacePath]: async () => {
+		// getter 现读偏好（不缓存）：设置页展示的生效根与下一次新任务用的根
+		// 是同一份，不存在「界面显示 A、实际用 B」的窗口。
+		const custom = readPreferences().defaultWorkspacePath;
+		return {
+			effective: getEffectiveWorkspaceRoot(),
+			custom,
+			isDefault: custom === undefined,
+		};
+	},
+
+	[INVOKE.setDefaultWorkspacePath]: async ([path]) => {
+		const trimmed = (path as string).trim();
+		const preferences = readPreferences();
+		if (trimmed === "") {
+			// 空串 = 还原默认：清掉该键，回退到内置默认（读改写，不丢其他键）。
+			const { defaultWorkspacePath: _dropped, ...rest } = preferences;
+			writePreferences(rest);
+		} else {
+			// 合法性不在此拒：非绝对路径会被 getEffectiveWorkspaceRoot 忽略并回退，
+			// 返回值里的 effective 如实告诉 UI 实际生效的是哪一层。
+			writePreferences({ ...preferences, defaultWorkspacePath: trimmed });
+		}
+		// 全链路的根 getter（临时目录推导、空间列表）都现读偏好不缓存，
+		// 所以新任务即刻用新根；已有会话的 cwd 不变（preferences.ts 注释的既定语义）。
+		return { effective: getEffectiveWorkspaceRoot() };
+	},
+
 	/* ── 输入框补全数据源（@ 文件 + / 命令） ────────────────────────── */
 
 	[INVOKE.completions]: async () => ({
-		// playground（workspaceDir 为 undefined）没有可引用的目录，文件列表为空。
-		files: workspaceDir === undefined ? [] : indexFiles(workspaceDir),
+		files: indexFiles(workspaceDir),
 		commands: [
 			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
 			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
@@ -1209,11 +1447,8 @@ const handlers: Record<string, Handler> = {
 			})),
 			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
 			// 发现目录必须与会话实际生效的一致 —— cwd 镜像 SessionHost 的取值
-			//（playground 时用配置目录下的 playground/ 占位，见 session-host.ts）。
-			...listPromptTemplates(
-				workspaceDir ?? join(getConfigDir(), "playground"),
-				getConfigDir(),
-			).map((t) => ({
+			//（临时任务模型下就是 workspaceDir 本身）。
+			...listPromptTemplates(workspaceDir, getConfigDir()).map((t) => ({
 				name: t.name,
 				description: t.description,
 				source: "template" as const,
@@ -1229,13 +1464,14 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.workspaceSnapshot]: async () => ({
 		current: workspaceDir,
-		defaultRoot: getWorkspaceDir(),
-		workspaces: listWorkspaces(getWorkspaceDir()),
+		// 生效根现读（不缓存）：改默认存储路径后，空间列表即刻反映新根。
+		defaultRoot: getEffectiveWorkspaceRoot(),
+		workspaces: listWorkspaces(getEffectiveWorkspaceRoot()),
 		previewBaseUrl: previewServer.baseUrl,
 	}),
 
 	[INVOKE.createWorkspace]: async ([name]) =>
-		applyWorkspace(createWorkspace(getWorkspaceDir(), name as string)),
+		applyWorkspace(createWorkspace(getEffectiveWorkspaceRoot(), name as string)),
 
 	[INVOKE.setWorkspace]: async ([path]) => applyWorkspace(path as string),
 
@@ -1277,7 +1513,7 @@ const handlers: Record<string, Handler> = {
 		}
 
 		for (const session of sessions) {
-			if (session.isPlayground || resolve(session.cwd) !== resolvedTarget) continue;
+			if (session.isTempTask || resolve(session.cwd) !== resolvedTarget) continue;
 			moveToTrash(session.path);
 		}
 
@@ -1453,6 +1689,16 @@ function start(): void {
 		event: "daemon_start",
 		node: process.version,
 		platform: `${process.platform}-${process.arch}`,
+	});
+
+	// 初始工作区（共享临时目录）的预览服务。applyWorkspace / resumeSession 之外
+	// 唯一一个换根点：启动时 workspaceDir 已是临时目录但还没有服务，不起服务
+	// 则首个临时任务交付的 HTML 产物无法预览。失败不阻断启动 —— 预览是增强
+	// 能力，聊天主链路不该被它拖死；记日志留现场。
+	void previewServer.setRoot(workspaceDir).catch((error: unknown) => {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`预览服务启动失败：${message}`);
+		eventLog.append({ kind: "ipc_error", channel: "preview:setRoot", message });
 	});
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，

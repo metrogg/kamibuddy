@@ -1,11 +1,11 @@
 /**
  * 左侧导航栏，布局对标 WorkBuddy：
- * 品牌行 → 新建任务 → 功能导航 → 任务（playground 会话）→ 空间（按 cwd 分组）→ 底部状态。
+ * 品牌行 → 新建任务 → 功能导航 → 任务（临时任务会话）→ 空间（按 cwd 分组）→ 底部状态。
  *
  * 导航项的能力按纵切片计划排期（STATUS.md），未实现的点击统一走 onTodo，
  * 不在此处各写占位逻辑。
  *
- * 两区的分组（playground 分桶、cwd 归组、组名与排序）全部由 groupSessions
+ * 两区的分组（临时任务分桶、cwd 归组、组名与排序）全部由 groupSessions
  * 算好传入 —— 组由会话文件派生（磁盘真相），这里只渲染，不重新推导
  * （推导规则集中才能跑纯函数测试，见 session-groups.ts 头注释）。
  */
@@ -131,7 +131,7 @@ export function Sidebar({
 	 */
 	const renderTaskRow = (task: SessionSummary): React.JSX.Element => {
 		const meta = `${formatMessageTime(task.modifiedAt, Date.now())} · ${
-			task.isPlayground ? "不使用工作空间" : cwdTail(task.cwd)
+			task.isTempTask ? "临时任务" : cwdTail(task.cwd)
 		}`;
 		const rowClass = task.current
 			? "task-item task-item-current"

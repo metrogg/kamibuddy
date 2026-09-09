@@ -169,6 +169,14 @@ WorkBuddy 的解法是自带用户态：`vendor/brokered-bin/` 30 个 toybox 替
 那是另一个决策，见 §4.4a。上面的论证只否掉 `bash`（Windows 上的依赖问题），
 没有否掉 Windows 原生的 `powershell`。
 
+**2026-09-09 修订（用户拍板）**：从"一行 shell 都不许碰"放宽为
+"不许假设用户机器上有第三方命令"——允许调用两类存在性有保证的命令：
+① Windows 原生 powershell（及经它可达的 COM，如 Word/WPS 自动化）；
+② 安装包自带二进制（体积权衡随包评审）。其余处理仍走进程内 Node 工具。
+上面的依赖问题论证不变（`bash` 仍禁），只是把规则从"禁用 shell"
+精确化为"禁无保证的依赖"。Word COM 自动化是办公场景的实在收益：
+目标用户机器普遍装着 Word/WPS，文档转换/回填可借力而不必自研全套 OOXML 写入。
+
 ### 4.4a agent 的 shell 能力：用 powershell，不用 bash
 
 决策日期 2026-09-08，四方调研见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。

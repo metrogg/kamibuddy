@@ -423,6 +423,94 @@ function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Elem
 	);
 }
 
+/* ── 默认存储路径 ──────────────────────────────────────────────── */
+
+/**
+ * 返回形状从 bridge 契约推导，不在此重复声明 —— 两处声明同一形状必然漂移
+ * （AGENTS.md §4：类型集中在 shared）。
+ */
+type DefaultWorkspaceInfo = Awaited<ReturnType<typeof window.kami.getDefaultWorkspacePath>>;
+
+/**
+ * 默认存储路径（对标 WorkBuddy 设置里的 workspaceStorage）。
+ *
+ * 生效根的分层（env KAMIBUDDY_WORKSPACE_DIR > 设置项 > 内置默认）与非法回退
+ * 都在 daemon 侧判定，这里只展示结果 —— renderer 若各写一份优先级逻辑，
+ * 改规则时两边必然漂移。
+ */
+function DefaultWorkspaceSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
+	const [info, setInfo] = useState<DefaultWorkspaceInfo | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
+
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			setInfo(await window.kami.getDefaultWorkspacePath());
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	/** 修改：系统目录选择框 → 写入设置项 → 刷新。取消不算错误，静默收回。 */
+	const change = (): void => {
+		void window.kami
+			.pickWorkspaceDirectory()
+			.then((path) => {
+				if (path === undefined) return;
+				return window.kami.setDefaultWorkspacePath(path).then(() => refresh());
+			})
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	};
+
+	/** 还原默认：空串 = 清除设置项（契约约定），daemon 回退内置默认。 */
+	const reset = (): void => {
+		void window.kami
+			.setDefaultWorkspacePath("")
+			.then(() => refresh())
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	};
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>默认存储路径</h2>
+				<button type="button" className="mini-btn" disabled={busy} onClick={change}>
+					修改
+				</button>
+				{/* 已是默认时「还原」无意义，藏起来比禁用更能说明当前状态。 */}
+				{info !== undefined && !info.isDefault && (
+					<button type="button" className="mini-btn danger" disabled={busy} onClick={reset}>
+						还原默认
+					</button>
+				)}
+			</header>
+
+			{error !== undefined && <div className="settings-error">{error}</div>}
+
+			{info === undefined ? (
+				<p className="settings-empty">正在读取存储路径…</p>
+			) : (
+				<>
+					<div className="provider-row">
+						<div className="provider-main">
+							{/* 路径可能很长，悬停给全量（同 sidebar 空间组头的做法）。 */}
+							<span className="provider-name" title={info.effective}>
+								{info.effective}
+							</span>
+							{info.isDefault && <span className="provider-tag">默认</span>}
+						</div>
+					</div>
+					<p className="settings-foot">新建的任务与工作空间会存放在该目录下；修改不影响已有任务的存放位置。</p>
+				</>
+			)}
+		</section>
+	);
+}
+
 function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React.JSX.Element {
 	const isEdit = initial !== undefined;
 	const [form, setForm] = useState<CustomProviderInput>(initial ?? EMPTY_CUSTOM);
@@ -835,6 +923,8 @@ export function SettingsView({ onClose }: { readonly onClose: () => void }): Rea
 						<WebSearchSection busy={busy} />
 
 						<PermissionSection busy={busy} />
+
+						<DefaultWorkspaceSection busy={busy} />
 
 						<p className="settings-foot">配置目录：{snapshot.configDir}</p>
 					</>

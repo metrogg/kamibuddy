@@ -80,9 +80,9 @@ interface ArtifactPanelProps {
 	readonly artifacts: readonly ArtifactRef[];
 	/** 本会话的文件变更（按路径收拢）。 */
 	readonly changes: readonly ChangeRef[];
-	/** 当前工作区目录。playground 为 undefined。 */
+	/** 当前工作区目录。undefined 仅是会话尚未建立的初始瞬态。 */
 	readonly cwd: string | undefined;
-	/** 静态服务 baseUrl。playground / 服务未起为 undefined。 */
+	/** 静态服务 baseUrl。服务未起为 undefined。 */
 	readonly previewBaseUrl: string | undefined;
 	/** 已打开的 tab（顺序即显示顺序）。 */
 	readonly tabs: readonly PreviewSelection[];
@@ -257,7 +257,7 @@ function OverviewMenu({
 					<div className="preview-menu-group">
 						<header className="preview-menu-title">工作区文件</header>
 						{cwd === undefined ? (
-							<div className="preview-menu-empty">playground 没有工作区文件</div>
+							<div className="preview-menu-empty">工作区尚未就绪</div>
 						) : files === undefined ? (
 							<div className="preview-menu-empty">加载中…</div>
 						) : (

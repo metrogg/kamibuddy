@@ -10,8 +10,8 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { getConfigDir } from "./config-paths.ts";
+import { dirname, isAbsolute, join } from "node:path";
+import { getConfigDir, getWorkspaceDir } from "./config-paths.ts";
 import {
 	isApprovalPolicy,
 	isSandboxMode,
@@ -30,6 +30,13 @@ export interface Preferences {
 	 * 免得「文件里没写」和「用户显式选了默认档」两件事看起来一样。
 	 */
 	readonly permissions?: PermissionSettings;
+	/**
+	 * 默认存储路径（工作空间根）。未设置则 undefined，走内置默认 ~/KamiBuddy。
+	 * 生效根的分层合成见 getEffectiveWorkspaceRoot()；
+	 * 修改只影响之后新建的任务与工作空间，已有会话 cwd 不变
+	 * （对齐 WorkBuddy「修改后不影响已有数据」语义）。
+	 */
+	readonly defaultWorkspacePath?: string;
 }
 
 export interface WebSearchPrefs {
@@ -65,10 +72,20 @@ export function readPreferences(): Preferences {
 			activeModelKey?: unknown;
 			webSearch?: unknown;
 			permissions?: unknown;
+			defaultWorkspacePath?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
 				? record.activeModelKey
+				: undefined;
+		/*
+		 * 这里只验「是非空字符串」，不验路径合法性（绝对性、存在性）：
+		 * 读取层保持原样透传，合法性判定集中在 getEffectiveWorkspaceRoot() 一处，
+		 * 免得两处校验规则漂移。
+		 */
+		const defaultWorkspacePath =
+			typeof record.defaultWorkspacePath === "string" && record.defaultWorkspacePath !== ""
+				? record.defaultWorkspacePath
 				: undefined;
 		const ws = record.webSearch;
 		const webSearch =
@@ -91,6 +108,7 @@ export function readPreferences(): Preferences {
 				? { webSearch }
 				: {}),
 			...(permissions !== undefined ? { permissions } : {}),
+			...(defaultWorkspacePath !== undefined ? { defaultWorkspacePath } : {}),
 		};
 	} catch {
 		return EMPTY;
@@ -135,4 +153,32 @@ export function writePreferences(preferences: Preferences): void {
 	const path = getPath();
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(preferences, null, 2)}\n`, "utf8");
+}
+
+/**
+ * 生效工作空间根 = env KAMIBUDDY_WORKSPACE_DIR > 设置项 defaultWorkspacePath > 内置默认。
+ *
+ * 对齐 WorkBuddy 的 resolveDefaultWorkspaceRoot()（main/server.js：
+ * 「所有生成临时任务 / 工作空间子目录的点都应使用 resolveDefaultWorkspaceRoot()……
+ * 兜底策略：~/{getWorkbuddyAppName()}」）——设置项优先、兜底家目录下可见目录。
+ * 我们在设置项之上多一层 env（测试与多环境并存用，与 getConfigDir 的 env 同风格）。
+ *
+ * 为什么这个函数在本文件而不在 config-paths.ts：
+ * 分层合成需要同时摸得到 env、设置项、内置默认三处。config-paths 被本文件
+ * import（getConfigDir），若 config-paths 再反向 import 本文件即成循环依赖；
+ * 放在依赖下游（本文件）一侧，getWorkspaceDir 从 config-paths 正向引入。
+ *
+ * 设置项非法（trim 后为空、非绝对路径）时**忽略并回退**下一层。
+ * WorkBuddy 对坏配置的策略是「清掉再回退系统默认」；我们只忽略、不主动改
+ * 用户的文件 —— 静默回退 vs 主动清除，选更少惊喜的那个：用户手工编辑出错时
+ * 文件里的值还在，改对即生效，不会被悄悄抹掉。
+ */
+export function getEffectiveWorkspaceRoot(): string {
+	const env = process.env["KAMIBUDDY_WORKSPACE_DIR"];
+	if (env !== undefined && env !== "") return env;
+	const custom = readPreferences().defaultWorkspacePath;
+	if (custom !== undefined && custom.trim() !== "" && isAbsolute(custom)) return custom;
+	// env 已在上面确认缺省，此处 getWorkspaceDir() 等价于取内置默认 ——
+	// 复用同一出处，免得 ~/KamiBuddy 这个字面量在两处各写一遍。
+	return getWorkspaceDir();
 }

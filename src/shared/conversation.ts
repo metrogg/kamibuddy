@@ -55,7 +55,7 @@ export const initialConversation: ConversationView = {
 	state: {
 		sessionId: "",
 		cwd: undefined,
-		isPlayground: true,
+		isTempTask: true,
 		sceneId: "work",
 		interactionId: "craft",
 		modelId: undefined,

@@ -44,6 +44,9 @@ button {
 }
 
 .app {
+	/* 定位基准：左上角的侧栏开关（.sidebar-toggle-btn）与右上角的
+	   产物面板开关（.panel-toggle-btn）都 absolute 钉在这里。 */
+	position: relative;
 	display: flex;
 	height: 100vh;
 }
@@ -65,7 +68,9 @@ button {
 	display: flex;
 	align-items: baseline;
 	gap: 6px;
-	padding: 4px 8px 10px;
+	/* 左内边距让出窗口左上角的侧栏开关（App 层 absolute，28px 宽，
+	   展开时它落在本行左侧）：36 = 28px 开关占位 + 8px gap。 */
+	padding: 4px 8px 10px 36px;
 }
 
 .brand-name {
@@ -790,6 +795,37 @@ button {
 	padding: 6px 8px;
 }
 
+/* 右上角产物面板开关（App 层渲染，与 ArtifactPanel 同范围：只在对话视图出现）。
+   absolute 脱离 flex 流：面板开合 / sash 拖拽 / 宽度过渡都不推移它；
+   z-index 40 高于面板全屏态（30），全屏时按钮仍可点；低于阻塞审批弹窗（100）。
+   top/right 与 chat-header、preview-head 的 8px/12px 内边距对齐，同排呼吸。 */
+.panel-toggle-btn {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	z-index: 40;
+}
+
+/* 面板展开中的激活态：提亮到正文色（bar-btn 默认 --text-dim）。 */
+.panel-toggle-btn.active {
+	color: var(--text);
+}
+
+/* 左上角侧栏开关（App 层常驻，不随侧栏卸载 —— 收起时唯一的展开入口）。
+   与 .panel-toggle-btn 同一按钮语言、同一层级：面板全屏态（z 30）覆盖
+   整个窗口左缘，z-index 40 保证按钮浮在其上仍可点。top/left 与右开关镜像。 */
+.sidebar-toggle-btn {
+	position: absolute;
+	top: 8px;
+	left: 12px;
+	z-index: 40;
+}
+
+/* 侧栏展开中的激活态：提亮到正文色（与右开关同口径）。 */
+.sidebar-toggle-btn.active {
+	color: var(--text);
+}
+
 .bar-spacer {
 	flex: 1 1 auto;
 }
@@ -1041,8 +1077,17 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 12px;
+	/* 左右内边距让出窗口两角：App 层的侧栏开关（左）与产物面板开关（右）
+	   钉在那里，行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区
+	   （48 = 40px 开关占位 + 8px gap）。 */
+	padding: 8px 48px;
 	border-bottom: 1px solid var(--border);
+}
+
+/* 侧栏展开时左上角开关落在侧栏 brand 行内（brand 已让位），不压 header，
+   恢复常规左内边距 —— 只有侧栏收起（无 .sidebar 兄弟）才需要让位。 */
+.sidebar ~ .chat .chat-header {
+	padding-left: 12px;
 }
 
 .chat-title {
@@ -1316,6 +1361,36 @@ button {
 	line-height: 20px;
 }
 
+/* 助手回答底部操作条（仅复制）：与 user-toolbar 同款常驻占位、hover 切透明度，
+   理由相同（hover 插入 DOM 会推搡下方消息流）。左对齐贴正文 —— assistant
+   消息在左，与 user-toolbar 的右对齐相反。 */
+.assistant-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 18px;
+	margin-top: 4px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+
+.entry.assistant:hover .assistant-toolbar {
+	opacity: 1;
+}
+
+.assistant-copy {
+	display: flex;
+	align-items: center;
+	padding: 2px;
+	border-radius: 4px;
+	color: var(--text-dim);
+}
+
+.assistant-copy:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 /* ── 错误卡（内嵌于消息流，run 异常或提交失败时展示）───────────────
    对标 WorkBuddy：红色图标 + 可折行标题 + runId 区（复制报告）+ 重试按钮。
    用独立样式体系，不再复用 .entry.error —— 错误卡内部有按钮与图标，
@@ -1509,6 +1584,52 @@ button {
 	padding: 0;
 	background: transparent;
 	font-size: 12px;
+}
+
+/* 围栏代码块卡片（markdown.tsx CodeBlockCard）：卡片容器承担外边距与圆角，
+   原 .markdown pre 的 margin/border-radius 在卡片内归零 —— 两条规则同权重，
+   靠书写顺序覆盖，所以本区块必须排在 .markdown pre 之后。 */
+.code-block {
+	margin: 8px 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	overflow: hidden;
+	background: rgb(0 0 0 / 5%);
+}
+
+.code-block-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 8px 4px 12px;
+	background: var(--bg-raised);
+	border-bottom: 1px solid var(--border);
+}
+
+.code-block-lang {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+/* 与 .user-copy 同一风格的图标按钮：三级灰，hover 加深。 */
+.code-block-copy {
+	display: flex;
+	align-items: center;
+	padding: 2px;
+	border-radius: 4px;
+	color: var(--text-dim);
+}
+
+.code-block-copy:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.code-block pre {
+	margin: 0;
+	max-height: 60vh;
+	overflow: auto;
+	border-radius: 0;
 }
 
 .markdown table {
@@ -1807,7 +1928,9 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	padding: 8px 12px;
+	/* 右内边距让出窗口右上角：App 层的面板开关（含面板全屏态）钉在那里，
+	   行尾的「全屏/外部打开」不能被它盖住（44 = 40px 开关占位 + 4px gap）。 */
+	padding: 8px 44px 8px 12px;
 	border-bottom: 1px solid var(--border);
 }
 
@@ -2247,8 +2370,17 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	padding: 12px 20px;
+	/* 右内边距让出窗口右上角：面板收起时 App 层的开关钉在那里，
+	   行尾的 mini-btn 不能滑进它的点击区（50 = 40px 开关占位 + 10px gap）。
+	   左内边距同理让出左上角的侧栏开关（侧栏收起时它压住返回按钮）。 */
+	padding: 12px 50px 12px 48px;
 	border-bottom: 1px solid var(--border);
+}
+
+/* 侧栏展开时左上角开关落在侧栏 brand 行内，不压本行，恢复常规左内边距。
+   diagnostics 视图复用 .settings 骨架，同一条规则覆盖。 */
+.sidebar ~ .settings .settings-head {
+	padding-left: 20px;
 }
 
 .settings-head h1 {
@@ -3024,6 +3156,17 @@ button {
 	opacity: 0.88;
 }
 
+/* 停止二次确认的待确认态：按钮内容换成 Esc 徽章 —— 同时提示「再按一次 Esc 也行」。 */
+.stop-confirm-kbd {
+	font-family: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1;
+	padding: 3px 5px;
+	border: 1px solid currentColor;
+	border-radius: 4px;
+}
+
 /* ── 权限审批弹窗 ─────────────────────────────────────────────── */
 
 /*
@@ -3134,6 +3277,64 @@ button {
 }
 
 .permission-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+/* ── 保存到工作空间（命名弹层） ─────────────────────────────────── */
+
+/* 卡片骨架与权限弹窗同尺寸语言（modal-backdrop 共享），内容更简单所以更窄。 */
+.save-space-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	max-width: 400px;
+	padding: 18px 20px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+.save-space-title {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.save-space-desc {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.save-space-input {
+	display: block;
+	width: 100%;
+	padding: 7px 10px;
+	font-size: 14px;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	outline: none;
+}
+
+.save-space-input:focus {
+	border-color: var(--primary);
+}
+
+.save-space-error {
+	margin: 0;
+	color: var(--danger);
+	font-size: 12px;
+}
+
+.save-space-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
@@ -3303,6 +3504,33 @@ button {
 	color: var(--text);
 }
 
+/* ── 对话页 composer 区的 ModelMenu ───────────────────────────── */
+/*
+ * ModelMenu 的默认定位服务首页（向下展开、右对齐）；对话页 composer-bar
+ * 在窗口底部，必须向上展开、左对齐 —— 与 PermissionMenu 同一理由：
+ * 弹层贴右放会溢出窗口右缘被裁掉。只覆写定位，条目版式不动。
+ */
+.composer-bar .model-menu {
+	top: auto;
+	right: auto;
+	bottom: calc(100% + 8px);
+	left: 0;
+}
+
+/*
+ * 输入余量：接近上限才出现（charCountState 判定）。等宽数字 —
+ * 不用 tabular-nums 的话每打一个字余量位数/字形宽度都在变，右侧按钮会跟着抖。
+ */
+.char-remaining {
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+.char-remaining.over {
+	color: var(--danger);
+}
+
 /* ── 技能列表（设置页）────────────────────────────────────────── */
 
 .settings-hint {
@@ -3335,8 +3563,16 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px 20px;
+	/* 右内边距让出窗口右上角：面板收起时 App 层的开关钉在那里，
+	   行尾的 mini-btn 不能滑进它的点击区（52 = 40px 开关占位 + 12px gap）。
+	   左内边距同理让出左上角的侧栏开关（侧栏收起时它压住返回按钮）。 */
+	padding: 10px 52px 10px 48px;
 	border-bottom: 1px solid var(--border);
+}
+
+/* 侧栏展开时左上角开关落在侧栏 brand 行内，不压本行，恢复常规左内边距。 */
+.sidebar ~ .skills .skills-head {
+	padding-left: 20px;
 }
 
 .skills-tabs {
