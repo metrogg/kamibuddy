@@ -1,0 +1,386 @@
+src/extensions/permission-policy.ts
+  s_02a19f96eca1d5::t_b8a75245d8d2de 335
+  s_02a19f96eca1d5::t_a4cd0853a4f776 254
+  s_02a19f96eca1d5::t_47b564fba66d3a 172-173
+  s_02a19f96eca1d5::t_812d5cacdb4cf0 132-135,137,140
+resources/modes/craft.md
+  s_02a19f96eca1d5::t_7587ee5d70c45c 6
+src/renderer/session-groups.ts
+  s_c4023de03b1ef1::t_2893353d04e2a7 48
+  s_c4023de03b1ef1::t_89dd3661fd9498 27
+src/renderer/input-history.ts
+  s_c4023de03b1ef1::t_85c8e533812ac4 1-88
+scripts/gen-doc-fixtures.ts
+  s_02a19f96eca1d5::t_e2882238727951 1-279
+.trae/specs/fix-context-usage-on-resume/spec.md
+  s_c5c899a6c86841::t_9820abb0cf66f0 1-50
+src/renderer/autocomplete.tsx
+  s_c4023de03b1ef1::t_4d48d31ad3d7a0 8
+  s_c4023de03b1ef1::t_2fe0d82c7be930 66
+src/shared/conversation.test.ts
+  s_c4023de03b1ef1::t_c0003d0b83fd3b 51
+src/extensions/doc-read-tool.test.ts
+  s_02a19f96eca1d5::t_dc51334c166ce2 1-109
+src/daemon/context-usage-detail.ts
+  s_c5c899a6c86841::t_b6add8fd044140 1-42
+.trae/specs/align-chat-details-workbuddy/spec.md
+  s_c4023de03b1ef1::t_19f51a358f4255 1-127
+.trae/specs/add-document-reading/spec.md
+  s_02a19f96eca1d5::t_8a22f7863423b9 1-126
+src/renderer/session-groups.test.ts
+  s_c4023de03b1ef1::t_565637b2a4a867 61-62
+  s_c4023de03b1ef1::t_7ecf39ad40a337 9
+  s_c4023de03b1ef1::t_1b516433bc5e3b 23-24,29,31
+  s_c4023de03b1ef1::t_2cb322d1fd8b65 42-45,51,53
+.trae/specs/fix-sidebar-default-and-toggles/spec.md
+  s_c5c899a6c86841::t_6955d58126f659 1-64
+src/core/doc-extract.ts
+  s_02a19f96eca1d5::t_5ce5424cd14e06 1-299
+src/extensions/permission-policy.test.ts
+  s_02a19f96eca1d5::t_20197d07e88a0d 102-129
+src/core/session-export.ts
+  s_c4023de03b1ef1::t_480eb1db42a70f 5-7
+src/core/observability.test.ts
+  s_c4023de03b1ef1::t_a7757f30219214 32
+src/core/doc-extract.test.ts
+  s_02a19f96eca1d5::t_b20c1c497732a2 19-20,24-38
+  s_02a19f96eca1d5::t_f04165be5dd220 203-223
+  s_02a19f96eca1d5::t_5b1b178bdcc465 12-14
+  s_02a19f96eca1d5::t_0a4d0204178264 1-11,15-18,21-23,39-202,224-292
+resources/modes/ask.md
+  s_02a19f96eca1d5::t_4b3d0dd41f5301 6
+src/renderer/settings-view.tsx
+  s_c4023de03b1ef1::t_8441eb797f3374 426-507
+  s_c4023de03b1ef1::t_f81d13b21cc737 927-928
+  s_c4023de03b1ef1::t_bfa196eb7997c3 508-510
+src/renderer/markdown-code.ts
+  s_c4023de03b1ef1::t_2bfc0d31a7a56a 1-52
+src/renderer/markdown.tsx
+  s_c4023de03b1ef1::t_511d076defca4f 16,19-58,66-67
+docs/ARCHITECTURE.md
+  s_02a19f96eca1d5::t_67a282c14a7e08 172-179
+resources/scenes/work/prompt.md
+  s_02a19f96eca1d5::t_11ea0857ffc623 12
+src/renderer/App.tsx
+  s_c4023de03b1ef1::t_9fcb33ab8a5587 562-579
+  s_c4023de03b1ef1::t_14c2e7e0542a90 680-684
+  s_c4023de03b1ef1::t_e619a4d8488476 142,561
+  s_c4023de03b1ef1::t_cb6626d5446889 41-50
+  s_c5c899a6c86841::t_b9a2375cbd3f0a 299-301
+  s_c5c899a6c86841::t_d8b480b533bdd8 297-298,302
+  s_c5c899a6c86841::t_f8d298993a0ef9 674-679
+  s_c4023de03b1ef1::t_ef5acb3b357d88 289
+  s_c5c899a6c86841::t_5cf926c536f131 619-621
+  s_c5c899a6c86841::t_aa94a920add07c 719-753
+  s_c5c899a6c86841::t_7a032dd4979316 51-60
+  s_c5c899a6c86841::t_7e6c28a144286f 699-701
+package.json
+  s_02a19f96eca1d5::t_0c96d375383310 27-28
+  s_02a19f96eca1d5::t_d3c9dbfc9f8cff 45-46
+  s_02a19f96eca1d5::t_fc07ab05ffac9c 37
+.trae/specs/align-sidebar-workbuddy-layout/tasks.md
+  s_c5c899a6c86841::t_021ea7d59674ff 1-2,13-17
+  s_c5c899a6c86841::t_db60be0c2f972e 3-12
+src/renderer/workspace-picker.tsx
+  s_c4023de03b1ef1::t_1022fdb920ef6b 113,118-120
+  s_c4023de03b1ef1::t_4bcac4a85c6ce1 3-5
+  s_c4023de03b1ef1::t_8954fa2144bea4 56,58-59
+  s_c4023de03b1ef1::t_29b3c5853e577e 19
+scripts/probe-doc-extract.ts
+  s_02a19f96eca1d5::t_bbe5380e05993a 91-93,98-99
+  s_02a19f96eca1d5::t_2cfbb21aae1898 114
+  s_02a19f96eca1d5::t_81826175f5c480 376
+  s_02a19f96eca1d5::t_98a7fc1e9473b3 380-383
+  s_02a19f96eca1d5::t_e13df327f7d169 373-375,377-379,384-389
+  s_02a19f96eca1d5::t_260457b35be79d 8-33
+  s_02a19f96eca1d5::t_bb81939bdc4de4 154-156,161
+  s_02a19f96eca1d5::t_1c105cac7248ca 1-7,34-90,94-97,100-113,115-153,157-160,162-372,390-413
+src/renderer/home-view.tsx
+  s_c5c899a6c86841::t_398121eebaa5fb 45
+  s_c4023de03b1ef1::t_3df68a7439939f 124
+src/preload/index.ts
+  s_c4023de03b1ef1::t_5afc980ff4e1fa 84-87
+  s_c4023de03b1ef1::t_d7534f331b529e 43,88
+src/extensions/doc-read-tool.ts
+  s_02a19f96eca1d5::t_8875534e7b517c 1-86
+src/renderer/copy-tick.ts
+  s_c4023de03b1ef1::t_e53373bfc1d668 1-28
+.trae/specs/fix-sidebar-default-and-toggles/checklist.md
+  s_c5c899a6c86841::t_e103471e62d141 4-7,10-14,17-20
+  s_c5c899a6c86841::t_213818e4bb0d28 1-3,8-9,15-16,21
+src/renderer/stop-confirm.test.ts
+  s_c4023de03b1ef1::t_6a92cc2b94c484 1-36
+.trae/specs/align-sidebar-workbuddy-layout/spec.md
+  s_c5c899a6c86841::t_c12c5a2e0d26fb 1-65
+src/core/preview-server.ts
+  s_c4023de03b1ef1::t_b4421ddbf2da42 13-14
+  s_c4023de03b1ef1::t_eb185fd1783ce2 65
+src/core/test-fixtures/docs/cn-cid.pdf
+  s_02a19f96eca1d5::t_55559d8270d903 1-40
+.trae/specs/fix-context-usage-on-resume/checklist.md
+  s_c5c899a6c86841::t_f2615f5d936375 1-3,8-9,13-14
+  s_c5c899a6c86841::t_d0cbae4a921d85 4-7,10-12,15-19
+src/core/config-paths.ts
+  s_c4023de03b1ef1::t_1de44a77497d2a 69,79-85,91-103
+src/daemon/context-usage-detail.test.ts
+  s_c5c899a6c86841::t_542eb13583ddf0 1-76
+src/renderer/index.css
+  s_c5c899a6c86841::t_b0e2464f00939f 3567-3569,3573-3575
+  s_c4023de03b1ef1::t_773fb7ba48a827 1364-1393
+  s_c4023de03b1ef1::t_fa8a1d5becf652 1091-1092,2384-2385,3286-3343,3576-3577
+  s_c5c899a6c86841::t_de002c9db3ecc6 1931-1933
+  s_c4023de03b1ef1::t_9e2fd4ed103ec3 3520-3533
+  s_c5c899a6c86841::t_353ffe0bff0cd8 1080-1083,1087-1090
+  s_c5c899a6c86841::t_cdfeae66ea5812 3566
+  s_c5c899a6c86841::t_8da8d13ad901a6 49
+  s_c5c899a6c86841::t_84f5680e9514d1 799-813
+  s_c4023de03b1ef1::t_864634c2434413 3507-3519
+  s_c4023de03b1ef1::t_7930abeee8da25 1589-1634
+  s_c5c899a6c86841::t_4dffc20b058f68 47-48
+  s_c5c899a6c86841::t_c803abf14715c6 2374-2376,2380-2383
+  s_c5c899a6c86841::t_ec4f51e86b3410 71-73
+  s_c5c899a6c86841::t_69d4cd79eb2167 2373
+  s_c5c899a6c86841::t_cce37285b621ec 814-828
+  s_c5c899a6c86841::t_9e0cc93e6def8d 798
+  s_c4023de03b1ef1::t_3d7165674f094d 3159-3169
+.trae/specs/add-document-reading/checklist.md
+  s_02a19f96eca1d5::t_8e9d89c1f925ac 3-12
+  s_02a19f96eca1d5::t_5cfd516fbb23d1 1-2,13
+.trae/specs/align-chat-details-workbuddy/tasks.md
+  s_c4023de03b1ef1::t_de9275c00818a7 5-6,8,10-11,13-14,16-17
+  s_c4023de03b1ef1::t_11e8348d7c5a25 21-22,24,27-28,32,35-36,38,40,42,44-46
+  s_c4023de03b1ef1::t_f9a0f879fa68db 51-54
+  s_c4023de03b1ef1::t_cb2f0fbfa76330 1-4,7,9,12,15,18-20,23,25-26,29-31,33-34,37,39,41,43,47-50,55-63
+.trae/specs/align-chat-details-workbuddy/checklist.md
+  s_c4023de03b1ef1::t_85c5e07a468c11 5-7,11-13,17-19,23-26,30-33,37-39,43-46
+  s_02a19f96eca1d5::t_dda710754819c2 1-4,8-10,14-16,20-22,27-29,34-36,40-42
+.trae/specs/align-chat-ui-workbuddy/tasks.md
+  s_c4023de03b1ef1::t_13d5b139518933 57
+  s_c4023de03b1ef1::t_1611a46c931ac0 46-52
+src/renderer/markdown-code.test.ts
+  s_c4023de03b1ef1::t_4670fe8841155e 1-56
+src/renderer/input-history.test.ts
+  s_c4023de03b1ef1::t_f695ead75558a4 1-83
+src/core/preferences.test.ts
+  s_c4023de03b1ef1::t_2bd18df05a12c7 4-6,11,13-18,21,27-30,36-40
+  s_c4023de03b1ef1::t_fd6241c9a1837f 78-140
+src/renderer/sidebar.tsx
+  s_c4023de03b1ef1::t_266873fed1163f 8
+  s_c4023de03b1ef1::t_d683b7905cf672 134
+  s_c4023de03b1ef1::t_90e29315bafe7b 3
+src/core/session-host.test.ts
+  s_c4023de03b1ef1::t_f72e1bfa536d0a 42
+src/renderer/input-limit.ts
+  s_c4023de03b1ef1::t_f9111947fbfd0b 1-30
+docs/STATUS.md
+  s_02a19f96eca1d5::t_80de93cce54aa4 155
+  s_c4023de03b1ef1::t_e1a40c88ad71db 624
+  s_c4023de03b1ef1::t_80e51d010976ca 156-161
+  s_c4023de03b1ef1::t_ddce329cece4ae 420-447
+  s_02a19f96eca1d5::t_0879b45d4225bd 152-154
+  s_c4023de03b1ef1::t_74a955125d60ae 646
+  s_c4023de03b1ef1::t_721a52ec9d1a72 341
+  s_c4023de03b1ef1::t_839c431f696857 311-335
+  s_02a19f96eca1d5::t_e02f05ae2bded7 3
+  s_02a19f96eca1d5::t_5edc7614bb6866 448-474
+  s_c4023de03b1ef1::t_3f5ee1798b11bd 336
+src/shared/session-events.ts
+  s_c4023de03b1ef1::t_7d6da56e9c4291 228-231,235-241,243
+src/renderer/artifact-panel.tsx
+  s_c4023de03b1ef1::t_bbc501762d4982 260
+  s_c4023de03b1ef1::t_c916e21220109c 83,85
+src/renderer/chat-view.tsx
+  s_c4023de03b1ef1::t_df97c28c8edde4 730,733-739
+  s_c4023de03b1ef1::t_f501cbc59f85c7 706,714-715
+  s_c4023de03b1ef1::t_6c7799e0e294ec 1164-1170
+  s_c4023de03b1ef1::t_893fe08f6398eb 856-857,862-871
+  s_c4023de03b1ef1::t_355002ab37e194 719-720
+  s_c4023de03b1ef1::t_affa5fdb2afd98 1175-1183
+  s_c5c899a6c86841::t_5ea1297ddfe13f 904-906
+  s_c4023de03b1ef1::t_4df6621c755b12 826-827
+  s_c4023de03b1ef1::t_b91ef805fe04b2 66-70,885-886
+  s_c5c899a6c86841::t_94840ceb353113 32
+  s_c4023de03b1ef1::t_3ecffe25518b21 173-197
+  s_c4023de03b1ef1::t_d7fc2e7be17e63 709-711
+  s_c4023de03b1ef1::t_59ca7f4edf38f0 1005-1007
+  s_c4023de03b1ef1::t_55d5cc2530e257 1138-1141
+  s_c4023de03b1ef1::t_6e64161d27c860 1191-1200
+  s_c4023de03b1ef1::t_6de3c56665a5fe 872-873,878-884
+  s_c4023de03b1ef1::t_74c0c5ef0bf032 29
+  s_c4023de03b1ef1::t_29ede4b72ffe6a 1208
+  s_c4023de03b1ef1::t_2810b51428ba54 35
+  s_c4023de03b1ef1::t_123d06af2bb63a 798-823
+  s_c4023de03b1ef1::t_cef3e81be675ee 33-34
+  s_c4023de03b1ef1::t_7f070fd1d2e6f9 908-926
+  s_c4023de03b1ef1::t_5b929f2d7c0fd3 716-718
+  s_c4023de03b1ef1::t_4d2da6d19cde6c 593-687
+  s_c4023de03b1ef1::t_7244c1f33dc9b8 731-732
+  s_c4023de03b1ef1::t_323dbce97ff3aa 1215-1223
+  s_c4023de03b1ef1::t_23063ad3a0d131 37-38
+  s_c4023de03b1ef1::t_aaf761b1717dc9 831-833,841-845
+.trae/specs/align-temp-task-workspace-model/checklist.md
+  s_c4023de03b1ef1::t_ce34d7e5133c4e 1-39
+src/core/preferences.ts
+  s_c4023de03b1ef1::t_2bf43c876c5648 157-184
+  s_c4023de03b1ef1::t_79e1b372ef0392 75,81-88
+  s_c4023de03b1ef1::t_43dbf54cc1db36 111
+  s_c4023de03b1ef1::t_b95c9d4c236f30 13-14,89
+  s_c4023de03b1ef1::t_e8c01602ed0a97 33-39
+src/shared/conversation.ts
+  s_c4023de03b1ef1::t_2d47529aa45c7b 58
+.trae/specs/add-document-reading/tasks.md
+  s_02a19f96eca1d5::t_94098505a8ce4c 1-2,6,11,16,20,25-30
+  s_02a19f96eca1d5::t_a489e4904adbbe 12-15,17-18
+  s_02a19f96eca1d5::t_a7c89b7de8d892 7-10
+  s_02a19f96eca1d5::t_7825938c47808c 3-5
+  s_02a19f96eca1d5::t_851a1ad999840d 22-24
+  s_02a19f96eca1d5::t_c48e7bc5d4f8ca 19,21
+src/daemon/index.ts
+  s_c4023de03b1ef1::t_8ac03b0a478016 13-21
+  s_c4023de03b1ef1::t_fc4acda9cb2c07 1467-1469,1474
+  s_c4023de03b1ef1::t_80e975820513a8 796,798-827
+  s_c4023de03b1ef1::t_57b8675af13d2d 828,830-834,840
+  s_c4023de03b1ef1::t_3c4cb1ae06832b 241-243,248-278
+  s_c4023de03b1ef1::t_7bdb6f468f8bbd 1265-1267
+  s_c4023de03b1ef1::t_15fd489fb2ea6d 1439,1450-1451
+  s_c5c899a6c86841::t_57fc41a19aa818 534,829,961-962
+  s_c5c899a6c86841::t_abebb8b49b6499 110
+  s_c4023de03b1ef1::t_55ce013063ad47 289-291
+  s_c4023de03b1ef1::t_c352a136d4f94d 29,35-39
+  s_c4023de03b1ef1::t_a9c97278d53307 996-998
+  s_c4023de03b1ef1::t_594a65e891bc28 623
+  s_c5c899a6c86841::t_fa6fc3cdda7a12 1246-1248
+  s_02a19f96eca1d5::t_95ca751fd6a9f4 71
+  s_c4023de03b1ef1::t_0536ace4ce0eb1 514,517,523,533,535-555,559,561,564,568,571,578
+  s_c4023de03b1ef1::t_495ac2bfcee00a 614
+  s_c4023de03b1ef1::t_e35c714701cc68 762-763
+  s_c4023de03b1ef1::t_4b433467332147 963-995,999-1058
+  s_c4023de03b1ef1::t_e9ef44a947c4fd 1516
+  s_c4023de03b1ef1::t_276b00d99de3bd 881-891
+  s_c5c899a6c86841::t_159d5474f61a0f 410-412
+  s_c4023de03b1ef1::t_b1d8058c1132b2 673,677-678,684-687,698,701,706
+  s_c5c899a6c86841::t_f7c96c6853f43b 34
+  s_c4023de03b1ef1::t_a274fc5a2df74e 1694-1703
+  s_c4023de03b1ef1::t_79818281a5f6bc 318-319
+  s_c4023de03b1ef1::t_59d3f2a02e5e52 1406-1435
+  s_c4023de03b1ef1::t_871918e152594b 911,916
+  s_c5c899a6c86841::t_b6453df6d13e5e 921-922,926-935,937-943,947,952-960
+  s_02a19f96eca1d5::t_4f0b5cbc1dabf3 643-645
+  s_c5c899a6c86841::t_f9c998d03cd37d 408-409
+.trae/specs/align-temp-task-workspace-model/tasks.md
+  s_c4023de03b1ef1::t_258bb6b4a69b57 1-54
+.trae/specs/fix-context-usage-on-resume/tasks.md
+  s_c5c899a6c86841::t_162e2302b87637 1-2,14-17
+  s_c5c899a6c86841::t_606f0285801e78 3-13
+src/shared/ipc.ts
+  s_c4023de03b1ef1::t_3fd37582133ace 386-390
+  s_c4023de03b1ef1::t_b56a5f459caced 91-97
+  s_c4023de03b1ef1::t_0fd15d820579da 72-73
+  s_c4023de03b1ef1::t_0c07ac1b0280c1 276
+  s_c4023de03b1ef1::t_a7c77daeeef99f 180-191
+  s_c4023de03b1ef1::t_96a9d278cade20 104
+  s_c4023de03b1ef1::t_887f66cc1f25e3 307
+  s_c4023de03b1ef1::t_7df1f48239f918 359
+  s_c4023de03b1ef1::t_98b8cbd6983e7c 322,324-325
+scripts/smoke-session.ts
+  s_c4023de03b1ef1::t_798255e7b73fe9 125
+  s_c4023de03b1ef1::t_6a01cd601c38c8 74,82-83,85
+src/core/session-host.ts
+  s_02a19f96eca1d5::t_8f71f794b967d6 84
+  s_c4023de03b1ef1::t_6995279f41734e 244-246,248,252-254,256
+  s_c4023de03b1ef1::t_fd53b65db7622b 303
+  s_c4023de03b1ef1::t_cdef1aaa969445 356-360,362
+  s_02a19f96eca1d5::t_31d11bb4568bc9 71
+  s_c4023de03b1ef1::t_334d5e1fd5a2a5 404
+  s_c4023de03b1ef1::t_b9c8dbfad21220 567-569
+.trae/specs/align-temp-task-workspace-model/spec.md
+  s_c4023de03b1ef1::t_ac39757718011f 1-137
+.trae/specs/fix-sidebar-default-and-toggles/tasks.md
+  s_c4023de03b1ef1::t_685c489a9c9c51 1-2,13-17
+  s_c5c899a6c86841::t_0367ba68a81165 11-12
+  s_c5c899a6c86841::t_ec82d4280b4bab 3-10
+src/renderer/input-limit.test.ts
+  s_c4023de03b1ef1::t_1028a32d31fb62 1-32
+.trae/specs/align-sidebar-workbuddy-layout/checklist.md
+  s_c5c899a6c86841::t_560c0f6827825d 1-3,8-9,14-15,20
+  s_c5c899a6c86841::t_3294f625576922 4-7,10-13,16-19
+src/core/preview-server.test.ts
+  s_c4023de03b1ef1::t_0ff8713335d578 59
+src/shared/bridge.ts
+  s_c4023de03b1ef1::t_5213915e2070d5 126-136
+  s_c4023de03b1ef1::t_5ee330b83cad29 79
+  s_c4023de03b1ef1::t_4110b4f86fdb1a 62
+AGENTS.md
+  s_02a19f96eca1d5::t_e0ce015947f4c6 41-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "1bea10097c02c09e9586430b8f8d82eb8d89fd9b",
+  "prompts": {},
+  "sessions": {
+    "s_02a19f96eca1d5": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa039a5f850234b77c2f872",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_id": "Edit",
+        "edit_kind": "file_edit",
+        "external_session_id": "6aa039a5f850234b77c2f872",
+        "operation_id": "6aa122f1f850234b77c322ed",
+        "tool_type": "agent",
+        "tool_use_id": "6aa122f1f850234b77c322ed",
+        "dedupe_key": "6aa039a5f850234b77c2f872:6aa122f1f850234b77c322ed:afterEdit:6ce469cc",
+        "session_id": "6aa039a5f850234b77c2f872",
+        "source_scene": "unknown",
+        "runtime_client": "trae-tob-git-ai",
+        "client_type": "ide"
+      }
+    },
+    "s_c4023de03b1ef1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9feadcc981c232faa34c0c",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "external_session_id": "6a9feadcc981c232faa34c0c",
+        "tool_use_id": "6aa121eef850234b77c322a2",
+        "source_scene": "unknown",
+        "session_id": "6a9feadcc981c232faa34c0c",
+        "client_type": "ide",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_type": "agent",
+        "tool_id": "Write",
+        "operation_id": "6aa121eef850234b77c322a2",
+        "dedupe_key": "6a9feadcc981c232faa34c0c:6aa121eef850234b77c322a2:afterEdit:09605e1a",
+        "edit_kind": "file_edit"
+      }
+    },
+    "s_c5c899a6c86841": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa04212f850234b77c2fba0",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_id": "Write",
+        "external_session_id": "6aa04212f850234b77c2fba0",
+        "session_id": "6aa04212f850234b77c2fba0",
+        "tool_type": "agent",
+        "client_type": "ide",
+        "operation_id": "6aa12645f850234b77c324fe",
+        "tool_use_id": "6aa12645f850234b77c324fe",
+        "source_scene": "unknown",
+        "dedupe_key": "6aa04212f850234b77c2fba0:6aa12645f850234b77c324fe:afterEdit:224a2ad6",
+        "runtime_client": "trae-tob-git-ai",
+        "edit_kind": "file_edit"
+      }
+    }
+  }
+}
