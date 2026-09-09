@@ -14,6 +14,7 @@
 import type { TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
+import type { ImagePart } from "./image.ts";
 
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
@@ -42,6 +43,8 @@ export interface UserMessage {
 	readonly text: string;
 	/** epoch ms。由 daemon 打点，UI 不自己取时间（保证重放时时间一致）。 */
 	readonly at: number;
+	/** 本条消息携带的图片附件（仅用于 UI 展示缩略图）。 */
+	readonly images?: readonly ImagePart[];
 }
 
 export interface AssistantMessage {
@@ -182,6 +185,17 @@ export type SessionEvent =
 	| { readonly type: "run_error"; readonly runId: RunId; readonly message: string }
 	/** 会话元信息变化（模型切换、模式切换、token 用量）。 */
 	| { readonly type: "session_state"; readonly state: SessionState }
+	/**
+	 * 会话历史已被 daemon 清空（新建任务 / 切换工作空间）。
+	 *
+	 * 不能靠 session_state 表达：reducer 对 session_state 只替换 state、
+	 * 不动 entries —— daemon 清空历史后若只发 session_state，renderer 会
+	 * 一直显示旧 entries（幽灵历史），后续流式事件继续追加在这份错误历史上。
+	 * /new 内置命令正是这样漂移的（侧栏「新建任务」有 resyncSnapshot 补救，
+	 * /new 没有）。走事件而不是让 renderer 重拉快照：两端共用同一个 reducer，
+	 * 一次折叠两端同步清零，不存在只对齐一端的窗口。
+	 */
+	| { readonly type: "history_reset" }
 	/**
 	 * 上下文用量明细（used/total 精确 + 分类估算）。在带用量的 session_state 之后
 	 * 由 daemon 组装发出 —— 分类所需的系统提示词/技能段 token 只有 daemon 知道。

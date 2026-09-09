@@ -13,11 +13,13 @@ import type {
 	PermissionResponse,
 	PromptRequest,
 	SaveArtifactRequest,
+	SessionSummary,
 	UiRequest,
 	UiResponse,
 	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
+import type { ImagePart } from "./image.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
 import type {
@@ -46,11 +48,24 @@ export interface KamiBridge {
 	readonly newTask: () => Promise<void>;
 	/** 输入框补全数据源（@ 文件 + / 命令）。 */
 	readonly completions: () => Promise<CompletionData>;
+	/** 系统图片选择框（多选，main 读出内容返回）。取消返回 undefined。 */
+	readonly pickImageFiles: () => Promise<readonly ImagePart[] | undefined>;
 	/** 切换场景（work / code / design）。 */
 	readonly setScene: (sceneId: string) => Promise<void>;
 	/** 切换交互模式（ask / craft / plan / expert）。 */
 	readonly setInteraction: (interactionId: string) => Promise<void>;
 	readonly setModel: (modelId: string) => Promise<void>;
+
+	/* ── 会话管理（历史会话） ────────────────────────────────────── */
+
+	/** 历史会话列表（全部目录，含 playground；current 标记活动会话）。 */
+	readonly listSessions: () => Promise<SessionSummary[]>;
+	/** 恢复指定历史会话为当前活动会话。path 来自 SessionSummary.path。 */
+	readonly resumeSession: (path: string) => Promise<void>;
+	/** 重命名会话（写入 pi 的 session_info 条目）。 */
+	readonly renameSession: (path: string, name: string) => Promise<void>;
+	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
+	readonly deleteSession: (path: string) => Promise<void>;
 
 	/** 拉取当前工作空间与可选列表。 */
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;

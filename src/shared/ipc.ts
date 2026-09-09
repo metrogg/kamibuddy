@@ -13,6 +13,7 @@
  * main 只做转发，不解释 payload。业务判断全在 daemon。
  */
 
+import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
@@ -54,12 +55,33 @@ export const INVOKE = {
 	 * 返回相对路径/命令名，renderer 自己做过滤与下拉。
 	 */
 	completions: "session:completions",
+	/**
+	 * 弹出系统文件选择框（图片多选，png/jpeg/gif/webp 过滤），并读出所选文件
+	 * 内容返回 ImagePart 数组。由 main 本地应答（dialog 与文件读取都要 Electron/
+	 * Node 能力），用户取消返回 undefined。main 读文件的理由：渲染进程是沙箱
+	 * web 环境，拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
+	 */
+	pickImageFiles: "session:pick-image-files",
 	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
 	setScene: "session:set-scene",
 	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
 	setInteraction: "session:set-interaction",
 	/** 切换模型。 */
 	setModel: "session:set-model",
+	/**
+	 * 历史会话列表（全部工作目录，含 playground）。
+	 * title / isPlayground 等展示字段由 daemon 组装好，UI 不再推导。
+	 */
+	sessionList: "session:list",
+	/**
+	 * 恢复指定历史会话为当前活动会话。path 来自 SessionSummary.path，
+	 * daemon 侧有路径守卫（限会话目录内的 .jsonl，防 ../ 穿越）。
+	 */
+	sessionResume: "session:resume",
+	/** 重命名会话（写入 pi 的 session_info 条目）。path 定位，name 为新名。 */
+	sessionRename: "session:rename",
+	/** 删除会话文件。当前活动会话由 daemon 拒删（需先新建任务）。 */
+	sessionDelete: "session:delete",
 	/** 拉取当前工作空间与可选列表（默认根 + 已有子目录）。 */
 	workspaceSnapshot: "workspace:snapshot",
 	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
@@ -176,6 +198,8 @@ export const PUSH = {
 
 export interface PromptRequest {
 	readonly text: string;
+	/** 本条消息携带的图片附件（pickImageFiles 选出）。无图时缺省。 */
+	readonly images?: readonly ImagePart[];
 	/**
 	 * 流式期间发来的消息如何处理。
 	 * steer：本轮工具执行完后插入；followUp：等 agent 完全停下再发。
@@ -236,6 +260,27 @@ export interface CompletionData {
 	readonly commands: readonly CommandItem[];
 }
 
+/** 一条历史会话的列表项（session:list 的结果元素）。 */
+export interface SessionSummary {
+	readonly id: string;
+	/** 会话文件绝对路径（resume/rename/delete 的定位键）。 */
+	readonly path: string;
+	/** 列表标题：命名 ?? 首条消息截断（daemon 组装好，UI 不再推导）。 */
+	readonly title: string;
+	/** 用户命名（appendSessionInfo）；未命名为 undefined，不要用空串。 */
+	readonly name?: string;
+	/** 会话启动时的工作目录（pi header.cwd）。playground 会话为占位目录路径。 */
+	readonly cwd: string;
+	/** 是否 playground 会话（daemon 按 cwd===配置目录/playground 判定好，UI 不推导）。 */
+	readonly isPlayground: boolean;
+	/** epoch ms。 */
+	readonly createdAt: number;
+	readonly modifiedAt: number;
+	readonly messageCount: number;
+	/** 是否为当前活动会话（至多一条 true）。 */
+	readonly current: boolean;
+}
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -244,9 +289,14 @@ export interface InvokeMap {
 	[INVOKE.abort]: { args: []; result: void };
 	[INVOKE.newTask]: { args: []; result: void };
 	[INVOKE.completions]: { args: []; result: CompletionData };
+	[INVOKE.pickImageFiles]: { args: []; result: readonly ImagePart[] | undefined };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
+	[INVOKE.sessionList]: { args: []; result: SessionSummary[] };
+	[INVOKE.sessionResume]: { args: [path: string]; result: void };
+	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
+	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
 	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
 	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };

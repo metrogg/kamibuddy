@@ -212,15 +212,21 @@ prompt-switch 胶水（仿 permission-gate.test 的假 ExtensionAPI）。
 四个搜索服务商（Tavily/博查/Brave/Bing）做成注册表，设置页「联网搜索」区块选填 Key。
 已落地细节见 [STATUS.md 联网工具（2026-09-08 落地）](STATUS.md)。
 
-### T4 · 会话管理（多会话 / 历史 / 恢复）
+### T4 · 会话管理（多会话 / 历史 / 恢复）（✅ 已完成 · 2026-09-08）
 
-现状：只有单会话，重启就没了。侧栏「任务」列表只显示当前这一条。
-这是通用 agent 的基本盘 —— 用户会问「昨天那个报告在哪」。
+已落地：侧栏「任务」区真实会话列表（`SessionManager.listAll` → SessionSummary）、
+点击恢复（`SessionManager.open` 注入 SessionHost，`core/session-rebuild.ts` 纯函数
+23 个测试把 pi SessionEntry[] 重建为 ConversationEntry[]，工作空间与预览服务根同步恢复）、
+行内重命名（`appendSessionInfo`，当前会话走活实例避免双写者）、
+删除（移入 `~/.kamibuddy/trash/` 可反悔，当前会话拒删）。
+路径安全：`validateSessionFilePath`（sessions 目录内 + .jsonl）。
+spec 与验收清单：`.trae/specs/home-permission-and-session-management/`。
 
-要做：会话列表（读 `~/.kamibuddy/sessions/`）→ 侧栏渲染 → 点击切换 → 重命名 / 删除。
-`SessionManager` 有现成能力，先读 `packages/coding-agent/docs/sessions.md`。
+**恢复会话不改模型与权限设置**（spec 决策）；resume 不发 history_reset
+（renderer resyncSnapshot 整体替换，避免闪空屏）。
 
-验收：关掉应用重开，能找回上次的对话并继续。
+明确不做（spec 范围外）：树分支（/tree /fork /clone）、LLM 自动命名、trash 自动清理、
+「保存到工作空间」（playground 任务事后落为正式空间）。
 
 ### T5 · 记忆
 
@@ -348,7 +354,7 @@ WorkBuddy 的 `wb-finance-skill` 是教科书案例（46 篇 references + 16 个
 ## 6. 排期建议（2026-09-08 修订）
 
 **P0 底座与 P1 主要体验已完成**：T1 提示词两轴、T2 技能机制、T3 联网工具、
-T6 产物交付与预览面板、T10 用量与压缩。距 2026-09-21 约两周。
+T4 会话管理、T6 产物交付与预览面板、T10 用量与压缩。距 2026-09-21 约两周。
 
 剩余按价值排序：
 
@@ -356,9 +362,8 @@ T6 产物交付与预览面板、T10 用量与压缩。距 2026-09-21 约两周�
 |---|---|---|
 | 1 | **T14 先打一次包** | 拖到最后风险最高：`resources/` 是否被复制、asar 内能否读文件、原生模块——这些只有打包才暴露。现在打一次，问题还有时间修 |
 | 2 | **T11 文档生成** | 产品价值主菜，也是「交给同事试用」时唯一能一眼看懂的能力。做一个体裁（周报）到位，胜过三个半成品 |
-| 3 | T4 会话恢复 | 试用者必然会问「昨天那个报告呢」。JSONL 已落盘，主要是 UI |
-| 4 | T5 记忆 | 「以后周报都用这个格式」——试用中很容易被夸的点 |
-| 5 | 其余（T7/T8/T9/T12/T13） | 按试用反馈决定 |
+| 3 | T5 记忆 | 「以后周报都用这个格式」——试用中很容易被夸的点 |
+| 4 | 其余（T7/T8/T9/T12/T13） | 按试用反馈决定 |
 
 **补测试债**：`extensions/present-files.ts` 目前**没有测试**（其余扩展都有：
 policy 23 / gate 16 / prompt-switch 3 / web-tools 7）。它是交付协议的实现，
@@ -383,6 +388,9 @@ policy 23 / gate 16 / prompt-switch 3 / web-tools 7）。它是交付协议的�
 3. **权限弹窗** —— 「在桌面建一个 txt」应弹审批框；写工作目录内应直接放行。
 4. **中断** —— 长任务中途点停止键。
 5. **产物交付** —— 让它生成一份文件，看产物卡片与右侧预览面板。
+6. **会话管理（T4）** —— 侧栏列出历史会话；点击恢复完整对话且能继续；重命名重启后仍在；
+   删除进 `~/.kamibuddy/trash/`；关闭应用重开能找回。
+7. **首页权限 chip** —— 弹层切「只读」后写文件被拒；切回恢复；与设置页显示一致。
 
 构造级实测见 `npm run smoke:session`（13/13），
 但那只验证「会话能建起来」，不等于「端到端行为正确」。

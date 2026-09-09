@@ -9,7 +9,8 @@
  */
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { PermissionRequest } from "@shared/ipc.ts";
+import type { PermissionRequest, PromptRequest, SessionSummary } from "@shared/ipc.ts";
+import type { ImagePart } from "@shared/image.ts";
 import type { SessionEvent, SessionSnapshot } from "@shared/session-events.ts";
 import {
 	conversationReducer,
@@ -58,6 +59,18 @@ export function App(): React.JSX.Element {
 	 * 那些工具就永久挂在 daemon 侧等应答 —— 表现为任务卡死。
 	 */
 	const [approvals, setApprovals] = useState<readonly PermissionRequest[]>([]);
+	/** 侧栏「任务」区的历史会话列表（daemon 组装好 title/current，UI 不推导）。 */
+	const [taskList, setTaskList] = useState<readonly SessionSummary[]>([]);
+
+	/**
+	 * 历史会话列表刷新。
+	 *
+	 * 拉取失败静默吞掉：列表只是侧栏的导航入口，拿不到不影响会话本体
+	 * （对话照常进行）。为辅助信息弹 toast 反而打扰，下一个触发点会再拉。
+	 */
+	const refreshTasks = useCallback(() => {
+		window.kami.listSessions().then(setTaskList).catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		// StrictMode 下 effect 会跑两遍，卸载后的异步回调必须能被丢弃。
@@ -80,6 +93,7 @@ export function App(): React.JSX.Element {
 					if (!disposed) dispatch({ type: "snapshot", snapshot });
 				})
 				.catch(fail);
+			refreshTasks();
 			// 预览服务 baseUrl 的初值（playground 启动时为 undefined）。
 			window.kami
 				.workspaceSnapshot()
@@ -98,6 +112,8 @@ export function App(): React.JSX.Element {
 			if (event.type === "artifacts_presented" && event.focusFile !== undefined) {
 				openPreview({ kind: "file", path: event.focusFile });
 			}
+			// 列表里的标题/时间/消息数只在 run 结束时才可能变，只在这个事件刷新。
+			if (event.type === "run_finished") refreshTasks();
 		});
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
 			if (!disposed) setLink({ kind: "down", reason });
@@ -148,12 +164,18 @@ export function App(): React.JSX.Element {
 	}, []);
 
 	const submit = useCallback(
-		(text: string) => {
-			if (link.kind !== "ready") return;
+		(text: string, images?: readonly ImagePart[]): Promise<void> => {
+			if (link.kind !== "ready") return Promise.resolve();
 			setLastError(undefined);
 			setView("chat");
-			window.kami.prompt({ text }).catch((error: unknown) => {
+			// 空数组与缺省同义：不带 images 字段，payload 与无图版本完全一致。
+			const request: PromptRequest =
+				images !== undefined && images.length > 0 ? { text, images } : { text };
+			// 错误先落进消息流（错误卡）再 rethrow：调用方靠成败决定附件去留
+			// （成功才 clear，见两个视图的 submit）。
+			return window.kami.prompt(request).catch((error: unknown) => {
 				setLastError(error instanceof Error ? error.message : String(error));
+				throw error;
 			});
 		},
 		[link.kind],
@@ -295,6 +317,8 @@ export function App(): React.JSX.Element {
 			.newTask()
 			.then(() => {
 				resyncSnapshot();
+				// 旧会话有了消息，新会话成为 current —— 两处都让列表变了。
+				refreshTasks();
 				setView("home");
 			})
 			.catch((error: unknown) => {
@@ -302,6 +326,56 @@ export function App(): React.JSX.Element {
 			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [link.kind, resyncSnapshot]);
+
+	/**
+	 * 恢复历史会话：成功后重拉快照（会话整体换新，以服务端为准）并刷新
+	 * 列表（current 标记易位）。失败 toast 且留在原视图 —— 恢复失败时
+	 * daemon 侧的活动会话没变，界面不应假装已经切过去了。
+	 */
+	const resumeTask = useCallback(
+		(path: string) => {
+			window.kami
+				.resumeSession(path)
+				.then(() => {
+					resyncSnapshot();
+					refreshTasks();
+					setView("chat");
+				})
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[resyncSnapshot, refreshTasks],
+	);
+
+	/** 重命名：成功只刷列表 —— 对话页标题来自消息流，不随命名变。 */
+	const renameTask = useCallback(
+		(path: string, name: string) => {
+			window.kami
+				.renameSession(path, name)
+				.then(() => refreshTasks())
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[refreshTasks],
+	);
+
+	/** 删除：成功只刷列表。当前活动会话由 daemon 拒删，reason 直接 toast 出来。 */
+	const deleteTask = useCallback(
+		(path: string) => {
+			window.kami
+				.deleteSession(path)
+				.then(() => refreshTasks())
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[refreshTasks],
+	);
 
 	/**
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
@@ -328,9 +402,11 @@ export function App(): React.JSX.Element {
 		<div className="app">
 			<Sidebar
 				link={link}
-				currentTaskTitle={title}
+				taskList={taskList}
 				onNewTask={newTask}
-				onOpenTask={() => setView("chat")}
+				onResumeTask={resumeTask}
+				onRenameTask={renameTask}
+				onDeleteTask={deleteTask}
 				onOpenSettings={openSettings}
 				onOpenDiagnostics={openDiagnostics}
 				onOpenSkills={() => setView("skills")}
@@ -362,6 +438,7 @@ export function App(): React.JSX.Element {
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
 					onPreviewArtifact={(path) => openPreview({ kind: "file", path })}
+					onError={showToast}
 					onTodo={showTodo}
 				/>
 			)}

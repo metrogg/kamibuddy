@@ -109,6 +109,48 @@ describe("context_usage", () => {
 	});
 });
 
+describe("history_reset", () => {
+	/*
+	 * /new 内置命令的回归用例：daemon 清空历史后此前只发 session_state，
+	 * 而 reducer 对 session_state 不动 entries —— renderer 一直显示幽灵历史。
+	 * 现在 daemon 改发 history_reset，两端折叠同一个事件同步清零。
+	 */
+	it("清空 entries / turn / cancelledTurns / artifacts / usageDetail，复位 sessionId 与 isStreaming", () => {
+		const dirty: ConversationView = {
+			...apply([
+				{ type: "run_started", runId: "r1" },
+				{ type: "user_message", message: { id: "u1", role: "user", text: "帮我写周报", at: 1 } },
+				{ type: "run_finished", runId: "r1", outcome: "cancelled" },
+				{
+					type: "context_usage",
+					usage: {
+						used: 100,
+						total: 128000,
+						byCategory: { systemPrompt: 50, skills: 0, conversation: 40, toolResults: 10 },
+					},
+				},
+			]),
+			state: { ...initialConversation.state, sessionId: "s1", cwd: "E:/demo", isStreaming: true },
+		};
+		// 前置断言：视图确实是「脏」的，否则下面的清零断言没有意义。
+		expect(dirty.entries).not.toHaveLength(0);
+		expect(dirty.cancelledTurns).toContain("u1");
+		expect(dirty.usageDetail).toBeDefined();
+
+		const view = conversationReducer(dirty, { type: "event", event: { type: "history_reset" } });
+
+		expect(view.entries).toHaveLength(0);
+		expect(view.turn).toBeUndefined();
+		expect(view.cancelledTurns).toHaveLength(0);
+		expect(view.artifacts).toHaveLength(0);
+		expect(view.usageDetail).toBeUndefined();
+		expect(view.state.sessionId).toBe("");
+		expect(view.state.isStreaming).toBe(false);
+		// cwd 与两轴选择保留：新建任务不换空间、不换模式（与 daemon resetSession 同口径）。
+		expect(view.state.cwd).toBe("E:/demo");
+	});
+});
+
 describe("流式增量", () => {
 	it("正文增量按序累积，不互相覆盖", () => {
 		const view = apply([

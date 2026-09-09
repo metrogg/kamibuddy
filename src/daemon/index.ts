@@ -10,13 +10,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
-import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { basename, join, resolve, sep } from "node:path";
+import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import {
 	getConfigDir,
 	getResourcesDir,
+	getSessionsDir,
 	getWorkspaceDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
@@ -31,7 +32,8 @@ import {
 } from "../core/prompt-composer.ts";
 import { loadResources, toDescriptors } from "../core/resources.ts";
 import { importSkill, userSkillsDir } from "../core/skill-install.ts";
-import { SessionHost } from "../core/session-host.ts";
+import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
+import { buildConversationEntries, validateSessionFilePath } from "../core/session-rebuild.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
@@ -68,6 +70,7 @@ import {
 	type PermissionResponse,
 	type ArtifactContent,
 	type PromptRequest,
+	type SessionSummary,
 } from "../shared/ipc.ts";
 import {
 	isWebSearchProviderId,
@@ -427,7 +430,12 @@ function getHost(): Promise<SessionHost> {
 	return hostPromise;
 }
 
-async function createHost(): Promise<SessionHost> {
+/**
+ * 组装会话宿主的唯一入口。恢复历史会话时传入 open 出来的 SessionManager，
+ * 其余（扩展、两轴、权限门、预览、当前模型选择）与新会话完全一致 ——
+ * 恢复会话不改模型选择与权限设置（spec 决策）。
+ */
+async function createHost(sessionManager?: SessionManager): Promise<SessionHost> {
 	const catalog = await getCatalog();
 
 	// 没选模型时不擅自挑一个：用户不知道在用哪家、也不知道会产生谁的费用。
@@ -457,6 +465,7 @@ async function createHost(): Promise<SessionHost> {
 		interactionId: conversation.state.interactionId,
 		emit: emitSessionEvent,
 		resources: RESOURCES,
+		...(sessionManager === undefined ? {} : { sessionManager }),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
 		// （依赖方向是 extensions → core，见 AGENTS.md §1）。
 		// playground（workspaceDir 为 undefined）不装权限门 —— 文件工具根本没注册，
@@ -573,19 +582,13 @@ async function resetSession(): Promise<void> {
 		(await hostPromise).dispose();
 		hostPromise = undefined;
 	}
-	conversation = {
-		...conversation,
-		state: { ...conversation.state, sessionId: "", isStreaming: false },
-		entries: [],
-		// 用量明细属于旧会话，不清掉新任务的圆环会停在旧值。
-		usageDetail: undefined,
-		// 回合计时同理：新任务不该沿用旧回合的起表时间。
-		turn: undefined,
-		// 取消痕迹同理：上一任务的「用户已取消」指示行不该挂到新任务。
-		cancelledTurns: [],
-		// 产物清单同理：上一任务的交付不该挂在新任务底下。
-		artifacts: [],
-	};
+	/*
+	 * 走事件而不是直接改 conversation：reducer 两端共用（shared/conversation.ts），
+	 * daemon 本地折叠与 renderer 折叠的是同一个 history_reset，历史同步清零。
+	 * 此前只清本地再发 session_state —— reducer 对 session_state 不动 entries，
+	 * renderer 一直显示旧历史（/new 命令的幽灵历史就是这么来的）。
+	 */
+	emitSessionEvent({ type: "history_reset" });
 }
 
 /**
@@ -622,6 +625,157 @@ async function applyWorkspace(dir: string): Promise<string | undefined> {
 	await resetSession();
 	updateStateLocally({ cwd: next, isPlayground: next === undefined });
 	return next;
+}
+
+/* ── 历史会话管理（list / resume / rename / delete） ────────────── */
+
+/**
+ * 列表标题的截断上限。renderer 的 taskTitle 另有 24 字符的展示截断，
+ * 这里截的是数据上限：firstMessage 原文可能整段上千字，不能原样进列表契约。
+ */
+const SESSION_TITLE_MAX = 40;
+
+/** 列表标题：命名优先，否则首条消息压单行截断。空会话给占位，不留空白行。 */
+function sessionTitle(name: string | undefined, firstMessage: string): string {
+	if (name !== undefined && name !== "") return name;
+	const oneLine = firstMessage.replace(/\s+/g, " ").trim();
+	if (oneLine === "") return "（空会话）";
+	return oneLine.length > SESSION_TITLE_MAX
+		? `${oneLine.slice(0, SESSION_TITLE_MAX)}…`
+		: oneLine;
+}
+
+/** 只容忍「目录不存在」：首次使用还没有 sessions 目录是正常情况，列表为空。 */
+function isEnoent(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { code?: unknown }).code === "ENOENT"
+	);
+}
+
+/** 当前活动宿主持有的会话文件。host 未建（还没发过消息）为 undefined。 */
+async function currentSessionFile(): Promise<string | undefined> {
+	if (hostPromise === undefined) return undefined;
+	return (await hostPromise).sessionFilePath;
+}
+
+async function listSessions(): Promise<SessionSummary[]> {
+	let infos: SessionInfo[];
+	try {
+		infos = await SessionManager.listAll(getSessionsDir());
+	} catch (error) {
+		// 只容忍 ENOENT（见 isEnoent）。其余错误必须抛 —— 静默返回空列表
+		// 会让用户以为历史丢了，那比报错更难排查（AGENTS.md §7）。
+		if (isEnoent(error)) return [];
+		throw error;
+	}
+	const currentFile = await currentSessionFile();
+	const playgroundDir = join(getConfigDir(), "playground");
+	return infos
+		.map((info): SessionSummary => {
+			return {
+				id: info.id,
+				path: info.path,
+				title: sessionTitle(info.name, info.firstMessage),
+				name: info.name,
+				cwd: info.cwd,
+				isPlayground: info.cwd === playgroundDir,
+				createdAt: info.created.getTime(),
+				modifiedAt: info.modified.getTime(),
+				messageCount: info.messageCount,
+				current:
+					currentFile !== undefined &&
+					resolve(currentFile) === resolve(info.path),
+			};
+		})
+		.sort((a, b) => b.modifiedAt - a.modifiedAt);
+}
+
+/**
+ * 恢复历史会话为当前活动会话。编排与 applyWorkspace 同构：
+ * 守卫 → 作废旧宿主 → 恢复工作空间语义 → 重建宿主 → 重建本地历史。
+ *
+ * 失败原子性：先验证，后切换。open / header 校验 / 工作目录校验全部在
+ * dispose 旧宿主之前完成 —— 这些步骤都可能失败（文件损坏、缺头部、目录
+ * 不合法），失败时旧会话必须原样保留（宿主、本地历史、工作目录、预览服务
+ * 都不动），错误经 IPC 抛回 renderer toast 即可。若先 dispose 再验证，
+ * 用户看到错误 toast 之后会发现当前会话已被静默清空（验收确证过的坑）。
+ *
+ * dispose 之后仍留一段非原子窗口：setRoot 换根、createHost 组装（如模型
+ * 不可用）失败时，旧宿主已销毁、新宿主未建。这与 applyWorkspace 的失败
+ * 语义一致（那里同样先 setRoot 再 resetSession，见该函数注释）——setRoot
+ * 是「先 close 旧服务再 listen 新根」，前移它救不了 createHost，反而把
+ * 预览服务也拖进中间态；要彻底关闭窗口需要「先建好后切换」的两阶段宿主
+ * 交换，超出本次修复范围。
+ *
+ * 与 resetSession 的关键差别：**不发 history_reset**。renderer 在 resume
+ * 返回后 resyncSnapshot 整体替换视图；若先发 history_reset，界面会先闪
+ * 一下空屏再出内容。本地 conversation 也由重建结果整体赋值，不经事件。
+ */
+async function resumeSession(path: string): Promise<void> {
+	if (conversation.state.isStreaming)
+		throw new Error("任务进行中，请先停止当前任务");
+	const sessionsDir = getSessionsDir();
+	const pathError = validateSessionFilePath(path, sessionsDir);
+	if (pathError !== undefined) throw new Error(pathError);
+
+	/* ── 切换前：做完所有可能失败的验证，此刻旧会话毫发无损 ── */
+
+	// open 是同步的（dist 类型：static open(...) : SessionManager），
+	// 不依赖旧宿主销毁；文件损坏/不可读在此抛出。
+	const manager = SessionManager.open(path, sessionsDir);
+	const header = manager.getHeader();
+	if (header === null) throw new Error("会话文件缺少头部，无法恢复");
+
+	// 从 header.cwd 推导目标工作空间，只算值不赋值：playground 占位目录
+	// → playground；否则按工作空间校验同一套规则把关（会话本身没问题但
+	// 目录不合法时拒，如指向配置目录的旧会话）。目录可能已被用户删掉，
+	// 补建与新建会话同口径 —— mkdir 幂等且不碰任何会话状态，可安全提前。
+	const playgroundDir = join(getConfigDir(), "playground");
+	let nextWorkspaceDir: string | undefined;
+	if (header.cwd === playgroundDir) {
+		nextWorkspaceDir = undefined;
+	} else {
+		const wsError = validateWorkspacePath(header.cwd, {
+			configDir: getConfigDir(),
+			appDir: process.cwd(),
+		});
+		if (wsError !== undefined) throw new Error(`会话的工作目录不可用：${wsError}`);
+		mkdirSync(header.cwd, { recursive: true });
+		nextWorkspaceDir = header.cwd;
+	}
+
+	/* ── 切换点：此后失败即进入上文的非原子窗口 ── */
+
+	if (hostPromise !== undefined) {
+		(await hostPromise).dispose();
+		hostPromise = undefined;
+	}
+
+	workspaceDir = nextWorkspaceDir;
+
+	// 预览服务随工作区换根（playground 时停掉），与 applyWorkspace 同口径。
+	await previewServer.setRoot(workspaceDir);
+
+	// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择），
+	// 只换 sessionManager。createHost 末尾会发 session_state，
+	// cwd / isPlayground / sessionId 随之同步给 UI。
+	const host = await createHost(manager);
+	hostPromise = Promise.resolve(host);
+
+	// 本地历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
+	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。usageDetail / turn /
+	// cancelledTurns / artifacts 属于旧会话，清空；state 保留现值 ——
+	// 它刚被 createHost 的 session_state 换成新会话的权威值。
+	conversation = {
+		...conversation,
+		entries: buildConversationEntries(manager.buildContextEntries(), restoredToolLabel),
+		usageDetail: undefined,
+		turn: undefined,
+		cancelledTurns: [],
+		artifacts: [],
+	};
 }
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
@@ -693,7 +847,7 @@ const handlers: Record<string, Handler> = {
 	/* ── 会话 ─────────────────────────────────────────────────────── */
 
 	[INVOKE.prompt]: async ([request]) => {
-		const { text, whileStreaming } = request as PromptRequest;
+		const { text, whileStreaming, images } = request as PromptRequest;
 
 		// 内置命令（/new、/compact）是操作不是消息：发给模型没有意义，
 		// 在进会话之前拦下来执行（解析规则见 shared/builtin-commands.ts）。
@@ -713,7 +867,7 @@ const handlers: Record<string, Handler> = {
 		}
 
 		const host = await getHost();
-		await host.prompt(text, whileStreaming);
+		await host.prompt(text, whileStreaming, images);
 	},
 
 	/**
@@ -733,6 +887,55 @@ const handlers: Record<string, Handler> = {
 	 * 会话本体是懒建的（getHost），这里只需作废 + 清空，下次 prompt 自然建新的。
 	 */
 	[INVOKE.newTask]: async () => newTask(),
+
+	/* ── 历史会话 ─────────────────────────────────────────────────── */
+
+	[INVOKE.sessionList]: async () => listSessions(),
+
+	[INVOKE.sessionResume]: async ([path]) => resumeSession(path as string),
+
+	[INVOKE.sessionRename]: async ([path, name]) => {
+		const target = path as string;
+		const trimmed = (name as string).trim();
+		if (trimmed === "") throw new Error("名称不能为空");
+
+		// 当前活动会话必须走活实例：pi 的 SessionManager 各自缓存 entries，
+		// 同一文件出现两个活写者会互相覆盖。
+		const host = hostPromise === undefined ? undefined : await hostPromise;
+		const currentFile = host?.sessionFilePath;
+		if (host !== undefined && currentFile !== undefined && resolve(currentFile) === resolve(target)) {
+			host.renameSession(trimmed);
+			return;
+		}
+
+		const pathError = validateSessionFilePath(target, getSessionsDir());
+		if (pathError !== undefined) throw new Error(pathError);
+
+		// 非当前会话：临时 open 写完即弃。实例不持有、不注册到任何地方 ——
+		// 它若日后成为活会话，会经 resume 重新 open，不存在双写者窗口。
+		SessionManager.open(target, getSessionsDir()).appendSessionInfo(trimmed);
+	},
+
+	[INVOKE.sessionDelete]: async ([path]) => {
+		const target = path as string;
+
+		// 当前活动会话拒删：宿主还持有这个文件的活写者，删掉后续写会失败，
+		// 且用户正在看的对话会变成一个打不开的历史项。
+		const host = hostPromise === undefined ? undefined : await hostPromise;
+		const currentFile = host?.sessionFilePath;
+		if (currentFile !== undefined && resolve(currentFile) === resolve(target)) {
+			throw new Error("这是当前任务，请先新建任务再删除");
+		}
+
+		const pathError = validateSessionFilePath(target, getSessionsDir());
+		if (pathError !== undefined) throw new Error(pathError);
+
+		// 移入 trash 而不是真删：可人工找回，对齐 pi 避免永久删除的取向。
+		// 时间戳前缀防同名覆盖（同一会话删两次、不同会话同文件名）。
+		const trashDir = join(getConfigDir(), "trash");
+		mkdirSync(trashDir, { recursive: true });
+		renameSync(target, join(trashDir, `${Date.now()}-${basename(target)}`));
+	},
 
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");

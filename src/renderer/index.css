@@ -138,20 +138,140 @@ button {
 	color: var(--text-dim);
 }
 
+/* 任务列表：行 = 可点击主体 + hover 浮现的行内操作钮。 */
+.task-list {
+	/* 会话多了侧栏不被撑爆：列表内部滚动，导航与底部状态始终在视口内。 */
+	max-height: 42vh;
+	overflow-y: auto;
+}
+
 .task-item {
+	position: relative;
+	width: 100%;
+	border-radius: 8px;
+	font-size: 13px;
+}
+
+.task-item:hover {
+	background: var(--bg-hover);
+}
+
+/* 当前活动会话：常驻底色 + 标题加重，与 hover 的临时反馈区分开。 */
+.task-item-current,
+.task-item-current:hover {
+	background: var(--bg-raised);
+}
+
+.task-item-current .task-item-title {
+	font-weight: 600;
+}
+
+.task-item-body {
 	display: block;
 	width: 100%;
 	padding: 6px 8px;
-	border-radius: 8px;
-	font-size: 13px;
 	text-align: left;
+}
+
+/* hover 时给浮现的操作钮让位，避免压在标题文字上。 */
+.task-item:hover .task-item-body {
+	padding-right: 52px;
+}
+
+.task-item-title {
+	display: block;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.task-item:hover {
-	background: var(--bg-hover);
+.task-item-meta {
+	display: block;
+	font-size: 11px;
+	color: var(--text-dim);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。 */
+.task-item-ops {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	display: flex;
+	gap: 2px;
+	opacity: 0;
+	visibility: hidden;
+}
+
+.task-item:hover .task-item-ops,
+.task-item-ops:focus-within {
+	opacity: 1;
+	visibility: visible;
+}
+
+.task-op-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 5px;
+	color: var(--text-dim);
+}
+
+.task-op-btn:hover {
+	color: var(--text);
+	background: rgb(0 0 0 / 8%);
+}
+
+/* 行内重命名：input 顶替标题位置，字号随行避免跳动。 */
+.task-rename-input {
+	display: block;
+	width: 100%;
+	padding: 1px 4px;
+	font: inherit;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	outline: none;
+}
+
+.task-rename-input:focus {
+	border-color: var(--text-dim);
+}
+
+/* 删除确认态：行内二次确认，不弹系统对话框（文件实为移入回收目录，可恢复）。 */
+.task-item-confirm {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.task-confirm-actions {
+	display: flex;
+	gap: 4px;
+	margin-left: auto;
+}
+
+.task-confirm-btn {
+	padding: 1px 8px;
+	border-radius: 6px;
+	font-size: 12px;
+	background: var(--bg-raised);
+}
+
+.task-confirm-btn:hover {
+	background: var(--border);
+}
+
+.task-confirm-yes {
+	color: var(--danger);
 }
 
 .sidebar-footer {
@@ -546,6 +666,70 @@ button {
 	opacity: 1;
 }
 
+/* ── 输入区图片附件（chat / home 共用） ─────────────────────── */
+
+/* 横向滚动：一次贴十几张截图也不会把输入卡撑高。 */
+.attachment-strip {
+	display: flex;
+	gap: 8px;
+	margin: 0 2px 8px;
+	overflow-x: auto;
+}
+
+.attachment-thumb {
+	position: relative;
+	flex: 0 0 auto;
+	width: 48px;
+	height: 48px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--bg-hover);
+	overflow: hidden;
+}
+
+.attachment-thumb img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* 删除钮收在缩略图右上角：strip 有 overflow-x 裁切，钮若凸出到 thumb 外会被剪掉。 */
+.attachment-remove {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	font-size: 12px;
+	line-height: 1;
+}
+
+.attachment-remove:hover {
+	background: rgba(0, 0, 0, 0.78);
+}
+
+/* 非视觉模型提示：缩略图条下方一行说明（图片仍可发送，但进不了模型，
+   以占位文本代替 —— 让用户发送前心里有数，而不是收不到图后才发现）。 */
+.vision-hint {
+	/* -4px 上收：紧贴缩略图条（其自带 8px 下边距），视觉上属于它。 */
+	margin: -4px 2px 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+/* 拖拽悬停高亮：边框与一圈主色描边双提示（对标常见拖放目标反馈）。 */
+.composer-card.drag-over {
+	border-color: var(--primary);
+	box-shadow: var(--shadow-card), 0 0 0 1px var(--primary);
+}
+
 .mascot {
 	position: absolute;
 	right: -6px;
@@ -895,6 +1079,25 @@ button {
 	overflow-y: auto;
 }
 
+/* 气泡内附件缩略图：文本下方横向排列（换行而非横向滚动 —— 气泡宽度有限，
+   滚动条会把后发的图藏起来）。固定小尺寸 + cover，完整内容点开大图看。 */
+.user-bubble-images {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.user-bubble-images img {
+	display: block;
+	width: 160px;
+	max-height: 200px;
+	object-fit: cover;
+	border-radius: 8px;
+	cursor: zoom-in;
+}
+
 /* hover 工具条：常驻占位只切透明度（避免 hover 插入 DOM 推搡下方消息流），
    负 margin 把占位高度吃进 .stream 的 12px 间距里，平时几乎不占额外高度。 */
 .user-toolbar {
@@ -924,6 +1127,27 @@ button {
 .user-copy:hover {
 	background: var(--bg-hover);
 	color: var(--text);
+}
+
+/* 图片放大预览（点击气泡缩略图打开）：全屏遮罩 + 居中大图，点击任意处关闭。
+   层级压在权限弹窗（.modal-backdrop，100）之下 —— 审批是阻塞链路，
+   daemon 侧正 await 在应答上，必须始终可点。 */
+.image-preview-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 90;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgb(0 0 0 / 72%);
+	cursor: zoom-out;
+}
+
+.image-preview-overlay img {
+	max-width: 100%;
+	max-height: 100%;
+	border-radius: 8px;
 }
 
 .entry.assistant {
@@ -2747,6 +2971,86 @@ button {
 }
 
 .model-menu-goto:hover {
+	color: var(--text);
+}
+
+/* ── 主页权限快捷切换 ─────────────────────────────────────────── */
+/* 与 WorkspacePicker 同在 context-row，弹层向上展开；条目版式对齐 model-menu。 */
+
+.permission-menu-zone {
+	position: relative;
+}
+
+.permission-menu {
+	position: absolute;
+	left: 0;
+	bottom: calc(100% + 8px);
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	width: 300px;
+	padding: 6px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	box-shadow: var(--shadow-card);
+}
+
+.permission-menu-empty {
+	margin: 0;
+	padding: 10px 12px;
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+.permission-menu-item {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 30px 8px 10px;
+	border-radius: 8px;
+	text-align: left;
+}
+
+.permission-menu-item:hover {
+	background: var(--bg-hover);
+}
+
+.permission-menu-item.active {
+	background: var(--bg-raised);
+}
+
+.permission-menu-name {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+/* 说明文字较长（一句话行为描述），允许换行，不做省略。 */
+.permission-menu-desc {
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--text-dim);
+}
+
+.permission-menu-check {
+	position: absolute;
+	right: 10px;
+	top: 50%;
+	transform: translateY(-50%);
+	color: var(--ok);
+}
+
+.permission-menu-goto {
+	margin-top: 4px;
+	padding: 8px 10px;
+	border-top: 1px solid var(--border);
+	color: var(--text-dim);
+	font-size: 12px;
+	text-align: left;
+}
+
+.permission-menu-goto:hover {
 	color: var(--text);
 }
 

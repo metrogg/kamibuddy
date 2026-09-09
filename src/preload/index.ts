@@ -28,10 +28,17 @@ const bridge: KamiBridge = {
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
 	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
 	completions: () => ipcRenderer.invoke(INVOKE.completions),
+	pickImageFiles: () => ipcRenderer.invoke(INVOKE.pickImageFiles),
 	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
 	setInteraction: (interactionId) =>
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
+
+	listSessions: () => ipcRenderer.invoke(INVOKE.sessionList),
+	resumeSession: (path) => ipcRenderer.invoke(INVOKE.sessionResume, path),
+	renameSession: (path, name) =>
+		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
+	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
 
 	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
 	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),

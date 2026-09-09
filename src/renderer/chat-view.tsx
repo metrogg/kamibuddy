@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
+import type { ImagePart } from "@shared/image.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
 import type { ConversationEntry, ModeDescriptor, RunId, ToolCard, TurnTiming } from "@shared/session-events.ts";
@@ -25,7 +26,9 @@ import {
 } from "./icons.tsx";
 import { useAutocomplete } from "./autocomplete.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
-import { shouldSwallowEnter } from "./ime-guard.ts";
+import { AttachmentStrip, imageDataUrl, useImageAttachments } from "./image-attachments.tsx";
+import { useImeGuard } from "./ime-guard.ts";
+import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
@@ -37,11 +40,17 @@ interface ChatViewProps {
 	readonly lastError: string | undefined;
 	readonly title: string;
 	readonly onBack: () => void;
-	readonly onSubmit: (text: string) => void;
+	/**
+	 * 提交（文本 + 可选图片附件）。resolve 表示 daemon 已接收；
+	 * 附件据此决定去留（失败保留在输入区，见 submit）。
+	 */
+	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
 	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
 	readonly onPreviewArtifact: (path: string) => void;
+	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
+	readonly onError: (message: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -113,12 +122,39 @@ function useCopyWithTick(): {
  * （时间戳 + 复制）。工具条常驻占位、只切透明度 —— 若 hover 才插入 DOM，
  * 每次划过都会推动下方消息流抖动，长对话里非常刺眼。
  */
-function UserBubble({ text, at }: { readonly text: string; readonly at: number }): React.JSX.Element {
+function UserBubble({
+	text,
+	at,
+	images,
+}: {
+	readonly text: string;
+	readonly at: number;
+	/** 本条消息携带的图片附件（仅 UI 展示；进模型的翻译在 daemon 侧）。 */
+	readonly images?: readonly ImagePart[];
+}): React.JSX.Element {
 	const { copied, copy } = useCopyWithTick();
+	// 点击放大的那张图；undefined = 预览关闭。MVP 不做轮播/缩放（YAGNI）。
+	const [preview, setPreview] = useState<ImagePart | undefined>(undefined);
 
 	return (
 		<div className="entry user">
-			<div className="user-bubble">{text}</div>
+			<div className="user-bubble">
+				{text}
+				{images !== undefined && images.length > 0 && (
+					// key 用下标与 AttachmentStrip 同口径：列表项无本地状态，src 是同步解码的 data URL。
+					<div className="user-bubble-images">
+						{images.map((part, index) => (
+							<img
+								key={index}
+								src={imageDataUrl(part)}
+								alt=""
+								draggable={false}
+								onClick={() => setPreview(part)}
+							/>
+						))}
+					</div>
+				)}
+			</div>
 			<div className="user-toolbar">
 				<span className="user-time">{formatMessageTime(at, Date.now())}</span>
 				<button
@@ -131,6 +167,12 @@ function UserBubble({ text, at }: { readonly text: string; readonly at: number }
 					{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
 				</button>
 			</div>
+			{preview !== undefined && (
+				// 全屏遮罩显示大图，点击任意处（含大图本身）关闭。
+				<div className="image-preview-overlay" onClick={() => setPreview(undefined)}>
+					<img src={imageDataUrl(preview)} alt="" draggable={false} />
+				</div>
+			)}
 		</div>
 	);
 }
@@ -545,6 +587,7 @@ export function ChatView({
 	onAbort,
 	onInteractionChange,
 	onPreviewArtifact,
+	onError,
 	onTodo,
 }: ChatViewProps): React.JSX.Element {
 	const [draft, setDraft] = useState("");
@@ -552,8 +595,12 @@ export function ChatView({
 	const [tipsDismissed, setTipsDismissed] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	// IME 状态走 ref 而非 state：guard 在 keydown 里同步读，不需要触发重渲染。
-	const imeRef = useRef({ composing: false, lastCompositionEndAt: 0 });
+	// IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 不发送。
+	const ime = useImeGuard();
+	// 图片附件（粘贴/拖拽/选择三入口），与 home-view 共用同一份 hook。
+	const img = useImageAttachments(onError);
+	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
+	const visionSupported = useModelSupportsVision(conversation.state.modelId);
 	const streaming = conversation.state.isStreaming;
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
@@ -616,12 +663,40 @@ export function ChatView({
 	const submit = (): void => {
 		const text = draft.trim();
 		if (text === "" || !ready) return;
+		const images = img.attachments;
 		setDraft("");
 		// 发新消息强制贴底（WorkBuddy 同行为）：回显经 daemon 确认后才进 entries，
 		// 这里先把跟随打开，entries 变化的 effect 落地时自然贴底。
 		followRef.current = true;
 		setShowJumpToBottom(false);
-		onSubmit(text);
+		// 附件等 daemon 接收成功再清：失败时错误卡已落进消息流，图留在
+		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
+		void onSubmit(text, images.length > 0 ? images : undefined).then(
+			() => img.clear(),
+			() => {},
+		);
+	};
+
+	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
+	const retrySubmit = (text: string): void => {
+		onSubmit(text).catch(() => {});
+	};
+
+	/**
+	 * 输入框按键。ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
+	 * IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
+	 */
+	const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+		ac.bind.onKeyDown(e);
+		if (e.key !== "Enter" || e.defaultPrevented) return;
+		if (ime.shouldSwallowNow()) {
+			e.preventDefault();
+			return;
+		}
+		if (!e.shiftKey) {
+			e.preventDefault();
+			submit();
+		}
 	};
 
 	const toggleFold = (id: string): void => {
@@ -698,9 +773,9 @@ export function ChatView({
 							return <ToolEntry key={entry.id} card={entry} />;
 						}
 						// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
-						if (entry.role === "user") {
-							return <UserBubble key={entry.id} text={entry.text} at={entry.at} />;
-						}
+					if (entry.role === "user") {
+						return <UserBubble key={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+					}
 						return (
 							<div key={entry.id} className={`entry ${entry.role}`}>
 								{/*
@@ -732,7 +807,7 @@ export function ChatView({
 								onRetry={() => {
 									if (retryText === undefined) return;
 									// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
-									onSubmit(retryText);
+									retrySubmit(retryText);
 								}}
 							/>
 						);
@@ -782,7 +857,7 @@ export function ChatView({
 						retryText={retryText}
 						onRetry={() => {
 							if (retryText === undefined) return;
-							onSubmit(retryText);
+							retrySubmit(retryText);
 						}}
 					/>
 				)}
@@ -802,7 +877,19 @@ export function ChatView({
 			</div>
 
 			<footer className="chat-composer">
-				<div className="composer-card">
+				{/*
+					拖放三件套（onDragOver/onDragLeave/onDrop）挂在输入卡而非 textarea 上：
+					整个卡片（含按钮行）都是放置目标，命中区大得多。悬停高亮由
+					img.dragOver 驱动（进 drag-over 类），拖文本片段不亮（见 hook 注释）。
+				*/}
+				<div
+					className={`composer-card${img.dragOver ? " drag-over" : ""}`}
+					onDrop={img.bind.onDrop}
+					onDragOver={img.bind.onDragOver}
+					onDragLeave={img.bind.onDragLeave}
+				>
+					<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
+					<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
 					<div className="composer-input">
 						{ac.menu}
 						<textarea
@@ -811,30 +898,10 @@ export function ChatView({
 							onChange={ac.bind.onChange}
 							onSelect={ac.bind.onSelect}
 							onBlur={ac.bind.onBlur}
-							onCompositionStart={() => {
-							imeRef.current.composing = true;
-						}}
-						onCompositionEnd={() => {
-							// compositionend 先于它携带的那个 keydown 触发（React 合成事件顺序），
-							// 所以宽限期必须靠时间戳判定，不能只靠 composing 布尔（见 ime-guard.ts）。
-							imeRef.current.composing = false;
-							imeRef.current.lastCompositionEndAt = Date.now();
-						}}
-						onKeyDown={(e) => {
-							// ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
-							ac.bind.onKeyDown(e);
-							if (e.key === "Enter" && !e.defaultPrevented) {
-								// IME 守卫：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
-								if (shouldSwallowEnter({ ...imeRef.current, now: Date.now() })) {
-									e.preventDefault();
-									return;
-								}
-								if (!e.shiftKey) {
-									e.preventDefault();
-									submit();
-								}
-							}
-						}}
+							onPaste={img.bind.onPaste}
+							onCompositionStart={ime.bind.onCompositionStart}
+							onCompositionEnd={ime.bind.onCompositionEnd}
+							onKeyDown={handleComposerKeyDown}
 							// 流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
 							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
 							disabled={!ready}
@@ -842,7 +909,7 @@ export function ChatView({
 						/>
 					</div>
 					<div className="composer-bar">
-						<button type="button" className="bar-btn" aria-label="添加附件" onClick={() => onTodo("附件引用")}>
+						<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片" onClick={() => void img.pickFromDialog()}>
 							<IconPlus size={17} />
 						</button>
 						<span className="bar-spacer" />

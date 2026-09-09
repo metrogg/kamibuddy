@@ -139,6 +139,20 @@ export function conversationReducer(view: ConversationView, action: Conversation
 
 	const event = action.event;
 	switch (event.type) {
+		case "history_reset":
+			// 与 daemon resetSession 同口径：历史 / 计时 / 取消痕迹 / 产物 / 用量明细全清；
+			// state 只复位 sessionId 与 isStreaming —— cwd、两轴、模型选择保留
+			// （新建任务不换空间也不换模式）。
+			return {
+				...view,
+				state: { ...view.state, sessionId: "", isStreaming: false },
+				entries: [],
+				usageDetail: undefined,
+				turn: undefined,
+				cancelledTurns: [],
+				artifacts: [],
+			};
+
 		case "run_started":
 			return { ...view, state: { ...view.state, isStreaming: true } };
 

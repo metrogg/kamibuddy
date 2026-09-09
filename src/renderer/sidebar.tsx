@@ -6,16 +6,21 @@
  * 不在此处各写占位逻辑。
  */
 
+import { useState } from "react";
+import type { SessionSummary } from "@shared/ipc.ts";
+import { formatMessageTime } from "@shared/message-time.ts";
 import {
 	IconAssistant,
 	IconAutomation,
 	IconChart,
+	IconEdit,
 	IconLibrary,
 	IconMore,
 	IconPlus,
 	IconProject,
 	IconSettings,
 	IconSkill,
+	IconTrash,
 } from "./icons.tsx";
 
 /** daemon 连接状态，与 App 里的 Link 同构。侧栏底部常驻显示，试用时一眼定位「发不出消息是不是没连上」。 */
@@ -26,10 +31,12 @@ export type LinkState =
 
 interface SidebarProps {
 	readonly link: LinkState;
-	/** 当前会话的首条用户消息，作为任务历史里的唯一一条（历史持久化是后排期的能力）。 */
-	readonly currentTaskTitle: string | undefined;
+	/** 历史会话列表（title/isPlayground/current 由 daemon 组装好，这里只展示）。 */
+	readonly taskList: readonly SessionSummary[];
 	readonly onNewTask: () => void;
-	readonly onOpenTask: () => void;
+	readonly onResumeTask: (path: string) => void;
+	readonly onRenameTask: (path: string, name: string) => void;
+	readonly onDeleteTask: (path: string) => void;
 	readonly onOpenSettings: () => void;
 	readonly onOpenDiagnostics: () => void;
 	/** 「专家·技能·连接器」是真实页面（技能页已可用），不走 onTodo。 */
@@ -46,16 +53,32 @@ const NAV_ITEMS = [
 	{ icon: IconMore, label: "更多" },
 ] as const;
 
+/** 空间标识取 cwd 末段（Windows 反斜杠与 POSIX 斜杠都认）。与 workspace-picker 的 baseName 同款。 */
+function cwdTail(cwd: string): string {
+	const trimmed = cwd.replace(/[\\/]+$/, "");
+	const at = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
+	return at === -1 ? trimmed : trimmed.slice(at + 1);
+}
+
 export function Sidebar({
 	link,
-	currentTaskTitle,
+	taskList,
 	onNewTask,
-	onOpenTask,
+	onResumeTask,
+	onRenameTask,
+	onDeleteTask,
 	onOpenSettings,
 	onOpenDiagnostics,
 	onOpenSkills,
 	onTodo,
 }: SidebarProps): React.JSX.Element {
+	/**
+	 * 行内操作态记 path 而不是布尔：同一时刻至多一行处于编辑/确认态，
+	 * 开始任一操作即挤掉另一个（单条互斥），也不会出现两行同时开编辑。
+	 */
+	const [editingPath, setEditingPath] = useState<string | undefined>(undefined);
+	const [confirmingPath, setConfirmingPath] = useState<string | undefined>(undefined);
+
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-brand">
@@ -89,17 +112,119 @@ export function Sidebar({
 
 			<div className="sidebar-section">
 				<div className="section-title">任务</div>
-				{currentTaskTitle === undefined ? (
+				{taskList.length === 0 ? (
 					<p className="section-empty">暂无历史任务</p>
 				) : (
-					<button
-						type="button"
-						className="task-item"
-						onClick={onOpenTask}
-						title={currentTaskTitle}
-					>
-						{currentTaskTitle}
-					</button>
+					<div className="task-list">
+						{taskList.map((task) => {
+							const meta = `${formatMessageTime(task.modifiedAt, Date.now())} · ${
+								task.isPlayground ? "不使用工作空间" : cwdTail(task.cwd)
+							}`;
+							const rowClass = task.current
+								? "task-item task-item-current"
+								: "task-item";
+
+							// 删除确认态：不弹系统对话框，行内二次确认（文件实为移入回收目录，可恢复）。
+							if (confirmingPath === task.path) {
+								return (
+									<div key={task.path} className="task-item task-item-confirm">
+										<span className="task-confirm-text">确认删除？</span>
+										<span className="task-confirm-actions">
+											<button
+												type="button"
+												className="task-confirm-btn task-confirm-yes"
+												onClick={() => {
+													setConfirmingPath(undefined);
+													onDeleteTask(task.path);
+												}}
+											>
+												删除
+											</button>
+											<button
+												type="button"
+												className="task-confirm-btn"
+												onClick={() => setConfirmingPath(undefined)}
+											>
+												取消
+											</button>
+										</span>
+									</div>
+								);
+							}
+
+							// 重命名编辑态：input 顶替标题位置，行点击在编辑态整体失效。
+							if (editingPath === task.path) {
+								return (
+									<div key={task.path} className={rowClass}>
+										<div className="task-item-body">
+											<input
+												className="task-rename-input"
+												defaultValue={task.name ?? task.title}
+												// 弹出的唯一输入框，自动聚焦即预期（同 workspace-picker）。
+												autoFocus
+												onKeyDown={(e) => {
+													if (e.key === "Enter") {
+														const name = e.currentTarget.value.trim();
+														setEditingPath(undefined);
+														// 空白名视为取消，不发请求。
+														if (name !== "") onRenameTask(task.path, name);
+													} else if (e.key === "Escape") {
+														setEditingPath(undefined);
+													}
+												}}
+											/>
+											<span className="task-item-meta">{meta}</span>
+										</div>
+									</div>
+								);
+							}
+
+							return (
+								<div key={task.path} className={rowClass}>
+									<button
+										type="button"
+										className="task-item-body"
+										title={task.title}
+										onClick={() => {
+											// 顺带收掉其他行可能开着的操作态，恢复后列表语义干净。
+											setEditingPath(undefined);
+											setConfirmingPath(undefined);
+											onResumeTask(task.path);
+										}}
+									>
+										<span className="task-item-title">{task.title}</span>
+										<span className="task-item-meta">{meta}</span>
+									</button>
+									<span className="task-item-ops">
+										<button
+											type="button"
+											className="task-op-btn"
+											aria-label="重命名"
+											title="重命名"
+											onClick={() => {
+												setConfirmingPath(undefined);
+												setEditingPath(task.path);
+											}}
+										>
+											<IconEdit size={13} />
+										</button>
+										<button
+											type="button"
+											className="task-op-btn"
+											aria-label="删除"
+											title="删除"
+											onClick={() => {
+												setEditingPath(undefined);
+												setConfirmingPath(task.path);
+											}}
+										>
+											<IconTrash size={13} />
+										</button>
+									</span>
+								</div>
+							);
+						})}
+					</div>
 				)}
 			</div>
 

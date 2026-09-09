@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { SessionHost, type SessionHostOptions } from "./session-host.ts";
@@ -73,5 +74,109 @@ describe("agent_end 后的流式状态", () => {
 			.map((e) => e.state.isStreaming);
 		expect(pushed.at(-1)).toBe(false);
 		expect(host.state.isStreaming).toBe(false);
+	});
+});
+
+type UserMessageEvent = Extract<SessionEvent, { type: "user_message" }>;
+
+describe("用户消息的图片附件翻译", () => {
+	it("带 image 块的 user message：text 拼接文本块，image 块转 ImagePart", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		translate(host, {
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [
+					{ type: "text", text: "看这张图" },
+					{ type: "image", data: "aGk=", mimeType: "image/png" },
+					{ type: "text", text: "，写个说明" },
+				],
+				timestamp: 1725,
+			},
+		} as unknown as AgentSessionEvent);
+
+		const message = events.find(
+			(e): e is UserMessageEvent => e.type === "user_message",
+		)?.message;
+		expect(message?.text).toBe("看这张图，写个说明");
+		expect(message?.images).toEqual([{ type: "image", data: "aGk=", mimeType: "image/png" }]);
+	});
+
+	it("纯文本 user message 不带 images 字段", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		translate(host, {
+			type: "message_start",
+			message: { role: "user", content: "你好", timestamp: 1725 },
+		} as unknown as AgentSessionEvent);
+
+		const message = events.find(
+			(e): e is UserMessageEvent => e.type === "user_message",
+		)?.message;
+		expect(message?.text).toBe("你好");
+		expect(message !== undefined && "images" in message).toBe(false);
+	});
+});
+
+describe("prompt 的图片透传", () => {
+	/** 可记录调用的假会话。isStreaming 决定走 prompt 还是 steer/followUp 分支。 */
+	function recordingSession(isStreaming: boolean): {
+		session: unknown;
+		calls: { prompt: unknown[][]; steer: unknown[][]; followUp: unknown[][] };
+	} {
+		const calls: { prompt: unknown[][]; steer: unknown[][]; followUp: unknown[][] } = {
+			prompt: [],
+			steer: [],
+			followUp: [],
+		};
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming,
+			getContextUsage: () => undefined,
+			prompt: (...args: unknown[]) => {
+				calls.prompt.push(args);
+			},
+			steer: (...args: unknown[]) => {
+				calls.steer.push(args);
+			},
+			followUp: (...args: unknown[]) => {
+				calls.followUp.push(args);
+			},
+		};
+		return { session, calls };
+	}
+
+	it("非流式：图片经 PromptOptions.images 传入，无图时不传 options", async () => {
+		const { session, calls } = recordingSession(false);
+		const host = createHost(session, () => {});
+
+		await host.prompt("看图", undefined, [
+			{ type: "image", data: "aGk=", mimeType: "image/png" },
+		]);
+		expect(calls.prompt).toEqual([
+			["看图", { images: [{ type: "image", data: "aGk=", mimeType: "image/png" }] }],
+		]);
+
+		await host.prompt("没图");
+		expect(calls.prompt).toHaveLength(2);
+		expect(calls.prompt[1]).toEqual(["没图", undefined]);
+	});
+
+	it("流式：steer / followUp 的第二参数是图片数组，缺省归一为 undefined", async () => {
+		const images: readonly ImagePart[] = [
+			{ type: "image", data: "aGk=", mimeType: "image/jpeg" },
+		];
+
+		const steer = recordingSession(true);
+		await createHost(steer.session, () => {}).prompt("纠偏", "steer", images);
+		expect(steer.calls.steer).toEqual([["纠偏", images]]);
+
+		const followUp = recordingSession(true);
+		await createHost(followUp.session, () => {}).prompt("追问", "followUp");
+		expect(followUp.calls.followUp).toEqual([["追问", undefined]]);
 	});
 });

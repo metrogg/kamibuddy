@@ -21,6 +21,7 @@ import {
 	createAgentSession,
 	DefaultResourceLoader,
 	type InlineExtension,
+	type PromptOptions,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -31,6 +32,7 @@ import type {
 	ToolOutcome,
 } from "../shared/session-events.ts";
 import { generatingLabel } from "../shared/session-events.ts";
+import type { ImagePart } from "../shared/image.ts";
 import {
 	changeFromEdit,
 	changeFromWrite,
@@ -119,6 +121,23 @@ function doneLabel(toolName: string, outcome: ToolOutcome): string {
 	return TOOL_DONE_LABELS[toolName] ?? toolName;
 }
 
+/**
+ * 历史视图重建（session-rebuild.ts）的工具卡 label 解析器。
+ *
+ * 重建出的卡片都是完成态，label 必须与 live 卡片完成后同词汇 —— 同一张卡
+ * 「活的时候叫 已搜索、刷新后叫 联网搜索」这种漂移比用词不准更难看。
+ * 词汇的单一来源就是本文件的 label 函数，这里只做分派，不另起映射表。
+ *
+ * write/edit 的完成标签依赖新建/覆盖（writeDoneLabel 要 changeType），
+ * 而执行前的文件存在性不落盘，重建时已无法知道 —— 取各自的典型语义：
+ * write 的主场景是生成新文档，edit 语义上就是改已有文件。
+ */
+export function restoredToolLabel(toolName: string): string {
+	if (toolName === "write") return writeDoneLabel("created", "ok");
+	if (toolName === "edit") return writeDoneLabel("modified", "ok");
+	return doneLabel(toolName, "ok");
+}
+
 /** 从工具入参里挑一个最能说明「在对什么东西操作」的值作为摘要。 */
 function summarizeArgs(args: unknown): string {
 	if (typeof args !== "object" || args === null) return "";
@@ -154,6 +173,59 @@ function textOf(content: unknown): string {
 		})
 		.map((part) => part.text)
 		.join("");
+}
+
+/**
+ * pi 的图片块类型（agent-session.d.ts 的 PromptOptions.images 元素）。
+ * 根包未直接导出 ImageContent（它来自 pi-ai/compat），经 PromptOptions 提取，
+ * 避免本仓库直接依赖 pi 的嵌套子包。
+ */
+type PiImage = NonNullable<PromptOptions["images"]>[number];
+
+/**
+ * shared 的 ImagePart → pi 的图片块。两者结构相同但类型来源不同：
+ * 依赖方向规则不许 pi 类型流进 shared（shared/image.ts 平行定义了一份），
+ * 反向（shared 类型进 core）合法；pi 的参数是可变数组而 shared 契约是
+ * readonly，拷贝一层完成转换。空/缺省归一成 undefined —— 无图请求不构造
+ * options，与既有无图调用路径的行为完全一致。
+ */
+function toPiImages(images: readonly ImagePart[] | undefined): PiImage[] | undefined {
+	if (images === undefined || images.length === 0) return undefined;
+	return images.map((image) => ({
+		type: "image" as const,
+		data: image.data,
+		mimeType: image.mimeType,
+	}));
+}
+
+/**
+ * pi 用户消息的 content → UI 的 { text, images }。
+ *
+ * 与 textOf 的分工：textOf 只取文本（assistant / 工具结果没有图片语义），
+ * 用户消息是唯一携带图片附件的路径，两条路径不合并 —— textOf 若也带图，
+ * assistant / tool 的翻译处就得各忽略一份它不该有的数据。
+ */
+function userContentOf(
+	content: unknown,
+): { readonly text: string; readonly images: readonly ImagePart[] | undefined } {
+	if (typeof content === "string") return { text: content, images: undefined };
+	if (!Array.isArray(content)) return { text: "", images: undefined };
+	let text = "";
+	const images: ImagePart[] = [];
+	for (const part of content) {
+		if (typeof part !== "object" || part === null) continue;
+		const p = part as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
+		if (p.type === "text" && typeof p.text === "string") {
+			text += p.text;
+		} else if (
+			p.type === "image" &&
+			typeof p.data === "string" &&
+			typeof p.mimeType === "string"
+		) {
+			images.push({ type: "image", data: p.data, mimeType: p.mimeType });
+		}
+	}
+	return { text, images: images.length === 0 ? undefined : images };
 }
 
 /** 工具结果的正文。大输出已由 pi 侧处理，这里不再截断。 */
@@ -200,6 +272,13 @@ export interface SessionHostOptions {
 	 * 权限门需要向宿主发起审批询问，提示词切换需要两轴与技能——都是 daemon 的职责。
 	 */
 	readonly extensions?: readonly InlineExtension[];
+	/**
+	 * 会话持久化管理器。缺省 `SessionManager.create(cwd, getSessionsDir())`（全新会话）；
+	 * 恢复历史会话时传 `SessionManager.open(path, getSessionsDir())` 的结果。
+	 * open 是同步的（dist 类型：static open(...) : SessionManager），
+	 * 所以注入点是个值而不是 Promise。
+	 */
+	readonly sessionManager?: SessionManager;
 }
 
 export class SessionHost {
@@ -321,7 +400,9 @@ export class SessionHost {
 			// 复用 ModelCatalog 已建好的 runtime，避免重复读 auth.json / models.json。
 			modelRuntime: options.catalog.modelRuntime,
 			...(model === undefined ? {} : { model }),
-			sessionManager: SessionManager.create(cwd, getSessionsDir()),
+			// 恢复历史会话时由 daemon 注入 open 出来的 manager（含全部落盘条目）；
+			// 缺省开全新会话文件。
+			sessionManager: options.sessionManager ?? SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
 			tools: playground
@@ -360,15 +441,19 @@ export class SessionHost {
 	async prompt(
 		text: string,
 		whileStreaming?: "steer" | "followUp",
+		images?: readonly ImagePart[],
 	): Promise<void> {
+		// pi 的两个入口形态不同（agent-session.d.ts）：prompt 走 PromptOptions.images，
+		// steer/followUp 的第二参直接是图片数组。这里统一先归一。
+		const piImages = toPiImages(images);
 		if (this.session.isStreaming) {
 			// 流式期间直接 prompt 会被 pi 拒绝，必须显式选择排队方式。
 			// 默认 steer：用户追加的话通常是想纠偏当前这轮，而不是等它跑完。
-			if (whileStreaming === "followUp") await this.session.followUp(text);
-			else await this.session.steer(text);
+			if (whileStreaming === "followUp") await this.session.followUp(text, piImages);
+			else await this.session.steer(text, piImages);
 			return;
 		}
-		await this.session.prompt(text);
+		await this.session.prompt(text, piImages === undefined ? undefined : { images: piImages });
 	}
 
 	async abort(): Promise<void> {
@@ -399,6 +484,26 @@ export class SessionHost {
 	 */
 	dispose(): void {
 		this.session.dispose();
+	}
+
+	/**
+	 * 重命名当前会话（写入 pi 的 session_info 条目）。
+	 *
+	 * 必须走本实例持有的活 SessionManager：pi 的 SessionManager 各自缓存
+	 * entries，同一文件出现两个活写者会互相覆盖。非当前会话的重命名
+	 * 由 daemon 临时 open 一个实例完成（用完即弃，不注册到任何地方）。
+	 */
+	renameSession(name: string): void {
+		this.session.sessionManager.appendSessionInfo(name);
+	}
+
+	/**
+	 * 当前会话文件名。daemon 用它标会话列表的 current、判定 rename/delete
+	 * 的目标是不是这个活会话。in-memory 会话为 undefined —— 本应用的会话
+	 * 都是持久化的，但 pi 的类型如此，调用方必须处理。
+	 */
+	get sessionFilePath(): string | undefined {
+		return this.session.sessionManager.getSessionFile();
 	}
 
 	async setModel(modelKey: string): Promise<void> {
@@ -566,19 +671,22 @@ export class SessionHost {
 				this.streamToolCalls.clear();
 
 				if (message.role === "user") {
-					// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
-					// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
-					emit({
-						type: "user_message",
-						message: {
-							id: this.nextId("user"),
-							role: "user",
-							text: textOf(message.content),
-							at: message.timestamp,
-						},
-					});
-					return;
-				}
+				// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
+				// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
+				const { text, images } = userContentOf(message.content);
+				emit({
+					type: "user_message",
+					message: {
+						id: this.nextId("user"),
+						role: "user",
+						text,
+						// 无图不带字段：UserMessage.images 是可选契约，UI 按缺省渲染。
+						...(images === undefined ? {} : { images }),
+						at: message.timestamp,
+					},
+				});
+				return;
+			}
 
 				if (message.role === "assistant") {
 					const id = this.nextId("assistant");

@@ -27,9 +27,14 @@
  * **T3 加了 web_search / web_fetch 之后这个前提就不成立了** ——
  * 外发通道已经存在，读到密钥就能被带走（哪怕只是提示注入诱导的）。
  * 所以现在凭据文件**禁读**，而不只是禁写。
+ *
+ * 【2026-09-08 修第二个回归】上面的禁读一刀切误伤了 configDir/skills/：
+ * 渐进式披露靠模型用 read 工具加载 SKILL.md 全文（系统提示词里只放索引），
+ * 全禁读让已安装技能变成「列表里有但永不可用」的死技能。
+ * 所以技能子目录对**只读工具**例外放行；写仍拒（见阶段 1 注释）。
  */
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	DEFAULT_PERMISSIONS,
 	resolveAsk,
@@ -62,7 +67,7 @@ export interface ToolCallFacts {
 export interface PolicyPaths {
 	/** 会话工作目录（~/KamiBuddy）。目录内的改动免打扰。 */
 	readonly workspaceDir: string;
-	/** 配置目录（~/.kamibuddy）。存着 API Key，一律禁读禁写。 */
+	/** 配置目录（~/.kamibuddy）。存着 API Key，禁读禁写；skills/ 子目录对只读工具例外。 */
 	readonly configDir: string;
 	/**
 	 * 额外的受保护目录（凭据类）。**读与写都拒，且任何沙箱模式都不能越过。**
@@ -190,6 +195,20 @@ function decideUnderMode(
 	 */
 	if (target !== undefined) {
 		if (isInside(paths.configDir, target)) {
+			/*
+			 * 技能子目录对只读工具例外：渐进式披露的加载路径就在这里 ——
+			 * 系统提示词只放技能索引（name + description + filePath），
+			 * 全文靠模型用 read 工具按需加载（skill-install.ts 的 filePath
+			 * 与 session-host 的提示词组装都指向这个目录）。
+			 * 一刀切禁读会让用户安装的技能全部变成「列表里有但永不可用」的死技能。
+			 *
+			 * 只放开读：写仍拒。技能正文 = 提示词，write/edit 篡改即提示注入；
+			 * 安装走 daemon 的 skill-install 校验通道（frontmatter 校验 + 同名拒绝），
+			 * 不经工具层，所以这里不需要为写开任何口子。
+			 */
+			if (READ_ONLY.has(toolName) && isInside(join(paths.configDir, "skills"), target)) {
+				return { kind: "allow" };
+			}
 			return { kind: "deny", reason: "禁止读写 KamiBuddy 的配置与凭据文件" };
 		}
 		for (const dir of paths.protectedDirs ?? []) {

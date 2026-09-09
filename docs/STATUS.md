@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-08（T3 联网工具落地；产物交付与预览面板由并行会话推进）
+> 最后更新：2026-09-08（T4 会话管理落地 + 首页权限入口前置；spec：.trae/specs/home-permission-and-session-management/）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -8,7 +8,8 @@
 
 **真实对话已跑通**（用户实测：填 Key → 选模型 → 发消息 → 模型正常回复，含思考块与工具卡片）。
 通用底座已齐：设置页（填 Key / 选模型 / 自建服务商）、权限门、技能机制、工作空间、
-产物交付与预览面板、联网工具。
+产物交付与预览面板、联网工具、**会话管理（列表 / 恢复 / 重命名 / 删除）**。
+首页权限 chip 已可用（预设快捷切换，设置页保留完整版）。
 
 当前唯一待收口：**联网工具的端到端验证**——服务商 API 已实测可用（博查直连返回真实结果），
 最后一版修复（工具集初始化 + 博查成功码语义）需要重启应用后由你确认一次，见「等你验证」。
@@ -109,8 +110,8 @@ WorkBuddy 主提示词里也明确写「中间过程在 UI 被折叠」，同一
 
 ```
 typecheck        通过
-check:deps       93 个文件，依赖方向合规
-test             393 passed（31 个测试文件）
+check:deps       96 个文件，依赖方向合规
+test             423 passed（32 个测试文件）
 smoke:session    13/13  ← SessionHost.create() 全流程，含扩展注入实测
 build            三目标（main/preload/renderer）产物正常
 真机运行          真实对话已跑通（用户实测：填 Key → 选模型 → 正常回复）
@@ -134,6 +135,11 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
    卡片，回答带来源链接。**旧会话不会生效**：工具集在建会话时一次性注入。
 3. **权限弹窗** —— 让它「在桌面建一个 txt」应弹审批框；写工作目录内应直接放行。
 4. **中断** —— 长任务中途点停止键。
+5. **会话管理（T4 新）** —— 侧栏「任务」列出历史会话；点击一条应恢复完整对话
+   （继续追问时模型记得之前内容）；行内重命名重启后仍在；删除后进 `~/.kamibuddy/trash/`；
+   关闭应用重开能找回并继续。
+6. **首页权限 chip（新）** —— 首页「默认权限 ▾」展开弹层，切「只读」后让它写文件
+   应被拒并提示切换预设；切回「默认权限」恢复。设置页权限区显示应一致。
 
 发现问题直接告诉我现象即可。
 
@@ -234,6 +240,54 @@ npm run smoke:sdk      # pi SDK 冒烟
 | `~/.kamibuddy/` | `auth.json`（密钥，0600）、`models.json`（自建服务商）、`models-store.json`、`preferences.json`、`sessions/` |
 | `~/KamiBuddy/`  | **会话工作目录**，AI 生成的文档落在这里。刻意与配置分开，免得用户误删配置                                                     |
 
+## 审查回归修复（2026-09-08）
+
+全面代码审查发现的问题中，三个高优先级项已修复（均有回归测试钉住）：
+
+1. **技能禁读误伤（权限回归）**：2026-09-08 把 configDir 从禁写升级为禁读时一刀切，
+   模型经 read 工具加载 `~/.kamibuddy/skills/**/SKILL.md` 被拒，用户安装的技能全部变成
+   「列表里有但永不可用」的死技能。修复：configDir 的 `skills/` 子目录对**只读工具**例外
+   （write/edit 仍拒——技能正文=提示词，篡改即注入；安装走 skill-install 校验通道）。
+   见 `permission-policy.ts` 阶段 1 注释与新增的 6 条测试。教训：**收紧安全策略时，
+   必须同时回归「被保护目录的合法消费者」清单**。
+
+2. **`/new` 命令会话漂移**：daemon 清空历史后只发 `session_state`，而 reducer 对它
+   不动 entries —— renderer 一直显示幽灵历史（侧栏「新建任务」有 resyncSnapshot 补救，
+   /new 没有）。修复：新增 `history_reset` 事件，resetSession 改走 emitSessionEvent，
+   两端折叠同一个 reducer 分支同步清零。`conversation.test.ts` 有对应用例。
+
+3. **首页输入框无 IME 守卫**：中文输入法选词 Enter 误发半截消息（chat-view 有守卫、
+   home-view 漏配——两处重复实现的直接后果）。修复：抽 `useImeGuard`（ime-guard.ts）
+   两处共用，按键逻辑统一为命名处理器 `handleComposerKeyDown`。
+
+## 会话管理（2026-09-08 落地，T4）
+
+pi 的 `SessionManager` 早已把会话以 JSONL 树落盘（`~/.kamibuddy/sessions/`），
+本次接上「使用」一半（spec：`.trae/specs/home-permission-and-session-management/`）：
+
+- **列表**：侧栏「任务」区显示全部历史会话（`SessionManager.listAll` → daemon 组装
+  `SessionSummary`：标题 = 命名 ?? 首条消息截断、智能时间戳、空间标识、current 高亮），
+  修改时间倒序。刷新时机：启动 / 新建任务 / 恢复 / run 结束。
+- **恢复**：点击历史会话 → `SessionManager.open` 重建 SessionHost（复用 createHost 全部组装，
+  只换 SessionManager 注入点），从 header 恢复工作空间（playground 占位目录恢复 playground 语义）
+  与预览服务根；视图由 `core/session-rebuild.ts` 纯函数重建（pi SessionEntry[] →
+  ConversationEntry[]，23 个测试）。**恢复不改模型与权限设置**（spec 决策）。
+  resume 路径不发 history_reset（renderer 走 resyncSnapshot 整体替换，避免闪空屏）。
+- **重命名**：`appendSessionInfo(name)`。当前会话走活实例，非当前会话临时 open 写入
+  （避免同一文件两个活写者）。
+- **删除**：移入 `~/.kamibuddy/trash/`（时间戳前缀防同名，可人工找回——对齐 pi
+  「避免永久删除」的取向）；当前会话拒删。
+
+路径安全：resume/rename/delete 的目标必须经 `validateSessionFilePath`
+（sessions 目录内 + `.jsonl`，防 `../` 穿越与任意文件打开）。
+
+## 首页权限入口前置（2026-09-08 落地）
+
+首页「默认权限 ▾」chip 从 onTodo 死按钮改为真实弹层（`renderer/permission-menu.tsx`）：
+三个预设快捷切换，选中即调既有 `setPermissions`（daemon getter 读取，下一次工具调用生效）。
+档位以旋钮反查（`presetIdFor`）为权威，组合不匹配显示「自定义」。
+分工同 ModelMenu：首页是切换器，设置页保留完整版（双旋钮 + 强制力说明），同一数据源无漂移。
+
 ## 已知坑
 
 ### pi 没有权限系统，也没有任何路径约束
@@ -243,8 +297,8 @@ npm run smoke:sdk      # pi SDK 冒烟
 pi README 自述 "does not include a built-in permission system"，它的思路是靠容器隔离整个进程。
 
 我们的对策是 `src/extensions/` 那一层（ARCHITECTURE.md §4.57）。
-**改动权限相关文件时务必跑** **`npm test`** —— 那 89 个测试是这条安全边界的唯一护栏
-（`permission-policy` 41 + `permission-gate` 21 + `project-trust` 9 + `shared/permissions` 18）。
+**改动权限相关文件时务必跑** **`npm test`** —— 那 95 个测试是这条安全边界的唯一护栏
+（`permission-policy` 47 + `permission-gate` 21 + `project-trust` 9 + `shared/permissions` 18）。
 
 ### IDE 注入 `ELECTRON_RUN_AS_NODE=1`
 
@@ -346,11 +400,12 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 完整任务清单见 **[ROADMAP.md](ROADMAP.md)**，含：
 接手者硬约束、已查清的 pi API 事实（省下重复调研）、P0-P3 分级任务、排期建议。
 
-**P0 底座已全部落地**（T1 提示词两轴 / T2 技能机制 / T3 联网工具）。
+**P0 底座已全部落地**（T1 提示词两轴 / T2 技能机制 / T3 联网工具），
+T4 会话管理已于 2026-09-08 落地（见上方「会话管理」一节）。
 眼下按价值排序的下一步：
 
 1. **T11 文档生成**（产品价值主菜，HTML 唯一中间态 → 预览 / PDF / docx）；
-2. **T4 会话恢复**（"昨天那个报告在哪"——`SessionManager` 已写 JSONL，缺 UI）；
+2. **T14 先打一次包**（`resources/` 是否被复制、asar 内能否读文件，只有打包才暴露）；
 3. **T5 记忆**（"以后周报都用这个格式"）。
 
 ## 尚未做的事
@@ -358,7 +413,9 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 - 未实现的场景 / 模式（code、design、plan、expert）点击给 toast，不会静默切换。
   已 ready：场景 work，交互 ask / craft。
 
-- 会话历史列表与恢复（T4）：JSONL 已落盘，侧栏「任务」只显示当前会话。
+- 会话树分支（/tree /fork /clone）、会话自动命名（LLM 起标题）：spec 明确不做（见
+  `.trae/specs/home-permission-and-session-management/spec.md` 范围外清单）。
+  「保存到工作空间」（playground 任务事后落为正式空间）未做。
 
 - 记忆（T5）、子代理（T8）、Plan 模式（T9）未做。
 
@@ -402,8 +459,8 @@ WorkBuddy 那 33 个内置插件全是这么组织的。先把底座和技能机
 
 - 会话仍是懒建（首次 prompt 才建 SessionHost），新建任务只作废 + 清空，下次 prompt 自然建新会话。
 
-待做（归 T4 多会话）：会话列表持久化与恢复（`SessionManager` 已写 JSONL，但 UI 还没有
-历史任务列表/切换/重命名/删除）；「保存到工作空间」（playground 任务事后落为正式空间）。
+待做：「保存到工作空间」（playground 任务事后落为正式空间）。
+会话列表/恢复/重命名/删除已落地，见上方「会话管理（2026-09-08 落地，T4）」。
 
 ## 输入框补全 @ / （2026-09-08 落地）
 
@@ -543,8 +600,8 @@ misunderstand as a security boundary"* —— 做不到就说清楚，不假装�
 上面所有路径保护（`type ~\.ssh\id_rsa`）。既然文档里批评了 WorkBuddy broker shim
 的 fail-open，自己就不能在同一处松手。
 
-测试：**权限相关共 89 个用例** —— `shared/permissions` 18（新增）+
-`permission-policy` 41（原 23）+ `permission-gate` 21（原 16）+ `project-trust` 9（新增）。
+测试：**权限相关共 95 个用例** —— `shared/permissions` 18 +
+`permission-policy` 47（含 skills/ 只读例外 6 条）+ `permission-gate` 21 + `project-trust` 9。
 其中最该留意的一条：**切到更严的档位后，先前「记住」的批准立即失效**
 （remembered 检查排在 decide 之后；若为了少弹窗把它提前，「切成只读」就成了空话）。
 

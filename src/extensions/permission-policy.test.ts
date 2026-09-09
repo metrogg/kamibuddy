@@ -145,6 +145,47 @@ describe("配置目录：一律拒绝，且不给「允许」选项", () => {
 	});
 });
 
+describe("配置目录内的技能子目录：只读工具例外", () => {
+	/*
+	 * 这组用例钉住 2026-09-08 的第二个回归：configDir 从禁写升级为禁读时
+	 * 一刀切误伤了 skills/ —— 渐进式披露靠模型用 read 工具加载 SKILL.md 全文，
+	 * 全禁读后用户安装的技能全部变成「列表里有但永不可用」的死技能。
+	 * 89 个权限测试里没有一条覆盖「被保护目录的合法消费者」，这组就是补位。
+	 */
+	const SKILLS_DIR = join(PATHS.configDir, "skills");
+	const SKILL_MD = join(SKILLS_DIR, "meeting-notes", "SKILL.md");
+
+	it("read 用户技能的 SKILL.md → 放行（渐进式披露的加载路径）", () => {
+		expect(decide(facts({ toolName: "read", path: SKILL_MD }), PATHS, CWD)).toEqual({ kind: "allow" });
+	});
+
+	it("find / grep / ls 技能目录 → 放行（模型要枚举技能的 references/）", () => {
+		for (const toolName of ["find", "grep", "ls"]) {
+			expect(decide(facts({ toolName, path: SKILLS_DIR }), PATHS, CWD)).toEqual({ kind: "allow" });
+		}
+	});
+
+	it("写技能目录仍然拒绝 —— 技能正文 = 提示词，篡改即提示注入（安装走 skill-install 校验通道）", () => {
+		expect(decide(facts({ toolName: "write", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
+		expect(decide(facts({ toolName: "edit", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
+	});
+
+	it("技能目录之外的配置目录仍然禁读（auth.json / sessions / preferences）", () => {
+		for (const p of ["auth.json", join("sessions", "x.jsonl"), "preferences.json"]) {
+			expect(decide(facts({ toolName: "read", path: join(PATHS.configDir, p) }), PATHS, CWD).kind).toBe("deny");
+		}
+	});
+
+	it("同名前缀的兄弟目录不放行（skills-evil 不是 skills）", () => {
+		const target = join(PATHS.configDir, "skills-evil", "SKILL.md");
+		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD).kind).toBe("deny");
+	});
+
+	it("只读模式下读技能同样放行（read-only 拒的是改动，不是读）", () => {
+		expect(decide(facts({ toolName: "read", path: SKILL_MD }), PATHS, CWD, READONLY)).toEqual({ kind: "allow" });
+	});
+});
+
 describe("工作目录之外的写入", () => {
 	it("写家目录其他位置 → 询问", () => {
 		const result = decide(facts({ path: join(HOME, "Desktop", "报表.xlsx") }), PATHS, CWD);

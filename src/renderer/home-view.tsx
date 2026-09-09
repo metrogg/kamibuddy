@@ -8,13 +8,17 @@
  */
 
 import { useRef, useState } from "react";
+import type { ImagePart } from "@shared/image.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { useAutocomplete } from "./autocomplete.tsx";
+import { AttachmentStrip, useImageAttachments } from "./image-attachments.tsx";
+import { useImeGuard } from "./ime-guard.ts";
 import { ModelMenu } from "./model-menu.tsx";
+import { PermissionMenu } from "./permission-menu.tsx";
+import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
-	IconChevronDown,
 	IconClose,
 	IconDoc,
 	IconMic,
@@ -44,7 +48,11 @@ interface HomeViewProps {
 	readonly onOpenSettings: () => void;
 	/** 主页就地操作（切模型等）失败时的提示出口。 */
 	readonly onError: (message: string) => void;
-	readonly onSubmit: (text: string) => void;
+	/**
+	 * 提交（文本 + 可选图片附件）。resolve 表示 daemon 已接收；
+	 * 附件据此决定去留（失败保留在输入区，见 submit）。
+	 */
+	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	/** 工作空间切换成功后调用：daemon 已重置会话，App 重拉快照。 */
 	readonly onWorkspaceChanged: () => void;
 	readonly onTodo: (feature: string) => void;
@@ -115,6 +123,13 @@ export function HomeView({
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值。
 	// cwd 作为刷新键：切换工作空间后重拉文件列表，否则 @ 停留在旧空间（或 playground 空列表）。
 	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd);
+	// IME 守卫与 chat-view 共用一份接线（useImeGuard）——此前各写一份漏了这里，
+	// 中文输入法选词 Enter 直接误发消息，两处同源后不会再出现这种半吊子修复。
+	const ime = useImeGuard();
+	// 图片附件（粘贴/拖拽/选择三入口），与 chat-view 共用同一份 hook。
+	const img = useImageAttachments(onError);
+	// 非视觉模型提示的数据源（模型目录 join，见 vision-hint.tsx）；未知不提示。
+	const visionSupported = useModelSupportsVision(modelId);
 	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
 	const [caseOffset, setCaseOffset] = useState(0);
 	const [casesVisible, setCasesVisible] = useState(true);
@@ -122,8 +137,31 @@ export function HomeView({
 	const submit = (): void => {
 		const text = draft.trim();
 		if (text === "" || !ready) return;
+		const images = img.attachments;
 		setDraft("");
-		onSubmit(text);
+		// 附件等 daemon 接收成功再清：失败时错误已由 App 落进对话页错误卡，
+		// 图留在输入区，补一句话重发即可，不必重挑文件。
+		void onSubmit(text, images.length > 0 ? images : undefined).then(
+			() => img.clear(),
+			() => {},
+		);
+	};
+
+	/**
+	 * 输入框按键。ac 先行：补全打开时 Enter=选中（已 preventDefault），守卫不插手它的消费顺序。
+	 * Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
+	 */
+	const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+		ac.bind.onKeyDown(e);
+		if (e.key !== "Enter" || e.defaultPrevented) return;
+		if (ime.shouldSwallowNow()) {
+			e.preventDefault();
+			return;
+		}
+		if (!e.shiftKey) {
+			e.preventDefault();
+			submit();
+		}
 	};
 
 	const visibleCases = Array.from(
@@ -163,7 +201,19 @@ export function HomeView({
 				</div>
 
 				<div className="composer-zone">
-					<div className="composer-card">
+					{/*
+						拖放三件套（onDragOver/onDragLeave/onDrop）挂在输入卡而非 textarea 上：
+						整个卡片（含按钮行）都是放置目标，命中区大得多。悬停高亮由
+						img.dragOver 驱动（进 drag-over 类），拖文本片段不亮（见 hook 注释）。
+					*/}
+					<div
+						className={`composer-card${img.dragOver ? " drag-over" : ""}`}
+						onDrop={img.bind.onDrop}
+						onDragOver={img.bind.onDragOver}
+						onDragLeave={img.bind.onDragLeave}
+					>
+						<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
+						<VisionHint visible={visionSupported === false && img.attachments.length > 0} />
 						<div className="composer-input">
 							{ac.menu}
 							<textarea
@@ -172,22 +222,17 @@ export function HomeView({
 								onChange={ac.bind.onChange}
 								onSelect={ac.bind.onSelect}
 								onBlur={ac.bind.onBlur}
-								onKeyDown={(e) => {
-									ac.bind.onKeyDown(e);
-									// Enter 发送，Shift+Enter 换行 —— 聊天类应用通行约定。
-									// ac 打开时 Enter=选中（已 preventDefault），这里只对未被消费的 Enter 发送。
-									if (e.key === "Enter" && !e.shiftKey && !e.defaultPrevented) {
-										e.preventDefault();
-										submit();
-									}
-								}}
+								onPaste={img.bind.onPaste}
+								onCompositionStart={ime.bind.onCompositionStart}
+								onCompositionEnd={ime.bind.onCompositionEnd}
+								onKeyDown={handleComposerKeyDown}
 								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
 								disabled={!ready}
 								rows={3}
 							/>
 						</div>
 						<div className="composer-bar">
-							<button type="button" className="bar-btn" aria-label="添加附件" onClick={() => onTodo("附件引用")}>
+							<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片" onClick={() => void img.pickFromDialog()}>
 								<IconPlus size={17} />
 							</button>
 							<span className="bar-spacer" />
@@ -212,10 +257,8 @@ export function HomeView({
 
 				<div className="context-row">
 					<WorkspacePicker cwd={cwd} onChanged={onWorkspaceChanged} />
-					<button type="button" className="context-chip" onClick={() => onTodo("权限策略")}>
-						默认权限
-						<IconChevronDown size={12} />
-					</button>
+					{/* 权限预设就地快切；两个独立旋钮与完整说明在设置页（菜单底部有入口）。 */}
+					<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
 				</div>
 
 				{casesVisible && (

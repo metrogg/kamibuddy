@@ -10,7 +10,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import {
 	BrowserWindow,
 	app,
@@ -22,6 +23,7 @@ import {
 	type UtilityProcess,
 } from "electron";
 import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
+import { MAX_IMAGE_BYTES, type ImagePart } from "../shared/image.ts";
 import { INVOKE, PUSH, type DaemonStatus, type SaveArtifactRequest } from "../shared/ipc.ts";
 
 /** main 自己处理、不转发给 daemon 的通道（需要 Electron API 或 main 独有状态）。 */
@@ -31,6 +33,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.saveArtifactAs,
 	INVOKE.pickWorkspaceDirectory,
 	INVOKE.pickSkillDirectory,
+	INVOKE.pickImageFiles,
 ];
 
 let window: BrowserWindow | undefined;
@@ -208,6 +211,53 @@ function registerIpc(): void {
 		});
 		return canceled || filePaths.length === 0 ? undefined : filePaths[0];
 	});
+
+	// 图片多选 + 读出内容。读文件必须在 main 做：渲染进程是沙箱 web 环境，
+	// 拿不到任意路径的字节；与其开两条通道不如在 dialog 应答里一并完成。
+	ipcMain.handle(INVOKE.pickImageFiles, async () => {
+		if (window === undefined) return undefined;
+		const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+			title: "选择图片",
+			properties: ["openFile", "multiSelections"],
+			filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+		});
+		if (canceled || filePaths.length === 0) return undefined;
+		return Promise.all(filePaths.map(readImageFile));
+	});
+}
+
+/**
+ * 扩展名 → MIME。dialog 的 filters 已限定可选类型，落到未知扩展名
+ * 说明环境异常（filter 被绕过），响亮失败而不是猜一个类型发出去。
+ */
+function imageMimeTypeOf(path: string): string {
+	switch (extname(path).toLowerCase()) {
+		case ".png":
+			return "image/png";
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".gif":
+			return "image/gif";
+		case ".webp":
+			return "image/webp";
+		default:
+			throw new Error(`不支持的图片格式：${path}`);
+	}
+}
+
+/** 读图片文件并编码成 ImagePart（base64 无 data: 前缀，shared 契约）。 */
+async function readImageFile(path: string): Promise<ImagePart> {
+	// 体积守门与粘贴/拖拽入口（image-attachments.tsx 的 rejectReason）同上限：
+	// dialog 选中的文件字节只在 main 可见，这道门必须在 readFile 之前补上，
+	// 否则超限图会带着 base64 放大后的负载直接进入会话。
+	const { size } = await stat(path);
+	if (size > MAX_IMAGE_BYTES) {
+		// 抛错经 invoke reject 回到 renderer 的 toast，文案口径与 rejectReason 一致。
+		throw new Error(`「${basename(path)}」超过 5MB 上限`);
+	}
+	const data = await readFile(path);
+	return { type: "image", data: data.toString("base64"), mimeType: imageMimeTypeOf(path) };
 }
 
 /* ── 启动 ─────────────────────────────────────────────────────────── */
