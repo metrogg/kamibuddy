@@ -474,6 +474,13 @@ function requestApproval(
 let hostPromise: Promise<SessionHost> | undefined;
 
 /**
+ * 最近一次非 plan 的交互模式。/plan 是进出开关：进入 plan 前记下当前模式，
+ * 在 plan 中再发 /plan 就切回这里记的模式。缺省 craft（与初始 interactionId 一致）。
+ * 只活在内存：重启后回 craft 可接受，不值得为它落盘。
+ */
+let lastNonPlanInteraction = "craft";
+
+/**
  * 懒建会话。第一次发消息时才创建 —— 建会话需要一个可用模型，
  * 而用户可能先打开应用、再去设置里填 Key。
  *
@@ -1129,12 +1136,19 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.prompt]: async ([request]) => {
 		const { text, whileStreaming, images } = request as PromptRequest;
 
-		// 内置命令（/new、/compact）是操作不是消息：发给模型没有意义，
+		// 内置命令（/new、/compact、/plan）是操作不是消息：发给模型没有意义，
 		// 在进会话之前拦下来执行（解析规则见 shared/builtin-commands.ts）。
 		const command = parseBuiltinCommand(text.trim());
 		if (command !== undefined) {
 			if (command.name === "new") {
 				await newTask();
+				return;
+			}
+			if (command.name === "plan") {
+				// 进出开关：非 plan 进 plan（applyInteraction 会记下当前模式）；
+				// 已在 plan 则切回记下的模式。
+				const current = conversation.state.interactionId;
+				await applyInteraction(current === "plan" ? lastNonPlanInteraction : "plan");
 				return;
 			}
 			// compact：pi 会先中断当前操作且不续跑，流式期间明确拒绝比被中断好。
@@ -1275,14 +1289,8 @@ const handlers: Record<string, Handler> = {
 		(await hostPromise).setScene(id);
 	},
 
-	[INVOKE.setInteraction]: async ([interactionId]) => {
-		const id = requireReady(INTERACTIONS, interactionId as string, "交互模式");
-		if (hostPromise === undefined) {
-			updateStateLocally({ interactionId: id });
-			return;
-		}
-		(await hostPromise).setInteraction(id);
-	},
+	[INVOKE.setInteraction]: async ([interactionId]) =>
+		applyInteraction(interactionId as string),
 
 	/**
 	 * 切换模型。不依赖会话 —— 设置界面在会话建立前就要能用。
@@ -1457,6 +1465,7 @@ const handlers: Record<string, Handler> = {
 			// 解析规则见 shared/builtin-commands.ts —— 两边必须一致。
 			{ name: "new", description: "新建任务", source: "builtin" as const },
 			{ name: "compact", description: "压缩上下文：总结历史，释放窗口", source: "builtin" as const },
+			{ name: "plan", description: "计划模式：只读调研，先出计划再执行", source: "builtin" as const },
 		],
 	}),
 
@@ -1594,6 +1603,21 @@ function updateStateLocally(changes: Partial<SessionState>): void {
 		type: "session_state",
 		state: { ...conversation.state, ...changes },
 	});
+}
+
+/**
+ * 交互模式切换的统一入口：setInteraction 通道与 /plan 内置命令都走这里。
+ * 任何切到非 plan 模式的切换都刷新记忆 —— 用户从切换器切走后再发 /plan，
+ * 回到的必须是刚切走的那个模式，而不是一条过时记忆。
+ */
+async function applyInteraction(id: string): Promise<void> {
+	const readyId = requireReady(INTERACTIONS, id, "交互模式");
+	if (readyId !== "plan") lastNonPlanInteraction = readyId;
+	if (hostPromise === undefined) {
+		updateStateLocally({ interactionId: readyId });
+		return;
+	}
+	(await hostPromise).setInteraction(readyId);
 }
 
 async function dispatch(request: DaemonRequest): Promise<void> {

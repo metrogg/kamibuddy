@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（文档读取能力 read_document：PDF/Office → 文本，模型可读 PDF 了；spec：.trae/specs/add-document-reading/）
+> 最后更新：2026-09-09（plan 模式 + 加号菜单 + /plan，spec：.trae/specs/add-plan-mode-and-plus-menu/；同日早前：文档读取 read_document）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -160,6 +160,10 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
    ⑤ 发几条消息后 Alt+↑ 逐条翻回、Alt+↓ 翻回到底再按一次恢复半截草稿，
    切到设置再切回对话页草稿还在；⑥ 粘贴超长文本：剩余 <1000 字符时右侧出余量，
    超 10 万变红且发不出去。
+11. **plan 模式（新，见下方专节）** —— 三种进法：输入框发 `/plan`、头部模式切换器选「计划」、
+    加号菜单 → 模式 → 计划。让它「规划一下 XX」：只读调研后给编号计划、不改任何文件；
+    计划消息下点「执行计划」：切回创作并自动开工。plan 中再发 `/plan` 回到之前模式。
+    加号菜单的「专家/技能/连接器」点击只提示待做。
 
 发现问题直接告诉我现象即可。
 
@@ -445,6 +449,26 @@ spec：`.trae/specs/align-chat-details-workbuddy/`（用户逐条确认的 6 点
 顺带完成的积压修正：复制 hook 上移 `copy-tick.ts`（三处共用）；右面板开关按钮的
 半完成重构补齐（`IconPanelRight` 从 chat-view 移到 App.tsx——按钮早已钉在 App 层右上角，
 图标与 props 解构还留在原地，typecheck 当时是红的）。
+
+## Plan 模式 + 加号菜单（2026-09-09）
+
+spec：`.trae/specs/add-plan-mode-and-plus-menu/`。机制学 pi 官方示例扩展
+`plan-mode/`（只读硬约束 + 计划先行 + 确认后执行），文案全部自创。
+
+1. **plan 交互模式**：`resources/modes/plan.md`——白名单只读（read/read_document/find/
+   grep/ls/web_search/web_fetch，无 write/edit/present_files），经既有
+   `setInteraction → setActiveToolsByName` 链路硬约束生效，零机制代码（AGENTS.md §3：
+   加模式 = 加一个文件）。头部 ModeSwitch 自动出现「计划」。
+2. **「执行计划」衔接**（官方 plan→execute 的轻量版）：plan 模式 + 非流式 + 末条是
+   assistant 消息时，操作条出现「执行计划」——点击先 `await setInteraction("craft")`
+   落地再自动发执行引导语（不落地会撞旧只读工具面，注释写了这个竞态）。
+   明确不做：DONE:n 进度跟踪、todo widget、bash 白名单（无 bash）、快捷键、跨会话持久化。
+3. **加号菜单**：对话页「+」展开菜单（`plus-menu.tsx`）——添加文件（原图片流程）/
+   模式 ▸（与 ModeSwitch 同源）/ 专家 / 技能 / 连接器（后三项占位 toast）。
+   首页「+」本批不动。
+4. **/plan 内置命令**：精确匹配、无参数（`/plan xxx` 按普通文本发送，与 /new 同理由）。
+   daemon 拦截切换；退出时回到上一个非 plan 模式（内存记录，缺省 craft）——
+   所有模式切换收敛到 `applyInteraction` 单入口，记忆不会失效。
 
 ## 文档读取 read_document（2026-09-09 落地）
 

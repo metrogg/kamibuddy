@@ -20,7 +20,6 @@ import {
 	IconCopy,
 	IconDoc,
 	IconMic,
-	IconPlus,
 	IconSend,
 	IconStop,
 } from "./icons.tsx";
@@ -34,6 +33,7 @@ import type { HistoryNavState } from "./input-history.ts";
 import { charCountState } from "./input-limit.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
+import { PlusMenu } from "./plus-menu.tsx";
 import { stopConfirmExpired, stopConfirmIdle, triggerStop } from "./stop-confirm.ts";
 import type { StopConfirmState } from "./stop-confirm.ts";
 import { useModelSupportsVision, VisionHint } from "./vision-hint.tsx";
@@ -173,15 +173,32 @@ function UserBubble({
 /* ── 助手消息操作条 ──────────────────────────────────────────────── */
 
 /**
- * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条，只做复制）。
+ * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条）。
  * 与 user-toolbar 同款「常驻占位、hover 切透明度」模式，理由相同：
  * hover 才插入 DOM 会推搡下方消息流。流式中的末条也渲染 —— 复制部分内容无害。
+ *
+ * 「执行计划」是 plan→craft 的衔接入口：plan 模式产出的计划只在末条
+ * assistant 消息上给这个按钮（历史消息不给，否则满屏按钮）。
  */
-function AssistantActions({ text }: { readonly text: string }): React.JSX.Element {
+function AssistantActions({
+	text,
+	showExecutePlan,
+	onExecutePlan,
+}: {
+	readonly text: string;
+	/** 是否显示「执行计划」（父组件按 plan 模式 + 非流式 + 末条判定）。 */
+	readonly showExecutePlan: boolean;
+	readonly onExecutePlan: () => void;
+}): React.JSX.Element {
 	const { copied, copy } = useCopyWithTick();
 
 	return (
 		<div className="assistant-toolbar">
+			{showExecutePlan && (
+				<button type="button" className="assistant-execute" onClick={onExecutePlan}>
+					执行计划
+				</button>
+			)}
 			<button
 				type="button"
 				className="assistant-copy"
@@ -856,6 +873,25 @@ export function ChatView({
 	};
 
 	/**
+	 * 「执行计划」：切回创作模式后以用户消息名义发起执行。
+	 *
+	 * 切换必须 await 落地后再发：setInteraction 与 prompt 走同一条 INVOKE
+	 * 通道但不保证工具面即时生效，不先落地的话执行请求会撞上 plan 的
+	 * 只读白名单（写工具调用被 daemon 拒掉）。
+	 * 为什么不走 onInteractionChange：它是 fire-and-forget（内部 catch），
+	 * 拿不到「切换已生效」的时机。
+	 */
+	const executePlan = (): void => {
+		void window.kami.setInteraction("craft").then(
+			() => {
+				// 提交失败的原因 App 会落进错误卡（lastError），与手动发送同口径，不重复提示。
+				onSubmit("计划没问题，就按上面的计划开始执行吧。").catch(() => {});
+			},
+			(error: unknown) => onError(error instanceof Error ? error.message : String(error)),
+		);
+	};
+
+	/**
 	 * 输入框按键。ac 先行：补全打开时 Enter=选中、Esc=关闭补全（均 preventDefault），
 	 * 之后的守卫一律不插手它的消费（e.defaultPrevented 直接 return）。
 	 * IME 守卫与 home-view 共用一份接线（useImeGuard）：选词确认的 Enter 发送与换行（含 Shift+Enter）都吞。
@@ -1005,9 +1041,17 @@ export function ChatView({
 									/>
 								)}
 								{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-							<Markdown text={entry.text} />
-							<AssistantActions text={entry.text} />
-						</div>
+						<Markdown text={entry.text} />
+						{/*
+							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
+							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
+						*/}
+						<AssistantActions
+							text={entry.text}
+							showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
+							onExecutePlan={executePlan}
+						/>
+					</div>
 						);
 					}
 					case "error": {
@@ -1157,9 +1201,18 @@ export function ChatView({
 						/>
 					</div>
 					<div className="composer-bar">
-						<button type="button" className="bar-btn" aria-label="添加附件" title="添加图片或文档" onClick={() => void img.pickFromDialog()}>
-							<IconPlus size={17} />
-						</button>
+					{/*
+						「+」菜单：添加文件（原图片/文档选择流程挪进菜单项）+ 模式子菜单
+						（与头部 ModeSwitch 同一数据源）+ 专家/技能/连接器占位。
+						弹层向上、左对齐，与下方 PermissionMenu 同一约定。
+					*/}
+					<PlusMenu
+						modes={conversation.availableModes}
+						currentId={conversation.state.interactionId}
+						onInteractionChange={onInteractionChange}
+						onPickFiles={() => void img.pickFromDialog()}
+						onTodo={onTodo}
+					/>
 						{/*
 							权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
 							时不必退回首页换档。放左侧而非右侧语音钮旁 —— 弹层左对齐

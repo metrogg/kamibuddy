@@ -21,6 +21,14 @@ describe("parseBuiltinCommand", () => {
 		expect(parseBuiltinCommand("/new 做个周报")).toBeUndefined();
 	});
 
+	it("/plan 精确匹配", () => {
+		expect(parseBuiltinCommand("/plan")).toEqual({ name: "plan", args: "" });
+	});
+
+	it("/plan 带参数不识别（与 /new 同规则：防误吞用户文本）", () => {
+		expect(parseBuiltinCommand("/plan 帮我规划")).toBeUndefined();
+	});
+
 	it("非内置命令不识别（技能 / 模板交给 pi 展开）", () => {
 		expect(parseBuiltinCommand("/skill:docx")).toBeUndefined();
 		expect(parseBuiltinCommand("/weekly 本周")).toBeUndefined();
