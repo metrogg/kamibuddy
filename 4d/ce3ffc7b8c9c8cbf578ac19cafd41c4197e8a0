@@ -1,0 +1,212 @@
+src/daemon/index.ts
+  s_c4023de03b1ef1::t_7bd9304f1404ae 405-416
+  s_c4023de03b1ef1::t_9fe733ae21eb4f 35
+  s_c4023de03b1ef1::t_2d75624a85ce6b 495-497
+  s_c4023de03b1ef1::t_6eb259e9b4c87a 956-1004
+  s_c4023de03b1ef1::t_8afcee8efa4499 1198-1199,1202-1209
+src/shared/ipc.ts
+  s_c4023de03b1ef1::t_59841d93a94565 85-90
+  s_c4023de03b1ef1::t_b60acc319444e6 306
+.trae/specs/strengthen-present-files-prompt/spec.md
+  s_02a19f96eca1d5::t_58f69cf19e6064 1-64
+src/shared/artifacts.test.ts
+  s_02a19f96eca1d5::t_94a1bc828fc665 194,199-200,204,209,211,220-228,231-242
+  s_02a19f96eca1d5::t_429e96e427e97a 248,252-253
+src/renderer/permission-dialog.tsx
+  s_c4023de03b1ef1::t_db5e232638ef7b 78-84,89
+.trae/specs/fix-present-files-delivery/tasks.md
+  s_02a19f96eca1d5::t_05f4219cf7b0d0 1-2,7,13,18,23,28-34
+  s_02a19f96eca1d5::t_7abbea82d216cd 3-6,8-12,14-17,19-22
+  s_02a19f96eca1d5::t_383c32501a08fb 24-27
+src/shared/artifacts.ts
+  s_02a19f96eca1d5::t_374b35be78a7f1 52-53,61-63,66-67,75,89,96,98-103
+  s_02a19f96eca1d5::t_8a82ee94d80fcb 70-71,80,83,97,108
+src/extensions/permission-gate.test.ts
+  s_c4023de03b1ef1::t_17f33ced6dffbb 79,81,87-100
+  s_c4023de03b1ef1::t_7bfa2f8fce9f1c 244-260
+src/renderer/chat-view.tsx
+  s_02a19f96eca1d5::t_4c91f25f3a05b0 842-857
+  s_c4023de03b1ef1::t_579fe80bffe98d 922-927
+  s_c4023de03b1ef1::t_94646f6ea1a1cc 31
+  s_c4023de03b1ef1::t_bc829e3d42eefa 53-54
+  s_c4023de03b1ef1::t_79fc20323cbb66 593
+.trae/specs/export-session-html/checklist.md
+  s_c4023de03b1ef1::t_ca3953325e96c6 1-4,10-12,15-17,22-24
+  s_c4023de03b1ef1::t_24819bd98d8641 5-9,13-14,18-21,25-28
+.trae/specs/strengthen-present-files-prompt/checklist.md
+  s_02a19f96eca1d5::t_b0cb3d5db62a9a 1-2,8
+  s_02a19f96eca1d5::t_7b16589fa233c2 3-7
+src/renderer/index.css
+  s_c4023de03b1ef1::t_9669837730039a 176,178
+resources/modes/craft.md
+  s_02a19f96eca1d5::t_bc8fd492170b58 13
+  s_02a19f96eca1d5::t_b1dc74b7ac134b 6
+src/renderer/artifact-panel.tsx
+  s_02a19f96eca1d5::t_b91c53d663a297 205-227
+  s_02a19f96eca1d5::t_7884a1e065f2bd 161,167
+  s_02a19f96eca1d5::t_658445b0c1f65e 298
+.trae/specs/harden-permission-boundary/tasks.md
+  s_c4023de03b1ef1::t_060bb58f65e443 5-9
+  s_c4023de03b1ef1::t_5801d4aaab8bbe 24-28
+  s_c4023de03b1ef1::t_ead40b561ba387 10-13
+  s_c4023de03b1ef1::t_3e1cb3b4ff2a39 1-4,14-16,21-23,29-31,35-52
+  s_c4023de03b1ef1::t_b4957f82d93d0e 17-20
+  s_c4023de03b1ef1::t_af901b18d9fc5f 32-34
+src/renderer/App.tsx
+  s_c4023de03b1ef1::t_51b4658a396b2c 479
+  s_c4023de03b1ef1::t_83218708742161 442
+  s_c4023de03b1ef1::t_29b1046b67aeb3 381-411
+  s_c4023de03b1ef1::t_e8f14010c3e776 380
+  s_02a19f96eca1d5::t_312076db44f500 473-478
+.trae/specs/fix-present-files-delivery/checklist.md
+  s_02a19f96eca1d5::t_566fa1c89fa10d 3-11
+  s_02a19f96eca1d5::t_8c14e08a495ebe 1-2
+.trae/specs/harden-permission-boundary/checklist.md
+  s_c4023de03b1ef1::t_64621f13a49807 5-9,13-15,19-20,24-25,29-30,34-37
+  s_c4023de03b1ef1::t_3ac24cba51f751 1-4,10-12,16-18,21-23,26-28,31-33
+src/shared/conversation.test.ts
+  s_02a19f96eca1d5::t_10cf9b6515b83e 383,389-390
+src/core/session-host.ts
+  s_c4023de03b1ef1::t_f967e3f852be54 127
+  s_c4023de03b1ef1::t_999387bf00c659 134-139,141-148,494
+  s_c4023de03b1ef1::t_72a0f13cb8622e 495-512
+src/extensions/permission-policy.ts
+  s_c4023de03b1ef1::t_e660dba7124534 20-25,139
+  s_c4023de03b1ef1::t_0a32065f4c4638 92-98
+  s_c4023de03b1ef1::t_7822b4dab658cf 248-269
+  s_c4023de03b1ef1::t_b48cc53d8abbbf 125,127-129,131-133,137-138
+  s_c4023de03b1ef1::t_28e29933ee97ac 308-322
+  s_c4023de03b1ef1::t_f0d24fcdbe7ddc 38-46
+src/core/session-rebuild.ts
+  s_c4023de03b1ef1::t_f04637e28d7727 184
+  s_c4023de03b1ef1::t_8da647d9b4e1fa 118-120,125
+.trae/specs/harden-permission-boundary/spec.md
+  s_c4023de03b1ef1::t_ee66a208e5d1b0 1-147
+src/core/session-rebuild.test.ts
+  s_c4023de03b1ef1::t_041e2397aff74c 277,279-283,285-286,291-337
+  s_c4023de03b1ef1::t_ab9f1b188b151b 26
+  s_c4023de03b1ef1::t_69517336c5dca8 338
+src/preload/index.ts
+  s_c4023de03b1ef1::t_bec2b8929c8d9f 42
+.trae/specs/fix-present-files-delivery/spec.md
+  s_02a19f96eca1d5::t_225770205b91f9 1-109
+src/core/session-export.test.ts
+  s_c4023de03b1ef1::t_9204ed5098112c 43
+  s_c4023de03b1ef1::t_fc90928784d164 1-22,26-41,44-60
+  s_c4023de03b1ef1::t_cd155035b82e94 42
+  s_c4023de03b1ef1::t_30aca2c56c7382 23-25
+package.json
+  s_c4023de03b1ef1::t_1d6fa7b20e2183 17
+docs/ARCHITECTURE.md
+  s_c4023de03b1ef1::t_a2080bc4336001 264
+  s_c4023de03b1ef1::t_af7dd8756359cb 270-273,276-278,280
+src/extensions/present-files.ts
+  s_02a19f96eca1d5::t_836c2c8e3f0557 24,59-67,70,74,78,97
+.trae/specs/strengthen-present-files-prompt/tasks.md
+  s_02a19f96eca1d5::t_9c87a76c2ff9c2 1-2,6,9,12-16
+  s_02a19f96eca1d5::t_ffab9b385bb91c 3-5,7-8,10-11
+scripts/smoke-permission-gate.ts
+  s_c4023de03b1ef1::t_a0cee8e2fb7fbf 159-160
+  s_c4023de03b1ef1::t_a132629acf089b 1-158,161-175,177-292
+  s_c4023de03b1ef1::t_e7fc57fae791c9 176
+resources/scenes/work/prompt.md
+  s_02a19f96eca1d5::t_6b71ae6545d1ce 20-26
+src/core/resources.test.ts
+  s_02a19f96eca1d5::t_4012673839453f 10
+  s_02a19f96eca1d5::t_e3bc3d8743ec36 114-128
+.trae/specs/export-session-html/tasks.md
+  s_c4023de03b1ef1::t_6df1201a1b5eae 5-11
+  s_c4023de03b1ef1::t_11e11c7a027d83 15-22
+  s_c4023de03b1ef1::t_0223e580c445ad 1-4,12-14,23-25,29-47
+  s_c4023de03b1ef1::t_5ec71ba23ec830 26-28
+src/core/session-export.ts
+  s_c4023de03b1ef1::t_77a11e6dea4862 13-17
+  s_c4023de03b1ef1::t_38d286fe7e243a 26-28,35,37
+  s_c4023de03b1ef1::t_3480cd023c805a 1-12,19-25,29-34,36,38-56
+  s_c4023de03b1ef1::t_e2357976a63886 18
+src/renderer/sidebar.tsx
+  s_c4023de03b1ef1::t_b276aeacf8f6e1 41-42
+  s_c4023de03b1ef1::t_0ca0c02eea3b1e 17
+  s_c4023de03b1ef1::t_f6e34fe8af8f96 203-221
+  s_c4023de03b1ef1::t_24c3b6a27f5b7b 73
+docs/STATUS.md
+  s_c4023de03b1ef1::t_bd02bbfbe4eeb2 314-341
+  s_c4023de03b1ef1::t_9713b2dec860c5 655-657
+  s_c4023de03b1ef1::t_2a5d67ca0010a8 3
+  s_c4023de03b1ef1::t_e600b7b25bc33a 238
+  s_c4023de03b1ef1::t_67ae185088cdd8 353
+  s_c4023de03b1ef1::t_b523b6108fbe09 137-138
+  s_c4023de03b1ef1::t_100b7f41f5c08c 351-352
+  s_c4023de03b1ef1::t_dfffeec47d0560 297-313
+  s_c4023de03b1ef1::t_7a5dcacd0fe572 145-147
+  s_c4023de03b1ef1::t_18b3800e9a940c 113-114,116
+resources/modes/ask.md
+  s_02a19f96eca1d5::t_b9b6ac1d3976e7 6
+src/extensions/permission-policy.test.ts
+  s_c4023de03b1ef1::t_97d717fe2c4ffc 24,29,86-88,346-347,458
+  s_c4023de03b1ef1::t_185f20ad8b0987 43-74,79-85
+  s_c4023de03b1ef1::t_057632a5434afe 135-136
+  s_c4023de03b1ef1::t_777d14cad00c07 447-450,453-457
+  s_c4023de03b1ef1::t_41bbe91702ac4a 336-345
+  s_c4023de03b1ef1::t_997b9bcd53c984 348-379
+src/shared/bridge.ts
+  s_c4023de03b1ef1::t_252d4c2e3b61ea 69-70
+.trae/specs/export-session-html/spec.md
+  s_c4023de03b1ef1::t_7dd3d4ee7f92ed 1-92
+src/extensions/permission-gate.ts
+  s_c4023de03b1ef1::t_904d0b98c6028d 103,105
+  s_c4023de03b1ef1::t_d69f86926d02fa 97-102
+  s_c4023de03b1ef1::t_96b064c7530b5c 96
+src/renderer/icons.tsx
+  s_c4023de03b1ef1::t_662d80796952d6 226-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "4dce3ffc7b8c9c8cbf578ac19cafd41c4197e8a0",
+  "prompts": {},
+  "sessions": {
+    "s_02a19f96eca1d5": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa039a5f850234b77c2f872",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "session_id": "6aa039a5f850234b77c2f872",
+        "edit_kind": "file_edit",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_id": "Edit",
+        "tool_use_id": "6aa0d09df850234b77c30abe",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "source_scene": "unknown",
+        "operation_id": "6aa0d09df850234b77c30abe",
+        "external_session_id": "6aa039a5f850234b77c2f872",
+        "dedupe_key": "6aa039a5f850234b77c2f872:6aa0d09df850234b77c30abe:afterEdit:f4b034f2"
+      }
+    },
+    "s_c4023de03b1ef1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9feadcc981c232faa34c0c",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "edit_kind": "file_edit",
+        "tool_id": "Edit",
+        "source_scene": "unknown",
+        "tool_type": "agent",
+        "operation_id": "6aa0d371f850234b77c30b58",
+        "dedupe_key": "6a9feadcc981c232faa34c0c:6aa0d371f850234b77c30b58:afterEdit:ba5f5e18",
+        "tool_use_id": "6aa0d371f850234b77c30b58",
+        "session_id": "6a9feadcc981c232faa34c0c",
+        "client_type": "ide",
+        "external_session_id": "6a9feadcc981c232faa34c0c",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
