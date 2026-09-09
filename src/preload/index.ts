@@ -97,12 +97,19 @@ const bridge: KamiBridge = {
 
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
 
+	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
+	saveAutomation: (input) => ipcRenderer.invoke(INVOKE.automationSave, input),
+	deleteAutomation: (id) => ipcRenderer.invoke(INVOKE.automationDelete, id),
+	toggleAutomation: (id) => ipcRenderer.invoke(INVOKE.automationToggle, id),
+	runAutomationNow: (id) => ipcRenderer.invoke(INVOKE.automationRunNow, id),
+
 	onSessionEvent: (listener) => subscribe(PUSH.sessionEvent, listener),
 	onUiRequest: (listener) => subscribe(PUSH.uiRequest, listener),
 	onPermissionRequest: (listener) =>
 		subscribe(PUSH.permissionRequest, listener),
 	onDaemonReady: (listener) => subscribe(PUSH.daemonReady, () => listener()),
 	onDaemonDown: (listener) => subscribe(PUSH.daemonDown, listener),
+	onAutomationEvent: (listener) => subscribe(PUSH.automationEvent, listener),
 };
 
 contextBridge.exposeInMainWorld("kami", bridge);

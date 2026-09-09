@@ -52,6 +52,11 @@ export function getSessionsDir(): string {
 	return join(getConfigDir(), "sessions");
 }
 
+/** 定时任务库。读写与原子落盘策略见 core/automation-store.ts。 */
+export function getAutomationsFile(): string {
+	return join(getConfigDir(), "automations.json");
+}
+
 /**
  * 提示词与模式资源目录（仓库根的 resources/）。
  *

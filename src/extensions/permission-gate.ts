@@ -29,6 +29,13 @@ export interface PermissionGateOptions {
 	readonly getSettings?: () => PermissionSettings;
 	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
 	readonly requestApproval: (request: Omit<PermissionRequest, "id">) => Promise<PermissionResponse>;
+	/**
+	 * 无人值守模式（定时任务 run 会话）：审批类请求一律自动拒绝，
+	 * 拒绝原因作为工具结果回给模型 —— 没有人在场点按钮，挂起等审批
+	 * 等于把 run 卡死到超时。deny（凭据目录等硬规则）不受影响，
+	 * 那条判定链在 policy 里、先于本开关生效。
+	 */
+	readonly unattended?: boolean;
 }
 
 /** 从 pi 的工具入参里取出判定需要的事实。 */
@@ -71,6 +78,20 @@ export function createPermissionGate(options: PermissionGateOptions) {
 			if (decision.kind === "deny") {
 				// reason 会作为工具结果回给模型，让它知道为什么失败、别再重试同一件事。
 				return { block: true, reason: decision.reason };
+			}
+
+			/*
+			 * 无人值守：ask 直接转拒，不发起审批。
+			 * 文案写给模型看（它是工具结果）：说明为什么不行、给可绕行的方向 ——
+			 * 模型据此改用工作区内路径，或在最终结果里如实报告该步骤做不了。
+			 */
+			if (options.unattended === true) {
+				return {
+					block: true,
+					reason:
+						"当前是定时任务的无人值守运行，没有人在场审批，此类操作不可用。" +
+						"请改用任务工作目录内的路径完成；实在绕不开的，在最终结果中如实说明这一步未能执行及原因。",
+				};
 			}
 
 			/*

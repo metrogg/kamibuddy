@@ -18,10 +18,16 @@ import {
 	IconBack,
 	IconCheck,
 	IconChevronDown,
+	IconCode,
 	IconCopy,
 	IconDoc,
+	IconEdit,
+	IconFolder,
 	IconMic,
+	IconResearch,
+	IconSkill,
 	IconAssistant,
+	IconWeb,
 } from "./icons.tsx";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
@@ -35,6 +41,7 @@ import { PlusMenu } from "./plus-menu.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
+import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
 
 interface ChatViewProps {
 	readonly conversation: ConversationView;
@@ -298,9 +305,13 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 	// 执行中（outcome 未落定）或生成中（write 参数还在流式输出）→ 状态字扫光；
 	// 完成后摘类回归静态 —— 扫光是全局唯一「进行中」语言（对标 WorkBuddy）。
 	const running = card.outcome === undefined || card.generating === true;
+	// 失败与 tool-dot.bad 同口径（outcome 落定且非 ok，含被拦/被取消）：
+	// 换成失败状态图标，不再显示工具类型图标（状态图标与类型图标分属两套，WorkBuddy 同构）。
+	const failed = card.outcome !== undefined && card.outcome !== "ok";
+	const ToolIcon = failed ? FAILED_ICON : toolIconOf(card.toolName);
 
 	return (
-		<div className={`entry tool${card.outcome === "error" ? " tool-error" : ""}`}>
+		<div className="entry tool">
 			<button
 				type="button"
 				className="tool-head"
@@ -309,6 +320,9 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				onClick={() => setOpen((v) => !v)}
 			>
 				<span className={`tool-dot ${outcomeClass(card.outcome)}`} />
+				{/* 工具类型图标按 toolName 从 registry 解析；执行中隐藏 ——
+				    进行中状态全靠呼吸点 + 扫光状态字表达（WorkBuddy 同款）。 */}
+				{!running && <ToolIcon size={14} className={failed ? "tool-icon failed" : "tool-icon"} />}
 				{/* 标签是状态词（生成中/已生成/读取中/已读取…），由适配层按
 				    WorkBuddy 词汇表给出，UI 不做映射（契约见 session-events.ts）。 */}
 				<span className={running ? "tool-label text-shimmer" : "tool-label"}>{card.label}</span>
@@ -323,12 +337,34 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				)}
 				{expandable && <IconChevronDown size={12} className={open ? "tool-caret open" : "tool-caret"} />}
 			</button>
-			{open && card.detail !== undefined && <pre className="tool-detail">{card.detail}</pre>}
+			{/* 详情盒常驻 DOM、open 类切换：条件挂载下元素挂载即终态，
+			    CSS 过渡无从起跳，折叠展开动画必须有一个始终在树的元素。 */}
+			{expandable && <pre className={open ? "tool-detail-box open" : "tool-detail-box"}>{card.detail}</pre>}
 		</div>
 	);
 }
 
 /* ── MetaFold 过程折叠 ───────────────────────────────────────────── */
+
+/**
+ * 折叠行行首主导图标的工具名 → 图标映射。fold.leadIcon 在 shared 层
+ * （metafold.ts）只是工具名 —— 图标是渲染资产，不能逆流进 shared（§1）。
+ * bash/powershell 在此汇合为同一终端图标（metafold 侧二者拆开计数，
+ * 视觉仍一致）。未知工具（如 MCP 工具）兜底 IconSkill。
+ */
+const FOLD_LEAD_ICONS: Readonly<Record<string, typeof IconDoc>> = {
+	read: IconDoc,
+	write: IconEdit,
+	edit: IconEdit,
+	ls: IconFolder,
+	grep: IconResearch,
+	find: IconResearch,
+	bash: IconCode,
+	powershell: IconCode,
+	web_search: IconWeb,
+	web_fetch: IconWeb,
+	present_files: IconDoc,
+};
 
 /**
  * 一个折叠单元：回合结束后连续工具卡折成的一行摘要（机制对标 WorkBuddy）。
@@ -339,16 +375,19 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
  * 展开后内容就是原 ToolEntry 列表，卡片自身的展开/详情行为不变。
  */
 function MetaFoldBlock({
+	leadIcon,
 	summary,
 	cards,
 	open,
 	onToggle,
 }: {
+	readonly leadIcon: string;
 	readonly summary: string;
 	readonly cards: readonly ToolCard[];
 	readonly open: boolean;
 	readonly onToggle: () => void;
 }): React.JSX.Element {
+	const LeadIcon = FOLD_LEAD_ICONS[leadIcon] ?? IconSkill;
 	return (
 		<div className="metafold">
 			<button
@@ -357,10 +396,18 @@ function MetaFoldBlock({
 				title={open ? "收起过程" : "展开过程"}
 				onClick={onToggle}
 			>
+				<LeadIcon size={16} className="metafold-lead" />
 				<span className="metafold-summary">{summary}</span>
 				<IconChevronDown size={12} className="metafold-caret" />
 			</button>
-			{open && cards.map((card) => <ToolEntry key={card.id} card={card} />)}
+			{/* 折叠体常驻 DOM（理由同 ToolEntry 详情盒）。高度动画走
+			    grid-template-rows 0fr↔1fr：卡片数不定、内层工具详情还会
+			    再展开，max-height 的固定上限方案在这里必然裁内容。 */}
+			<div className={open ? "metafold-body open" : "metafold-body"}>
+				<div className="metafold-body-inner">
+					{cards.map((card) => <ToolEntry key={card.id} card={card} />)}
+				</div>
+			</div>
 		</div>
 	);
 }
@@ -893,6 +940,7 @@ export function ChatView({
 					return (
 						<MetaFoldBlock
 							key={block.id}
+							leadIcon={block.leadIcon}
 							summary={block.summary}
 							cards={block.cards}
 							open={foldOpen.get(block.id) ?? false}
@@ -1036,8 +1084,14 @@ export function ChatView({
 					/>
 				)}
 				</div>
-				{/* 不在底部时浮现（跟随已停）；点击平滑回底并恢复跟随。 */}
-				{showJumpToBottom && (
+			{/*
+				底部渐隐（对标 WorkBuddy __bottom-mask）：渐变叠加层钉在
+				stream-wrap 视口底部，不随内容滚动。与「回到底部」共用同一可见
+				条件（不在底部才需要软收边）；常驻 DOM 只切 opacity，往返都有过渡。
+			*/}
+			<div className="stream-fade" data-visible={showJumpToBottom} />
+			{/* 不在底部时浮现（跟随已停）；点击平滑回底并恢复跟随。 */}
+			{showJumpToBottom && (
 					<button
 						type="button"
 						className="jump-to-bottom"

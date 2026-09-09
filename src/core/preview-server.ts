@@ -130,6 +130,14 @@ export class PreviewServer {
 			const name = path.slice(path.lastIndexOf(sep) + 1);
 			headers["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
 		}
+		// CORS：预览面板（dev localhost:5173 / prod file://）与本服务（127.0.0.1:随机端口）
+		// 不同源，PDF/Office 预览用 fetch 读字节会被浏览器 CORS 拦截——
+		// 而嵌入式加载（img/video/audio/iframe）不受 CORS 约束所以正常。
+		// 服务只绑 127.0.0.1、只读、根限工作区，风险可控，故放行所有源。
+		// PNA（Private Network Access）：Electron 44 对 file://（非 local 地址空间）访问
+		// 127.0.0.1（local 空间）会触发 PNA 预检，缺此头会被拦。
+		headers["access-control-allow-origin"] = "*";
+		headers["access-control-allow-private-network"] = "true";
 		res.writeHead(200, headers);
 		createReadStream(path).pipe(res);
 	}

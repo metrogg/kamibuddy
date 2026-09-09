@@ -1,8 +1,11 @@
 /**
  * 产物预览面板（右侧栏，对标 WorkBuddy 的 DetailPanel，07-artifact-preview.md §3）。
  *
- * 结构对齐其 DetailPanel：顶部 tab 条 = 概览下拉 + 文件/变更 tab + 外部打开。
- * - 概览下拉：产物 / 变更 / 工作区文件 三组导航（其「概览」+ 用户要的文件可见性）。
+ * 结构对齐其 DetailPanel：顶部 tab 条 = 视图切换器 + 文件/变更 tab + 外部打开。
+ * - 视图切换器：概览 / 工作空间文件 / 变更 三平级视图（fix-panel-view-hierarchy：
+ *   三者平级，产物只是概览视图内的一组，不再共用一个内嵌三组的下拉）。
+ *   主体双态（列表 / 预览）由 panel-view.ts 状态机管：点条目进预览，
+ *   切视图回列表（tabs 留 tab 条可点回），关最后一个 tab 回列表。
  * - 文件 tab：HTML 走静态服务的活页面（iframe，能跑 JS）；代码走 Monaco 只读高亮
  *   （code-preview.tsx）；纯文本 <pre>；图片 <img>；
  *   Markdown 富文本；PDF 走 react-pdf（pdf-preview.tsx）；Office 三格式走
@@ -15,7 +18,7 @@
  * 本组件只管渲染，不做路径判断 —— 判断放两边必然漂移。
  */
 
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ARTIFACT_PREVIEW_MAX_BYTES, type ArtifactRef, type ChangeRef } from "@shared/artifacts.ts";
 import { formatSize } from "@shared/format-size.ts";
 import { codeLanguageOf, isCodePreviewExt } from "./code-languages.ts";
@@ -24,15 +27,27 @@ import { PdfPreview } from "./pdf-preview.tsx";
 import { OfficePreview, type OfficeFormat } from "./office-preview.tsx";
 import { Markdown } from "./markdown.tsx";
 import {
+	IconCheck,
 	IconChevronDown,
 	IconClose,
 	IconDoc,
+	IconEdit,
 	IconExpand,
 	IconFile,
 	IconFolder,
 	IconOpenExternal,
 	IconShrink,
+	IconWorkspace,
 } from "./icons.tsx";
+import {
+	closeLastTab,
+	closeTab,
+	initialPanelViewState,
+	openPreview,
+	selectView,
+	type PanelView,
+	type PanelViewState,
+} from "./panel-view.ts";
 import {
 	collapseFolder,
 	createLazyTreeState,
@@ -456,34 +471,192 @@ function visibleCollapsed(state: LazyTreeState): ReadonlySet<string> {
 	return collapsed;
 }
 
-/** 概览下拉：产物 / 变更 / 工作区文件（目录树）三组导航。 */
-function OverviewMenu({
+/** 三平级视图的显示名（切换器按钮与菜单项共用一份，两处各写必然漂移）。 */
+const VIEW_LABELS: Record<PanelView, string> = {
+	overview: "概览",
+	workspace: "工作空间文件",
+	changes: "变更",
+};
+
+/** 菜单顺序固定：概览 / 工作空间文件 / 变更（WorkBuddy 截图同款）。 */
+const VIEW_ORDER: readonly PanelView[] = ["overview", "workspace", "changes"];
+
+function viewIcon(view: PanelView): React.JSX.Element {
+	switch (view) {
+		case "overview":
+			return <IconDoc size={14} />;
+		case "workspace":
+			return <IconWorkspace size={14} />;
+		case "changes":
+			return <IconEdit size={14} />;
+	}
+}
+
+/**
+ * 视图切换器：按钮 = 当前视图名 + chevron；菜单 = 三个平级视图项，
+ * 当前项带 ✓，菜单里不内嵌任何文件列表（层级修正的核心：
+ * 变更/工作空间文件不再是概览的子级分组）。
+ */
+function ViewSwitcher({
+	view,
+	onSelect,
+}: {
+	readonly view: PanelView;
+	readonly onSelect: (view: PanelView) => void;
+}): React.JSX.Element {
+	const [open, setOpen] = useState(false);
+	return (
+		<div className="view-switcher">
+			<button
+				type="button"
+				className="bar-btn bar-btn-text"
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+			>
+				{VIEW_LABELS[view]}
+				<IconChevronDown size={13} />
+			</button>
+			{open && (
+				<div className="preview-menu view-switcher-menu" role="menu">
+					{VIEW_ORDER.map((v) => (
+						<button
+							key={v}
+							type="button"
+							className="preview-item"
+							role="menuitemradio"
+							aria-checked={v === view}
+							onClick={() => {
+								setOpen(false);
+								onSelect(v);
+							}}
+						>
+							{viewIcon(v)}
+							<span className="preview-item-name">{VIEW_LABELS[v]}</span>
+							{v === view && (
+								<span className="preview-item-meta view-switcher-check">
+									<IconCheck size={13} />
+								</span>
+							)}
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/** 概览视图：产物组（计数 + 条目 + 空态）。条目行为：单击预览 / 双击转正 / URL 外部打开。 */
+function OverviewView({
 	artifacts,
-	changes,
-	cwd,
-	active,
-	onOpen,
+	onPick,
 	onPin,
 	onOpenExternal,
 }: {
 	readonly artifacts: readonly ArtifactRef[];
-	readonly changes: readonly ChangeRef[];
-	readonly cwd: string | undefined;
-	/** 当前激活的预览对象（目录树里高亮对应文件行）。 */
-	readonly active: PreviewSelection | undefined;
-	readonly onOpen: (sel: PreviewSelection) => void;
+	readonly onPick: (sel: PreviewSelection) => void;
 	readonly onPin: (sel: PreviewSelection) => void;
 	readonly onOpenExternal: (path: string) => void;
 }): React.JSX.Element {
-	const [open, setOpen] = useState(false);
+	return (
+		<div className="preview-view">
+			<header className="preview-group-title">产物（{artifacts.length}）</header>
+			{artifacts.length === 0 && <div className="preview-group-empty">暂无内容</div>}
+			{artifacts.map((a) => {
+				const isUrl = /^https?:\/\//i.test(a.path);
+				return (
+					<button
+						key={a.path}
+						type="button"
+						className="preview-item"
+						title={isUrl ? `${a.path}（外部打开）` : a.path}
+						onClick={() => {
+							if (isUrl) onOpenExternal(a.path);
+							else onPick({ kind: "file", path: a.path });
+						}}
+						onDoubleClick={() => {
+							if (!isUrl) onPin({ kind: "file", path: a.path });
+						}}
+					>
+						<IconDoc size={14} />
+						<span className="preview-item-name">{baseName(a.path)}</span>
+						{a.size > 0 && <span className="preview-item-meta">{formatSize(a.size)}</span>}
+					</button>
+				);
+			})}
+		</div>
+	);
+}
+
+/** 变更视图：顶部汇总头「文件变更 +N -M」（全变更增删行合计）+ 变更列表（+/- 徽章）。 */
+function ChangesView({
+	changes,
+	onPick,
+	onPin,
+}: {
+	readonly changes: readonly ChangeRef[];
+	readonly onPick: (sel: PreviewSelection) => void;
+	readonly onPin: (sel: PreviewSelection) => void;
+}): React.JSX.Element {
+	// 汇总头是合计值（WorkBuddy 截图同款），逐条徽章在下方列表里，两处口径不同不混用。
+	const totalAdded = changes.reduce((sum, c) => sum + c.added, 0);
+	const totalRemoved = changes.reduce((sum, c) => sum + c.removed, 0);
+	return (
+		<div className="preview-view">
+			{changes.length === 0 ? (
+				<div className="preview-group-empty">本会话还没有变更</div>
+			) : (
+				<>
+					<header className="changes-summary">
+						<span className="changes-summary-label">文件变更</span>
+						<span className="added">+{totalAdded}</span>
+						<span className="removed">-{totalRemoved}</span>
+					</header>
+					{changes.map((c) => (
+						<button
+							key={c.path}
+							type="button"
+							className="preview-item"
+							title={c.path}
+							onClick={() => onPick({ kind: "change", path: c.path })}
+							onDoubleClick={() => onPin({ kind: "change", path: c.path })}
+						>
+							<IconDoc size={14} />
+							<span className="preview-item-name">{baseName(c.path)}</span>
+							<span className="preview-item-meta">
+								<span className="added">+{c.added}</span>
+								<span className="removed">-{c.removed}</span>
+							</span>
+						</button>
+					))}
+				</>
+			)}
+		</div>
+	);
+}
+
+/** 工作空间文件视图：懒加载目录树（状态机原样复用 workspace-file-tree.ts）。 */
+function WorkspaceView({
+	cwd,
+	active,
+	onPick,
+	onPin,
+}: {
+	readonly cwd: string | undefined;
+	/** 当前激活的预览对象（目录树里高亮对应文件行）。 */
+	readonly active: PreviewSelection | undefined;
+	readonly onPick: (sel: PreviewSelection) => void;
+	readonly onPin: (sel: PreviewSelection) => void;
+}): React.JSX.Element {
 	const [tree, setTree] = useState<LazyTreeState | undefined>(undefined);
 
-	// 工作区文件组：打开下拉时拉一次（复用补全通道的索引，两份扫描必然漂移）。
+	// 切入该视图（组件挂载）时拉一次（复用补全通道的索引，两份扫描必然漂移）。
 	// 数据一次性全量（file-index maxEntries 2000 上限），目录树的「懒加载」
 	// 是状态机上的渐进展开而非数据拉取——为将来条目超限后的真分页留口
-	//（workspace-file-tree.ts 头注释）。
+	//（workspace-file-tree.ts 头注释）。切走即卸载、回来重拉，与旧
+	// 「打开下拉时拉一次」同口径，顺带拿到最新索引。
 	useEffect(() => {
-		if (!open || cwd === undefined) return;
+		if (cwd === undefined) return;
 		let disposed = false;
 		window.kami
 			.completions()
@@ -496,17 +669,7 @@ function OverviewMenu({
 		return () => {
 			disposed = true;
 		};
-	}, [open, cwd]);
-
-	const pick = (sel: PreviewSelection): void => {
-		setOpen(false);
-		onOpen(sel);
-	};
-
-	const pin = (sel: PreviewSelection): void => {
-		setOpen(false);
-		onPin(sel);
-	};
+	}, [cwd]);
 
 	/** 文件夹行点击：已加载的折叠 → 即刻展开；展开态 → 折叠；未加载 → 转圈后展开。 */
 	const toggleFolder = (path: string): void => {
@@ -525,115 +688,53 @@ function OverviewMenu({
 	};
 
 	return (
-		<div className="preview-overview">
-			<button type="button" className="bar-btn bar-btn-text" onClick={() => setOpen((v) => !v)}>
-				概览
-				<IconChevronDown size={13} />
-			</button>
-			{open && (
-				<div className="preview-menu">
-					<div className="preview-menu-group">
-						<header className="preview-menu-title">产物（{artifacts.length}）</header>
-						{artifacts.length === 0 && <div className="preview-menu-empty">本会话还没有产物</div>}
-						{artifacts.map((a) => {
-							const isUrl = /^https?:\/\//i.test(a.path);
-							return (
-								<button
-									key={a.path}
-									type="button"
-									className="preview-item"
-									title={isUrl ? `${a.path}（外部打开）` : a.path}
-									onClick={() => {
-										if (isUrl) {
-											setOpen(false);
-											onOpenExternal(a.path);
-										} else {
-											pick({ kind: "file", path: a.path });
-										}
-									}}
-									onDoubleClick={() => {
-										if (!isUrl) pin({ kind: "file", path: a.path });
-									}}
-								>
-									<IconDoc size={14} />
-									<span className="preview-item-name">{baseName(a.path)}</span>
-									{a.size > 0 && <span className="preview-item-meta">{formatSize(a.size)}</span>}
-								</button>
-							);
-						})}
-					</div>
-					<div className="preview-menu-group">
-						<header className="preview-menu-title">变更（{changes.length}）</header>
-						{changes.length === 0 && <div className="preview-menu-empty">本会话还没有变更</div>}
-						{changes.map((c) => (
+		<div className="preview-view">
+			{cwd === undefined ? (
+				<div className="preview-group-empty">工作区尚未就绪</div>
+			) : tree === undefined ? (
+				<div className="preview-group-empty">加载中…</div>
+			) : (
+				<div className="file-tree">
+					{flattenTree(tree.fullTree, visibleCollapsed(tree)).map(({ node, depth }) =>
+						node.kind === "folder" ? (
 							<button
-								key={c.path}
+								key={node.path}
 								type="button"
-								className="preview-item"
-								title={c.path}
-								onClick={() => pick({ kind: "change", path: c.path })}
-								onDoubleClick={() => pin({ kind: "change", path: c.path })}
+								className="file-tree-row file-tree-folder"
+								style={{ paddingLeft: `${8 + depth * 12}px` }}
+								title={node.path}
+								onClick={() => toggleFolder(node.path)}
 							>
-								<IconDoc size={14} />
-								<span className="preview-item-name">{baseName(c.path)}</span>
-								<span className="preview-item-meta">
-									<span className="added">+{c.added}</span>
-									<span className="removed">-{c.removed}</span>
-								</span>
+								<IconChevronDown
+									size={12}
+									className={`file-tree-chevron${
+										tree.loadedPaths.has(node.path) && !tree.collapsedPaths.has(node.path)
+											? " expanded"
+											: ""
+									}`}
+								/>
+								<IconFolder size={14} />
+								<span className="file-tree-name">{node.name}</span>
+								{tree.loadingPaths.has(node.path) && <span className="file-tree-spinner" />}
 							</button>
-						))}
-					</div>
-					<div className="preview-menu-group">
-						<header className="preview-menu-title">工作区文件</header>
-						{cwd === undefined ? (
-							<div className="preview-menu-empty">工作区尚未就绪</div>
-						) : tree === undefined ? (
-							<div className="preview-menu-empty">加载中…</div>
 						) : (
-							<div className="file-tree">
-								{flattenTree(tree.fullTree, visibleCollapsed(tree)).map(({ node, depth }) =>
-									node.kind === "folder" ? (
-										<button
-											key={node.path}
-											type="button"
-											className="file-tree-row file-tree-folder"
-											style={{ paddingLeft: `${8 + depth * 12}px` }}
-											title={node.path}
-											onClick={() => toggleFolder(node.path)}
-										>
-											<IconChevronDown
-												size={12}
-												className={`file-tree-chevron${
-													tree.loadedPaths.has(node.path) && !tree.collapsedPaths.has(node.path)
-														? " expanded"
-														: ""
-												}`}
-											/>
-											<IconFolder size={14} />
-											<span className="file-tree-name">{node.name}</span>
-											{tree.loadingPaths.has(node.path) && <span className="file-tree-spinner" />}
-										</button>
-									) : (
-										<button
-											key={node.path}
-											type="button"
-											className={`file-tree-row file-tree-file${
-												active?.kind === "file" && active.path === node.path ? " selected" : ""
-											}`}
-											/* 文件行没有 chevron：补 18px（12 chevron + 6 gap）让图标与文件夹行对齐。 */
-											style={{ paddingLeft: `${8 + depth * 12 + 18}px` }}
-											title={node.path}
-											onClick={() => pick({ kind: "file", path: node.path })}
-											onDoubleClick={() => pin({ kind: "file", path: node.path })}
-										>
-											<FileTypeIcon name={node.name} size={14} />
-											<span className="file-tree-name">{node.name}</span>
-										</button>
-									),
-								)}
-							</div>
-						)}
-					</div>
+							<button
+								key={node.path}
+								type="button"
+								className={`file-tree-row file-tree-file${
+									active?.kind === "file" && active.path === node.path ? " selected" : ""
+								}`}
+								/* 文件行没有 chevron：补 18px（12 chevron + 6 gap）让图标与文件夹行对齐。 */
+								style={{ paddingLeft: `${8 + depth * 12 + 18}px` }}
+								title={node.path}
+								onClick={() => onPick({ kind: "file", path: node.path })}
+								onDoubleClick={() => onPin({ kind: "file", path: node.path })}
+							>
+								<FileTypeIcon name={node.name} size={14} />
+								<span className="file-tree-name">{node.name}</span>
+							</button>
+						),
+					)}
 				</div>
 			)}
 		</div>
@@ -657,6 +758,52 @@ export function ArtifactPanel({
 	onOpenExternal,
 	onError,
 }: ArtifactPanelProps): React.JSX.Element {
+	// 主体双态（列表 / 预览）× 当前视图，迁移语义见 panel-view.ts 头注释。
+	const [panelState, setPanelState] = useState<PanelViewState>(initialPanelViewState);
+	const { view, mode } = panelState;
+
+	/** 单击条目/点 tab：App 侧 openPreview 落（或激活）tab，面板侧翻预览态。 */
+	const pick = (sel: PreviewSelection): void => {
+		onOpen(sel);
+		setPanelState((s) => openPreview(s));
+	};
+
+	/** 双击转正：同上，转正在 App 侧完成。 */
+	const pin = (sel: PreviewSelection): void => {
+		onPin(sel);
+		setPanelState((s) => openPreview(s));
+	};
+
+	/**
+	 * 外部打开（产物卡 / focusFile / present_files 首开）不经面板内部回调，
+	 * 直接改 previewActive —— 不同步的话外部点了卡片面板还停在列表态。
+	 * 唯一例外：关 tab 让 App 把 active 回退到剩余 tab（handleCloseTab 记下
+	 * 回退目标），列表态关 tab 不该被这个同步拽回预览。
+	 */
+	const closedActiveRef = useRef<PreviewSelection | undefined>(undefined);
+	useEffect(() => {
+		if (active === undefined) {
+			// 外部清空（如会话切换 closePreviewPanel）→ 回列表态，
+			// 保住「预览态必有激活项」的不变量。
+			setPanelState((s) => (s.mode === "preview" ? closeLastTab(s) : s));
+			return;
+		}
+		const fallback = closedActiveRef.current;
+		closedActiveRef.current = undefined;
+		if (fallback !== undefined && sameSelection(fallback, active)) return;
+		setPanelState((s) => (s.mode === "preview" ? s : openPreview(s)));
+	}, [active]);
+
+	const handleCloseTab = (sel: PreviewSelection): void => {
+		const remaining = tabs.filter((t) => !sameSelection(t, sel));
+		if (active !== undefined && sameSelection(active, sel) && remaining.length > 0) {
+			// 与 App closePreviewTab 的回退口径一致：active 落到最后一个剩余 tab。
+			closedActiveRef.current = remaining[remaining.length - 1];
+		}
+		onCloseTab(sel);
+		setPanelState((s) => (remaining.length === 0 ? closeLastTab(s) : closeTab(s)));
+	};
+
 	const servable = previewBaseUrl !== undefined && cwd !== undefined;
 	const activeChange =
 		active?.kind === "change" ? changes.find((c) => c.path === active.path) : undefined;
@@ -716,26 +863,19 @@ export function ArtifactPanel({
 				/>
 			)}
 			<header className="preview-head">
-				<OverviewMenu
-					artifacts={artifacts}
-					changes={changes}
-					cwd={cwd}
-					active={active}
-					onOpen={onOpen}
-					onPin={onPin}
-					onOpenExternal={onOpenExternal}
-				/>
+				<ViewSwitcher view={view} onSelect={(v) => setPanelState((s) => selectView(s, v))} />
 				<div className="preview-tabs-strip">
 					{tabs.map((sel) => (
 						<span
 							key={`${sel.kind}:${sel.path}`}
-							className={`preview-tab-item${active !== undefined && sameSelection(sel, active) ? " active" : ""}${sel.isPreview === true ? " preview" : ""}`}
+							/* 列表态 tabs 仍显示但不高亮：激活语义只在预览态成立。 */
+							className={`preview-tab-item${mode === "preview" && active !== undefined && sameSelection(sel, active) ? " active" : ""}${sel.isPreview === true ? " preview" : ""}`}
 						>
 							<button
 								type="button"
 								className="preview-tab-label"
 								title={sel.kind === "change" ? `${sel.path}（变更）` : sel.path}
-								onClick={() => onOpen(sel)}
+								onClick={() => pick(sel)}
 							>
 								{baseName(sel.path)}
 								{sel.kind === "change" && "（变更）"}
@@ -745,7 +885,7 @@ export function ArtifactPanel({
 								className="preview-tab-close"
 								title="关闭"
 								aria-label={`关闭 ${baseName(sel.path)}`}
-								onClick={() => onCloseTab(sel)}
+								onClick={() => handleCloseTab(sel)}
 							>
 								<IconClose size={11} />
 							</button>
@@ -776,10 +916,22 @@ export function ArtifactPanel({
 			</header>
 
 			<div className="preview-body">
-				{active === undefined ? (
-					/* 空态：常态展开但无激活文件（WorkBuddy 无文件也能展开面板，
-					   显示「暂无内容」占位）。 */
-					<div className="preview-fallback">选择文件以预览</div>
+				{/* 列表态 = 默认主体（不再是「选择文件以预览」占位）。
+				    active===undefined 的预览态是同步间隙的瞬态（pick 与 App 落 active
+				    之间的帧），也落列表渲染兜底，不闪占位。 */}
+				{mode === "list" || active === undefined ? (
+					view === "overview" ? (
+						<OverviewView
+							artifacts={artifacts}
+							onPick={pick}
+							onPin={pin}
+							onOpenExternal={onOpenExternal}
+						/>
+					) : view === "changes" ? (
+						<ChangesView changes={changes} onPick={pick} onPin={pin} />
+					) : (
+						<WorkspaceView cwd={cwd} active={active} onPick={pick} onPin={pin} />
+					)
 				) : (
 					<>
 						{active.kind === "change" && (

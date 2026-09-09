@@ -6,13 +6,14 @@
  */
 
 :root {
-	/* WorkBuddy 浅色主题同款配色（safe-delete-events-vjEg4QyO.css :1749-1830 提取）。
-	   主背景用 gray-1（比纯白稍暖），侧栏 gray-3，主按钮黑 90%（不是品牌色——
-	   WorkBuddy 的 primary CTA 是黑，品牌绿只用于状态/强调点缀）。 */
-	--bg: #fafafa;
+	/* WorkBuddy 浅色主题同款配色（safe-delete-events-vjEg4QyO.css :1749-1917 提取）。
+	   主背景是纯白（bg-primary = white-100），侧栏 gray-3（#F2F2F2），
+	   次级背景 gray-2（#F7F7F7），卡片纯白——「暖」感来自侧栏与卡片的对比，
+	   不是主背景本身偏暖。 */
+	--bg: #ffffff;
 	--bg-sidebar: #f2f2f2;
 	--bg-hover: rgba(0, 0, 0, 0.05);
-	--bg-raised: #f4f4f4;
+	--bg-raised: #f7f7f7;
 	--border: #e6e6e6;
 	--text: #000000;
 	--text-dim: rgba(0, 0, 0, 0.5);
@@ -1247,9 +1248,59 @@ button {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: 20px 24px;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
+	/* 普通块流而非 flex 纵向：flex 子项的 min-height:auto 对 overflow:hidden
+	   元素（工具卡）计算为 0，长输出被压到 0px 整卡裁没 —— 「工具调用挤没」
+	   的根因。WorkBuddy 消息流同为块流；间距改由各元素自管 margin
+	   （用户 32 / 回合头 12 / 助手 8 / 工具 4），统一 gap 表达不了这套节奏。 */
+	display: block;
+	/* 整列 hydration reveal（对标 WorkBuddy __content--hydrating → --revealed：
+	   0.32s cubic-bezier(0.34,1.56,0.64,1) 带回弹）。.stream 不随消息更新重建，
+	   动画天然只在挂载时跑一次。fill-mode 用 backwards 而非 both：both 会让终帧
+	   translateY(0) 常驻，常驻 transform 使 .stream 成为 fixed 后代的包含块，
+	   图片放大预览（.image-preview-overlay，position:fixed）就被压回消息流盒内；
+	   backwards 只补起始帧，动画结束元素回归无 transform。 */
+	animation: stream-reveal 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+@keyframes stream-reveal {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* 与全局其他动效同一约定：减少动态偏好下直接呈现。 */
+@media (prefers-reduced-motion: reduce) {
+	.stream {
+		animation: none;
+	}
+}
+
+/* 底部渐隐（对标 WorkBuddy __bottom-mask）：视口锚定的渐变叠加层，不是
+   mask-image —— .stream 是滚动容器，mask 加在滚动容器上会把滚动条一起渐隐；
+   叠加层钉在 .stream-wrap 底部（absolute，不随内容滚动），pointer-events:none
+   不挡点击与选字，滚动条触底区只是视觉软收边。与「回到底部」按钮同一可见
+   条件：在底部时内容自然收进 padding，无需渐隐。
+   层级：无 z-index，靠 DOM 序压在静态的 .stream 之上、让 z-index:1 的
+   .jump-to-bottom 浮在自己之上。 */
+.stream-fade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 40px;
+	background: linear-gradient(to bottom, transparent, var(--bg));
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+
+.stream-fade[data-visible="true"] {
+	opacity: 1;
 }
 
 /* 「回到底部」：不在底部时浮现的圆形按钮（对标 WorkBuddy）。
@@ -1314,8 +1365,9 @@ button {
 	display: flex;
 	align-items: flex-start;
 	gap: 10px;
-	/* 贴齐消息正文左缘（entry 有 14px 内边距）。 */
-	margin: -4px 0 0 0;
+	/* 垂直节奏自管（.stream 已无父级 gap），原来的 -4px 反吃 gap hack 同步删除；
+	   水平保持 0，贴齐消息正文左缘（entry 有 14px 内边距）。 */
+	margin: 12px 0;
 	padding-bottom: 4px;
 }
 
@@ -1353,54 +1405,55 @@ button {
 /* 「用户已取消」指示行：中断在消息流里留下的唯一痕迹（机制对标 WorkBuddy
    的取消终态），所以用最低调的三级灰单行，不做成卡片也不加图标。 */
 .user-cancelled {
-	align-self: flex-start;
 	padding: 4px 14px;
 	font-size: 15px;
 	color: var(--text-dim);
 }
 
 /* MetaFold 过程折叠行：回合结束后连续工具卡折成的一行摘要（机制对标
-   WorkBuddy）。它是「过程的墓碑」而非内容本身 —— 与取消指示行同级的
-   三级灰单行，hover 变主色提示可点；chevron 平时隐藏（opacity 0），
-   hover/展开才出现，减少长对话里的视觉噪声。 */
+   WorkBuddy）。它是「过程的墓碑」而非内容本身 —— fit-content 纯文字行，
+   与取消指示行同级的三级灰单行，hover 变主色提示可点；chevron 平时隐藏
+   （opacity 0），hover/展开才出现，减少长对话里的视觉噪声。 */
 .metafold {
-	align-self: stretch;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
+	/* 消息流节奏：上下 8px。内部不用 flex gap —— 展开的工具卡已自带 4px
+	   上下 margin（与回合内工具行同节奏），父级 gap 会叠出双份间距。 */
+	margin: 8px 0;
 }
 
 .metafold-row {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	width: 100%;
-	padding: 8px 12px;
+	/* 纯文字行：宽度随内容收拢，无卡片底。通栏矩形会和真正的内容卡
+	   抢视觉层级 —— 折叠行是过程的注脚，不是内容。 */
+	width: fit-content;
 	font-size: 15px;
+	line-height: 1.75;
 	color: var(--text-dim);
 	text-align: left;
-	/* 折叠行是「过程在此」的可见入口，给一个轻量卡片底避免它像一行灰字一样被忽略。 */
-	background: var(--bg-raised);
-	border-radius: 8px;
-	border: 1px solid var(--border);
 }
 
 .metafold-row:hover {
 	color: var(--primary);
 }
 
+.metafold-lead {
+	flex: 0 0 auto;
+}
+
 .metafold-summary {
-	flex: 1 1 auto;
+	flex: 0 1 auto;
 	min-width: 0;
+	max-width: 520px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-/* 收起态箭头朝右（-90°），展开态旋回朝下（0°）。 */
+/* 收起态箭头朝右（-90°），展开态旋回朝下（0°）；平时隐藏，hover/展开浮现。 */
 .metafold-caret {
 	flex: 0 0 auto;
-	opacity: 1;
+	opacity: 0;
 	transform: rotate(-90deg);
 	transition:
 		opacity 0.15s ease,
@@ -1416,23 +1469,58 @@ button {
 	transform: rotate(0deg);
 }
 
+/* 折叠体（展开后的工具卡列表）高度动画：grid-template-rows 0fr↔1fr。
+   不用 max-height 固定上限 —— 折叠体高度随卡片数变化，内层工具详情还会
+   再展开，任何定死的上限都会裁掉内容。WorkBuddy 用 interpolate-size
+   （Chromium 129+），0fr↔1fr 是同等效果的宽兼容写法（Chromium 107+）。
+   基类即收起态：元素常驻 DOM 由 open 类切换，过渡才有起跳点。 */
+.metafold-body {
+	display: grid;
+	grid-template-rows: 0fr;
+	opacity: 0;
+	visibility: hidden;
+	transform: translateY(-6px);
+	transition:
+		grid-template-rows 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.metafold-body.open {
+	grid-template-rows: 1fr;
+	opacity: 1;
+	visibility: visible;
+	transform: translateY(0);
+}
+
+/* 0fr 能真正收拢的前提：grid 子项默认 min-height:auto（不会缩到内容
+   高度以下），必须 min-height:0 + overflow:hidden 才能折到 0 高。 */
+.metafold-body-inner {
+	min-height: 0;
+	overflow: hidden;
+}
+
 /* 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，右下角直角。
    外层 .entry.user 只做右对齐容器，padding/背景都内收到 .user-bubble ——
    否则 hover 工具条也会被气泡背景包进去。 */
 .entry.user {
-	align-self: flex-end;
 	display: flex;
 	flex-direction: column;
 	align-items: flex-end;
 	padding: 0;
+	/* WorkBuddy 用户消息的呼吸感（_userMessage 同口径）：上下 32px，
+	   与回合内的紧凑节奏拉开层级。 */
+	margin: 32px 0;
 }
 
 .user-bubble {
 	width: fit-content;
 	/* WorkBuddy 用户气泡宽度口径：明显短于消息流宽（约 70%），长消息折行而非占满。 */
 	max-width: 70%;
-	/* WorkBuddy 用户气泡排版口径：上下 32px 的舒展留白、字号 15。 */
-	padding: 32px 16px;
+	/* WorkBuddy 气泡自身（_userMessageBubble）是紧凑排版：padding 仅 8px 12px；
+	   上下 32px 的呼吸感在外层消息行（.entry.user 的 margin），不在气泡内边距。 */
+	padding: 8px 12px;
 	font-size: 15px;
 	line-height: 1.6;
 	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
@@ -1485,8 +1573,8 @@ button {
 	pointer-events: auto;
 }
 
-/* 用户侧（右对齐贴气泡）：负 margin 把占位高度吃进 .stream 的 12px 间距里，
-   平时几乎不占额外高度。 */
+/* 用户侧：锚在 entry 右缘 —— 气泡在 entry 内右对齐且 entry padding 为 0，
+   右缘即气泡右缘。 */
 .entry-toolbar-right {
 	left: auto;
 	right: 0;
@@ -1557,7 +1645,6 @@ button {
 }
 
 .entry.assistant {
-	align-self: flex-start;
 	/* assistant 无气泡：纯文本流（WorkBuddy _assistantTextContent 同口径：
 	   background transparent、padding 0、border-radius 0）。覆盖 .entry 的
 	   padding/border-radius，让正文与 turn-header 左缘对齐。 */
@@ -1566,6 +1653,8 @@ button {
 	padding: 0 14px;
 	font-size: 14px;
 	line-height: 20px;
+	/* 消息流节奏：上下 8px。 */
+	margin: 8px 0;
 }
 
 /* 助手侧：左对齐贴正文 —— assistant 消息在左，与用户气泡的右对齐相反。 */
@@ -1603,7 +1692,9 @@ button {
    用独立样式体系，不再复用 .entry.error —— 错误卡内部有按钮与图标，
    与消息卡片的边距/对齐需求不同。 */
 .error-card {
-	align-self: flex-start;
+	/* 块流下收缩到内容宽（flex 时代靠 align-self:flex-start，.stream 改块流后
+	   用 fit-content 等价保持），max-width 仍兜住超长错误。 */
+	width: fit-content;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -1872,31 +1963,22 @@ button {
 	border-top: 1px solid var(--border);
 }
 
-/* 工具卡片：折叠头 + 可展开正文。padding 归 .tool-head，整行都可点。 */
+/* 工具行：纯文本单行 + 可展开详情盒（形态对标 WorkBuddy）。
+   无背景/无边框/无卡片圆角 —— 工具调用是过程信息，通栏卡片会抢消息的视觉重量。 */
 .entry.tool {
 	display: flex;
 	flex-direction: column;
+	/* 防线：flex 纵向容器里子项的 min-height:auto 对 overflow:hidden 元素
+	   计算为 0，长输出会被压到 0px 整卡裁没（「工具调用挤没」根因）。
+	   .stream 虽已改块流根治，此卡仍可能被嵌进 flex 纵向上下文，防线保留。 */
+	flex-shrink: 0;
+	/* 回合内工具行节奏：上下 4px，紧凑（WorkBuddy 回合内同口径）。 */
+	margin: 4px 0;
 	padding: 0;
-	overflow: hidden;
-	background: var(--bg-raised);
-	/* 一侧细线标识「工具」而非「消息」，颜色用边界灰而非主色 —— 黑色标签太重。 */
-	border-left: 2px solid var(--border);
-	font-size: 13px;
+	font-size: 14px;
+	line-height: 1.75;
+	color: var(--text-dim);
 	white-space: normal;
-	border-radius: 8px;
-	border-left-width: 2px;
-	border-left-style: solid;
-	border-left-color: var(--border);
-}
-
-/* WorkBuddy 工具卡执行中外圈脉冲：outline + border-ping，是「正在干活」的最直观信号。 */
-.entry.tool:has(.tool-dot.running) {
-	outline: 2px solid color-mix(in srgb, var(--text-dim) 35%, transparent);
-	animation: border-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
-.entry.tool-error {
-	border-left-color: var(--danger);
 }
 
 .tool-head {
@@ -1904,17 +1986,12 @@ button {
 	align-items: center;
 	gap: 8px;
 	width: 100%;
-	padding: 8px 12px;
 	text-align: left;
 }
 
 /* 无正文可展开时不给点击手型，避免暗示能点开。 */
 .tool-head:disabled {
 	cursor: default;
-}
-
-.tool-head:not(:disabled):hover {
-	background: var(--bg-hover);
 }
 
 .tool-dot {
@@ -1944,11 +2021,15 @@ button {
 	}
 }
 
-@keyframes border-ping {
-	75%,
-	100% {
-		outline-color: transparent;
-	}
+/* 工具图标：完成态常驻，执行中由 tsx 摘走（状态全靠呼吸点 + 扫光字）。 */
+.tool-icon {
+	flex: 0 0 auto;
+	color: var(--text-dim);
+}
+
+/* 失败状态图标与状态点同红（tool-dot.bad），不再保持哑色。 */
+.tool-icon.failed {
+	color: var(--danger);
 }
 
 .tool-label {
@@ -1975,25 +2056,88 @@ button {
 .tool-caret {
 	flex: 0 0 auto;
 	color: var(--text-dim);
-	transition: transform 0.15s ease;
+	transition:
+		transform 0.15s ease,
+		opacity 0.15s ease;
 }
 
 .tool-caret.open {
 	transform: rotate(180deg);
 }
 
-.tool-detail {
+/* 工具行的箭头平时隐身，hover 行或展开时才出现 —— 纯文本行不放常驻控件
+   （WorkBuddy 同口径）。作用域限在 .tool-head 内：permission-dialog 复用了
+   .tool-caret 类名，不能跟着隐身。 */
+.tool-head .tool-caret {
+	opacity: 0;
+}
+
+.tool-head:hover .tool-caret,
+.tool-head .tool-caret.open {
+	opacity: 1;
+}
+
+/* 展开详情从通栏 pre 改为独立小圆角盒：详情是附属内容，圆角盒把它
+   和消息正文在视觉上归为一档（对标 WorkBuddy）。
+   基类即收起态、.open 是展开态 —— 元素常驻 DOM 由类切换，过渡才有起跳点
+   （条件挂载下元素挂载即终态，transition 不会触发）。
+   max-height 过渡的坑：border-box 下 padding/border/margin 不一起收，
+   max-height:0 也会留下 ~38px 空壳，所以垂直方向全部归零并参与过渡。 */
+.tool-detail-box {
 	margin: 0;
-	padding: 10px 12px;
-	border-top: 1px solid var(--border);
-	/* 工具输出可能很长（读文件、搜索结果），限高避免把对话冲掉。 */
-	max-height: 320px;
-	overflow: auto;
+	padding: 0 16px;
+	border: 0 solid var(--border);
+	border-radius: var(--radius-lg);
+	background: var(--bg-raised);
+	max-height: 0;
+	/* 收起时必须 hidden：auto 会在 0 高区冒出滚动条。 */
+	overflow: hidden;
+	opacity: 0;
+	visibility: hidden;
+	transform: translateY(-6px);
+	transition:
+		max-height 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		padding-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		padding-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		margin-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		margin-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		border-width 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
 	color: var(--text-dim);
 	font-size: 12px;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+.tool-detail-box.open {
+	margin: 4px 0 8px;
+	padding: 12px 16px;
+	border-width: 1px;
+	/* 工具输出可能很长（读文件、搜索结果），限高避免把对话冲掉。 */
+	max-height: 300px;
+	overflow: auto;
+	opacity: 1;
+	visibility: visible;
+	transform: translateY(0);
+}
+
+/* 减少动态偏好：呼吸点与 spinner 停转（静态点/静态环仍表达状态），
+   折叠展开过渡退化为瞬时切换。扫光、preview-panel、file-tree-chevron
+   的覆盖在各自区块。 */
+@media (prefers-reduced-motion: reduce) {
+	.tool-dot.running,
+	.task-spinner,
+	.file-tree-spinner {
+		animation: none;
+	}
+
+	.tool-detail-box,
+	.metafold-body {
+		transition: none;
+	}
 }
 
 /* write/edit 成功后的增删行徽章（+n / -n）。 */
@@ -2158,8 +2302,8 @@ button {
 	border-bottom: 1px solid var(--border);
 }
 
-/* 概览下拉：产物 / 变更 / 工作区文件 三组导航。 */
-.preview-overview {
+/* 视图切换器：概览 / 工作空间文件 / 变更 三平级视图（菜单不内嵌文件列表）。 */
+.view-switcher {
 	position: relative;
 	flex: 0 0 auto;
 }
@@ -2179,22 +2323,59 @@ button {
 	box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
 }
 
-.preview-menu-group + .preview-menu-group {
-	margin-top: 6px;
-	border-top: 1px solid var(--border);
-	padding-top: 6px;
+/* 纯视图项的菜单比旧「内嵌三组文件列表」窄得多，收紧免得大片留白。 */
+.view-switcher-menu {
+	width: 200px;
 }
 
-.preview-menu-title {
+/* 当前视图的 ✓ 用主题色，与菜单项正文的 dim 色拉开层级。 */
+.view-switcher-check {
+	color: var(--accent);
+}
+
+/* 列表态三视图的公共内容区：撑满主体并纵向滚动（预览态各预览器自己撑）。 */
+.preview-view {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: 6px;
+}
+
+.preview-group-title {
 	padding: 4px 8px;
 	font-size: 12px;
 	color: var(--text-dim);
 }
 
-.preview-menu-empty {
+.preview-group-empty {
 	padding: 4px 8px 8px;
 	font-size: 12px;
 	color: var(--text-dim);
+}
+
+/* 变更视图汇总头「文件变更 +N -M」：增删色与工具卡（.tool-change）同口径。 */
+.changes-summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px 8px;
+	font-size: 12px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	color: var(--text-dim);
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 4px;
+}
+
+.changes-summary-label {
+	font-family: inherit;
+	color: var(--text);
+}
+
+.changes-summary .added {
+	color: var(--ok);
+}
+
+.changes-summary .removed {
+	color: var(--danger);
 }
 
 .preview-item {
@@ -2930,7 +3111,10 @@ button {
 }
 
 /* ── 设置页 ───────────────────────────────────────────────────── */
-.settings {
+/* skills 页骨架与本页逐字相同（head 的 gap/padding 数值不同，各自保留），
+   壳与 body 以选择器并集共用；diagnostics 直接复用 .settings 类名。 */
+.settings,
+.skills {
 	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
@@ -2951,8 +3135,9 @@ button {
 }
 
 /* 侧栏展开时左上角开关落在侧栏 brand 行内，不压本行，恢复常规左内边距。
-   diagnostics 视图复用 .settings 骨架，同一条规则覆盖。 */
-.sidebar ~ .settings .settings-head {
+   diagnostics / skills 视图复用 .settings 骨架，同一条规则覆盖。 */
+.sidebar ~ .settings .settings-head,
+.sidebar ~ .skills .skills-head {
 	padding-left: 20px;
 }
 
@@ -2962,7 +3147,8 @@ button {
 	font-weight: 600;
 }
 
-.settings-body {
+.settings-body,
+.skills-body {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: 20px 24px 40px;
@@ -3122,7 +3308,8 @@ button {
 
 /* ── 服务商列表 ───────────────────────────────────────────────── */
 
-.provider-list {
+.provider-list,
+.preset-list {
 	display: flex;
 	flex-direction: column;
 	border: 1px solid var(--border);
@@ -3134,7 +3321,8 @@ button {
 	border-bottom: 1px solid var(--border);
 }
 
-.provider-row:last-child {
+.provider-row:last-child,
+.preset-item:last-child {
 	border-bottom: 0;
 }
 
@@ -3227,14 +3415,8 @@ button {
 }
 
 /* ── 权限预设 ─────────────────────────────────────────────────── */
-
-.preset-list {
-	display: flex;
-	flex-direction: column;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	overflow: hidden;
-}
+/* 列表容器（含末行去边线）与 .provider-list 逐字相同，
+   规则以选择器并集合并在服务商列表一节，此处不再重复。 */
 
 .preset-item {
 	display: flex;
@@ -3243,10 +3425,6 @@ button {
 	padding: 10px 12px;
 	text-align: left;
 	border-bottom: 1px solid var(--border);
-}
-
-.preset-item:last-child {
-	border-bottom: 0;
 }
 
 .preset-item:hover:not(:disabled) {
@@ -3513,7 +3691,8 @@ button {
 	background: var(--bg-raised);
 }
 
-.mode-menu-label {
+.mode-menu-label,
+.plus-menu-mode-label {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -3522,7 +3701,8 @@ button {
 }
 
 /* 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），用标签说明状态。 */
-.mode-menu-tag {
+.mode-menu-tag,
+.plus-menu-mode-tag {
 	padding: 0 5px;
 	border-radius: 4px;
 	background: var(--bg-raised);
@@ -3715,11 +3895,13 @@ button {
 	font-variant-numeric: tabular-nums;
 }
 
-.mode-menu-item.active .mode-menu-tag {
+.mode-menu-item.active .mode-menu-tag,
+.plus-menu-mode-item.active .plus-menu-mode-tag {
 	background: var(--bg);
 }
 
-.mode-menu-desc {
+.mode-menu-desc,
+.plus-menu-mode-desc {
 	font-size: 11px;
 	color: var(--text-dim);
 }
@@ -3858,7 +4040,8 @@ button {
 	color: var(--text-dim);
 }
 
-.permission-actions {
+.permission-actions,
+.save-space-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
@@ -3916,12 +4099,7 @@ button {
 	font-size: 12px;
 }
 
-.save-space-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 4px;
-}
+/* 操作行与 .permission-actions 逐字相同，规则以选择器并集合并在权限弹窗一节。 */
 
 /* ── 主页模型快捷切换 ─────────────────────────────────────────── */
 
@@ -3935,7 +4113,8 @@ button {
 	padding: 4px;
 }
 
-.model-menu-empty {
+.model-menu-empty,
+.permission-menu-empty {
 	margin: 0;
 	padding: 10px 12px;
 	color: var(--text-dim);
@@ -3973,7 +4152,8 @@ button {
 	color: var(--text-dim);
 }
 
-.model-menu-check {
+.model-menu-check,
+.plus-menu-mode-check {
 	position: absolute;
 	right: 8px;
 	top: 50%;
@@ -3981,7 +4161,8 @@ button {
 	color: var(--ok);
 }
 
-.model-menu-goto {
+.model-menu-goto,
+.permission-menu-goto {
 	margin-top: 4px;
 	padding: 8px 10px;
 	border-top: 1px solid var(--border);
@@ -3990,7 +4171,8 @@ button {
 	text-align: left;
 }
 
-.model-menu-goto:hover {
+.model-menu-goto:hover,
+.permission-menu-goto:hover {
 	color: var(--text);
 }
 
@@ -4011,13 +4193,8 @@ button {
 	border-radius: 12px;
 }
 
-.permission-menu-empty {
-	margin: 0;
-	padding: 10px 12px;
-	color: var(--text-dim);
-	font-size: 12px;
-}
-
+/* empty / goto 与 .model-menu-empty、.model-menu-goto 逐字相同，
+   规则以选择器并集合并在 model-menu 一节，此处不再重复。 */
 .permission-menu-item {
 	position: relative;
 	display: flex;
@@ -4054,19 +4231,6 @@ button {
 	top: 50%;
 	transform: translateY(-50%);
 	color: var(--ok);
-}
-
-.permission-menu-goto {
-	margin-top: 4px;
-	padding: 8px 10px;
-	border-top: 1px solid var(--border);
-	color: var(--text-dim);
-	font-size: 12px;
-	text-align: left;
-}
-
-.permission-menu-goto:hover {
-	color: var(--text);
 }
 
 /* ── 对话页 composer 区的 ModelMenu ───────────────────────────── */
@@ -4157,40 +4321,8 @@ button {
 	background: var(--bg-raised);
 }
 
-.plus-menu-mode-label {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	font-size: 13px;
-	font-weight: 500;
-}
-
-/* 未实现的模式仍然列出（与头部 ModeSwitch 同一能力面），用标签说明状态。 */
-.plus-menu-mode-tag {
-	padding: 0 5px;
-	border-radius: 4px;
-	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 10px;
-	font-weight: 400;
-}
-
-.plus-menu-mode-item.active .plus-menu-mode-tag {
-	background: var(--bg);
-}
-
-.plus-menu-mode-desc {
-	font-size: 11px;
-	color: var(--text-dim);
-}
-
-.plus-menu-mode-check {
-	position: absolute;
-	right: 8px;
-	top: 50%;
-	transform: translateY(-50%);
-	color: var(--ok);
-}
+/* label / tag / desc / check 与 .mode-menu-*、.model-menu-check 逐字相同，
+   规则以选择器并集合并在各自首个定义处，此处不再重复。 */
 
 /*
  * 输入余量：接近上限才出现（charCountState 判定）。等宽数字 —
@@ -4225,13 +4357,8 @@ button {
 
 /* ── 技能页（侧栏「专家·技能·连接器」）──────────────────────── */
 
-.skills {
-	flex: 1 1 auto;
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	background: var(--bg);
-}
+/* 页骨架（.skills 壳 / .skills-body / 侧栏开关让位）与 .settings 逐字相同，
+   规则以选择器并集合并在设置页一节，此处不再重复。 */
 
 .skills-head {
 	flex: 0 0 auto;
@@ -4243,11 +4370,6 @@ button {
 	   左内边距同理让出左上角的侧栏开关（侧栏收起时它压住返回按钮）。 */
 	padding: 10px 52px 10px 48px;
 	border-bottom: 1px solid var(--border);
-}
-
-/* 侧栏展开时左上角开关落在侧栏 brand 行内，不压本行，恢复常规左内边距。 */
-.sidebar ~ .skills .skills-head {
-	padding-left: 20px;
 }
 
 .skills-tabs {
@@ -4289,15 +4411,6 @@ button {
 .skills-tab.active .skills-tab-tag {
 	background: var(--primary);
 	color: var(--primary-text);
-}
-
-.skills-body {
-	flex: 1 1 auto;
-	overflow-y: auto;
-	padding: 20px 24px 40px;
-	max-width: 900px;
-	width: 100%;
-	margin: 0 auto;
 }
 
 .skills-empty {
@@ -4372,4 +4485,230 @@ button {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* ── 定时任务管理页 ─────────────────────────────────────────────
+ * 骨架复用 .settings（同 diagnostics-view），这里只有任务列表、
+ * 状态徽标、运行记录与表单弹层。视觉全部取既有变量与卡片档位。
+ * ──────────────────────────────────────────────────────────────── */
+
+.auto-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 24px 0;
+	color: var(--text-dim);
+	font-size: 13px;
+}
+
+.auto-empty p {
+	margin: 0;
+}
+
+.auto-empty .primary-btn {
+	margin-top: 8px;
+}
+
+.auto-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+/* 任务行卡片：与 skill-card / preset-item 同档位（边框 + --radius-md）。 */
+.auto-row {
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+}
+
+.auto-row-main {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+/* 展开运行记录的 chevron：与空间组折叠箭头同语言（收起 -90°，展开朝下）。 */
+.auto-row-expand {
+	display: flex;
+	align-items: center;
+	color: var(--text-dim);
+	flex: 0 0 auto;
+}
+
+.auto-row-expand:hover {
+	color: var(--text);
+}
+
+.auto-chevron {
+	transition: transform 0.15s ease;
+	transform: rotate(-90deg);
+}
+
+.auto-chevron.open {
+	transform: rotate(0deg);
+}
+
+.auto-row-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.auto-row-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.auto-row-name {
+	font-size: 14px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.auto-row-meta {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.auto-row-ops {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+
+/* 状态徽标：与 permission-badge 同尺寸语言；色阶用既有 --ok / --danger 的
+   color-mix 档位（同 settings-error / mini-btn.danger 的混色手法）。 */
+.auto-badge {
+	padding: 2px 8px;
+	border-radius: 5px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: 11px;
+	flex: 0 0 auto;
+}
+
+.auto-badge-missed {
+	background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+	color: var(--danger);
+}
+
+/* 运行记录区：行内展开，顶部分隔线收束视觉层级。 */
+.auto-runs {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: 10px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border);
+}
+
+.auto-run-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 4px 6px;
+	border-radius: 6px;
+	font-size: 12px;
+	text-align: left;
+}
+
+.auto-run-row:not(.auto-run-static):hover {
+	background: var(--bg-hover);
+}
+
+/* 无会话可跳的记录（装配失败）不给 hover 反馈，避免暗示能点开（同 tool-head）。 */
+.auto-run-static {
+	color: var(--text-dim);
+}
+
+.auto-run-time {
+	color: var(--text-dim);
+	flex: 0 0 auto;
+}
+
+.auto-run-badge {
+	padding: 1px 7px;
+	border-radius: 5px;
+	font-size: 11px;
+	flex: 0 0 auto;
+}
+
+.auto-run-badge.ok {
+	background: color-mix(in srgb, var(--ok) 12%, var(--bg));
+	color: var(--ok);
+}
+
+.auto-run-badge.bad {
+	background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+	color: var(--danger);
+}
+
+.auto-run-error {
+	color: var(--danger);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* 表单弹层：骨架复用 modal-backdrop；卡片比 save-space 宽（字段多），
+   其余（圆角/阴影/内边距）保持同一尺寸语言。 */
+.auto-form-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	width: 100%;
+	max-width: 520px;
+	max-height: 100%;
+	overflow-y: auto;
+	padding: 18px 20px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+/* 调度类型与星期 toggle 组：选中态给 mini-btn 加 active 反色
+   （主按钮黑 90% 的 CTA 色，同 mode-tab.active 的选中语言）。 */
+.auto-toggle-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.mini-btn.active {
+	background: var(--primary);
+	color: var(--primary-text);
+	border-color: var(--primary);
+}
+
+/* .field 的输入档位只覆盖了 text/password/number，表单还用到
+   time / datetime-local / textarea —— 同一份视觉补齐全家福。 */
+.auto-form-card .field input[type="time"],
+.auto-form-card .field input[type="datetime-local"],
+.auto-form-card .field textarea {
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+}
+
+.auto-form-card .field textarea {
+	min-height: 84px;
+	resize: vertical;
+	line-height: 1.6;
 }

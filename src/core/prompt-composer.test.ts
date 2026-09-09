@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { composePrompt, formatSkillsSection } from "./prompt-composer.ts";
+import { composePrompt, formatRuntimeTime, formatSkillsSection } from "./prompt-composer.ts";
 
 const BASE = {
 	sceneBody: "你是 KamiBuddy。\n\n# 模式\n{{interaction}}\n{{skills}}\n目录：{{cwd}}",
@@ -92,6 +92,44 @@ describe("补回 pi 上下文与工具提示", () => {
 	it("没有上下文与工具提示时不追加任何段落（保持现状兼容）", () => {
 		expect(composePrompt(BASE)).not.toContain("<project_context>");
 		expect(composePrompt(BASE)).not.toContain("Available tools:");
+	});
+});
+
+describe("运行时环境块", () => {
+	// 时区名随测试机走（开发机 Asia/Shanghai、CI 可能 Asia/Hong_Kong），
+	// 但同一天 GMT+8 内日期/星期/时刻/偏移的断言是确定的。
+	const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	it("固定 now：环境块含日期、分钟级时刻、星期、GMT 偏移与 IANA 时区名", () => {
+		const out = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:30+08:00") });
+		expect(out).toContain(
+			`Current time: 2026-09-09 23:18 (Wednesday, GMT+8, ${localTz})`,
+		);
+	});
+
+	it("环境块在整个提示词的末尾（前缀稳定利于 provider 缓存）", () => {
+		const out = composePrompt({
+			...BASE,
+			now: new Date("2026-09-09T23:18:30+08:00"),
+			piContext: { promptGuidelines: ["一条指引"] },
+		});
+		expect(out.trimEnd().endsWith(`(Wednesday, GMT+8, ${localTz})`)).toBe(true);
+	});
+
+	it("now 缺省时取当前时间（只断言形态，不钉值）", () => {
+		expect(composePrompt(BASE)).toMatch(
+			/Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(\w+day, GMT[+-]\d+(:\d{2})?, .+\)/,
+		);
+	});
+
+	it("分钟级精度：同一分钟内不同秒的两次组装字节相等（不炸缓存）", () => {
+		const a = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:01+08:00") });
+		const b = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:59+08:00") });
+		expect(a).toBe(b);
+	});
+
+	it("formatRuntimeTime 直出与 composePrompt 内嵌文本一致", () => {
+		const now = new Date("2026-09-09T23:18:30+08:00");
+		expect(composePrompt({ ...BASE, now })).toContain(formatRuntimeTime(now));
 	});
 });
 

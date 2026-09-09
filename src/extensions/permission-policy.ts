@@ -21,7 +21,8 @@
  *      区外低风险询问（danger-full-access 不受限）
  *   3. 沙箱模式的范围约束（read-only 拒一切写与命令）
  *   4. 工具种类（shell 任何档都问；写工具按 应用目录内高风险询问 →
- *      工作区内放行 → 区外询问 的顺序判；未知工具询问）
+ *      工作区内放行 → 区外询问 的顺序判；改应用自身数据的
+ *      automation_create/delete 询问；未知工具询问）
  *   5. 审批策略（ask → 弹窗；never → 确定性拒绝）
  * 顺序本身就是语义：靠后的阶段无法放行靠前阶段已经拒掉的东西。
  *
@@ -124,17 +125,29 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
 /**
  * 只读工具：不改变任何状态。
  *
- * 其中 web_search / web_fetch / present_files 没有本地路径概念，维持一律放行：
- * 不写本地、不改任何状态，且数据不是密钥。不可信内容的风险由工具层
+ * 其中 web_search / web_fetch / present_files / automation_list 没有本地路径概念，
+ * 维持一律放行：不写本地、不改任何状态，且数据不是密钥。不可信内容的风险由工具层
  * （web-tools.ts）的标记 + 本门对「后续写操作」的拦截共同兜住。
  * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
+ * automation_list 同理：读的是 KamiBuddy 自己的任务库（automations.json），
+ * 与 web_search 同类——不涉及用户文件系统，也没有路径参数可判。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
  * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
  * read_document 与 read 完全同语义（工作区内放行、区外低风险询问、凭据目录禁读）：
  * 它只是换了种解析方式，读的还是本地文件，边界不该因文件格式不同而不同。
  */
-const READ_ONLY = new Set(["read", "read_document", "find", "grep", "ls", "web_search", "web_fetch", "present_files"]);
+const READ_ONLY = new Set([
+	"read",
+	"read_document",
+	"find",
+	"grep",
+	"ls",
+	"web_search",
+	"web_fetch",
+	"present_files",
+	"automation_list",
+]);
 
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
 const LOCAL_READ = new Set(["read", "read_document", "find", "grep", "ls"]);
@@ -144,6 +157,20 @@ const MUTATING = new Set(["write", "edit"]);
 
 /** 会执行任意命令的工具。默认工具集里没有它们，但扩展或设置可能启用。 */
 const SHELL = new Set(["bash", "powershell"]);
+
+/**
+ * 改变 KamiBuddy 自身数据的工具（目前只有 automation_*，经 AutomationStore
+ * 落 ~/.kamibuddy/automations.json，不经工具路径参数）。
+ *
+ * 显式登记为询问，而不是依赖末尾「未知工具」的 fail-safe：两者今天的结果
+ * 相同（medium 询问），但 fail-safe 的默认值将来若变动，不该静默改变
+ * 这类工具的语义。定为询问而非放行：创建/删除定时任务改变应用自身数据，
+ * 且任务会在后台无人值守地跑，默认从紧；用户可用审批弹窗的「记住」免除。
+ *
+ * 落盘文件在 configDir 内、阶段 1 本就禁写——那是 AutomationStore 的内部
+ * 实现路径，不经过工具入参，所以这里不需要、也不许为阶段 1 开口子。
+ */
+const APP_DATA_MUTATING = new Set(["automation_create", "automation_delete"]);
 
 /**
  * 判断 target 是否在 base 之内（含 base 本身）。
@@ -250,7 +277,7 @@ function decideUnderMode(
 	/*
 	 * 阶段 2：只读工具（不改变任何状态）。
 	 *
-	 * 无本地路径概念的（web_search / web_fetch / present_files）一律放行。
+	 * 无本地路径概念的（web_search / web_fetch / present_files / automation_list）一律放行。
 	 * 有路径概念的（read / read_document / find / grep / ls）按归属判：
 	 *   工作区内（或无路径参数，如 ls 列 cwd）→ 放行；
 	 *   工作区外 → 低风险询问；danger-full-access 不受限，与写侧语义一致。
@@ -329,6 +356,21 @@ function decideUnderMode(
 			risk: "medium",
 			summary: toolName === "write" ? "写入工作目录之外的文件" : "修改工作目录之外的文件",
 			details: target,
+		};
+	}
+
+	/*
+	 * 改变 KamiBuddy 自身数据的工具（automation_create / automation_delete）：
+	 * 显式询问档，理由见上方 APP_DATA_MUTATING 的登记注释。
+	 * 放在 read-only 拒绝（阶段 3）之后：只读档下它们同样被拒，语义自洽。
+	 * 无路径入参，details 没有可展示的目标，留空。
+	 */
+	if (APP_DATA_MUTATING.has(toolName)) {
+		return {
+			kind: "ask",
+			risk: "medium",
+			summary: toolName === "automation_create" ? "创建自动化任务" : "删除自动化任务",
+			details: "",
 		};
 	}
 

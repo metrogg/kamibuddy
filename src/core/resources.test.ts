@@ -125,4 +125,20 @@ describe("真实 resources/ 的回归约束", () => {
 			expect(mode?.tools, `模式 ${id} 的 tools 应含 present_files`).toContain("present_files");
 		}
 	});
+
+	it("automation 三工具只在 craft 白名单，ask / plan 只读模式没有", () => {
+		// 与 present_files 同款防护：扩展注册了但模式白名单漏加，模型就看不到工具。
+		// ask / plan 是只读模式，不能建任务（spec：只读模式不加）。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { modes } = loadResources(realDir);
+		const craft = modes.find((m) => m.id === "craft");
+		expect(craft, "模式 craft 应存在").toBeDefined();
+		for (const tool of ["automation_create", "automation_list", "automation_delete"]) {
+			expect(craft?.tools, `craft 的 tools 应含 ${tool}`).toContain(tool);
+		}
+		for (const id of ["ask", "plan"]) {
+			const mode = modes.find((m) => m.id === id);
+			expect(mode?.tools, `${id} 不应有 automation_create`).not.toContain("automation_create");
+		}
+	});
 });

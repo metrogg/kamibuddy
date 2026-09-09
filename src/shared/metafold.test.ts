@@ -1,11 +1,12 @@
 /**
  * MetaFold 过程折叠的行为测试。
  *
- * 钉住四类行为：
+ * 钉住五类行为：
  *   1. 回合分组边界（无 user、连续 user、工具开头）
  *   2. 连续段拆分（assistant 打断连续性：工具-文本-工具 = 两段）
  *   3. 进行中的回合不折叠（历史回合照常折叠）
  *   4. 摘要文案（归类计数 / 带主题 / 单位区分 / 未知工具 / 兜底）
+ *   5. 主导工具 leadIcon（次数最多者 / 平局稳定 / 命令类不合并）
  */
 
 import { describe, expect, it } from "vitest";
@@ -16,7 +17,7 @@ import type {
 	ToolCard,
 	UserMessage,
 } from "./session-events.ts";
-import { buildRenderBlocks, summarizeToolRun, type RenderBlock } from "./metafold.ts";
+import { buildRenderBlocks, leadToolName, summarizeToolRun, type RenderBlock } from "./metafold.ts";
 
 function user(id: string): UserMessage {
 	return { id, role: "user", text: `消息 ${id}`, at: 1 };
@@ -266,5 +267,41 @@ describe("摘要文案", () => {
 		expect(summarizeToolRun([tool("t1", "write", ""), tool("t2", "write", "real.html")])).toBe(
 			"写入 real.html 等 2 个文件",
 		);
+	});
+});
+
+describe("主导工具（leadIcon）", () => {
+	it("fold 块带 leadIcon：段内调用次数最多的工具名", () => {
+		const blocks = buildRenderBlocks(
+			[user("u1"), tool("t1", "read"), tool("t2", "write"), tool("t3", "read")],
+			{ streaming: false },
+		);
+		expect(folds(blocks)[0]?.leadIcon).toBe("read");
+	});
+
+	it("leadToolName 取次数最多者，与摘要的主题位规则无关", () => {
+		expect(leadToolName([tool("t1", "bash", "a"), tool("t2", "read"), tool("t3", "read")])).toBe(
+			"read",
+		);
+	});
+
+	it("平局保留先达到最高次数者", () => {
+		expect(leadToolName([tool("t1", "write"), tool("t2", "read")])).toBe("write");
+		expect(leadToolName([tool("t1", "read"), tool("t2", "write")])).toBe("read");
+	});
+
+	it("bash 与 powershell 不合并计数（渲染侧把二者映射成同一图标）", () => {
+		expect(
+			leadToolName([
+				tool("t1", "bash", "a"),
+				tool("t2", "powershell", "b"),
+				tool("t3", "read"),
+				tool("t4", "read"),
+			]),
+		).toBe("read");
+	});
+
+	it("全是未知工具时 leadIcon 是首个未知工具名（图标兜底在渲染侧）", () => {
+		expect(leadToolName([tool("t1", "mcp__a"), tool("t2", "mcp__b")])).toBe("mcp__a");
 	});
 });

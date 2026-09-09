@@ -26,6 +26,8 @@ import type { ConversationEntry, ErrorEntry, MessageId, ToolCard } from "./sessi
  * 渲染块：消息流的线性渲染单元。
  * entry       —— 原样渲染的单条消息（user / assistant / 进行中回合的 tool）。
  * fold        —— 一个折叠单元：一行摘要，展开后是 cards 原序列。
+ *               leadIcon 是段内调用次数最多的**工具名**（不是图标本身）——
+ *               shared 层不能 import 渲染资产，工具名→图标的映射在渲染侧做。
  * error       —— 错误卡（ErrorEntry 单列一块）：渲染料与消息不同（图标/runId/重试），
  *               不混进 entry 块让渲染侧逐条窄化。
  * turn-header —— 回合头部占位（agent 名 + 计时），userId 指向回合的 user 消息。
@@ -35,7 +37,13 @@ export type RenderBlock =
 	// error 条目单列 error 块（见上），entry 块在类型上把它排除 ——
 	// 渲染侧 user/tool 分流后剩的就是 AssistantMessage，窄化由类型保证而非注释。
 	| { readonly kind: "entry"; readonly entry: Exclude<ConversationEntry, ErrorEntry> }
-	| { readonly kind: "fold"; readonly id: string; readonly summary: string; readonly cards: readonly ToolCard[] }
+	| {
+			readonly kind: "fold";
+			readonly id: string;
+			readonly summary: string;
+			readonly leadIcon: string;
+			readonly cards: readonly ToolCard[];
+	  }
 	| { readonly kind: "error"; readonly entry: ErrorEntry }
 	| { readonly kind: "turn-header"; readonly userId: MessageId }
 	| { readonly kind: "cancelled"; readonly userId: MessageId };
@@ -138,6 +146,29 @@ export function summarizeToolRun(cards: readonly ToolCard[]): string {
 	return parts.join("、");
 }
 
+/**
+ * 段内调用次数最多的工具名，折叠行行首主导图标的依据（WorkBuddy
+ * computeTopToolName 同思路）。返回值只是工具名 —— 图标映射是渲染侧的事。
+ *
+ * 平局保留先达到最高次数者（按段内出现序推进，结果稳定可测）。
+ * bash/powershell 不像摘要那样合并计数：二者在渲染侧映射成同一个终端图标，
+ * 这里拆开统计不影响最终视觉。
+ */
+export function leadToolName(cards: readonly ToolCard[]): string {
+	const counts = new Map<string, number>();
+	let lead = "";
+	let max = 0;
+	for (const card of cards) {
+		const n = (counts.get(card.toolName) ?? 0) + 1;
+		counts.set(card.toolName, n);
+		if (n > max) {
+			max = n;
+			lead = card.toolName;
+		}
+	}
+	return lead;
+}
+
 /* ── 分组与块流 ────────────────────────────────────────────────── */
 
 /**
@@ -175,6 +206,7 @@ export function buildRenderBlocks(
 				kind: "fold",
 				id: `fold-${first?.id ?? "0"}`,
 				summary: summarizeToolRun(toolBuffer),
+				leadIcon: leadToolName(toolBuffer),
 				cards: toolBuffer,
 			});
 		}

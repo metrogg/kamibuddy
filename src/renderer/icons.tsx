@@ -341,3 +341,66 @@ export const IconDownload = (p: IconProps): React.JSX.Element => (
 	<path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
 </Svg>
 );
+
+/* ── 工具类型图标（tool-icon-registry 用） ───────────────────────── */
+
+export const IconEye = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 眼轮廓 + 瞳：读取/预览/交付类工具（「看见内容」）。 */}
+	<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+	<circle cx="12" cy="12" r="3" />
+</Svg>
+);
+
+export const IconTerminal = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 提示符 >_ ：命令执行类工具。与 IconCode（</>，代码文件）分工：终端是会话。 */}
+	<path d="m4 17 6-6-6-6M12 19h8" />
+</Svg>
+);
+
+export const IconClipboard = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 夹板 + 横线：计划/待办/定时任务类工具。 */}
+	<rect x="5" y="5" width="14" height="16" rx="2" />
+	<path d="M9 5V4a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 4v1M9 11h6M9 15h4" />
+</Svg>
+);
+
+export const IconDatabase = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 圆柱体：数据库服务的通用隐喻。 */}
+	<ellipse cx="12" cy="5.5" rx="7.5" ry="2.5" />
+	<path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13" />
+	<path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5" />
+</Svg>
+);
+
+export const IconCloud = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	<path d="M18 10h-1.3A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+</Svg>
+);
+
+export const IconDebug = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 甲虫：调试类工具（bug 的双关）。 */}
+	<rect x="8" y="7" width="8" height="12" rx="4" />
+	<path d="M9 7a3 3 0 0 1 6 0M4 13h4M16 13h4M6 6l2.5 2.5M18 6l-2.5 2.5M6 20l2.5-2.5M18 20l-2.5-2.5" />
+</Svg>
+);
+
+export const IconLocation = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 地图钉：位置/POI 查询类工具。 */}
+	<path d="M12 21s-7-5.6-7-11a7 7 0 0 1 14 0c0 5.4-7 11-7 11z" />
+	<circle cx="12" cy="10" r="2.5" />
+</Svg>
+);
+
+export const IconWrench = (p: IconProps): React.JSX.Element => (
+<Svg {...p}>
+	{/* 扳手：未识别工具与 MCP 工具的兜底（「反正是某种工具」）。 */}
+	<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 8l-6.9 7a2.1 2.1 0 0 1-3-3l7-7a6 6 0 0 1 7.9-8l-3.8 3.8z" />
+</Svg>
+);

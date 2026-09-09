@@ -13,6 +13,7 @@
  * main 只做转发，不解释 payload。业务判断全在 daemon。
  */
 
+import type { AutomationTask, Schedule } from "./automation.ts";
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
@@ -226,6 +227,22 @@ export const INVOKE = {
 	 * 会话事件本身就是「该刷新了」的信号，多开一条通道只是重复投递。
 	 */
 	statsSnapshot: "stats:snapshot",
+
+	/* ── 定时任务 ─────────────────────────────────────────────────── */
+
+	/** 全部定时任务（管理页列表）。 */
+	automationList: "automation:list",
+	/**
+	 * 新建或编辑定时任务（AutomationSaveInput：新建不带 id，编辑带 id）。
+	 * 返回落盘后的完整任务（status / nextRunAt / 时间戳由 daemon 算好）。
+	 */
+	automationSave: "automation:save",
+	/** 删除定时任务。正在运行（含排队中）的任务由 daemon 拒删。 */
+	automationDelete: "automation:delete",
+	/** 启停切换（active ↔ paused；missed 重新启用走这里）。返回切换后的任务。 */
+	automationToggle: "automation:toggle",
+	/** 立即运行一次（进同一串行队列，不影响既有 nextRunAt 的周期语义）。 */
+	automationRunNow: "automation:run-now",
 } as const;
 
 /** daemon → renderer，单向推送（webContents.send）。 */
@@ -243,6 +260,8 @@ export const PUSH = {
 	 * 不做自动重连——试用阶段静默重连会掩盖真问题（AGENTS.md §7：让它响亮地失败）。
 	 */
 	daemonDown: "daemon:down",
+	/** 定时任务事件（数据变更 / 一次运行结束），payload 为 AutomationEvent。 */
+	automationEvent: "automation:event",
 } as const;
 
 /* ────────────────────────────────────────────────────────────────
@@ -357,6 +376,36 @@ export interface WorkspaceGroupMeta {
 	readonly displayName?: string;
 }
 
+/**
+ * automationSave 的入参：新建不带 id，编辑带 id。
+ * status / runs / nextRunAt / 时间戳由 daemon 维护，不接受前端指定 ——
+ * daemon 是单一业务判断点，前端传了也不能信。
+ */
+export interface AutomationSaveInput {
+	readonly id?: string;
+	readonly name: string;
+	readonly prompt: string;
+	readonly schedule: Schedule;
+	/** 运行时的工作目录（任务工作空间）。 */
+	readonly cwd: string;
+}
+
+/**
+ * 定时任务推送（PUSH.automationEvent 的 payload）。
+ * changed：任务数据有变更（增删改 / 启停 / 启动恢复 / 运行记录追加），renderer 重拉列表；
+ * runFinished：一次运行结束（手动或到期），renderer 据此 toast 并标记运行会话未读。
+ */
+export type AutomationEvent =
+	| { readonly kind: "changed" }
+	| {
+			readonly kind: "runFinished";
+			readonly taskId: string;
+			readonly taskName: string;
+			/** 运行会话 id（管理页点击运行记录 / toast 跳转定位用）。装配失败时为空串（无会话可跳）。 */
+			readonly sessionId: string;
+			readonly success: boolean;
+	  };
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -414,6 +463,12 @@ export interface InvokeMap {
 	[INVOKE.pickSkillDirectory]: { args: []; result: string | undefined };
 
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
+
+	[INVOKE.automationList]: { args: []; result: AutomationTask[] };
+	[INVOKE.automationSave]: { args: [input: AutomationSaveInput]; result: AutomationTask };
+	[INVOKE.automationDelete]: { args: [id: string]; result: void };
+	[INVOKE.automationToggle]: { args: [id: string]; result: AutomationTask };
+	[INVOKE.automationRunNow]: { args: [id: string]; result: void };
 }
 
 /** push 通道的 payload 映射。 */
@@ -423,6 +478,7 @@ export interface PushMap {
 	[PUSH.permissionRequest]: PermissionRequest;
 	[PUSH.daemonReady]: void;
 	[PUSH.daemonDown]: { readonly reason: string };
+	[PUSH.automationEvent]: AutomationEvent;
 }
 
 /* ────────────────────────────────────────────────────────────────

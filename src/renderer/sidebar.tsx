@@ -69,6 +69,8 @@ interface SidebarProps {
 	readonly onOpenDiagnostics: () => void;
 	/** 「专家·技能·连接器」是真实页面（技能页已可用），不走 onTodo。 */
 	readonly onOpenSkills: () => void;
+	/** 「自动化」是真实页面（定时任务管理页），不走 onTodo。 */
+	readonly onOpenAutomations: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -101,6 +103,7 @@ export function Sidebar({
 	onOpenSettings,
 	onOpenDiagnostics,
 	onOpenSkills,
+	onOpenAutomations,
 	onTodo,
 }: SidebarProps): React.JSX.Element {
 	/**
@@ -440,7 +443,12 @@ export function Sidebar({
 						key={label}
 						type="button"
 						className="nav-item"
-						onClick={() => (label === "专家·技能·连接器" ? onOpenSkills() : onTodo(label))}
+						onClick={() => {
+							// 已点亮的能力走真实入口，其余统一「待做」（同技能入口的先例）。
+							if (label === "专家·技能·连接器") onOpenSkills();
+							else if (label === "自动化") onOpenAutomations();
+							else onTodo(label);
+						}}
 					>
 						<Icon size={16} />
 						{label}

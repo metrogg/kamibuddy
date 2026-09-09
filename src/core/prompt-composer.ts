@@ -41,6 +41,11 @@ export interface ComposePromptInput {
 	readonly model?: string;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
 	readonly piContext?: PromptContextOptions;
+	/**
+	 * 环境块取数的时刻，缺省 `new Date()`。可注入是为了纯函数可测：
+	 * 固定 now 才能断言环境块的完整文本。
+	 */
+	readonly now?: Date;
 }
 
 const SLOT = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;
@@ -75,7 +80,53 @@ export function composePrompt(input: ComposePromptInput): string {
 
 	// 空槽位（如无技能）会留下连续空行，压平；trim 掉首尾。
 	const composed = filled.replace(/\n{3,}/g, "\n\n").trim();
-	return appendPiContext(composed, input);
+	// 环境块放整个提示词的**末尾**：系统提示词前缀稳定利于 provider 前缀缓存
+	// （前面各段同分钟内字节一致，变化的只有最后一小段）。
+	return `${appendPiContext(composed, input)}\n\n${formatRuntimeTime(input.now ?? new Date())}`;
+}
+
+/**
+ * 运行时环境块：本地日期 + 分钟级时刻 + 星期 + IANA 时区名 + GMT 偏移。
+ *
+ * pi 不注入任何日期时间，模型对「现在」零感知 —— 这一行是它唯一的时间来源。
+ *
+ * 为什么只到分钟级：秒级会让每轮重组的 systemPrompt 都不同，炸 provider 的
+ * 提示词缓存；分钟级下同一 run 内连续模型调用通常落在同一分钟、字节一致，
+ * 缓存照常命中，而时间显示对「现在几点」这类问题分钟精度已够用。
+ *
+ * 格式自创（合规红线：不抄 WorkBuddy 的 <env> 措辞）。
+ */
+export function formatRuntimeTime(now: Date): string {
+	// en-US 只为拿到英文星期名与数字；日期顺序自己从 parts 重组为 YYYY-MM-DD。
+	// hourCycle h23：避免某些引擎 hour12:false 下午夜给出 "24"。
+	const parts = new Intl.DateTimeFormat("en-US", {
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hourCycle: "h23",
+		weekday: "long",
+	}).formatToParts(now);
+	const get = (type: Intl.DateTimeFormatPartTypes): string =>
+		parts.find((p) => p.type === type)?.value ?? "";
+	const date = `${get("year")}-${get("month")}-${get("day")}`;
+	const time = `${get("hour")}:${get("minute")}`;
+
+	const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	// getTimezoneOffset 与直觉相反：东八区返回 -480，取负即「相对 UTC 快多少分钟」。
+	const offsetMin = -now.getTimezoneOffset();
+	const sign = offsetMin >= 0 ? "+" : "-";
+	const absMin = Math.abs(offsetMin);
+	const offsetHours = Math.floor(absMin / 60);
+	const offsetRestMin = absMin % 60;
+	// 半小时时区（如印度 GMT+5:30）分钟部分必须保留，整时区则不赘述 :00。
+	const gmt =
+		offsetRestMin === 0
+			? `GMT${sign}${offsetHours}`
+			: `GMT${sign}${offsetHours}:${String(offsetRestMin).padStart(2, "0")}`;
+
+	return `Current time: ${date} ${time} (${get("weekday")}, ${gmt}, ${timeZone})`;
 }
 
 /**

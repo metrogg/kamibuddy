@@ -93,6 +93,16 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	present_files: "已交付",
 };
 
+/**
+ * 参数生成期即上屏卡片（tool_stream_started）的工具白名单。
+ * write/edit：参数里就是文件内容，生成几十秒、执行毫秒级，等执行态上屏
+ * 等于整段生成不可见；web_search/web_fetch：网络请求长耗时，生成期即上屏
+ * 消除执行前的空白窗。read/ls/grep/find 不在列：本地快操作几乎瞬时完成，
+ * 参数又小（一个路径/一个词），生成期上屏反而闪一下，卡片等执行态再上
+ * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
+ */
+const STREAM_CARD_TOOLS: readonly string[] = ["write", "edit", "web_search", "web_fetch"];
+
 /** 执行中标签。write/edit 不走这里（它们的执行期沿用生成期标签）。 */
 function runningLabel(toolName: string): string {
 	return TOOL_RUNNING_LABELS[toolName] ?? toolName;
@@ -515,6 +525,14 @@ export class SessionHost {
 	}
 
 	/**
+	 * 定时任务 run 的溯源标记（automation_run custom 条目，taskId 定位任务的运行会话）。
+	 * 会话列表/导出链路经会话文件天然可追（spec：add-automation-scheduler）。
+	 */
+	markAutomationRun(taskId: string): void {
+		this.session.sessionManager.appendCustomEntry("automation_run", { taskId });
+	}
+
+	/**
 	 * 当前会话文件名。daemon 用它标会话列表的 current、判定 rename/delete
 	 * 的目标是不是这个活会话。in-memory 会话为 undefined —— 本应用的会话
 	 * 都是持久化的，但 pi 的类型如此，调用方必须处理。
@@ -913,9 +931,9 @@ export class SessionHost {
 	/**
 	 * toolcall_delta 的处理：累积参数原文，并在 id/name 稳定后发出生成中卡片。
 	 *
-	 * 只有 write/edit 有生成中卡片 —— 它们的参数里就是文件内容，生成阶段几十秒；
-	 * 其余工具参数小（一个路径/一个词），生成转瞬即逝，卡片等执行态再上
-	 * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
+	 * 生成期上屏的工具范围见 STREAM_CARD_TOOLS：write/edit 生成期长，
+	 * web_search/web_fetch 执行期长（网络请求），都需要尽早占位消除空白窗；
+	 * read/ls/grep/find 本地瞬时完成，生成期上屏反而闪一下。
 	 *
 	 * write 额外发行数进度（「生成中 +N」的 N 从这里来）。edit 不发 ——
 	 * 它的参数是嵌套的 edits 数组，流式数行要维护部分 JSON 解析状态机，
@@ -935,7 +953,7 @@ export class SessionHost {
 		// 不稳定就不发，等下一个 delta；整段生成都没等到则由 tool_execution_start 兜底上屏。
 		if (block === undefined || block.type !== "toolCall") return;
 		if (block.id === "" || block.name === "") return;
-		if (block.name !== "write" && block.name !== "edit") return;
+		if (!STREAM_CARD_TOOLS.includes(block.name)) return;
 
 		const emit = this.options.emit;
 		if (track.emittedId === undefined) {
@@ -944,9 +962,15 @@ export class SessionHost {
 				id: block.id,
 				role: "tool",
 				toolName: block.name,
-				// path 还没解析出来，changeType 未知：先按新建给标签，
-				// 进度事件到达时 reducer 会按真实 changeType 刷新（生成中→修改中）。
-				label: generatingLabel(block.name, "created"),
+				// web_search/web_fetch 没有「生成中」语义（WorkBuddy 词汇表里它们
+				// 只有执行态标签），直接给执行中标签 —— 执行开始的 tool_started
+				// upsert 同一张卡，标签不跳变。write/edit 的 path 还没解析出来，
+				// changeType 未知：先按新建给标签，进度事件到达时 reducer 会按
+				// 真实 changeType 刷新（生成中→修改中）。
+				label:
+					block.name === "write" || block.name === "edit"
+						? generatingLabel(block.name, "created")
+						: runningLabel(block.name),
 				summary: "",
 				outcome: undefined,
 				detail: undefined,

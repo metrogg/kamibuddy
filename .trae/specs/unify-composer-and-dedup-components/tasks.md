@@ -18,14 +18,14 @@
   - [x] 1.3 验证：`npm run typecheck && npm run check:deps && npx vitest run src/renderer`
     （chat 相关测试不回归）
 
-- [ ] Task 2: home-view 接入 Composer + 首页「+」修复
-  - [ ] 2.1 App.tsx：HomeView 补传 availableModes / interactionId / onInteractionChange
+- [x] Task 2: home-view 接入 Composer + 首页「+」修复
+  - [x] 2.1 App.tsx：HomeView 补传 availableModes / interactionId / onInteractionChange
     （与传 ChatView 的同源）
-  - [ ] 2.2 home-view.tsx：手写 composer 区块替换为 `<Composer>`（不开 draftKey/
+  - [x] 2.2 home-view.tsx：手写 composer 区块替换为 `<Composer>`（不开 draftKey/
     enableHistory/streaming；左组=PlusMenu+ModelMenu+Mic）；PlusMenu 复用
     `src/renderer/plus-menu.tsx`；删除被内化的死代码（submit/keydown/hook 接线/
-    不再使用的 import）
-  - [ ] 2.3 验证：`npm run typecheck && npm run check:deps && npx vitest run src/renderer`
+    不再使用的 import）；ComposerHandle 补充 setText（首页案例卡填充通道）
+  - [x] 2.3 验证：`npm run typecheck && npm run check:deps && npx vitest run src/renderer`
 
 ## 去重 · 可与 Task 1/2 并行（只动 index.css 与各自小组件，需避开 composer 区块类名）
 
@@ -39,13 +39,13 @@
 
 ## 收尾
 
-- [ ] Task 4: 渲染层重复审计 + 全量验证 + 文档
-  - [ ] 4.1 审 settings-view / skills-view / diagnostics-view / sidebar / artifact-panel /
-    permission-dialog / toast：列重复清单；只合并「逻辑相同、无各自演进方向」的项
-    （如完全相同的空态/节标题/加载态结构）；存疑项不合并
-  - [ ] 4.2 `npm run typecheck && npm run check:deps && npm test` 全绿
-  - [ ] 4.3 `docs/STATUS.md`：新增专节（Composer 统一 + 去重 + 审计结论含「已知重复、
-    暂不合并」清单）与「等你验证」冒烟项
+- [x] Task 4: 渲染层重复审计 + 全量验证 + 文档
+  - [x] 4.1 审 settings-view / skills-view / diagnostics-view / sidebar / artifact-panel /
+    permission-dialog / toast：合并 10 组逐字重复（CSS 选择器并集，约 -70 行）；
+    16 项存疑记录为「已知重复、暂不合并」（已进 STATUS.md 专节）
+  - [x] 4.2 `npm run typecheck && npm run check:deps && npm test` 全绿（764 用例）
+  - [x] 4.3 `docs/STATUS.md`：新增专节（Composer 统一 + 去重 + 审计结论含「已知重复、
+    暂不合并」清单）与「等你验证」冒烟项（第 12 项）
 
 # Task Dependencies
 

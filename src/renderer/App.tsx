@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
+	AutomationEvent,
 	PermissionRequest,
 	PromptRequest,
 	SessionSummary,
@@ -31,9 +32,10 @@ import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
+import { AutomationsView } from "./automations-view.tsx";
 import { Toast, type ToastMessage, type ToastType } from "./toast.tsx";
 
-type View = "home" | "chat" | "settings" | "skills" | "diagnostics";
+type View = "home" | "chat" | "settings" | "skills" | "diagnostics" | "automations";
 
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
@@ -188,6 +190,47 @@ export function App(): React.JSX.Element {
 				if (!disposed) setApprovals((queue) => [...queue, request]);
 			},
 		);
+		/*
+		 * 定时任务推送。changed（任务增删改/启停）不需要 App 层动作 ——
+		 * 管理页挂在时自己订阅了同一事件重拉列表（侧栏不展示任务数据）。
+		 * runFinished 要在这里处理：toast 全局可见，且后台 run 的会话事件
+		 * 不转发 renderer（见 daemon 的 run 执行器），下面的 run_finished
+		 * 分支覆盖不到它 —— 侧栏列表刷新与未读标记都得在这条推送里补。
+		 */
+		const offAutomation = window.kami.onAutomationEvent(
+			(event: AutomationEvent) => {
+				if (disposed || event.kind !== "runFinished") return;
+				showToast(
+					event.success
+						? `任务「${event.taskName}」已完成`
+						: `任务「${event.taskName}」运行失败`,
+					event.success ? "success" : "error",
+				);
+				// 让新产生的 run 会话出现在侧栏（标题/分组的真相在 daemon）。
+				refreshTasks();
+				// 装配失败的 run 没有会话（空串），无可标记对象。
+				if (event.sessionId === "") return;
+				// 未读与 run_finished 分支同口径：完成时用户没在看就标绿点。
+				// 区别只是定位键 —— 这里是 sessionId，要经列表换成 path。
+				window.kami
+					.listSessions()
+					.then((list) => {
+						if (disposed) return;
+						const hit = list.find((t) => t.id === event.sessionId);
+						if (hit === undefined) return;
+						if (viewRef.current === "chat" && hit.current) return;
+						setUnreadPaths((prev) => {
+							if (prev.has(hit.path)) return prev;
+							const next = new Set(prev);
+							next.add(hit.path);
+							return next;
+						});
+					})
+					.catch(() => {
+						// 列表只是导航入口，标不上未读不掩盖主体事实（toast 已提示）。
+					});
+			},
+		);
 
 		// 消除竞态：daemon 可能在监听器注册之前就已就绪，那条推送已经丢了。
 		window.kami
@@ -206,6 +249,7 @@ export function App(): React.JSX.Element {
 			offDown();
 			offReady();
 			offPermission();
+			offAutomation();
 		};
 	}, []);
 
@@ -622,6 +666,30 @@ export function App(): React.JSX.Element {
 		setView("diagnostics");
 	}, [view]);
 
+	/** 定时任务管理页同理：记住来路，关闭后回去。 */
+	const openAutomations = useCallback(() => {
+		setReturnView(view === "chat" ? "chat" : "home");
+		setView("automations");
+	}, [view]);
+
+	/**
+	 * 管理页点击运行记录：resume 链路的定位键是 path，运行记录给的是
+	 * sessionId，要经会话列表换算。列表里没有（会话已被删除）时 resume
+	 * 无从谈起 —— toast 说明，不假装切过去（与 resumeTask 失败同口径）。
+	 */
+	const resumeRunSession = useCallback(
+		(sessionId: string) => {
+			const hit = taskList.find((t) => t.id === sessionId);
+			if (hit === undefined) {
+				showToast("本次运行的会话已不在列表中（可能已删除）", "warning");
+				return;
+			}
+			resumeTask(hit.path);
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[taskList, resumeTask],
+	);
+
 	const firstUserText = conversation.entries.find(
 		(e) => e.role === "user",
 	)?.text;
@@ -664,11 +732,12 @@ export function App(): React.JSX.Element {
 					onRemoveWorkspace={removeWorkspace}
 					onRevealWorkspace={revealWorkspace}
 					onOpenSettings={openSettings}
-					onOpenDiagnostics={openDiagnostics}
-					onOpenSkills={() => setView("skills")}
-					onTodo={showTodo}
-				/>
-			)}
+				onOpenDiagnostics={openDiagnostics}
+				onOpenSkills={() => setView("skills")}
+				onOpenAutomations={openAutomations}
+				onTodo={showTodo}
+			/>
+		)}
 			{view === "home" && (
 				<HomeView
 					ready={link.kind === "ready"}
@@ -704,8 +773,8 @@ export function App(): React.JSX.Element {
 					else openPreview({ kind: "file", path });
 				}}
 					onOpenPanelGroup={(_group) => {
-				// 聚合入口：打开面板（无激活项时用第一个产物），概览菜单
-				// 的分组展开由 OverviewMenu 的 open 状态自持，打开面板即展开。
+				// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
+				// 面板概览视图里常驻展示，无需额外展开动作。
 				const first = conversation.artifacts[0];
 				if (first !== undefined) openPreview({ kind: "file", path: first.path });
 			}}
@@ -727,8 +796,16 @@ export function App(): React.JSX.Element {
 				<SettingsView onClose={() => setView(returnView)} />
 			)}
 			{view === "diagnostics" && (
-				<DiagnosticsView onClose={() => setView(returnView)} />
-			)}
+			<DiagnosticsView onClose={() => setView(returnView)} />
+		)}
+		{view === "automations" && (
+			<AutomationsView
+				cwd={conversation.state.cwd}
+				onClose={() => setView(returnView)}
+				onResumeSession={resumeRunSession}
+				onToast={showToast}
+			/>
+		)}
 			{/* 产物预览面板：只在对话任务里出现（WorkBuddy：预览属于任务上下文），
 		   首页是引导页，右侧没有面板。panelOpen 即渲染（无激活文件时显示空态）。 */}
 		{view === "chat" && panelOpen && (

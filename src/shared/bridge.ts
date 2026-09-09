@@ -5,7 +5,10 @@
  * 不知道 ipcRenderer、不知道通道名、更不知道 pi。
  */
 
+import type { AutomationTask } from "./automation.ts";
 import type {
+	AutomationEvent,
+	AutomationSaveInput,
 	DaemonStatus,
 	ArtifactContent,
 	CompletionData,
@@ -160,6 +163,19 @@ export interface KamiBridge {
 	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
 	readonly statsSnapshot: () => Promise<ObservabilitySnapshot>;
 
+	/* ── 定时任务 ─────────────────────────────────────────────────── */
+
+	/** 全部定时任务（管理页列表）。 */
+	readonly listAutomations: () => Promise<AutomationTask[]>;
+	/** 新建或编辑（input 带 id 即编辑）。名称/调度非法时 reject 原因。 */
+	readonly saveAutomation: (input: AutomationSaveInput) => Promise<AutomationTask>;
+	/** 删除任务。正在运行的任务会被 daemon 拒删（reject 原因）。 */
+	readonly deleteAutomation: (id: string) => Promise<void>;
+	/** 启停切换（active ↔ paused；missed 重新启用也走这里）。 */
+	readonly toggleAutomation: (id: string) => Promise<AutomationTask>;
+	/** 立即运行一次（进同一串行队列，不影响既有周期）。 */
+	readonly runAutomationNow: (id: string) => Promise<void>;
+
 	readonly onSessionEvent: (
 		listener: (event: SessionEvent) => void,
 	) => Unsubscribe;
@@ -170,6 +186,10 @@ export interface KamiBridge {
 	readonly onDaemonReady: (listener: () => void) => Unsubscribe;
 	readonly onDaemonDown: (
 		listener: (info: { readonly reason: string }) => void,
+	) => Unsubscribe;
+	/** 定时任务事件（数据变更 / 一次运行结束）。 */
+	readonly onAutomationEvent: (
+		listener: (event: AutomationEvent) => void,
 	) => Unsubscribe;
 }
 

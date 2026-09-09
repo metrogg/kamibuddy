@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（plan 模式 + 加号菜单 + /plan，spec：.trae/specs/add-plan-mode-and-plus-menu/；同日早前：文档读取 read_document）
+> 最后更新：2026-09-09（定时任务自动化核心闭环，spec：.trae/specs/add-automation-scheduler/；同日早前：plan 模式、Composer 统一 + 渲染层去重、文档读取）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -164,6 +164,14 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
     加号菜单 → 模式 → 计划。让它「规划一下 XX」：只读调研后给编号计划、不改任何文件；
     计划消息下点「执行计划」：切回创作并自动开工。plan 中再发 `/plan` 回到之前模式。
     加号菜单的「专家/技能/连接器」点击只提示待做。
+12. **Composer 统一（新，见下方专节）** —— 首页「+」应展开与对话页相同的五项菜单；
+    首页模式 → 计划 → 发消息，新任务以 plan 起手；首页案例卡片点击能填充输入框；
+    首页/对话页的附件三入口、IME 选词 Enter、字数闸行为一致；hover 用户气泡/助手消息
+    工具条与四个弹层观感无变化。
+13. **定时任务（新，见下方专节）** —— 侧栏「自动化」进管理页：新建一个 interval=1 分钟
+    的任务，等到期后应自动跑出会话（侧栏出现、带未读点、toast 提示），管理页展开
+    运行记录可点开该会话；对话里说「每 2 分钟检查一次 XX」（craft 模式）模型应能
+    建任务（权限询问一次，可点记住）；暂停后不再触发；删除运行中任务被拒。
 
 发现问题直接告诉我现象即可。
 
@@ -176,6 +184,8 @@ docs/
   ARCHITECTURE.md      架构 + 决策记录
   workbuddy分析/        逆向调研笔记（仅参考，勿抄文字）
                        08-builtin-tools-reference.md = 16 个自研工具逐实现对照手册
+                       10-context-system.md = 上下文系统全景（118 模板/17 每轮注入段/压缩体系，
+                       证据到行号；KamiBuddy 上下文工程的规格书）
 AGENTS.md              开发约定
 resources/             能力即数据（加模式/场景/技能 = 加文件，零代码）
   scenes/<id>/prompt.md   场景骨架（frontmatter + 提示词，含槽位）
@@ -470,6 +480,63 @@ spec：`.trae/specs/add-plan-mode-and-plus-menu/`。机制学 pi 官方示例扩
    daemon 拦截切换；退出时回到上一个非 plan 模式（内存记录，缺省 craft）——
    所有模式切换收敛到 `applyInteraction` 单入口，记忆不会失效。
 
+## Composer 统一 + 渲染层去重（2026-09-09）
+
+spec：`.trae/specs/unify-composer-and-dedup-components/`。起因：用户抓到首页「+」
+仍是裸图片按钮——根因是首页与对话页的输入卡是两份手写重复（各约 150 行），
+改一处漏一处是必然。
+
+1. **统一 `Composer` 组件**（`composer.tsx`）：内置 draft、附件/补全/IME 三 hook 接线、
+   keydown 链（ac→IME→可选 Alt 历史→流式 Esc 停止确认→Enter）、提交（字数闸双闸、
+   文档 chip 折回）、bar 固定尾部（余量 + send/stop 含二次确认）；差异全走 props
+   （draftKey/enableHistory/streaming…），bar 左组 children 注入。
+   `ComposerHandle` ref 暴露 `pickFiles`（PlusMenu 触发内部附件选择）与
+   `setText`（首页案例卡填充——draft 内化后父组件唯一写入通道）。
+2. **首页修复**：「+」= 同一个 PlusMenu（App 补传模式数据源）；获得字数闸；
+   仍不开历史/草稿（语义不变）。
+3. **CSS 去重**：工具条合并（`.entry-toolbar` + 左右修饰 + `.entry-icon-btn`）；
+   菜单容器公共类 `.pop-menu`；审计再并 10 组逐字重复（mode/plus 菜单条目、
+   settings/skills 骨架等，约 -70 行）。
+4. **审计留下的「已知重复、暂不合并」**（判据：非逐字、跨模块、各有演进方向）：
+   `.space-menu-item` vs `.plus-menu-item`（紧凑行 vs 常规行数值不同）；
+   pdf/office 两套预览器样式（各随第三方库升级演进）；
+   `e instanceof Error ? e.message : String(e)` 习语 48 处（要改应单列切片全量换）；
+   settings/skills 视图的 `refresh`/`run` 回调（状态所有权交织，hook 化收益低于成本）；
+   artifact-panel 文本预览守卫段（包装后调用点更长）；sidebar 两处重命名 input（共享仅 8 行）。
+   完整 16 项见该 spec 的审计报告记录。
+
+## 定时任务自动化·核心闭环（2026-09-09）
+
+spec：`.trae/specs/add-automation-scheduler/`。机制对齐 WorkBuddy 桌面层自动化
+（调研：持久任务 + 调度 + 每次运行一条新会话 + 未读 inbox + 对话内工具），
+文案自创；用户拍板 v1 = 核心闭环 + 对话内工具。
+
+1. **存储**：`~/.kamibuddy/automations.json`（临时文件+rename 原子写，损坏响亮报错）。
+   调度四型 once/interval/daily/weekly，`shared/automation.ts` 纯函数算下次运行
+   （46 用例；interval 锚=epoch 均分序列，重启/补算结果一致）。**不引 rrule 库**
+   （四种够用，月度规则再引——YAGNI）。
+2. **调度器**（`daemon/automation-scheduler.ts`）：30s tick + 串行队列（FIFO 顺延）；
+   启动恢复（once 过期→missed 不补跑，周期重算）；手动运行只 appendRun 不动调度。
+3. **run 执行器**（`daemon/automation-runner.ts`）：每次运行 = 独立新会话
+   （任务 cwd、work+craft、当前生效模型），**收集型 emit 不污染用户当前会话视图**；
+   会话文件写 `automation_run` custom 条目溯源；30 分钟超时记失败。
+   **无人值守权限**：run 会话权限门 `unattended` 变体——审批类自动拒绝并把原因
+   返回模型（凭据禁读写等硬规则不变）。
+4. **对话内三工具**（craft 白名单）：`automation_create/list/delete`。
+   once 的 `at` 用 ISO 字符串而非毫秒戳（模型从系统时间推字符串远比算戳可靠）；
+   delete 名称歧义返回候选而非报错（isError 会诱导原样重试）。
+   craft 提示词加 self-contained 段（任务指令写全时间/路径/对象，未来运行看不到对话）。
+   **权限门登记**：list 只读放行；create/delete 显式 medium 询问（不依赖 fail-safe
+   默认值——它将来变动不该静默改语义；用户可「记住」免除）。
+5. **管理页**（`automations-view.tsx`，侧栏「自动化」入口接入真实路由）：
+   列表/启停/删除（运行中拒删）/手动运行/行展开运行记录（点击 resume 对应会话）/
+   新建·编辑表单（validateSchedule 前后端双闸）。run 完成 PUSH → toast + 会话列表刷新；
+   未读复用现有绿点机制（后台 run 事件不转发 renderer，在 automationEvent 里按
+   同口径补标，注释写了根因）。
+
+明确不做：AI 自主调下轮、jitter、月度/复杂规则、任务级独立模型/技能/权限档、
+托盘通知、并发多 run。
+
 ## 文档读取 read_document（2026-09-09 落地）
 
 模型此前读不了 PDF/Office（pi 的 read 只支持文本+图片，PDF 读出乱码）。
@@ -508,6 +575,24 @@ spec：`.trae/specs/add-plan-mode-and-plus-menu/`。机制学 pi 官方示例扩
 **发送时**经 `foldDocumentRefsIntoText` 把 `@path` 行折进消息（模型自取约定不变）。
 chip 与图片附件同为组件态不做会话持久化（已知限制，实现路径已注释）。
 `document-reference.ts` 与 `insertSnippetAtCursor` 已删干净。605 个测试全绿。
+
+**右侧面板视图层级修正（同日，spec：`.trae/specs/fix-panel-view-hierarchy/`）**：
+头部下拉从「概览内嵌 产物/变更/工作区文件 三组」（层级错误）改为 WorkBuddy 5.5.4 同款
+**视图切换器**——概览/工作空间文件/变更三者平级（当前项 ✓）；产物只属概览视图；
+变更视图加「文件变更 +N -M」汇总头。主体双态（列表态↔预览态）由
+`renderer/panel-view.ts` 纯状态机驱动（11 个迁移测试）：点条目进预览、
+切视图回列表（tabs 保留可点回）、关最后一个 tab 回列表。「选择文件以预览」
+占位移除——列表态即默认主体。653 个测试全绿。
+
+**当前时间注入（同日，spec：`.trae/specs/inject-current-time/`）**：
+模型此前答不了「现在几点」（pi 不注入时间，prompt-composer 也无时间上下文；
+WorkBuddy 的机制是系统提示词 `<env>` 块注入日期——product.json 模板实证）。
+现 `composePrompt` 末尾追加运行时环境块
+`Current time: 2026-09-09 23:18 (Wednesday, GMT+8, Asia/Shanghai)`（文字自创），
+before_agent_start 每轮重组 → 每个新 run 时间新鲜（composePrompt 唯一生产调用
+在 daemon，无组装缓存，session-host 零改动）。**分钟级精度是刻意取舍**：
+秒级每轮炸 provider 提示词缓存，分钟级 run 内字节一致（测试钉住）。
+用户名画像注入不做（无画像系统，归 T5 记忆）。739 个测试全绿。
 
 另：同日规则变更——AGENTS.md §2「文档流水线」改为按 WorkBuddy 用 Python venv
 （托管 `~/.venv-html-to-docx` + `uv` 独立 Python 3.12），不再要求用户预装

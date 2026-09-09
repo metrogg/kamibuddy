@@ -22,6 +22,7 @@ import {
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { AutomationStore } from "../core/automation-store.ts";
 import {
 	getConfigDir,
 	getResourcesDir,
@@ -41,6 +42,7 @@ import { PreviewServer } from "../core/preview-server.ts";
 import {
 	composePrompt,
 	formatSkillsSection,
+	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
 import { loadResources, toDescriptors } from "../core/resources.ts";
@@ -57,6 +59,7 @@ import {
 } from "../core/workspace-registry.ts";
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
+import { automationExtensionFactory } from "../extensions/automation-tools.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { defaultProtectedDirs, isPathInside } from "../extensions/permission-policy.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
@@ -87,6 +90,7 @@ import { isDaemonRequest } from "../shared/daemon-protocol.ts";
 import {
 	INVOKE,
 	PUSH,
+	type AutomationSaveInput,
 	type PermissionRequest,
 	type PermissionResponse,
 	type ArtifactContent,
@@ -94,6 +98,8 @@ import {
 	type SessionSummary,
 	type WorkspaceGroupMeta,
 } from "../shared/ipc.ts";
+import { nextRunAfter, validateSchedule } from "../shared/automation.ts";
+import type { AutomationTask } from "../shared/automation.ts";
 import {
 	isWebSearchProviderId,
 	type WebSearchConfigInfo,
@@ -108,6 +114,8 @@ import type {
 } from "../shared/session-events.ts";
 import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
+import { createAutomationRunExecutor } from "./automation-runner.ts";
+import { AutomationScheduler } from "./automation-scheduler.ts";
 
 /* ── 与父进程的通道 ───────────────────────────────────────────────── */
 
@@ -235,6 +243,61 @@ function listSkills(): SkillInfo[] {
 	}
 }
 
+/**
+ * 联网搜索配置。用户会话与定时任务 run 会话共用这一份读取逻辑。
+ * 偏好文件可能被手工编辑出非法值：按「未配置」处理，工具会引导用户去设置页 ——
+ * 不静默用错服务商打 API。
+ */
+function getWebSearchConfig(): WebSearchConfig | undefined {
+	const webSearch = readPreferences().webSearch;
+	if (webSearch === undefined || !isWebSearchProviderId(webSearch.providerId)) {
+		return undefined;
+	}
+	return { providerId: webSearch.providerId, apiKey: webSearch.apiKey };
+}
+
+/**
+ * 组装指定 cwd 与两轴下的系统提示词。用户会话与定时任务 run 会话共用 ——
+ * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
+ * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
+ * run 会话没有诊断视图、直接丢弃）。
+ */
+async function composeSystemPrompt(
+	cwd: string,
+	sceneId: string,
+	interactionId: string,
+	piContext: PromptContextOptions,
+): Promise<{ prompt: string; systemTokens: number; skillsTokens: number }> {
+	const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
+	const mode = RESOURCES.modes.find((m) => m.id === interactionId);
+	if (scene === undefined || mode === undefined) {
+		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
+	}
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
+	const skills: SkillDescriptor[] = listSkills().map((s) => ({
+		name: s.name,
+		description: s.description,
+		filePath: s.filePath,
+	}));
+	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
+	// 的工具（read / bash）时，不注入技能段 —— 否则会让模型去调用
+	// 一个并不存在的 read 工具（plan 模式就是这个坑）。
+	const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
+	const skillsSection = hasSkillReader ? formatSkillsSection(skills) : "";
+	const prompt = composePrompt({
+		sceneBody: scene.body,
+		modeBody: mode.body,
+		skillsSection,
+		cwd,
+		piContext,
+	});
+	return {
+		prompt,
+		systemTokens: estimateTokens(prompt),
+		skillsTokens: estimateTokens(skillsSection),
+	};
+}
+
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
@@ -319,6 +382,116 @@ const observability = new ObservabilityStore();
  * 换工作空间时随 applyWorkspace 换根。
  */
 const previewServer = new PreviewServer();
+
+/* ── 定时任务 ─────────────────────────────────────────────────────── */
+
+/**
+ * 定时任务库与调度器。
+ *
+ * daemon 是单一业务判断点：五个 IPC handler 与对话内 automation 工具都落在这一个
+ * store 上，调度器的 tick/队列也只读它 —— 不存在第二份任务状态。
+ * load() 在 start() 里显式调（库损坏暴露在启动时刻，而不是第一次读写时才炸）。
+ */
+const automationStore = new AutomationStore();
+
+const automationScheduler = new AutomationScheduler({
+	store: automationStore,
+	execute: createAutomationRunExecutor({
+		getCatalog,
+		getModelKey: () => activeModelKey,
+		resources: RESOURCES,
+		compose: async (cwd, sceneId, interactionId, piContext) =>
+			(await composeSystemPrompt(cwd, sceneId, interactionId, piContext)).prompt,
+		getPermissions: () => activePermissions,
+		protectedDirs: PROTECTED_DIRS,
+		isTempCwd,
+		isOwnWorkspace: (dir) =>
+			isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
+		getWebSearchConfig,
+	}),
+	push: (event) => {
+		post({ kind: "push", channel: PUSH.automationEvent, payload: event });
+	},
+});
+
+/** 任务数据变更的统一推送（handler 与调度器共用这一个出口）。 */
+function pushAutomationChanged(): void {
+	post({ kind: "push", channel: PUSH.automationEvent, payload: { kind: "changed" } });
+}
+
+/**
+ * 新建/编辑定时任务的统一入口（automationSave 通道）。
+ * 状态机归位规则：paused 编辑保持 paused；其余按「还有没有下一次」归位 ——
+ * 算不出下一次（一次性已过期）就是 missed，有就是 active。
+ */
+function saveAutomation(input: AutomationSaveInput): AutomationTask {
+	const name = input.name.trim();
+	if (name === "") throw new Error("任务名称不能为空");
+	const prompt = input.prompt.trim();
+	if (prompt === "") throw new Error("任务内容不能为空");
+	const scheduleError = validateSchedule(input.schedule);
+	if (scheduleError !== undefined) throw new Error(scheduleError);
+	const cwd = input.cwd.trim();
+	if (cwd === "") throw new Error("工作目录不能为空");
+	// 任务 cwd 就是运行时权限门的放行边界，与工作空间同规则把关（配置目录/应用目录拒）。
+	const cwdError = validateWorkspacePath(cwd, {
+		configDir: getConfigDir(),
+		appDir: process.cwd(),
+	});
+	if (cwdError !== undefined) throw new Error(cwdError);
+
+	const now = Date.now();
+	const existing = input.id === undefined ? undefined : automationStore.get(input.id);
+	if (input.id !== undefined && existing === undefined) {
+		throw new Error("定时任务不存在，可能已被删除");
+	}
+
+	const nextRunAt = nextRunAfter(input.schedule, now);
+	const status =
+		existing?.status === "paused" ? "paused" : nextRunAt === undefined ? "missed" : "active";
+
+	const task: AutomationTask = {
+		id: existing?.id ?? randomUUID(),
+		name,
+		prompt,
+		schedule: input.schedule,
+		cwd,
+		status,
+		runs: existing?.runs ?? [],
+		createdAt: existing?.createdAt ?? now,
+		updatedAt: now,
+		nextRunAt,
+		lastRunAt: existing?.lastRunAt,
+	};
+	automationStore.upsert(task);
+	pushAutomationChanged();
+	return task;
+}
+
+/**
+ * 启停切换（automationToggle 通道）。active → paused；
+ * paused / missed → 按当前时间重算下一次启用，算不出来（一次性已过期）仍是 missed。
+ */
+function toggleAutomation(id: string): AutomationTask {
+	const task = automationStore.get(id);
+	if (task === undefined) throw new Error("定时任务不存在");
+	const now = Date.now();
+	let next: AutomationTask;
+	if (task.status === "active") {
+		next = { ...task, status: "paused", updatedAt: now };
+	} else {
+		const nextRunAt = nextRunAfter(task.schedule, now);
+		next = {
+			...task,
+			status: nextRunAt === undefined ? "missed" : "active",
+			nextRunAt,
+			updatedAt: now,
+		};
+	}
+	automationStore.upsert(next);
+	pushAutomationChanged();
+	return next;
+}
 
 /** 预览文本的上限：超过按二进制处理（面板只读展示，不做大文件）。 */
 const ARTIFACT_TEXT_MAX = 512 * 1024;
@@ -600,61 +773,23 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 					interactionId: conversation.state.interactionId,
 				}),
 				compose: async (sceneId, interactionId, piContext) => {
-					const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
-					const mode = RESOURCES.modes.find((m) => m.id === interactionId);
-					if (scene === undefined || mode === undefined) {
-						throw new Error(
-							`场景或交互模式不存在：${sceneId} / ${interactionId}`,
-						);
-					}
-					// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
-					const skills: SkillDescriptor[] = listSkills().map((s) => ({
-						name: s.name,
-						description: s.description,
-						filePath: s.filePath,
-					}));
-					// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
-					// 的工具（read / bash）时，不注入技能段 —— 否则会让模型去调用
-					// 一个并不存在的 read 工具（plan 模式就是这个坑）。
-					const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
-					const skillsSection = hasSkillReader ? formatSkillsSection(skills) : "";
-					const prompt = composePrompt({
-						sceneBody: scene.body,
-						modeBody: mode.body,
-						skillsSection,
-						cwd,
-						piContext,
-					});
+					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, piContext);
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
-					lastSystemPromptTokens = estimateTokens(prompt);
-					lastSkillsTokens = estimateTokens(skillsSection);
-					return prompt;
+					lastSystemPromptTokens = composed.systemTokens;
+					lastSkillsTokens = composed.skillsTokens;
+					return composed.prompt;
 				},
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
-			createWebTools({
-				getSearchConfig: () => {
-					const webSearch = readPreferences().webSearch;
-					// 偏好文件可能被手工编辑出非法值：按「未配置」处理，
-					// 工具会引导用户去设置页 —— 不静默用错服务商打 API。
-					if (
-						webSearch === undefined ||
-						!isWebSearchProviderId(webSearch.providerId)
-					) {
-						return undefined;
-					}
-					const config: WebSearchConfig = {
-						providerId: webSearch.providerId,
-						apiKey: webSearch.apiKey,
-					};
-					return config;
-				},
-			}),
+			createWebTools({ getSearchConfig: getWebSearchConfig }),
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
+			// 对话内 automation 工具（craft 白名单）：模型在对话里建/查/删定时任务。
+			// cwd 缺省取当前会话 cwd —— 工厂闭包拿不到会话状态，由这里注入 getter。
+			automationExtensionFactory(automationStore, () => workspaceDir),
 		],
 	});
 
@@ -1135,6 +1270,27 @@ const handlers: Record<string, Handler> = {
 			contextUsage: conversation.state.contextUsage,
 			logDir: eventLog.dir,
 		}),
+
+	/* ── 定时任务 ─────────────────────────────────────────────────── */
+
+	[INVOKE.automationList]: async () => automationStore.list(),
+
+	[INVOKE.automationSave]: async ([input]) => saveAutomation(input as AutomationSaveInput),
+
+	[INVOKE.automationDelete]: async ([id]) => {
+		const taskId = id as string;
+		// 正在运行（含排队中）的任务拒删：run 结束时要回写运行记录与
+		// nextRunAt，任务没了会写成一笔找不到主儿的孤儿账（spec 同口径）。
+		if (automationScheduler.isBusy(taskId)) {
+			throw new Error("任务正在运行，请等运行结束后再删除");
+		}
+		automationStore.remove(taskId);
+		pushAutomationChanged();
+	},
+
+	[INVOKE.automationToggle]: async ([id]) => toggleAutomation(id as string),
+
+	[INVOKE.automationRunNow]: async ([id]) => automationScheduler.runNow(id as string),
 
 	/* ── 会话 ─────────────────────────────────────────────────────── */
 
@@ -1732,6 +1888,12 @@ function start(): void {
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，
 	// 而不是让 daemon 起不来、界面永久卡在「正在启动」。
+
+	// 定时任务：库损坏在启动时暴露（store 契约：响亮报错不静默吞）；
+	// 调度器 start 做启动恢复（过期 once 标 missed、周期任务重算下一次）并开 tick。
+	automationStore.load();
+	automationScheduler.start();
+
 	post({ kind: "ready" });
 }
 

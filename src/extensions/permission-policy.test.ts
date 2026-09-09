@@ -308,6 +308,38 @@ describe("异常输入", () => {
 	});
 });
 
+describe("automation 工具（读写 KamiBuddy 自身任务库，不涉及用户文件系统）", () => {
+	it("automation_list → 放行（无本地路径概念，与 web_search 同类）", () => {
+		expect(decide(facts({ toolName: "automation_list" }), PATHS, CWD)).toEqual({ kind: "allow" });
+	});
+
+	it("automation_create / automation_delete → 询问 medium（改变应用自身数据，默认从紧）", () => {
+		// 显式登记，不依赖「未知工具」fail-safe —— 后者默认值若变动不该静默改这里的语义。
+		for (const toolName of ["automation_create", "automation_delete"]) {
+			expect(decide(facts({ toolName }), PATHS, CWD)).toMatchObject({ kind: "ask", risk: "medium" });
+		}
+	});
+
+	it("询问摘要说明动作（创建 / 删除自动化任务）", () => {
+		const create = decide(facts({ toolName: "automation_create" }), PATHS, CWD);
+		if (create.kind !== "ask") throw new Error("应为 ask");
+		expect(create.summary).toContain("创建");
+		const del = decide(facts({ toolName: "automation_delete" }), PATHS, CWD);
+		if (del.kind !== "ask") throw new Error("应为 ask");
+		expect(del.summary).toContain("删除");
+	});
+
+	it("read-only 档下 automation_create → 拒绝（只读拒一切改动，含应用自身数据）", () => {
+		expect(decide(facts({ toolName: "automation_create" }), PATHS, CWD, READONLY).kind).toBe("deny");
+	});
+
+	it("danger-full-access 下维持询问（与 fail-safe 现状一致；approval=never 即转为拒绝）", () => {
+		// 这条钉住「完全访问档不为应用自身数据开口子」的保守选择：
+		// 定时任务会在后台无人值守地跑，创建它始终要有人点头。
+		expect(decide(facts({ toolName: "automation_create" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+});
+
 describe("本次会话记住", () => {
 	it("同目录下不同文件共用一个键", () => {
 		const a = rememberKey(facts({ path: join(HOME, "Desktop", "a.txt") }), CWD);

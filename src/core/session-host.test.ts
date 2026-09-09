@@ -181,3 +181,66 @@ describe("prompt 的图片透传", () => {
 		expect(followUp.calls.followUp).toEqual([["追问", undefined]]);
 	});
 });
+
+type StreamStartedEvent = Extract<SessionEvent, { type: "tool_stream_started" }>;
+
+describe("工具卡片生成期上屏", () => {
+	/** 驱动一次「toolcall_start → 首个 delta（id/name 已稳定）」的最小事件序列。 */
+	function streamToolCall(host: SessionHost, name: string, id = "c1"): void {
+		translate(host, {
+			type: "message_update",
+			assistantMessageEvent: {
+				type: "toolcall_start",
+				contentIndex: 0,
+				partial: { content: [{ type: "toolCall", id: "", name: "" }] },
+			},
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "message_update",
+			assistantMessageEvent: {
+				type: "toolcall_delta",
+				contentIndex: 0,
+				delta: "{}",
+				partial: { content: [{ type: "toolCall", id, name }] },
+			},
+		} as unknown as AgentSessionEvent);
+	}
+
+	it("web_search/web_fetch 在参数生成期即上屏，标签用执行中词汇（搜索中/抓取中）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		streamToolCall(host, "web_search");
+		streamToolCall(host, "web_fetch", "c2");
+
+		const cards = events
+			.filter((e): e is StreamStartedEvent => e.type === "tool_stream_started")
+			.map((e) => e.card);
+		expect(cards.map((c) => [c.toolName, c.label])).toEqual([
+			["web_search", "搜索中"],
+			["web_fetch", "抓取中"],
+		]);
+		expect(cards.every((c) => c.generating === true)).toBe(true);
+	});
+
+	it("read/ls/grep/find 是本地快操作，不在生成期上屏（卡片等执行态再上）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		for (const name of ["read", "ls", "grep", "find"]) streamToolCall(host, name);
+
+		expect(events.some((e) => e.type === "tool_stream_started")).toBe(false);
+	});
+
+	it("write 仍在生成期上屏，标签按新建给「生成中」", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		streamToolCall(host, "write");
+
+		const card = events.find(
+			(e): e is StreamStartedEvent => e.type === "tool_stream_started",
+		)?.card;
+		expect(card).toMatchObject({ toolName: "write", label: "生成中", generating: true });
+	});
+});
