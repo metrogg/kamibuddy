@@ -1,0 +1,70 @@
+src/daemon/index.ts
+  s_c4023de03b1ef1::t_cd25ec409188bf 1292-1293
+  s_c4023de03b1ef1::t_9ab9104dd8cfcd 1139,1147-1151
+  s_c4023de03b1ef1::t_7d7e77f4ce053d 1468
+  s_c4023de03b1ef1::t_9f00520a271a39 477-482,1152-1153
+  s_c4023de03b1ef1::t_489bfe2a45979e 476,1608-1622
+.trae/specs/add-plan-mode-and-plus-menu/tasks.md
+  s_c4023de03b1ef1::t_d77edbbae5f359 35-37
+  s_c4023de03b1ef1::t_2ffa955c0a81ac 5-6,10,12,15,17-18,22,25,29,31
+  s_c4023de03b1ef1::t_efa55bf04f8628 1-4,7-9,11,13-14,16,19-21,23-24,26-28,30,32-34,38-44
+src/shared/builtin-commands.ts
+  s_c4023de03b1ef1::t_3cc290754c7136 13
+  s_c4023de03b1ef1::t_1be2951d1fef7a 24-25,27
+  s_c4023de03b1ef1::t_3b4429b9dba00b 6
+src/renderer/index.css
+  s_c4023de03b1ef1::t_56b1d7cb07d372 1536-1553
+  s_c4023de03b1ef1::t_086e4a0e34f4e9 3680-3801
+src/shared/builtin-commands.test.ts
+  s_c4023de03b1ef1::t_e260ffeefd9cf3 24-31
+src/renderer/plus-menu.tsx
+  s_c4023de03b1ef1::t_4e5b10807677f2 1-145
+src/renderer/chat-view.tsx
+  s_c4023de03b1ef1::t_786619202f7a20 875
+  s_c4023de03b1ef1::t_092fa1687a4c54 876-893
+  s_c4023de03b1ef1::t_bbb490c8dc281f 1044-1054
+  s_c4023de03b1ef1::t_5be623a6e5ea10 176,179-181,183-192,197-201
+  s_c4023de03b1ef1::t_005c1caef3a61c 1204-1215
+  s_c4023de03b1ef1::t_cb088451113ea7 36
+.trae/specs/add-plan-mode-and-plus-menu/checklist.md
+  s_c4023de03b1ef1::t_a0f4d041af09c7 5,8,10,14-16,20-24,28-31,35-37
+  s_c4023de03b1ef1::t_60feae42549a99 1-4,6-7,9,11-13,17-19,25-27,32-34
+docs/STATUS.md
+  s_c4023de03b1ef1::t_6392af035c798f 163
+  s_c4023de03b1ef1::t_324d1c05213c9b 453-472
+  s_c4023de03b1ef1::t_a1f3a550a91549 164-166
+  s_c4023de03b1ef1::t_1e7b9349e578a0 3
+resources/modes/plan.md
+  s_c4023de03b1ef1::t_6bbb0d10e44bd2 1-13
+.trae/specs/add-plan-mode-and-plus-menu/spec.md
+  s_c4023de03b1ef1::t_c678cfd6cf5e04 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "72566d153622e119ee5a70ae88a71d8592f79863",
+  "prompts": {},
+  "sessions": {
+    "s_c4023de03b1ef1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9feadcc981c232faa34c0c",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_id": "Write",
+        "external_session_id": "6a9feadcc981c232faa34c0c",
+        "operation_id": "6aa13dbef850234b77c32a6c",
+        "edit_kind": "file_edit",
+        "client_type": "ide",
+        "session_id": "6a9feadcc981c232faa34c0c",
+        "dedupe_key": "6a9feadcc981c232faa34c0c:6aa13dbef850234b77c32a6c:afterEdit:40cfb3d5",
+        "source_scene": "unknown",
+        "tool_use_id": "6aa13dbef850234b77c32a6c",
+        "tool_type": "agent",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
