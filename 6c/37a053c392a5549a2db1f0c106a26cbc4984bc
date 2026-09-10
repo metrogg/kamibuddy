@@ -1,0 +1,34 @@
+src/core/preview-server.ts
+  s_c5c899a6c86841::t_98006cc37030e1 140-201
+src/core/preview-server.test.ts
+  s_c5c899a6c86841::t_98006cc37030e1 5,108-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "6c37a053c392a5549a2db1f0c106a26cbc4984bc",
+  "prompts": {},
+  "sessions": {
+    "s_c5c899a6c86841": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa04212f850234b77c2fba0",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "source_scene": "unknown",
+        "tool_use_id": "6aa24d0df850234b77c35e8f",
+        "external_session_id": "6aa04212f850234b77c2fba0",
+        "edit_kind": "file_edit",
+        "runtime_client": "trae-tob-git-ai",
+        "tool_id": "Edit",
+        "tool_type": "agent",
+        "operation_id": "6aa24d0df850234b77c35e8f",
+        "dedupe_key": "6aa04212f850234b77c2fba0:6aa24d0df850234b77c35e8f:afterEdit:6ce469cc",
+        "client_type": "ide",
+        "session_id": "6aa04212f850234b77c2fba0"
+      }
+    }
+  }
+}
