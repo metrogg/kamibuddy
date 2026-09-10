@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PreviewServer } from "./preview-server.ts";
+import { PreviewServer, PreviewServers } from "./preview-server.ts";
 
 let base: string;
 let server: PreviewServer;
@@ -103,5 +103,56 @@ describe("PreviewServer", () => {
 		const old = await fetch(`${server.baseUrl}/snake.html`);
 		expect(old.status).toBe(404);
 		rmSync(other, { recursive: true, force: true });
+	});
+});
+
+describe("PreviewServers（多根池）", () => {
+	let pool: PreviewServers;
+	let other: string;
+
+	beforeEach(() => {
+		pool = new PreviewServers();
+		other = mkdtempSync(join(tmpdir(), "kami-preview-pool-"));
+		writeFileSync(join(other, "b.html"), "<html>b</html>");
+	});
+
+	afterEach(async () => {
+		await pool.closeAll();
+		rmSync(other, { recursive: true, force: true });
+	});
+
+	it("每个 cwd 一个独立端口，互不影响", async () => {
+		const urlA = await pool.ensure(base);
+		const urlB = await pool.ensure(other);
+		expect(urlA).toBeDefined();
+		expect(urlB).toBeDefined();
+		expect(urlA).not.toBe(urlB);
+		// 两个根同时在线：A 的文件在 B 上 404，反之亦然。
+		expect((await fetch(`${urlA}/snake.html`)).status).toBe(200);
+		expect((await fetch(`${urlB}/b.html`)).status).toBe(200);
+		expect((await fetch(`${urlA}/b.html`)).status).toBe(404);
+		expect((await fetch(`${urlB}/snake.html`)).status).toBe(404);
+	});
+
+	it("ensure 幂等：同 cwd 重复调用复用同一实例（端口不变）", async () => {
+		const url1 = await pool.ensure(base);
+		const url2 = await pool.ensure(base);
+		expect(url2).toBe(url1);
+		// 并发 ensure 也共享同一个启动 promise，不会起出两个服务。
+		const [url3, url4] = await Promise.all([pool.ensure(other), pool.ensure(other)]);
+		expect(url4).toBe(url3);
+	});
+
+	it("baseUrlFor：未启动的 cwd 返回 undefined（契约口径，不视为错误）", async () => {
+		expect(pool.baseUrlFor(base)).toBeUndefined();
+		await pool.ensure(base);
+		expect(pool.baseUrlFor(base)).toBeDefined();
+	});
+
+	it("closeAll 后所有实例下线", async () => {
+		const urlA = await pool.ensure(base);
+		await pool.closeAll();
+		expect(pool.baseUrlFor(base)).toBeUndefined();
+		await expect(fetch(`${urlA}/snake.html`)).rejects.toThrow();
 	});
 });

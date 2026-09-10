@@ -137,8 +137,67 @@ export class PreviewServer {
 		// PNA（Private Network Access）：Electron 44 对 file://（非 local 地址空间）访问
 		// 127.0.0.1（local 空间）会触发 PNA 预检，缺此头会被拦。
 		headers["access-control-allow-origin"] = "*";
-		headers["access-control-allow-private-network"] = "true";
-		res.writeHead(200, headers);
-		createReadStream(path).pipe(res);
+	headers["access-control-allow-private-network"] = "true";
+	res.writeHead(200, headers);
+	createReadStream(path).pipe(res);
+}
+}
+
+/**
+ * 多根预览服务池：每个 cwd 一个 PreviewServer（各占一个系统分配端口），懒建。
+ *
+ * 多任务并发后不同会话的工作目录不同，单根换服务模式（setRoot 先关旧服务）
+ * 会让切走会话的预览立刻断线；改为按 cwd 各起一个实例后互不影响
+ * （spec：support-concurrent-tasks E）。
+ *
+ * 不做实例回收：cwd 的数量被工作空间数天然约束（用户手动经营的目录，
+ * 量级是个位到几十），每个空闲服务只占一个 loopback 端口与极小的
+ * Server 对象，引入 LRU 只会换来「预览偶发重连」的复杂度，不值得。
+ */
+export class PreviewServers {
+	private readonly servers = new Map<string, PreviewServer>();
+	/** 同 cwd 的并发 ensure 共享同一个启动 promise，不会起出两个服务。 */
+	private readonly starting = new Map<string, Promise<string | undefined>>();
+
+	/** 查询某 cwd 的服务地址；该 cwd 的服务未启动时返回 undefined（契约口径，不视为错误）。 */
+	baseUrlFor(cwd: string): string | undefined {
+		return this.servers.get(cwd)?.baseUrl;
+	}
+
+	/**
+	 * 确保某 cwd 的服务已启动，返回 baseUrl。
+	 * 启动失败时清掉半成品实例并抛错 —— 调用方决定响亮失败（工作区切换）
+	 * 还是记日志降级（启动预热），本层不静默吞。
+	 */
+	async ensure(cwd: string): Promise<string | undefined> {
+		const running = this.servers.get(cwd);
+		if (running !== undefined) return running.baseUrl;
+		const pending = this.starting.get(cwd);
+		if (pending !== undefined) return pending;
+
+		const attempt = (async (): Promise<string | undefined> => {
+			const server = new PreviewServer();
+			try {
+				await server.setRoot(cwd);
+			} catch (error) {
+				await server.close();
+				throw error;
+			}
+			this.servers.set(cwd, server);
+			return server.baseUrl;
+		})();
+		this.starting.set(cwd, attempt);
+		try {
+			return await attempt;
+		} finally {
+			this.starting.delete(cwd);
+		}
+	}
+
+	/** 进程退出前收尾。daemon 随 utilityProcess 被杀时操作系统会回收端口，这里主要服务测试。 */
+	async closeAll(): Promise<void> {
+		const servers = [...this.servers.values()];
+		this.servers.clear();
+		await Promise.all(servers.map((server) => server.close()));
 	}
 }
