@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ConversationEntry } from "@shared/session-events.ts";
 import { computeTicks, nearestActiveTick } from "./turn-rail.ts";
 import type { Tick, TickMeasurement } from "./turn-rail.ts";
@@ -14,7 +14,13 @@ import type { Tick, TickMeasurement } from "./turn-rail.ts";
  *
  * 只标 user 消息：需求就是「回找自己说过的话」；assistant/工具条目不标
  * （spec「明确不做」）。用户消息少于 2 条时没有导航需求，不渲染。
+ *
+ * ratio 浅比较的容差：getBoundingClientRect 是亚像素浮点，scrollHeight 也在
+ * 流式期间持续微变 —— 严格相等比较在流式全程几乎永不命中，容差把「肉眼不可见
+ * 的漂移」挡在 setState 之外（1000px 高内容下 1e-4 ≈ 0.1px）。
  */
+const RATIO_EPSILON = 1e-4;
+
 export function TurnRail({
 	entries,
 	scrollRef,
@@ -24,6 +30,8 @@ export function TurnRail({
 }): React.JSX.Element | null {
 	const [ticks, setTicks] = useState<readonly Tick[]>([]);
 	const [activeId, setActiveId] = useState<string | undefined>(undefined);
+	/** 最新一次测量函数，供 ResizeObserver 回调调用（见下方 RO effect 的注释）。 */
+	const measureRef = useRef<() => void>(() => { });
 
 	/*
 		测量：getBoundingClientRect 差值 + scrollTop 换算出「滚动内容坐标」，
@@ -31,7 +39,8 @@ export function TurnRail({
 		position:relative，中间任何一层再引入定位都会让 offsetTop 静默换
 		基准；rect 差值与定位上下文完全无关，是可靠口径。
 		重算时机：entries 变化（流式增高自然覆盖）+ 容器尺寸变化
-		（ResizeObserver）。内容不变高但布局重排（窗口缩放）由后者兜住。
+		（ResizeObserver，见下方独立 effect）。内容不变高但布局重排
+		（窗口缩放）由后者兜住。
 	*/
 	useLayoutEffect(() => {
 		const node = scrollRef.current;
@@ -48,13 +57,44 @@ export function TurnRail({
 					top: el.getBoundingClientRect().top - containerTop + node.scrollTop,
 				});
 			}
-			setTicks(computeTicks(measurements, node.scrollHeight));
+			const nextTicks = computeTicks(measurements, node.scrollHeight);
+			// 浅比较 + 容差：id 相同且 ratio 漂移小于容差则返回旧数组引用——
+			// computeTicks 每次返回全新数组（.map），Object.is 永不 bailout，
+			// 会让下游 [ticks] effect 级联重跑（Maximum update depth exceeded
+			// 的级联放大器）。
+			setTicks((prev) => {
+				if (
+					prev.length === nextTicks.length &&
+					prev.every((tick, i) => {
+						const next = nextTicks[i];
+						return (
+							next !== undefined &&
+							tick.id === next.id &&
+							Math.abs(tick.ratio - next.ratio) < RATIO_EPSILON
+						);
+					})
+				) {
+					return prev;
+				}
+				return nextTicks;
+			});
 		};
+		measureRef.current = measure;
 		measure();
-		const observer = new ResizeObserver(measure);
+	}, [entries, scrollRef]);
+
+	/*
+		容器尺寸监听只挂一次。之前它跟测量合并在同一个 [entries] effect 里：
+		每个流式 delta 都 disconnect + 重建 observer，而 observe() 必发一次
+		初始通知 —— 等于每个 delta 额外多跑一轮异步测量，徒增级联更新。
+	*/
+	useEffect(() => {
+		const node = scrollRef.current;
+		if (node === null) return;
+		const observer = new ResizeObserver(() => measureRef.current());
 		observer.observe(node);
 		return () => observer.disconnect();
-	}, [entries, scrollRef]);
+	}, [scrollRef]);
 
 	/*
 		高亮跟随：自挂 scroll 监听（rAF 节流），与 chat-view 的

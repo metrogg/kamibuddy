@@ -19,29 +19,17 @@
 - 文档生成纵切片：职场文档 + 联网调研报告
 - 联网工具（WebFetch / WebSearch，pi 没有，自研）
 - 技能机制（pi 原生 Agent Skills）+ 记忆 + 提示词模板
-
-本期不做（写明原因，避免被当作遗漏）：
-
-| 不做 | 原因 |
-|---|---|
-| 沙箱 | WorkBuddy 自研 tsbx + 语言 shim 是一个团队的量级 |
-| IM 多渠道 | 交付形态是桌面试用，渠道不在评价路径上 |
-| 插件市场 | pi 有 packages 机制（npm/git 安装），本期用不上分发 |
-| 多模态生成 | 依赖图像/视频模型接入，价值不在文档主线上 |
-| Agent Teams | 单场景纵切片不需要多智能体协作 |
-| 云端配置热更 | 本期本地配置文件，但**接口按可换成云端设计**（见 §4.5） |
-| 多会话标签 / 托盘 / 自动更新 / 设置界面 | 壳层成本，试用阶段用配置文件代替 |
-| MCP | 内部系统集成本期不做；pi 也没有内置 MCP |
+- <br />
 
 ## 2. 技术选型
 
-| 层 | 选型 | 理由 |
-|---|---|---|
-| Agent 内核 | `@earendil-works/pi-coding-agent` **0.85.1**，npm 依赖 | 不 fork。pi 迭代快，fork 即永久背 merge 债 |
-| 桌面壳 | Electron + electron-vite + React + TypeScript | 本地文件与本地 Office 是办公 Agent 的能力上限所在 |
-| Agent 进程 | Electron `utilityProcess`，直接 import pi SDK | 见 §4.1、§4.2 |
-| 文档中间态 | HTML | 一份代码同时拿到预览 / PDF / 图表 / OOXML 导出，见 §4.3 |
-| 模型 | 自备 API Key，走 `pi-ai` 现成 provider | 不自建抽象层，`pi-ai` 已是多 provider 统一层 |
+| 层        | 选型                                                  | 理由                                      |
+| -------- | --------------------------------------------------- | --------------------------------------- |
+| Agent 内核 | `@earendil-works/pi-coding-agent` **0.85.1**，npm 依赖 | 不 fork。pi 迭代快，fork 即永久背 merge 债         |
+| 桌面壳      | Electron + electron-vite + React + TypeScript       | 本地文件与本地 Office 是办公 Agent 的能力上限所在        |
+| Agent 进程 | Electron `utilityProcess`，直接 import pi SDK          | 见 §4.1、§4.2                             |
+| 文档中间态    | HTML                                                | 一份代码同时拿到预览 / PDF / 图表 / OOXML 导出，见 §4.3 |
+| 模型       | 自备 API Key，走 `pi-ai` 现成 provider                    | 不自建抽象层，`pi-ai` 已是多 provider 统一层         |
 
 WorkBuddy 的关键认知同样适用于我们：**Agent 主循环不自研**。
 它 bundle 了 OpenAI Agents SDK，工程量全在外面那一圈（权限链、沙箱、提示词、生态）。
@@ -102,11 +90,11 @@ Electron 自带 Node 运行时，用户不需要装任何东西，与 §4.4 的�
 
 **原生模块风险（已大幅降低）**。依赖树里有三个 `.node`：
 
-| 模块 | 加载时机 | ABI |
-|---|---|---|
-| `@mariozechner/clipboard` | **import 期立即加载**（实测，非懒加载） | napi-rs 构建（`package.json` 有 `napi` 字段） |
-| `pi-tui` `win32-console-mode` | 懒加载（`terminal.ts:375`） | 用 `napi_register_module_v`，运行时解析 `napi_*` 符号 |
-| `pi-tui` `darwin-modifiers` | 懒加载（`native-modifiers.ts:29`） | 同上，走 dlfcn（仅 macOS） |
+| 模块                            | 加载时机                          | ABI                                          |
+| ----------------------------- | ----------------------------- | -------------------------------------------- |
+| `@mariozechner/clipboard`     | **import 期立即加载**（实测，非懒加载）     | napi-rs 构建（`package.json` 有 `napi` 字段）       |
+| `pi-tui` `win32-console-mode` | 懒加载（`terminal.ts:375`）        | 用 `napi_register_module_v`，运行时解析 `napi_*` 符号 |
+| `pi-tui` `darwin-modifiers`   | 懒加载（`native-modifiers.ts:29`） | 同上，走 dlfcn（仅 macOS）                          |
 
 原先的假设"全部懒加载，纯 SDK 路径不触及"**被证伪**——clipboard 在 import 期就加载。
 但实际风险更低：三者**全部基于 Node-API**，而 Node-API 的设计目的就是 ABI 稳定，
@@ -167,7 +155,7 @@ WorkBuddy 自己就是这条路（`doc-typeset` → HTML → `html-to-docx` → 
 - SessionStart hook 后台异步预热（超时 5s 不阻塞），首次冷启动不卡会话。
 - 转换失败降级 Markdown；单个组件/图片失败只跳过或占位，不整篇崩。
 
-这套 venv 是文档流水线的进程内受控调用，**不等于把 `bash` 作为 agent 的自由
+这套 venv 是文档流水线的进程内受控调用，**不等于把** **`bash`** **作为 agent 的自由
 shell 工具暴露出去**——agent 的 shell 能力是另一个决策，见 §4.4a。
 
 ### 4.4a agent 的 shell 能力：用 powershell，不用 bash
@@ -190,12 +178,12 @@ shell 工具暴露出去**——agent 的 shell 能力是另一个决策，见 �
 
 **"Windows 做不了沙箱"是错的判断**，必须写清楚，否则后人以为此路不通：
 
-| 项目 | Windows 实现 |
-|---|---|
-| codex | `codex-rs/windows-sandbox-rs`（约 40 文件）：专用沙箱用户账号 + ACL + 独立桌面 + DPAPI |
-| dsh | `packages/shell/pwsh-sandbox`：自述 "ACL restricted-token runner chain" |
-| WorkBuddy | 内核态 `tsbx.dll` + 287MB 用户态 + 语言 shim |
-| pi | 不做，指向容器 / 微 VM（其 sandbox 扩展硬编码只支持 darwin/linux） |
+| 项目        | Windows 实现                                                           |
+| --------- | -------------------------------------------------------------------- |
+| codex     | `codex-rs/windows-sandbox-rs`（约 40 文件）：专用沙箱用户账号 + ACL + 独立桌面 + DPAPI |
+| dsh       | `packages/shell/pwsh-sandbox`：自述 "ACL restricted-token runner chain" |
+| WorkBuddy | 内核态 `tsbx.dll` + 287MB 用户态 + 语言 shim                                 |
+| pi        | 不做，指向容器 / 微 VM（其 sandbox 扩展硬编码只支持 darwin/linux）                      |
 
 两家独立收敛到同一机制（**受限令牌 + ACL**），这就是 Windows 上的正解。
 
@@ -234,7 +222,7 @@ electron-vite 只在单入口时自动加 `.mjs`，我们是双入口（`index` 
 `entryFileNames: "[name].mjs"`，`package.json` 的 `main` 与 `utilityProcess.fork()`
 的路径同步改为 `.mjs`。
 
-**坑二：IDE 注入 `ELECTRON_RUN_AS_NODE=1`。** Electron 系的 IDE（Trae CN、VS Code、Cursor…）
+**坑二：IDE 注入** **`ELECTRON_RUN_AS_NODE=1`。** Electron 系的 IDE（Trae CN、VS Code、Cursor…）
 本身是 Electron 应用，会给集成终端注入该变量，使 Electron 二进制退化成普通 Node
 ——没有 `app`、没有 `BrowserWindow`，**报错与坑一完全相同**，极易误判为构建问题。
 
@@ -266,23 +254,23 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 判定主轴是路径归属而非工具种类（`src/extensions/permission-policy.ts`，60 个测试）。
 判定链**有序**（借鉴 WorkBuddy 的 9 阶求值链）：靠后的阶段无法放行靠前阶段已拒的东西。
 
-| 阶段 | 目标 | 判定 | 理由 |
-|---|---|---|---|
-| 1 | 凭据目录（`.ssh`/`.gnupg`/`.aws`/`.kube`/`.docker`/`.npmrc`/`~/.pi/agent`） | **禁读也禁写，任何权限档位都不能越过** | 泄露即账号级损失，不该由一次弹窗决定 |
-| 1 | 配置目录内（`~/.kamibuddy`） | 同上（`skills/` 子目录对只读工具例外） | 存着 API Key；靠弹窗把关的话，提示注入可编造理由骗用户点允许。技能例外见 permission-policy.ts 头注释 2026-09-08 第二条 |
-| 2 | 无本地路径的只读工具（web_search / web_fetch / present_files） | 放行 | 不改变本地状态 |
-| 2 | 本地只读工具（read/grep/find/ls）：工作目录内 | 放行 | 工作目录本来就是给模型看的 |
-| 2 | 本地只读工具：工作目录外 | **低风险询问**（`danger-full-access` 放行） | 2026-09-09 事故：读侧漫游是写越界的必经入口；且有 web_fetch 时「读任意文件 + 抓任意 URL」是数据外带路径。codex 不限读的前提是其沙箱默认禁网，我们不具备 |
-| 3 | `read-only` 档位下的一切改动与命令 | 拒 | 这就是该档位的全部含义 |
-| 3 | shell 工具 | **任何档位都拦**（含"允许完全访问"） | 没有危险命令分类器之前保持 fail-closed：一条命令就能绕开上面所有路径保护（`type ~\.ssh\id_rsa`）。见 §4.4a |
-| 4 | write/edit：应用目录内（`appDir`） | **高风险询问，不支持「记住」**（`danger-full-access` 放行） | 2026-09-09 事故的直接对象：模型试图修改 KamiBuddy 自身源码。先于工作区内放行判定——appDir 也可能就是工作区 |
-| 4 | write/edit：工作目录内（`~/KamiBuddy`） | 放行 | 生成文档本就该在这儿，反复打扰会让人放弃使用 |
-| 4 | write/edit：工作目录外 | 询问（`danger-full-access` 放行） | 用户可能真想改桌面上的某个文件 |
-| 5 | 审批策略 `never` | 把「询问」转成**拒绝** | 无人值守时"不问"必须等于"不做"，不是"随便做" |
-| 5 | 高风险询问（shell、写应用目录） | **不支持「本次会话记住」**（UI 不渲染 + gate 忽略，双保险） | 一次「永远允许」shell 等于把全部路径保护烧穿 |
+| 阶段 | 目标                                                                    | 判定                                         | 理由                                                                                             |
+| -- | --------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| 1  | 凭据目录（`.ssh`/`.gnupg`/`.aws`/`.kube`/`.docker`/`.npmrc`/`~/.pi/agent`） | **禁读也禁写，任何权限档位都不能越过**                      | 泄露即账号级损失，不该由一次弹窗决定                                                                             |
+| 1  | 配置目录内（`~/.kamibuddy`）                                                 | 同上（`skills/` 子目录对只读工具例外）                   | 存着 API Key；靠弹窗把关的话，提示注入可编造理由骗用户点允许。技能例外见 permission-policy.ts 头注释 2026-09-08 第二条               |
+| 2  | 无本地路径的只读工具（web\_search / web\_fetch / present\_files）                 | 放行                                         | 不改变本地状态                                                                                        |
+| 2  | 本地只读工具（read/grep/find/ls）：工作目录内                                       | 放行                                         | 工作目录本来就是给模型看的                                                                                  |
+| 2  | 本地只读工具：工作目录外                                                          | **低风险询问**（`danger-full-access` 放行）         | 2026-09-09 事故：读侧漫游是写越界的必经入口；且有 web\_fetch 时「读任意文件 + 抓任意 URL」是数据外带路径。codex 不限读的前提是其沙箱默认禁网，我们不具备 |
+| 3  | `read-only` 档位下的一切改动与命令                                               | 拒                                          | 这就是该档位的全部含义                                                                                    |
+| 3  | shell 工具                                                              | **任何档位都拦**（含"允许完全访问"）                      | 没有危险命令分类器之前保持 fail-closed：一条命令就能绕开上面所有路径保护（`type ~\.ssh\id_rsa`）。见 §4.4a                       |
+| 4  | write/edit：应用目录内（`appDir`）                                            | **高风险询问，不支持「记住」**（`danger-full-access` 放行） | 2026-09-09 事故的直接对象：模型试图修改 KamiBuddy 自身源码。先于工作区内放行判定——appDir 也可能就是工作区                           |
+| 4  | write/edit：工作目录内（`~/KamiBuddy`）                                       | 放行                                         | 生成文档本就该在这儿，反复打扰会让人放弃使用                                                                         |
+| 4  | write/edit：工作目录外                                                      | 询问（`danger-full-access` 放行）                | 用户可能真想改桌面上的某个文件                                                                                |
+| 5  | 审批策略 `never`                                                          | 把「询问」转成**拒绝**                              | 无人值守时"不问"必须等于"不做"，不是"随便做"                                                                      |
+| 5  | 高风险询问（shell、写应用目录）                                                    | **不支持「本次会话记住」**（UI 不渲染 + gate 忽略，双保险）      | 一次「永远允许」shell 等于把全部路径保护烧穿                                                                      |
 
 **凭据从禁写改为禁读禁写**（2026-09-08）：原先放行读取的理由是
-"读到也带不走（没有网络工具）"，**T3 落地 `web_fetch` 后该前提消失** ——
+"读到也带不走（没有网络工具）"，**T3 落地** **`web_fetch`** **后该前提消失** ——
 提示注入可诱导「读 auth.json → 抓取某 URL 带上内容」。
 新增任何外发能力（上传、发邮件、调第三方 API）都要重走一遍这个推理。
 
@@ -292,7 +280,7 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 工具层之前还有一道闸：**项目信任**（`src/extensions/project-trust.ts`，9 个测试）。
 `.pi/extensions` 是 TS 模块，**加载即以本进程权限执行任意代码**，权限门拦不到
 （那不是工具调用）—— 打开陌生目录必须先问一句。
-| 未登记的工具 | 询问 | fail-safe：既不静默放行，也不静默阻断新能力 |
+\| 未登记的工具 | 询问 | fail-safe：既不静默放行，也不静默阻断新能力 |
 
 「本次会话记住」按**工具 + 目标目录**记，且只在内存里：
 批准「写桌面」不该顺带批准「写 C:\Windows」；持久化的批准会在几周后仍生效而用户已忘记。
@@ -312,46 +300,32 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 
 为"将来可能要换"造的抽象层，通常在真要换时并不合用。开缝的五处及其第二实现：
 
-| 缝 | 第二实现（已知，非假想） |
-|---|---|
-| pi SDK 边界（`core/session-host.ts`） | pi 破坏性升级；将来换内核 |
-| UI 传输（`ExtensionUIContext`） | 已验证：TUI / RPC / Electron 三套 |
-| 配置解析（`config.get`） | 本地文件 → 云端下发 |
-| 导出器（`(html, opts) => Buffer`） | PDF、docx 立刻就有两个 |
-| agent shell 策略（`getShellConfig`） | 无 agent shell → MinGit |
+| 缝                                 | 第二实现（已知，非假想）                |
+| --------------------------------- | --------------------------- |
+| pi SDK 边界（`core/session-host.ts`） | pi 破坏性升级；将来换内核              |
+| UI 传输（`ExtensionUIContext`）       | 已验证：TUI / RPC / Electron 三套 |
+| 配置解析（`config.get`）                | 本地文件 → 云端下发                 |
+| 导出器（`(html, opts) => Buffer`）     | PDF、docx 立刻就有两个             |
+| agent shell 策略（`getShellConfig`）  | 无 agent shell → MinGit      |
 
 明确不抽象：LLM provider（`pi-ai` 已是）、插件加载器（pi 有 packages + Skills）、
 会话存储（`SessionManager` 已给 JSONL / 内存两种）、多租户、事件 schema 版本号。
 
 ## 5. pi 能力边界（D1 验证结论）
 
-| 项 | 结论 |
-|---|---|
-| `ctx.ui` 路由到 Electron | **通过**。`bindExtensions({uiContext, mode:"rpc"})` 注入自己的实现；`modes/rpc/rpc-mode.ts:136` 是现成范本 |
-| 可跨进程的 UI 方法 | `confirm` / `select` / `input` / `notify` / `setStatus` / `setTitle` / `setWidget`（仅字符串数组）。权限弹窗够用 |
-| 不可跨进程 | `custom()` / `setFooter` / `setHeader` / `setWorking*` / `onTerminalInput` / 编辑器系列——需要真 TUI 对象。复杂交互走自己的 IPC |
-| `ExtensionMode` | 仅 `"tui" \| "rpc" \| "json" \| "print"`，无自定义槽位。宿主声明 `"rpc"`（非 TUI 路径里能力最全） |
-| Skills | 原生支持 Agent Skills 标准，可加载 `~/.pi/agent/skills/`、`.pi/skills/`、`.agents/skills/`。WorkBuddy 的渐进式披露架构可近乎原样搬 |
-| 会话存储 | `SessionManager.create()` 走 JSONL 文件、`inMemory()` 走内存。`node:sqlite` 在独立包里，不引入 |
-| 内置工具 | 仅 8 个：bash / powershell / read / write / edit / find / grep / ls |
-| 缺口需自研 | WebFetch / WebSearch / 权限判定链 / MCP |
-| 原生模块 | 三个 `.node`，clipboard 在 import 期即加载（原"全懒加载"假设已证伪）；但全部基于 Node-API，ABI 稳定。基线 3/3 通过，待 Electron 内复核（§4.1） |
-| SDK 导出面 | 实测确认 `createAgentSession` / `SessionManager` / `ModelRuntime` / `AgentSession` 均从包根导出 |
+| 项                     | 结论                                                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `ctx.ui` 路由到 Electron | **通过**。`bindExtensions({uiContext, mode:"rpc"})` 注入自己的实现；`modes/rpc/rpc-mode.ts:136` 是现成范本                  |
+| 可跨进程的 UI 方法           | `confirm` / `select` / `input` / `notify` / `setStatus` / `setTitle` / `setWidget`（仅字符串数组）。权限弹窗够用           |
+| 不可跨进程                 | `custom()` / `setFooter` / `setHeader` / `setWorking*` / `onTerminalInput` / 编辑器系列——需要真 TUI 对象。复杂交互走自己的 IPC |
+| `ExtensionMode`       | 仅 `"tui" \| "rpc" \| "json" \| "print"`，无自定义槽位。宿主声明 `"rpc"`（非 TUI 路径里能力最全）                                  |
+| Skills                | 原生支持 Agent Skills 标准，可加载 `~/.pi/agent/skills/`、`.pi/skills/`、`.agents/skills/`。WorkBuddy 的渐进式披露架构可近乎原样搬     |
+| 会话存储                  | `SessionManager.create()` 走 JSONL 文件、`inMemory()` 走内存。`node:sqlite` 在独立包里，不引入                               |
+| 内置工具                  | 仅 8 个：bash / powershell / read / write / edit / find / grep / ls                                            |
+| 缺口需自研                 | WebFetch / WebSearch / 权限判定链 / MCP                                                                          |
+| 原生模块                  | 三个 `.node`，clipboard 在 import 期即加载（原"全懒加载"假设已证伪）；但全部基于 Node-API，ABI 稳定。基线 3/3 通过，待 Electron 内复核（§4.1）       |
+| SDK 导出面               | 实测确认 `createAgentSession` / `SessionManager` / `ModelRuntime` / `AgentSession` 均从包根导出                       |
 
-## 6. 十天计划
+##
 
-| 天 | 内容 |
-|---|---|
-| D1 | pi 能力边界验证（**已完成**，见 §5）；仓库骨架、架构文档、依赖规则校验 |
-| D2 | Electron 骨架 + daemon（utilityProcess）+ IPC 事件桥 + 最小对话界面端到端；**原生模块冒烟** |
-| D3 | 工具调用卡片渲染 + 权限确认弹窗（`uiContext` 路由落地） |
-| D4-5 | 三模式（工具白名单 + 提示片段组合）+ 提示词模板 + 技能加载 |
-| D6-8 | 文档纵切片：HTML 流水线、体裁模板、design token、ECharts、导出、预览面板 |
-| D9 | 联网工具（WebFetch / WebSearch）+ 记忆 |
-| D10 | 打包、修 bug、演示脚本与交付文档 |
-
-## 7. 合规
-
-`docs/workbuddy分析/` 是经批准的逆向调研素材，仅限内部参考。
-**机制可以学，文字必须自己写**——提示词、模板、技能正文一律独立撰写，
-不从 WorkBuddy 原文复制。详见 [AGENTS.md](../AGENTS.md) §6。
+##

@@ -5,12 +5,12 @@
 ## 项目一句话
 
 KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面端，对标腾讯 WorkBuddy。
-逆向调研素材在 `docs/workbuddy分析/`，**当规格书读，不当代码抄**（见下方合规红线）。
+逆向调研素材在 `docs/workbuddy分析/`,我们的目标就是做一个workbuddy出来,如果没有更好的办法就模仿吧+
 
 ### 参考物与来历
 
 - WorkBuddy：经批准解包后的安装目录（`开源项目/WorkBuddy/`，非 git 仓库），
-  逆向笔记在 `docs/workbuddy分析/`，**当规格书读，不当代码抄**。
+  逆向笔记在 `docs/workbuddy分析/`
 - pi：官方仓库 clone（`开源项目/pi/`），查 API 时直接读源码，不凭记忆猜。
 - codex / deepseek-harness：同类 Agent 实现的参考 clone。
 - opencode：先 fork 到个人仓库再拉的（`开源项目/opencode/`）。
@@ -48,13 +48,13 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
 
 三条硬规则：
 
-1. **`documents/` 不许 import pi，不许 import electron。** 它只是
+1. **`documents/`** **不许 import pi，不许 import electron。** 它只是
    `内容 + tokens + 体裁 → HTML → bytes` 的纯函数库。这条保证它可以脱离
    LLM 和 Electron 单独跑单元测试——这是我们最重的模块，测试是 AI 写它时唯一的护栏。
-2. **pi 的类型只允许出现在 `core/` 和 `extensions/` 里。**
+2. **pi 的类型只允许出现在** **`core/`** **和** **`extensions/`** **里。**
    `AgentSessionEvent`、`AgentTool`、`ExtensionAPI` 这些一律不许流到 `renderer/`。
    理由：pi 是 0.85.x，破坏性变更几乎必然发生。适配层挡住后，pi 升级只塌一个模块。
-3. **`renderer/` 只能 import `shared/`。** 不许碰 `core/`、`daemon/`、`documents/` 的内部。
+3. **`renderer/`** **只能 import** **`shared/`。** 不许碰 `core/`、`daemon/`、`documents/` 的内部。
 
 `npm run check:deps` 机械校验以上规则，CI 和提交前都要跑。
 
@@ -66,7 +66,7 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
   S3「HTML→docx」用 Python 引擎（`python-docx` / `html-for-docx` /
   beautifulsoup4 / lxml / Pillow），环境用「托管 venv + `uv` 装独立 Python 3.12」
   解决，不要求用户机器上预装 Python / Git for Windows。
-- **环境准备照 WorkBuddy 的 `setup-html-to-docx.sh` 抄机制**：
+- **环境准备照 WorkBuddy 的** **`setup-html-to-docx.sh`** **抄机制**：
   - 幂等脚本，已就绪秒退；首次联网装 `uv` → `uv python install 3.12` 拉独立发行版
     → 建 `~/.venv-html-to-docx` → `--only-binary=:all:` 装 wheel（绕开 lxml 无
     libxml2/libxslt 时源码编译失败的坑）→ import 冒烟。
@@ -108,9 +108,9 @@ resources/
 
 ## 四、防重复
 
-- **IPC 通道名和 payload 类型集中在 `shared/ipc.ts`**，主进程和渲染进程都从这里 import。
+- **IPC 通道名和 payload 类型集中在** **`shared/ipc.ts`**，主进程和渲染进程都从这里 import。
   不许在两侧各写一遍字符串字面量。
-- **写任何 helper 前先看 `shared/`。** AI 不记得三天前写过什么，这条是硬要求。
+- **写任何 helper 前先看** **`shared/`。** AI 不记得三天前写过什么，这条是硬要求。
 - 业务工具的公共部分（HTTP、错误映射、大输出落盘）抽进 toolkit，
   工具本身只写领域逻辑。
 
@@ -119,15 +119,8 @@ resources/
 所有配置读取走 `config.get(key)` 单一入口，分层合并：
 内置默认 → 本地文件 → （预留）云端下发。
 
-**不许在业务代码里直接 `readFileSync('settings.json')`。**
+**不许在业务代码里直接** **`readFileSync('settings.json')`。**
 云端配置是将来少发版的命根子，现在不做，但入口必须现在就统一。
-
-## 六、合规红线
-
-- `docs/workbuddy分析/` 是经批准的逆向调研素材，**仅限内部参考**。
-- **机制可以学，文字必须自己写。** 提示词、模板、技能正文一律独立撰写，
-  不许从 WorkBuddy 的 `.tpl` / `SKILL.md` 原文复制粘贴。
-- 不许把调研素材或其中的 prompt 原文提交进本仓库的产物目录。
 
 ## 七、代码风格
 

@@ -39,6 +39,14 @@ import type { ConversationView } from "../shared/conversation.ts";
 export const MAX_IDLE_HOSTS = 5;
 
 /**
+ * 每会话的子代理 spawn 预算（task 工具防失控循环：子代理输出回灌主代理后，
+ * 主代理可能据此再委派，没有预算上限就是永动机）。挂在桶上按会话计 ——
+ * 开新桶（新建任务 / 恢复历史）即新预算；saveToWorkspace 原地换 cwd
+ * 不换桶，预算不复位（同一场对话）。
+ */
+export const SPAWN_BUDGET_PER_SESSION = 20;
+
+/**
  * 一个会话的全部 daemon 侧状态。
  *
  * 泛型 THost 让本模块不依赖 core 的 SessionHost（测试里用桩宿主）。
@@ -67,8 +75,10 @@ export interface SessionBucket<THost> {
 	cwd: string;
 	/** 是否有正在进行的 run（run_started / run_finished / 折叠后的 isStreaming 维护）。 */
 	running: boolean;
-	/** 该会话在途的权限审批数。>0 时豁免回收 —— 用户在答的框不能随宿主一起消失。 */
+	/** 该会话在途的权限审批/问卷等待数。>0 时豁免回收 —— 用户在答的框不能随宿主一起消失。 */
 	pendingApprovals: number;
+	/** 剩余的子代理 spawn 预算（task 工具逐次扣减，见 SPAWN_BUDGET_PER_SESSION）。 */
+	spawnBudgetRemaining: number;
 	/** 互斥链上的在途操作数。>0 时豁免回收（排队中的操作不能丢失）。 */
 	pendingOps: number;
 	/** 互斥链尾指针。只记「上一棒何时结束」，不带值不带错（见 enqueue）。 */
@@ -98,6 +108,7 @@ export function createBucket<THost>(options: CreateBucketOptions): SessionBucket
 		cwd: options.cwd,
 		running: false,
 		pendingApprovals: 0,
+		spawnBudgetRemaining: SPAWN_BUDGET_PER_SESSION,
 		pendingOps: 0,
 		tail: Promise.resolve(),
 		lastUsedAt: Date.now(),

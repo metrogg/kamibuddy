@@ -325,6 +325,18 @@ describe("questionnaire（结构化提问）", () => {
 	});
 });
 
+describe("task（子代理委派）", () => {
+	it("三档都放行 —— 不直接碰文件系统，子代理内部工具各自过门", () => {
+		// read-only 档也放行（与 questionnaire 同语义）：子代理会话里装着同一道门，
+		// 它的写操作会被子会话那道门的阶段 3 拒掉 —— 真正的判定在子会话内发生。
+		for (const settings of [undefined, READONLY, FULL]) {
+			expect(decide(facts({ toolName: "task" }), PATHS, CWD, settings)).toEqual({
+				kind: "allow",
+			});
+		}
+	});
+});
+
 describe("异常输入", () => {
 	it("write 缺路径 → 拒绝，而不是放行", () => {
 		expect(decide(facts({ path: undefined }), PATHS, CWD).kind).toBe("deny");

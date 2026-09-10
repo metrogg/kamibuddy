@@ -8,7 +8,9 @@
  *     （凭据目录等硬 deny 不变，见 permission-gate.ts）；
  *   - 两轴固定 work + craft（spec），提示词组装与用户会话同一套 compose；
  *   - 不注册 automation 工具 —— run 里再建/改任务属于「AI 自主调下轮」，
- *     明确不进 v1（craft 白名单里的未注册工具名 pi 会静默忽略，不会炸）。
+ *     明确不进 v1（craft 白名单里的未注册工具名 pi 会静默忽略，不会炸）；
+ *     task（子代理委派）同样不注册 —— 无人值守下的递归委派明确不做，
+ *     白名单未注册名静默忽略的机制同样兜住它。
  *
  * 返回的 Promise 不 reject：装配失败 / 模型错误 / 超时都折进
  * AutomationRunOutcome —— 这是调度器队列的韧性边界（一个任务失败不能

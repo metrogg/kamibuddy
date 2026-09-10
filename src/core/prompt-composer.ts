@@ -138,7 +138,7 @@ export function formatRuntimeTime(now: Date): string {
  * 不拼回来模型就看不到「该在什么时候用哪个工具」。格式与 pi 的
  * buildSystemPrompt 对齐，避免同一份数据两处漂移。
  */
-function appendPiContext(composed: string, input: ComposePromptInput): string {
+function appendPiContext(composed: string, input: { readonly piContext?: PromptContextOptions }): string {
 	const sections: string[] = [];
 
 	const contextFiles = input.piContext?.contextFiles ?? [];
@@ -172,6 +172,32 @@ function appendPiContext(composed: string, input: ComposePromptInput): string {
 	}
 
 	return sections.length === 0 ? composed : `${composed}\n\n${sections.join("\n\n")}`;
+}
+
+export interface ComposeSubagentPromptInput {
+	/** 子代理定义正文（resources/agents/<name>.md 的 body）——提示词主体。 */
+	readonly agentBody: string;
+	readonly cwd: string;
+	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
+	readonly piContext?: PromptContextOptions;
+	/** 环境块取数时刻，可注入是为了纯函数可测（同 composePrompt）。 */
+	readonly now?: Date;
+}
+
+/**
+ * 子代理会话的提示词组装：agent.body 为主体 + 工作目录 + pi 上下文 + 时间块。
+ *
+ * 为什么不走 composePrompt 的场景×模式双轴：双轴回答的是「KamiBuddy 这个产品
+ * 在什么场景下以什么交互方式工作」，而子代理的身份由 agent 定义自己完整声明
+ * （scout 是侦察员、reviewer 是评审员，都不是「办公助手」）——套场景骨架会把
+ * 产品身份灌进子代理，身份冲突且浪费 token。技能段同理不注入：子代理的
+ * 能力面由自己的 tools 白名单界定，与主会话安装的技能无关。
+ * 但工作目录、pi 的上下文（工具 snippet / guidelines / 项目指令文件）与
+ * 时间块仍是必需品——没有它们模型不知道自己在哪个目录工作、工具该怎么用。
+ */
+export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string {
+	const composed = `${input.agentBody.trim()}\n\n当前工作目录：${input.cwd}`;
+	return `${appendPiContext(composed, input)}\n\n${formatRuntimeTime(input.now ?? new Date())}`;
 }
 
 /**

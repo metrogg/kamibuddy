@@ -42,19 +42,15 @@ interface SidebarProps {
 	/** 两区分组结果（App 用 groupSessions 算好）。取代旧的平铺 taskList。 */
 	readonly groups: SessionGroups;
 	/**
-	 * 正在流式的会话 path（该行显示转圈）。单 daemon 单会话架构下同
-	 * 一时刻至多一个 run，所以至多命中一行 —— 不需要集合。
-	 */
-	readonly streamingPath: string | undefined;
-	/**
-	 * 未读会话 path 集合（标题前绿点）。渲染进程内存态，重启清零 ——
+	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
 	 */
-	readonly unreadPaths: ReadonlySet<string>;
+	readonly unreadIds: ReadonlySet<string>;
 	/**
-	 * 有阻塞式请求在等用户应答（权限审批或问卷）。单 daemon 单会话下
-	 * 这类请求必然属于当前活动会话，所以 badge 画在当前会话行上；
-	 * 由 App 用两条本地请求队列合成（daemon 不推送 pending 计数）。
+	 * 有阻塞式请求在等用户应答（权限审批或问卷），badge 画在当前会话行。
+	 * 由 App 用两条本地请求队列合成（daemon 不推送 pending 计数）；
+	 * 请求契约不带 sessionId，多任务并发下无法按会话路由，只能统一
+	 * 挂在当前行 —— 口径说明见 App 里 pendingConfirm 的注释。
 	 */
 	readonly pendingConfirm: boolean;
 	readonly onNewTask: () => void;
@@ -95,8 +91,7 @@ const TASKS_COLLAPSED_COUNT = 5;
 export function Sidebar({
 	link,
 	groups,
-	streamingPath,
-	unreadPaths,
+	unreadIds,
 	pendingConfirm,
 	onNewTask,
 	onResumeTask,
@@ -211,10 +206,11 @@ export function Sidebar({
 					}}
 				>
 					<span className="task-item-title">
-						{unreadPaths.has(task.path) && <span className="task-unread-dot" />}
-						{/* 转圈只可能出现在当前会话行（单 run 架构事实），但这里不判
-							current —— streamingPath 由 App 算好，命中即画。 */}
-						{streamingPath === task.path && <span className="task-spinner" />}
+						{unreadIds.has(task.id) && <span className="task-unread-dot" />}
+						{/* 运行中转圈以 SessionSummary.running 为准（daemon 权威，随
+						taskListChanged 推送更新）：多任务并发后同时可有多行在跑，
+						旧的「本地 streaming && 当前行」推导只看得见当前会话，已废。 */}
+						{task.running && <span className="task-spinner" />}
 						{task.title}
 					</span>
 					{/* 「待确认」压在时间之前（flex:none，与 meta 同排常驻可见）；

@@ -23,9 +23,11 @@ import type { SessionEventEnvelope, SessionSnapshot } from "@shared/session-even
 import {
 	conversationReducer,
 	initialConversation,
+	type ConversationView,
 } from "@shared/conversation.ts";
 import { Sidebar, type LinkState } from "./sidebar.tsx";
 import { groupSessions } from "./session-groups.ts";
+import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
@@ -74,14 +76,33 @@ export function App(): React.JSX.Element {
 	const [link, setLink] = useState<LinkState>({ kind: "connecting" });
 	const [conversation, dispatch] = useReducer(
 		conversationReducer,
-		undefined,
-		() => initialConversation,
+		initialConversation,
 	);
+	/**
+	 * 多视图缓存（Task 3.1）：桶 = 每个后台会话一份 ConversationView。
+	 *
+	 * 渲染语义（想清楚再改）：后台会话的流式事件按信封 sessionId 折叠进
+	 * 各自桶——桶放 ref、折叠不 setState，所以**不触发任何重渲染**；
+	 * 只有当前指针所指会话的事件才进 useReducer 驱动可见视图。后台 run 的
+	 * 高频 delta 因此不会以流式频率重渲染当前界面；侧栏运行态另有
+	 * taskListChanged 推送（SessionSummary.running，daemon 权威），不依赖
+	 * 会话视图的重渲染。切回时桶内容一次性进 reducer（snapshot action），
+	 * 现场完整且不依赖整体重拉。
+	 */
+	const viewCacheRef = useRef<Map<string, ConversationView>>(new Map());
+	/**
+	 * 当前可见会话 id（本 UI 查看即 resume，可见会话与 daemon 当前会话始终一致）。
+	 * 指针只允许在与「视图替换」同一处代码里切换——先切指针再换视图会把
+	 * 新会话的事件折进旧视图（错位污染），先换视图再切指针则把事件丢进桶。
+	 */
+	const visibleSessionIdRef = useRef("");
+	/**
+	 * 事件回调里读当下视图用（一次性注册的监听器闭包冻结在首次渲染，
+	 * 同下方 viewRef 的模式）。
+	 */
+	const conversationRef = useRef(conversation);
+	conversationRef.current = conversation;
 	const [view, setView] = useState<View>("home");
-	/** 「任务进行中」拒绝后的待恢复会话（二次确认「停止当前任务并切换」）。 */
-	const [pendingResume, setPendingResume] = useState<
-		{ readonly path: string; readonly message: string } | undefined
-	>(undefined);
 	/** 关闭设置页后要回到的视图。见下方 openSettings 的理由。 */
 	const [returnView, setReturnView] = useState<"home" | "chat">("home");
 	const [lastError, setLastError] = useState<string | undefined>(undefined);
@@ -104,10 +125,12 @@ export function App(): React.JSX.Element {
 	/** 「空间」组的名称覆盖元数据（workspaces.json），组本身由会话派生。 */
 	const [groupMetas, setGroupMetas] = useState<readonly WorkspaceGroupMeta[]>([]);
 	/**
-	 * 未读会话 path 集合（标题前绿点）。渲染进程内存态，重启清零 ——
+	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
+	 * 多任务并发后未读以 sessionId 为键（不再假设单会话）：run 结束的
+	 * 判定在 taskListChanged 推送的 running 翻转检测里（见挂载 effect）。
 	 */
-	const [unreadPaths, setUnreadPaths] = useState<ReadonlySet<string>>(new Set());
+	const [unreadIds, setUnreadIds] = useState<ReadonlySet<string>>(new Set());
 	/**
 	 * run_finished 监听只注册一次，闭包里的 view/taskList 永远是初值，
 	 * 未读判定需要的最新值必须走 ref（同 autocomplete.tsx 的 openRef 模式，
@@ -119,15 +142,15 @@ export function App(): React.JSX.Element {
 	taskListRef.current = taskList;
 
 	/**
-	 * 历史会话列表刷新（同时重拉空间元数据）。
+	 * 空间元数据重拉（仅显示名覆盖）。
 	 *
-	 * 拉取失败静默吞掉：列表只是侧栏的导航入口，拿不到不影响会话本体
-	 * （对话照常进行）。为辅助信息弹 toast 反而打扰，下一个触发点会再拉。
-	 * metas 与 sessions 独立拉取（不 Promise.all）：一条失败不该拖死另一条，
-	 * 组名回退 basename 后列表仍可用。
+	 * 会话列表本身走 taskListChanged 推送全量替换（daemon 是列表真相的
+	 * 持有者，见 shared/ipc.ts 该通道注释），renderer 不再 invoke 重拉；
+	 * 组名覆盖不在推送载荷里，空间重命名/移除/转正后仍需这里补拉。
+	 * 拉取失败静默吞掉：组名回退 basename 后列表仍可用，为辅助信息
+	 * 弹 toast 反而打扰。
 	 */
-	const refreshTasks = useCallback(() => {
-		window.kami.listSessions().then(setTaskList).catch(() => { });
+	const refreshGroups = useCallback(() => {
 		window.kami.listWorkspaceGroups().then(setGroupMetas).catch(() => { });
 	}, []);
 
@@ -149,53 +172,86 @@ export function App(): React.JSX.Element {
 			window.kami
 				.snapshot()
 				.then((snapshot: SessionSnapshot) => {
-					if (!disposed) dispatch({ type: "snapshot", snapshot });
+					if (!disposed) applySnapshot(snapshot);
 				})
 				.catch(fail);
-			refreshTasks();
-			// 预览服务 baseUrl 的初值（静态服务未起时为 undefined）。
-			window.kami
-				.workspaceSnapshot()
-				.then((snap) => {
-					if (!disposed) setPreviewBaseUrl(snap.previewBaseUrl);
-				})
-				.catch(() => {
-					// 拿不到就是不可预览，面板会显示引导文案，不需要额外报错。
-				});
+			// 首屏初拉保留：推送通道只推变更，列表初值要自己拉一次。
+			window.kami.listSessions().then(setTaskList).catch(() => { });
+			refreshGroups();
+			// previewBaseUrl 不在此初始化：快照落地后 state.cwd 就位，
+			// 按 cwd 取 baseUrl 的 effect 会自动触发（见 Task 3.4）。
 		};
 
 		// 先注册监听，再主动查状态：顺序反了会漏掉两者之间到达的事件。
-		// 契约是 SessionEventEnvelope（sessionId 路由键 + 事件本体）——单视图
-		// 今天只消费本体；信封不拆直接当事件 dispatch 的话，reducer 的 switch
-		// 全部落空返回 undefined，React 把会话状态置空，下一帧整树白屏。
-		// 按 sessionId 分桶是多会话视图的后续工作（另一边在途），这里不做。
-		const offEvent = window.kami.onSessionEvent((envelope: SessionEventEnvelope) => {
-			const { event } = envelope;
+		// 信封 sessionId 是路由键：当前指针所指会话的事件进 useReducer（可见视图）；
+		// 其余折叠进对应桶（ref，不重渲染），切回时现场完整（Task 3.1）。
+		const offEvent = window.kami.onSessionEvent(({ sessionId, event }: SessionEventEnvelope) => {
+			if (sessionId !== visibleSessionIdRef.current) {
+				// ── 后台会话：只维护桶与通知，绝不动可见视图 ──
+				if (event.type === "history_reset") {
+					viewCacheRef.current.delete(sessionId);
+					// history_reset 的信封 id 由 daemon 在会话重建后打点，可能已是新 id，
+					// 那它其实是当前会话的重置（/new）被路由到了这里：可见视图已被清空，
+					// 按权威快照重指指针。后台会话本身不会被清空（宿主保活、历史在
+					// JSONL），所以无脑重拉无害。
+					resyncSnapshot();
+					return;
+				}
+				// 桶种子：目录字段（场景/模式列表）是全局资源而非每会话一份，
+				// 事件流里拿不到，从当前视图复制 —— 纯事件流拼出的桶除此外没有来源。
+				const base = viewCacheRef.current.get(sessionId) ?? {
+					...initialConversation,
+					availableScenes: conversationRef.current.availableScenes,
+					availableModes: conversationRef.current.availableModes,
+				};
+				viewCacheRef.current.set(sessionId, conversationReducer(base, { type: "event", event }));
+				// 完成 toast（Task 3.3）：推送列表只带 running 标志（契约无结局字段），
+				// 成功/失败文案只能从事件流拿；未读点则由推送翻转检测负责
+				// （覆盖不转发会话事件的 automation run）。
+				if (event.type === "run_finished" && event.outcome === "completed") {
+					const title = taskListRef.current.find((t) => t.id === sessionId)?.title;
+					showToast(title === undefined ? "后台任务已完成" : `任务「${title}」已完成`, "success");
+				} else if (event.type === "run_error") {
+					const title = taskListRef.current.find((t) => t.id === sessionId)?.title;
+					showToast(title === undefined ? "后台任务运行失败" : `任务「${title}」运行失败`, "error");
+				}
+				return;
+			}
+			// ── 当前会话：进 reducer，驱动可见视图 ──
 			dispatch({ type: "event", event });
 			// present_files 交付：首个本地文件自动在预览面板打开，且面板自动展开
 			//（WorkBuddy：第一个自动打开 + 交付时面板若收起则展开）。
 			if (event.type === "artifacts_presented") {
 				setPanelOpen(true);
 				if (event.focusFile !== undefined) openPreview({ kind: "file", path: event.focusFile });
+				// 预览服务按 cwd 懒建（Task 2.7），交付时刻它必然已起 ——
+				// baseUrl 此刻重取最准（cwd 未变，effect 不会自动再跑）。
+				refreshPreviewBaseUrl();
 			}
-			// 列表里的标题/时间/消息数只在 run 结束时才可能变，只在这个事件刷新。
-			if (event.type === "run_finished") {
-				refreshTasks();
-				// 未读：用户不在对话页看着它完成时，给当前会话打绿点。
-				// 单 daemon 单会话，run_finished 一定属于当前活动会话 ——
-				// 取列表里的 current 项即可；极端竞态（列表还没刷出 current）
-				// 取不到就不加，下一次 refreshTasks 后列表本身已是最新，不漏信息。
-				if (viewRef.current !== "chat") {
-					const currentPath = taskListRef.current.find((t) => t.current)?.path;
-					if (currentPath !== undefined) {
-						setUnreadPaths((prev) => {
-							if (prev.has(currentPath)) return prev;
-							const next = new Set(prev);
-							next.add(currentPath);
-							return next;
-						});
-					}
-				}
+			if (event.type === "history_reset") {
+				// /new 等会话内重置后 sessionId 易位，后续事件带新 id ——
+				// 不按权威快照重指指针的话，它们会被路由进桶，可见视图就此冻结。
+				resyncSnapshot();
+			}
+		});
+		// 列表推送是全量替换（契约见 shared/ipc.ts），本地不再 invoke 重拉。
+		// running 标志 true→false 翻转 = run 结束（daemon 权威）。未读点在
+		// 这里判而不是在会话事件流里：automation run 的会话事件不转发
+		// renderer（见 daemon 的 run 执行器），事件流覆盖不到它，翻转检测全覆盖。
+		const offListChanged = window.kami.onTaskListChanged((sessions) => {
+			if (disposed) return;
+			// 翻转检测要在替换列表前做：prev 是上一份推送（渲染期写入 taskListRef）。
+			const finished = detectFinishedRuns(taskListRef.current, sessions);
+			setTaskList(sessions);
+			for (const item of finished) {
+				// 正看着它完成（当前会话 + 对话页）就不标未读。
+				if (item.id === visibleSessionIdRef.current && viewRef.current === "chat") continue;
+				setUnreadIds((prev) => {
+					if (prev.has(item.id)) return prev;
+					const next = new Set(prev);
+					next.add(item.id);
+					return next;
+				});
 			}
 		});
 		const offDown = window.kami.onDaemonDown(({ reason }) => {
@@ -217,9 +273,9 @@ export function App(): React.JSX.Element {
 		/*
 		 * 定时任务推送。changed（任务增删改/启停）不需要 App 层动作 ——
 		 * 管理页挂在时自己订阅了同一事件重拉列表（侧栏不展示任务数据）。
-		 * runFinished 要在这里处理：toast 全局可见，且后台 run 的会话事件
-		 * 不转发 renderer（见 daemon 的 run 执行器），下面的 run_finished
-		 * 分支覆盖不到它 —— 侧栏列表刷新与未读标记都得在这条推送里补。
+		 * runFinished 要在这里处理：toast 全局可见，且 automation run 的会话事件
+		 * 不转发 renderer（见 daemon 的 run 执行器），上面的会话事件分支覆盖
+		 * 不到它 —— 未读标记得在这条推送里补（侧栏列表则由 taskListChanged 覆盖）。
 		 */
 		const offAutomation = window.kami.onAutomationEvent(
 			(event: AutomationEvent) => {
@@ -230,29 +286,16 @@ export function App(): React.JSX.Element {
 						: `任务「${event.taskName}」运行失败`,
 					event.success ? "success" : "error",
 				);
-				// 让新产生的 run 会话出现在侧栏（标题/分组的真相在 daemon）。
-				refreshTasks();
 				// 装配失败的 run 没有会话（空串），无可标记对象。
 				if (event.sessionId === "") return;
-				// 未读与 run_finished 分支同口径：完成时用户没在看就标绿点。
-				// 区别只是定位键 —— 这里是 sessionId，要经列表换成 path。
-				window.kami
-					.listSessions()
-					.then((list) => {
-						if (disposed) return;
-						const hit = list.find((t) => t.id === event.sessionId);
-						if (hit === undefined) return;
-						if (viewRef.current === "chat" && hit.current) return;
-						setUnreadPaths((prev) => {
-							if (prev.has(hit.path)) return prev;
-							const next = new Set(prev);
-							next.add(hit.path);
-							return next;
-						});
-					})
-					.catch(() => {
-						// 列表只是导航入口，标不上未读不掩盖主体事实（toast 已提示）。
-					});
+				// 未读与 taskListChanged 翻转检测同口径：完成时用户没在看就标绿点。
+				if (event.sessionId === visibleSessionIdRef.current && viewRef.current === "chat") return;
+				setUnreadIds((prev) => {
+					if (prev.has(event.sessionId)) return prev;
+					const next = new Set(prev);
+					next.add(event.sessionId);
+					return next;
+				});
 			},
 		);
 
@@ -270,6 +313,7 @@ export function App(): React.JSX.Element {
 		return () => {
 			disposed = true;
 			offEvent();
+			offListChanged();
 			offDown();
 			offReady();
 			offPermission();
@@ -363,8 +407,40 @@ export function App(): React.JSX.Element {
 	/** 预览面板的 tab 集合与激活项（对标 WorkBuddy DetailPanel 的多 tab）。空数组 = 面板关闭。 */
 	const [previewTabs, setPreviewTabs] = useState<readonly PreviewSelection[]>([]);
 	const [previewActive, setPreviewActive] = useState<PreviewSelection | undefined>(undefined);
-	/** 静态服务 baseUrl，随工作空间快照刷新（服务未起为 undefined）。 */
+	/**
+	 * 静态服务 baseUrl，按**当前会话 cwd** 查询（PreviewServer 按 cwd 多实例，
+	 * Task 2.7；服务未起为 undefined，面板显示引导文案——旧降级行为保留）。
+	 */
 	const [previewBaseUrl, setPreviewBaseUrl] = useState<string | undefined>(undefined);
+	/** baseUrl 在途请求序号：会话快速切换时两次查询可能乱序返回，只认最后一次。 */
+	const previewSeqRef = useRef(0);
+	/**
+	 * 按当前会话 cwd 重取 baseUrl。cwd 未确定（会话尚未建立的瞬态）
+	 * 或服务未起时为 undefined，不视为错误。
+	 */
+	const refreshPreviewBaseUrl = useCallback(() => {
+		const seq = ++previewSeqRef.current;
+		const cwd = conversationRef.current.state.cwd;
+		if (cwd === undefined) {
+			setPreviewBaseUrl(undefined);
+			return;
+		}
+		window.kami
+			.previewBaseUrl(cwd)
+			.then((url) => {
+				if (previewSeqRef.current === seq) setPreviewBaseUrl(url);
+			})
+			.catch(() => {
+				if (previewSeqRef.current === seq) setPreviewBaseUrl(undefined);
+			});
+	}, []);
+
+	// 会话切换 / cwd 易位都体现在 state.cwd 上（含桶恢复路径：桶内容进
+	// reducer 后这里自动跟着变），cwd 一变就按它重取 baseUrl（Task 3.4）。
+	const currentCwd = conversation.state.cwd;
+	useEffect(() => {
+		refreshPreviewBaseUrl();
+	}, [currentCwd, refreshPreviewBaseUrl]);
 	/** 面板宽度（px，WorkBuddy 默认 440、sash 拖拽 clamp [340, 800]）。 */
 	const [panelWidth, setPanelWidth] = useState(440);
 	/** 面板全屏态：absolute 覆盖主内容区。 */
@@ -471,37 +547,66 @@ export function App(): React.JSX.Element {
 		[],
 	);
 
+	/** 切走前把当前可见会话的现场入桶。空会话（id 尚未分配）没有可保内容，跳过。 */
+	const stashVisibleView = (nextId: string): void => {
+		const prevId = visibleSessionIdRef.current;
+		if (prevId === "" || prevId === nextId) return;
+		viewCacheRef.current.set(prevId, conversationRef.current);
+	};
+
 	/**
-	 * 工作空间切换后重拉快照。
-	 *
-	 * 换空间会让 daemon 作废旧会话并清空历史（cwd 与会话终身绑定），
-	 * 本地 reducer 里的 entries 不会自己消失，必须以服务端快照为准重同步。
+	 * 快照进视图：切指针与换视图在同一处完成（原因见 visibleSessionIdRef 注释）。
+	 * 快照是 daemon 侧折叠的权威全量，同会话桶里的增量以它为准作废。
 	 */
-	const resyncSnapshot = useCallback(() => {
-		window.kami
-			.snapshot()
-			.then((snapshot: SessionSnapshot) =>
-				dispatch({ type: "snapshot", snapshot }),
-			)
-			.catch((error: unknown) => {
-				showToast(error instanceof Error ? error.message : String(error));
-			});
-		// 预览服务的根随工作区变了：baseUrl 与面板里开着的文件都要刷新。
-		window.kami
-			.workspaceSnapshot()
-			.then((snap) => setPreviewBaseUrl(snap.previewBaseUrl))
-			.catch(() => setPreviewBaseUrl(undefined));
-		closePreviewPanel();
-		// showToast 是稳定的 useCallback（空依赖），不需列入依赖数组。
+	const applySnapshot = useCallback((snapshot: SessionSnapshot): void => {
+		const nextId = snapshot.state.sessionId;
+		stashVisibleView(nextId);
+		visibleSessionIdRef.current = nextId;
+		viewCacheRef.current.delete(nextId);
+		dispatch({ type: "snapshot", snapshot });
+		// stashVisibleView 只碰 ref，不随渲染变化，无需入依赖。
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	/**
-	 * 新建任务：让 daemon 作废旧会话、开全新会话，然后回首页 + 重拉快照。
-	 *
-	 * 不只是切页面 —— 旧会话的消息历史必须由 daemon 真正作废，
-	 * 否则两个任务共享 pi 的上下文，正是要根治的「任务干扰」。
-	 * 工作空间选择保留（在哪个空间就在哪个空间开新任务）。
+	 * 桶命中即恢复（Task 3.1 核心验收：切回不丢流式现场）：后台期间事件
+	 * 持续折叠进桶，现场是最新的，不必整体重拉。纯事件流拼出的桶没有
+	 * 快照才携带的目录字段（场景/模式列表），判空走快照兜底。
+	 */
+	const restoreFromBucket = useCallback((targetId: string): boolean => {
+		const bucket = viewCacheRef.current.get(targetId);
+		if (bucket === undefined || bucket.availableScenes.length === 0) return false;
+		stashVisibleView(targetId);
+		viewCacheRef.current.delete(targetId);
+		visibleSessionIdRef.current = targetId;
+		// ConversationView 与 SessionSnapshot 字段同构（两端共用同一折叠结果）。
+		dispatch({ type: "snapshot", snapshot: bucket });
+		return true;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	/**
+	 * 以服务端快照重同步（桶缺失时的兜底路径；也是 newTask / 保存转正 /
+	 * 会话内 /new 等 daemon 侧重建了会话的场景的统一收口）。
+	 * sessionId 缺省 = daemon 当前会话。会话切换后旧预览 tab 不再属于
+	 * 新会话的工作区，面板一并关掉。
+	 */
+	const resyncSnapshot = useCallback((sessionId?: string) => {
+		window.kami
+			.snapshot(sessionId)
+			.then(applySnapshot)
+			.catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+		closePreviewPanel();
+		// applySnapshot/closePreviewPanel/showToast 都是稳定 useCallback（空依赖）。
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	/**
+	 * 新建任务：daemon 开全新会话并切当前，旧会话后台保活（run 不中止，
+	 * 多任务并发见 spec）。列表经 taskListChanged 推送更新，这里只按
+	 * 权威快照换指针。工作空间选择保留（在哪个空间就在哪个空间开新任务）。
 	 *
 	 * 旧会话的未读点保留：未读属于「那个会话完成了但你没看」的事实，
 	 * 当前会话换了并不消灭这个事实 —— 点回那行时才清。
@@ -515,8 +620,6 @@ export function App(): React.JSX.Element {
 			.newTask()
 			.then(() => {
 				resyncSnapshot();
-				// 旧会话有了消息，新会话成为 current —— 两处都让列表变了。
-				refreshTasks();
 				setView("home");
 			})
 			.catch((error: unknown) => {
@@ -526,70 +629,81 @@ export function App(): React.JSX.Element {
 	}, [link.kind, resyncSnapshot]);
 
 	/**
-	 * 恢复历史会话：成功后重拉快照（会话整体换新，以服务端为准）并刷新
-	 * 列表（current 标记易位）。失败 toast 且留在原视图 —— 恢复失败时
-	 * daemon 侧的活动会话没变，界面不应假装已经切过去了。
+	 * 恢复历史会话：桶命中直接换指针上屏（后台事件持续折叠进桶，现场
+	 * 最新，不重拉）；桶缺失走快照兜底。失败 toast 且留在原视图 ——
+	 * 恢复失败时 daemon 侧的活动会话没变，界面不应假装已经切过去了。
 	 *
 	 * 侧栏所有行点击（含当前行回对话页）都汇到这一个入口，所以未读
 	 * 也只在这里清 —— 用户看到了，绿点就该消失。
 	 */
 	const resumeTask = useCallback(
 		(path: string) => {
+			const target = taskListRef.current.find((t) => t.path === path);
 			window.kami
 				.resumeSession(path)
 				.then(() => {
-					setUnreadPaths((prev) => {
-						if (!prev.has(path)) return prev;
-						const next = new Set(prev);
-						next.delete(path);
-						return next;
-					});
-					resyncSnapshot();
-					refreshTasks();
+					if (target !== undefined) {
+						setUnreadIds((prev) => {
+							if (!prev.has(target.id)) return prev;
+							const next = new Set(prev);
+							next.delete(target.id);
+							return next;
+						});
+						// resume 成功后 daemon 侧 current 已易位，本地换指针 + 上屏。
+						if (!restoreFromBucket(target.id)) resyncSnapshot(target.id);
+						else closePreviewPanel();
+					} else {
+						// 列表里找不到（理论上点不到）——按 daemon 当前会话兜底。
+						resyncSnapshot();
+					}
 					setView("chat");
 				})
 				.catch((error: unknown) => {
-					const message = error instanceof Error ? error.message : String(error);
-					// 「任务进行中」的拒绝：给「停止当前任务并切换」的二次确认按钮，
-					// 而不是只 toast 一句死路（zombie run 场景：daemon 的 isStreaming
-					// 滞留，用户无从停止——ErrorBoundary 重载只 reload renderer，daemon 原样存活）。
-					if (message.includes("任务进行中")) {
-						setPendingResume({ path, message });
-						return;
-					}
-					showToast(message);
+					showToast(error instanceof Error ? error.message : String(error));
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[resyncSnapshot, refreshTasks],
+		[resyncSnapshot, restoreFromBucket],
 	);
 
-	/** 重命名：成功只刷列表 —— 对话页标题来自消息流，不随命名变。 */
+	/** 重命名：新标题经 taskListChanged 推送带回（对话页标题来自消息流，不随命名变）。 */
 	const renameTask = useCallback(
 		(path: string, name: string) => {
 			window.kami
 				.renameSession(path, name)
-				.then(() => refreshTasks())
 				.catch((error: unknown) => {
 					showToast(error instanceof Error ? error.message : String(error));
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[refreshTasks],
+		[],
 	);
 
-	/** 删除：成功只刷列表。当前活动会话由 daemon 拒删，reason 直接 toast 出来。 */
+	/**
+	 * 删除：列表经推送更新；当前活动会话由 daemon 拒删，reason 直接 toast。
+	 * 顺带清掉它的桶与未读 —— 会话文件没了，视图缓存与未读标记都是垃圾。
+	 */
 	const deleteTask = useCallback(
 		(path: string) => {
+			const target = taskListRef.current.find((t) => t.path === path);
 			window.kami
 				.deleteSession(path)
-				.then(() => refreshTasks())
+				.then(() => {
+					if (target === undefined) return;
+					viewCacheRef.current.delete(target.id);
+					setUnreadIds((prev) => {
+						if (!prev.has(target.id)) return prev;
+						const next = new Set(prev);
+						next.delete(target.id);
+						return next;
+					});
+				})
 				.catch((error: unknown) => {
 					showToast(error instanceof Error ? error.message : String(error));
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[refreshTasks],
+		[],
 	);
 
 	/**
@@ -600,7 +714,8 @@ export function App(): React.JSX.Element {
 	 * - 点的是当前会话行：daemon 直接导出，界面只 toast + 打开。
 	 *   不做 resync —— 快照会被同内容整体替换一遍，纯属多余切换。
 	 * - 点的是历史会话行：daemon 会先恢复该会话再导出（当前上下文被切走），
-	 *   所以必须像 resumeTask 一样重拉快照、刷新列表（current 易位）并落到对话页。
+	 *   所以必须像 resumeTask 一样按权威快照换指针并落到对话页
+	 *   （列表由 taskListChanged 推送覆盖，无需本地重拉）。
 	 */
 	const exportTask = useCallback(
 		(path: string) => {
@@ -612,7 +727,6 @@ export function App(): React.JSX.Element {
 					openArtifact(outputPath);
 					if (!isCurrent) {
 						resyncSnapshot();
-						refreshTasks();
 						setView("chat");
 					}
 				})
@@ -621,7 +735,7 @@ export function App(): React.JSX.Element {
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[taskList, resyncSnapshot, refreshTasks, openArtifact],
+		[taskList, resyncSnapshot, openArtifact],
 	);
 
 	/**
@@ -642,23 +756,24 @@ export function App(): React.JSX.Element {
 		[newTask],
 	);
 
-	/** 重命名空间：仅改显示名覆盖（workspaces.json），成功刷列表重拉 metas。 */
+	/** 重命名空间：仅改显示名覆盖（workspaces.json），成功重拉 metas（会话列表不经这里变）。 */
 	const renameWorkspace = useCallback(
 		(cwd: string, name: string) => {
 			window.kami
 				.renameWorkspace(cwd, name)
-				.then(() => refreshTasks())
+				.then(() => refreshGroups())
 				.catch((error: unknown) => {
 					// daemon 的校验错误串（重名/未知空间等）直接透出。
 					showToast(error instanceof Error ? error.message : String(error));
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[refreshTasks],
+		[refreshGroups],
 	);
 
 	/**
-	 * 从列表移除空间：该 cwd 全部会话移入回收目录（可反悔），成功刷列表。
+	 * 从列表移除空间：该 cwd 全部会话移入回收目录（可反悔），列表经推送更新，
+	 * 这里只补拉 metas（组名覆盖被清掉）。
 	 * 当前会话属于该空间时 daemon 侧已拒（错误串直接 toast），这里无需处理
 	 * 视图切换 —— 能走到成功分支时，当前视图必然不属于被移除的空间。
 	 */
@@ -666,13 +781,13 @@ export function App(): React.JSX.Element {
 		(cwd: string) => {
 			window.kami
 				.removeWorkspace(cwd)
-				.then(() => refreshTasks())
+				.then(() => refreshGroups())
 				.catch((error: unknown) => {
 					showToast(error instanceof Error ? error.message : String(error));
 				});
 		},
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[refreshTasks],
+		[refreshGroups],
 	);
 
 	/** 系统文件管理器打开空间目录（daemon 侧校验是已知工作空间，防任意路径）。 */
@@ -685,8 +800,8 @@ export function App(): React.JSX.Element {
 
 	/**
 	 * 临时任务转正：daemon 建目录、重写归组键并以新 cwd 重建当前会话。
-	 * 成功后按 resume 同口径重拉快照（cwd/isTempTask 易位、预览根变了）
-	 * 并刷列表（该任务从任务区挪进新空间组）。
+	 * 成功后按 resume 同口径按权威快照换指针（cwd/isTempTask 易位、预览根变了），
+	 * 会话挪组经推送覆盖，这里只补拉 metas（新空间组可能第一次出现）。
 	 *
 	 * 失败不在这里 toast：promise 原样 reject 给对话页的命名弹层，
 	 * 校验错误（重名/非法字符/保留名…）在输入框下原位显示，用户改完重试。
@@ -695,11 +810,11 @@ export function App(): React.JSX.Element {
 		(name: string): Promise<void> =>
 			window.kami.saveToWorkspace(name).then(() => {
 				resyncSnapshot();
-				refreshTasks();
+				refreshGroups();
 				showToast("已保存到工作空间", "success");
 			}),
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[resyncSnapshot, refreshTasks],
+		[resyncSnapshot, refreshGroups],
 	);
 
 	/**
@@ -756,19 +871,14 @@ export function App(): React.JSX.Element {
 		[taskList, groupMetas],
 	);
 	/**
-	 * 转圈行 = 当前会话行且流式中（单 daemon 单会话，两个条件本地可判，
-	 * 无需新增状态）。
-	 */
-	const streamingPath = conversation.state.isStreaming
-		? taskList.find((t) => t.current)?.path
-		: undefined;
-	/**
 	 * 侧栏「待确认」badge 的驱动：审批或问卷任一 pending 即亮。
 	 *
 	 * 规格书原本设想复用 daemon 推送的 pending 计数，核查现状后 daemon 并没有
 	 * 这个字段（审批/问卷请求只走各自的 PUSH 通道，不进 session_state），
-	 * 所以改在 App 层用两条本地队列合成 —— 单 daemon 单会话下这两类请求
-	 * 必然属于当前活动会话，本地合成与 daemon 计数等价，且改动最小。
+	 * 所以改在 App 层用两条本地队列合成。注意局限：PermissionRequest /
+	 * QuestionnaireRequest 都不带 sessionId，多任务并发下无法按会话路由，
+	 * badge 只能画在当前会话行上 —— 后台会话的请求也会点亮它（与单会话期
+	 * 的实现口径一致，按会话路由是请求契约补字段后的后续工作）。
 	 */
 	const pendingConfirm = approvals.length + questionnaires.length > 0;
 
@@ -780,8 +890,7 @@ export function App(): React.JSX.Element {
 				<Sidebar
 					link={link}
 					groups={sidebarGroups}
-					streamingPath={streamingPath}
-					unreadPaths={unreadPaths}
+					unreadIds={unreadIds}
 					pendingConfirm={pendingConfirm}
 					onNewTask={newTask}
 					onResumeTask={resumeTask}
@@ -960,43 +1069,6 @@ export function App(): React.JSX.Element {
 						}
 					}}
 				/>
-			)}
-			{/* 「任务进行中」拒绝后的二次确认：先停止当前任务（abort），再重试恢复。 */}
-			{pendingResume !== undefined && (
-				<div className="modal-backdrop" onClick={() => setPendingResume(undefined)}>
-					<div className="permission-card" onClick={(e) => e.stopPropagation()}>
-						<h3 style={{ margin: 0, fontSize: 15 }}>停止当前任务并切换？</h3>
-						<p style={{ margin: 0, fontSize: 13, color: "var(--text-dim)" }}>
-							{pendingResume.message}
-						</p>
-						<div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-							<button
-								type="button"
-								className="task-confirm-btn"
-								onClick={() => setPendingResume(undefined)}
-							>
-								取消
-							</button>
-							<button
-								type="button"
-								className="task-confirm-btn task-confirm-yes"
-								onClick={() => {
-									const path = pendingResume.path;
-									setPendingResume(undefined);
-									// 先停止当前任务（abort 是幂等的，无 run 时 no-op），再重试恢复。
-									window.kami
-										.abort()
-										.then(() => resumeTask(path))
-										.catch((error: unknown) => {
-											showToast(error instanceof Error ? error.message : String(error));
-										});
-								}}
-							>
-								停止并切换
-							</button>
-						</div>
-					</div>
-				</div>
 			)}
 			<Toast messages={toasts} />
 		</div>

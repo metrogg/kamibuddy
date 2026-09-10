@@ -80,6 +80,8 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	present_files: "交付中",
 	// 等待用户作答期间卡片停在这个标题上（问卷弹层本身承载等待态）。
 	questionnaire: "向用户提问",
+	// 子代理委派：运行中的阶段性进展（哪个 agent 在干什么）走 tool_progress 增量。
+	task: "子任务",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -94,6 +96,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	web_fetch: "已抓取",
 	present_files: "已交付",
 	questionnaire: "已回答",
+	task: "已完成",
 };
 
 /**
@@ -293,6 +296,14 @@ export interface SessionHostOptions {
 	 * 所以注入点是个值而不是 Promise。
 	 */
 	readonly sessionManager?: SessionManager;
+	/**
+	 * 初始工具集覆盖（子代理会话专用）。省略时按交互模式 frontmatter 的白名单。
+	 *
+	 * 子代理的工具面来自 agent 定义（resources/agents/<name>.md 的 tools），
+	 * 与交互模式无关——白名单语义不变：未列出的工具被禁用，含扩展注册的工具。
+	 * 子代理会话没有切换器，创建时一次注入即终身不变（同 cwd 的绑定语义）。
+	 */
+	readonly toolsOverride?: readonly string[];
 }
 
 export class SessionHost {
@@ -408,6 +419,7 @@ export class SessionHost {
 		 * 曾经只传 DEFAULT_TOOLS、切换只发生在 setInteraction —— 新建任务后的
 		 * 首次对话（没人点过切换器）工具集就没有 web_search，模型自称「没有联网
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
+		 * toolsOverride（子代理会话）优先于模式白名单，理由见 options 注释。
 		 */
 		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
 		const { session } = await createAgentSession({
@@ -421,7 +433,12 @@ export class SessionHost {
 			sessionManager: options.sessionManager ?? SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
-			tools: mode === undefined ? [...DEFAULT_TOOLS] : [...mode.tools],
+			tools:
+				options.toolsOverride !== undefined
+					? [...options.toolsOverride]
+					: mode === undefined
+						? [...DEFAULT_TOOLS]
+						: [...mode.tools],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
@@ -539,6 +556,15 @@ export class SessionHost {
 	 */
 	markAutomationRun(taskId: string): void {
 		this.session.sessionManager.appendCustomEntry("automation_run", { taskId });
+	}
+
+	/**
+	 * 子代理 run 的溯源标记（subagent_run custom 条目，agent 名定位这次会话
+	 * 是哪个子代理跑的）。子代理会话与主会话同落 sessions 目录，没有这条
+	 * 条目就会在会话列表里混入一条看不出来历的「普通会话」。
+	 */
+	markSubagentRun(agentName: string): void {
+		this.session.sessionManager.appendCustomEntry("subagent_run", { agent: agentName });
 	}
 
 	/**

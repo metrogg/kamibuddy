@@ -27,6 +27,20 @@ class ErrorBoundary extends Component<
 		// 直接看到是哪个组件在循环（turn-rail 的级联 effect 是第一嫌疑人）。
 		this.setState({ componentStack: info.componentStack });
 		console.error("[ErrorBoundary]", error, info.componentStack);
+		// 「重新加载」按钮会销毁现场，而诊断这类错误全靠 componentStack ——
+		// 落一份到 localStorage，重载后仍能从 devtools 取回（kamibuddy.lastRenderError）。
+		try {
+			localStorage.setItem(
+				"kamibuddy.lastRenderError",
+				JSON.stringify({
+					message: error.message,
+					componentStack: info.componentStack,
+					at: new Date().toISOString(),
+				}),
+			);
+		} catch {
+			// localStorage 不可写（隐私模式等）不掩盖主错误。
+		}
 	}
 
 	override render(): ReactNode {
