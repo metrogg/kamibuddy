@@ -213,6 +213,18 @@ export class ModelCatalog {
 		model: { id: string; name: string; provider: string; contextWindow: number; maxTokens: number; reasoning: boolean; input: readonly string[] },
 		configuredProviders: ReadonlySet<string>,
 	): ModelInfo {
+		/*
+		 * 推理强度档位不在此快照暴露（与 tasks.md 原文的有意偏离）：
+		 * UI 只需要**当前会话所用模型**的可用档位，那一份经 SessionState
+		 * （availableThinkingLevels，pi getAvailableThinkingLevels() 现读）下发，
+		 * 档位裁剪逻辑单一权威在 pi —— 快照若再带一份全量模型的档位表，
+		 * 就是第二份需要与 pi 对齐的数据。
+		 *
+		 * thinkingLevelMap 也无需在此转换：内置模型定义来自 pi-ai 自带数据
+		 * （generate-models.ts 生成的注册表），map 天然在 pi 的 Model 对象上，
+		 * 由各 provider 流消费（model.thinkingLevelMap?.[level]）；
+		 * 自定义模型的 map 透传在 custom-providers.ts（models.json 白名单继承）。
+		 */
 		return {
 			id: model.id,
 			providerId: model.provider,

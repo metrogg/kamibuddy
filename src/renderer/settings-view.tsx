@@ -21,6 +21,8 @@ import type {
 	WebSearchTestResult,
 } from "@shared/settings.ts";
 import { WEB_SEARCH_PROVIDERS, validateCustomProvider } from "@shared/settings.ts";
+import type { ThinkingLevel } from "@shared/session-events.ts";
+import { THINKING_LEVEL_LABELS } from "@shared/session-events.ts";
 import type { PermissionInfo } from "@shared/permissions.ts";
 import { CUSTOM_PRESET, PERMISSION_PRESETS } from "@shared/permissions.ts";
 import { IconBack, IconCheck, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "./icons.tsx";
@@ -340,6 +342,79 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 					</div>
 				)}
 			</div>
+		</section>
+	);
+}
+
+/* ── 默认推理强度 ──────────────────────────────────────────────── */
+
+/**
+ * 全局默认推理强度（对标 WorkBuddy 设置页的全局兜底档）。
+ *
+ * 只影响之后新建的会话：既有会话以各自会话内选择为准，不被回溯 ——
+ * 会话内切换在模型菜单（ModelMenu 的「推理强度」行），两处数据源不同：
+ * 这里走偏好文件（get/setThinkingLevelDefault），会话内走 session_state。
+ */
+function ThinkingLevelSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
+	const [level, setLevel] = useState<ThinkingLevel | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
+
+	useEffect(() => {
+		window.kami
+			.getThinkingLevelDefault()
+			.then((result) => setLevel(result.level))
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	}, []);
+
+	const change = (next: ThinkingLevel): void => {
+		const prev = level;
+		setLevel(next);
+		void window.kami.setThinkingLevelDefault(next).catch((e: unknown) => {
+			// 失败回滚显示值：select 是受控的，不回滚会让用户以为已经存上。
+			setLevel(prev);
+			setError(e instanceof Error ? e.message : String(e));
+		});
+	};
+
+	// 全局默认不做模型裁剪（保存时还不知道会配哪个模型），列全量七档；
+	// 建会话时 pi 按所选模型能力 clamp。档位顺序取 LABELS 声明序（off→max）。
+	const options = Object.keys(THINKING_LEVEL_LABELS) as ThinkingLevel[];
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>默认推理强度</h2>
+			</header>
+
+			{error !== undefined && <div className="settings-error">{error}</div>}
+
+			{level === undefined ? (
+				<p className="settings-empty">正在读取推理强度设置…</p>
+			) : (
+				<>
+					<div className="provider-row">
+						<div className="provider-main">
+							<span className="provider-name">新建会话的初始档位</span>
+							<span className="bar-spacer" />
+							<select
+								className="provider-select"
+								value={level}
+								disabled={busy}
+								onChange={(e) => change(e.target.value as ThinkingLevel)}
+							>
+								{options.map((option) => (
+									<option key={option} value={option}>
+										{THINKING_LEVEL_LABELS[option]}
+									</option>
+								))}
+							</select>
+						</div>
+					</div>
+					<p className="settings-foot">
+						影响之后新建的会话，不改动已存在的会话；模型不支持的档位会在建会话时自动裁剪。
+					</p>
+				</>
+			)}
 		</section>
 	);
 }
@@ -921,6 +996,8 @@ export function SettingsView({ onClose }: { readonly onClose: () => void }): Rea
 						</section>
 
 						<WebSearchSection busy={busy} />
+
+						<ThinkingLevelSection busy={busy} />
 
 						<PermissionSection busy={busy} />
 

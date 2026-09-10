@@ -4336,9 +4336,14 @@ button {
 	right: 0;
 	z-index: 30;
 	min-width: 250px;
-	max-height: 320px;
-	overflow-y: auto;
 	padding: 4px;
+}
+
+/* 滚动范围收窄到模型列表：弹层整体 overflow 会把向左飞出的档位子菜单
+   裁掉（一轴非 visible，另一轴也按非 visible 处理），见组件内注释。 */
+.model-menu-list {
+	max-height: 260px;
+	overflow-y: auto;
 }
 
 .model-menu-empty,
@@ -4403,6 +4408,82 @@ button {
 .permission-menu-goto:hover {
 	color: var(--text);
 }
+
+/* pill 档位后缀（「DeepSeek-V4-Flash 高」的「高」）：弱化一档显示，
+   档位是模型的修饰信息，不与模型名同权重。 */
+.model-menu-level {
+	margin-left: 5px;
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+/* 「推理强度」行：与 goto 行同款顶边分隔（列表与功能区的一道线）。
+   zone 是子菜单的定位锚点（同 plus-menu-sub-zone 机制）。 */
+.model-menu-thinking-zone {
+	position: relative;
+	margin-top: 4px;
+	border-top: 1px solid var(--border);
+}
+
+.model-menu-thinking {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	padding: 8px 10px;
+	border-radius: 7px;
+	font-size: 13px;
+	text-align: left;
+}
+
+.model-menu-thinking:hover {
+	background: var(--bg-hover);
+}
+
+.model-menu-thinking-current {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+.model-menu-thinking-caret {
+	font-size: 13px;
+}
+
+/* 档位子菜单：向左展开挂在行旁（模型弹层右对齐贴窗口右区，向右开会溢出
+   被裁），底边与行对齐、向上生长 —— 与主菜单「向上展开」同一方向语言，
+   定位口径同 plus-menu-sub。卡片视觉复用 .pop-menu（JSX 类名组合）。 */
+.model-menu-levels {
+	right: calc(100% + 4px);
+	bottom: -5px;
+	z-index: 31;
+	min-width: 120px;
+	padding: 4px;
+}
+
+.model-menu-level-item {
+	position: relative;
+	display: flex;
+	align-items: center;
+	width: 100%;
+	padding: 6px 28px 6px 10px;
+	border-radius: 7px;
+	font-size: 13px;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.model-menu-level-item:hover {
+	background: var(--bg-hover);
+}
+
+.model-menu-level-item.active {
+	background: var(--bg-raised);
+}
+
+/* 勾选标记复用 .model-menu-check（绝对定位右置，见上）。 */
 
 /* ── 主页权限快捷切换 ─────────────────────────────────────────── */
 /* 与 WorkspacePicker 同在 context-row，弹层向上展开；条目版式对齐 model-menu。 */
@@ -5210,9 +5291,78 @@ button {
 
 .questionnaire-actions {
 	display: flex;
-	justify-content: flex-end;
+	justify-content: space-between;
 	gap: 8px;
 	margin-top: 4px;
+}
+
+/* ── 问卷分页器（WorkBuddy 分步答题 v3：一次一题，‹ n/N › + 整卡跳过 X） ── */
+
+.questionnaire-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.questionnaire-header-controls {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+}
+
+.questionnaire-pager {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.questionnaire-pager-btn {
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	font-size: 14px;
+	line-height: 1;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+	border-radius: 6px;
+}
+
+.questionnaire-pager-btn:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.questionnaire-pager-btn:disabled {
+	opacity: 0.3;
+	cursor: default;
+}
+
+.questionnaire-pager-text {
+	min-width: 32px;
+	text-align: center;
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+.questionnaire-skip-all {
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	font-size: 12px;
+	line-height: 1;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+	border-radius: 6px;
+}
+
+.questionnaire-skip-all:hover {
+	background: var(--bg-hover);
+	color: var(--text);
 }
 
 /* ── 侧栏「待确认」badge ─────────────────────────────────────── */

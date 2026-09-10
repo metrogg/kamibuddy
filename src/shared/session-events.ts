@@ -27,6 +27,52 @@ export type ToolCallId = string;
 export type ToolOutcome = "ok" | "error" | "blocked" | "aborted";
 
 /**
+ * 推理强度七档。与 pi 的 ThinkingLevel **平行定义**，不 import pi 类型 ——
+ * 依赖方向规则（AGENTS.md §1.2）：pi 类型只允许出现在 core/ 与 extensions/，
+ * 而本文件是 renderer 也 import 的契约层。档位集合与 pi 0.85.1 的
+ * THINKING_LEVELS（agent-session.ts）逐一对应；pi 若加档，typecheck 会在
+ * core/session-host.ts 的适配处响亮报错，而不是在这里静默漏档。
+ */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** 全量档位列表（守卫与设置页下拉共用一份，不各写字面量）。 */
+const THINKING_LEVELS: readonly ThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
+/**
+ * 运行时守卫：偏好文件与 IPC 入参都是 unknown 进界，
+ * 非法值按「未配置」处理（偏好可能被手编，同 webSearch 字段的防御口径）。
+ */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+	return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * 档位中文标签（renderer 的模型菜单 pill 与设置页下拉共用）。
+ *
+ * 集中一处的先例是工具卡片 label（core/session-host.ts 的 TOOL_*_LABELS）：
+ * 词汇表若散在各 UI 组件里必然漂移。与工具卡不同的是归属层——工具卡 label
+ * 由 daemon 下发（卡片是数据），档位标签放契约层是因为 SessionState 只携带
+ * 档位 id（state 是事实），显示词是 UI 的恒定映射，不占事件流带宽。
+ */
+export const THINKING_LEVEL_LABELS: Readonly<Record<ThinkingLevel, string>> = {
+	off: "关",
+	minimal: "极低",
+	low: "低",
+	medium: "中",
+	high: "高",
+	xhigh: "极高",
+	max: "最大",
+};
+
+/**
  * run 的结束方式。
  *
  * 中断与正常结束在 UI 上是两种终态：中断要留下「用户已取消」指示行、
@@ -163,12 +209,12 @@ export type SessionEvent =
 	 * 与终态 FileChange.changeType 同口径。
 	 */
 	| {
-			readonly type: "tool_stream_progress";
-			readonly id: ToolCallId;
-			readonly path: string | undefined;
-			readonly added: number;
-			readonly changeType: "created" | "modified";
-	  }
+		readonly type: "tool_stream_progress";
+		readonly id: ToolCallId;
+		readonly path: string | undefined;
+		readonly added: number;
+		readonly changeType: "created" | "modified";
+	}
 	/** 工具开始执行（参数已生成完毕）。同 id 的生成中卡片原位翻转为执行态。 */
 	| { readonly type: "tool_started"; readonly card: ToolCard }
 	/** 工具流式输出（如命令 stdout）。 */
@@ -183,10 +229,10 @@ export type SessionEvent =
 	 * focusFile（首个本地文件）由渲染进程自动在预览面板打开。
 	 */
 	| {
-			readonly type: "artifacts_presented";
-			readonly files: readonly PresentedFile[];
-			readonly focusFile: string | undefined;
-	  }
+		readonly type: "artifacts_presented";
+		readonly files: readonly PresentedFile[];
+		readonly focusFile: string | undefined;
+	}
 	/**
 	 * run 异常结束。message 是给用户看的，不要塞 stack。
 	 * 诊断信息走 daemon 侧日志，不经 UI。
@@ -262,6 +308,21 @@ export interface SessionState {
 	readonly interactionId: string;
 	readonly modelId: string | undefined;
 	readonly isStreaming: boolean;
+	/**
+	 * 当前推理强度档位。由宿主从 pi 的 session.thinkingLevel 现读
+	 * （pi 恒 clamp 到模型能力内，非推理模型为 "off"）。
+	 *
+	 * 可选而非必填：不掀翻全部既有构造点（daemon freshConversation、
+	 * session-rebuild、各测试的初始瞬态）。renderer 对 undefined 一律
+	 * 不显示档位 —— 与非推理模型「不显示档位行/pill 后缀」同一口径。
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
+	/**
+	 * 当前模型的可用档位（pi getAvailableThinkingLevels() 现读）。
+	 * 非推理模型仅 ["off"]；切模型后随下次 session_state 联动更新，
+	 * UI 的档位子菜单只列这里的值，不自建模型能力表。
+	 */
+	readonly availableThinkingLevels?: readonly ThinkingLevel[];
 	/** 上下文占用。undefined 表示尚未有过一次请求。 */
 	readonly contextUsage?: {
 		readonly usedTokens: number;

@@ -35,6 +35,8 @@ const bridge: KamiBridge = {
 	setInteraction: (interactionId) =>
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
+	setThinkingLevel: (level) =>
+		ipcRenderer.invoke(INVOKE.setThinkingLevel, level),
 
 	listSessions: () => ipcRenderer.invoke(INVOKE.sessionList),
 	resumeSession: (path) => ipcRenderer.invoke(INVOKE.sessionResume, path),
@@ -90,6 +92,11 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.getDefaultWorkspacePath),
 	setDefaultWorkspacePath: (path) =>
 		ipcRenderer.invoke(INVOKE.setDefaultWorkspacePath, path),
+
+	getThinkingLevelDefault: () =>
+		ipcRenderer.invoke(INVOKE.getThinkingLevelDefault),
+	setThinkingLevelDefault: (level) =>
+		ipcRenderer.invoke(INVOKE.setThinkingLevelDefault, level),
 
 	getPermissions: () => ipcRenderer.invoke(INVOKE.getPermissions),
 	setPermissions: (settings) => ipcRenderer.invoke(INVOKE.setPermissions, settings),

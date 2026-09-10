@@ -104,13 +104,17 @@ export function questionnaireExtensionFactory(
 						details: { skipped: true },
 					};
 				}
-				// 问答对原样回给模型（问题 → 用户所选/补充的答案）。
+				// 逐题结算回给模型：作答按题目原文配对，没答的题明确标「未回答」
+				// （分页弹层允许逐题跳过 —— 缺失不等于没问，模型据此决定要不要
+				// 在结果里说明假设，而不是当成没问过）。
+				const settled = params.questions.map((q) => {
+					const hit = response.answers.find((a) => a.question === q.question);
+					return { question: q.question, answer: hit?.answer ?? "（用户未回答此题）" };
+				});
 				// details 带 skipped 标记：工具卡的 已回答/已跳过 两态据此区分，
 				// 不必反解析给模型看的文案。
 				return {
-					content: [
-						{ type: "text" as const, text: JSON.stringify(response.answers, null, 2) },
-					],
+					content: [{ type: "text" as const, text: JSON.stringify(settled, null, 2) }],
 					details: { skipped: false },
 				};
 			},

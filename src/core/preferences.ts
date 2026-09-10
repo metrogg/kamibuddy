@@ -18,6 +18,7 @@ import {
 	presetIdFor,
 	type PermissionSettings,
 } from "../shared/permissions.ts";
+import { isThinkingLevel, type ThinkingLevel } from "../shared/session-events.ts";
 
 export interface Preferences {
 	/** 选中的模型，形如 `provider/model`。未选则 undefined。 */
@@ -37,6 +38,12 @@ export interface Preferences {
 	 * （对齐 WorkBuddy「修改后不影响已有数据」语义）。
 	 */
 	readonly defaultWorkspacePath?: string;
+	/**
+	 * 全局默认推理强度（之后新建会话的初始档位，含定时任务 run 与子代理会话）。
+	 * 未设置则 undefined —— 调用方回 medium 兜底（pi 的内置默认即 medium，
+	 * 两处不漂移）。既有会话以各自会话内选择为准，不被本键回溯修改。
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
 }
 
 export interface WebSearchPrefs {
@@ -73,6 +80,7 @@ export function readPreferences(): Preferences {
 			webSearch?: unknown;
 			permissions?: unknown;
 			defaultWorkspacePath?: unknown;
+			thinkingLevel?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
@@ -91,17 +99,25 @@ export function readPreferences(): Preferences {
 		const webSearch =
 			typeof ws === "object" && ws !== null
 				? {
-						providerId:
-							typeof (ws as WebSearchPrefs).providerId === "string"
-								? (ws as WebSearchPrefs).providerId
-								: "",
-						apiKey:
-							typeof (ws as WebSearchPrefs).apiKey === "string"
-								? (ws as WebSearchPrefs).apiKey
-								: "",
-					}
+					providerId:
+						typeof (ws as WebSearchPrefs).providerId === "string"
+							? (ws as WebSearchPrefs).providerId
+							: "",
+					apiKey:
+						typeof (ws as WebSearchPrefs).apiKey === "string"
+							? (ws as WebSearchPrefs).apiKey
+							: "",
+				}
 				: undefined;
 		const permissions = readPermissions(record.permissions);
+		/*
+		 * 非法值按「未配置」处理，与 webSearch 的防御口径一致：
+		 * 偏好文件可能被手工编辑，坏掉的可再生字段不值得阻塞启动。
+		 * 回落方向是 pi 内置默认（medium），既不是放宽也不是收紧，无安全取向。
+		 */
+		const thinkingLevel = isThinkingLevel(record.thinkingLevel)
+			? record.thinkingLevel
+			: undefined;
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -109,6 +125,7 @@ export function readPreferences(): Preferences {
 				: {}),
 			...(permissions !== undefined ? { permissions } : {}),
 			...(defaultWorkspacePath !== undefined ? { defaultWorkspacePath } : {}),
+			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 		};
 	} catch {
 		return EMPTY;

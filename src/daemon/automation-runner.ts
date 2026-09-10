@@ -40,7 +40,7 @@ import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { AutomationTask } from "../shared/automation.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
-import type { SessionEvent } from "../shared/session-events.ts";
+import type { SessionEvent, ThinkingLevel } from "../shared/session-events.ts";
 import type { AutomationRunExecutor, AutomationRunOutcome } from "./automation-scheduler.ts";
 
 /** run 超时上限：超过即 abort 记失败（spec：30 分钟）。 */
@@ -60,6 +60,11 @@ export interface AutomationRunExecutorDeps {
 		piContext: PromptContextOptions,
 	) => Promise<string>;
 	readonly getPermissions: () => PermissionSettings;
+	/**
+	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。run 会话每次新建，
+	 * 逐会话还原不适用；无人值守会话没有会话内切换入口，全局默认即口径。
+	 */
+	readonly getThinkingLevel: () => ThinkingLevel | undefined;
 	readonly protectedDirs: readonly string[];
 	readonly isTempCwd: (cwd: string) => boolean;
 	/** 自家目录判定（生效根 / 配置目录内直接信任，见 project-trust.ts）。 */
@@ -104,6 +109,9 @@ export function createAutomationRunExecutor(
 				interactionId: "craft",
 				emit,
 				resources: deps.resources,
+				// 初始档 = 全局默认；未配置时为 undefined，SessionHost 只把非
+				// undefined 传给 pi（pi 走自己的 medium 默认链）。
+				thinkingLevel: deps.getThinkingLevel(),
 				extensions: buildRunExtensions(deps, cwd, () => host),
 			});
 			// 溯源：会话文件写 automation_run custom 条目（taskId），

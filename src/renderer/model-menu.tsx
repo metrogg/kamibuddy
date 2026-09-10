@@ -11,10 +11,22 @@
 
 import { useCallback, useState } from "react";
 import type { ModelInfo, SettingsSnapshot } from "@shared/settings.ts";
+import type { ThinkingLevel } from "@shared/session-events.ts";
+import { THINKING_LEVEL_LABELS } from "@shared/session-events.ts";
 import { IconCheck, IconChevronDown } from "./icons.tsx";
 
 interface ModelMenuProps {
 	readonly modelId: string | undefined;
+	/**
+	 * 当前推理档位（conversation.state 直传，session_state 推送自动刷新）。
+	 * undefined = 宿主未建/未知，pill 不显示档位后缀（与非推理模型同口径）。
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
+	/**
+	 * 当前模型的可用档位。undefined = pristine（宿主未建、能力未解析），
+	 * 此时子菜单列全量七档；恰为 ["off"] 表示非推理模型，不渲染「推理强度」行。
+	 */
+	readonly availableThinkingLevels?: readonly ThinkingLevel[];
 	readonly onOpenSettings: () => void;
 	readonly onError: (message: string) => void;
 }
@@ -26,9 +38,17 @@ export function shortModelName(modelId: string | undefined): string {
 	return at === -1 ? modelId : modelId.slice(at + 1);
 }
 
-export function ModelMenu({ modelId, onOpenSettings, onError }: ModelMenuProps): React.JSX.Element {
+export function ModelMenu({
+	modelId,
+	thinkingLevel,
+	availableThinkingLevels,
+	onOpenSettings,
+	onError,
+}: ModelMenuProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [snapshot, setSnapshot] = useState<SettingsSnapshot | undefined>(undefined);
+	// 档位子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover，同 PlusMenu 约定）。
+	const [levelsOpen, setLevelsOpen] = useState(false);
 
 	const toggle = useCallback(() => {
 		setOpen((v) => {
@@ -42,6 +62,8 @@ export function ModelMenu({ modelId, onOpenSettings, onError }: ModelMenuProps):
 			}
 			return next;
 		});
+		// 主菜单开合都复位子菜单：下次重开从「推理强度」行开始，而不是残留展开态。
+		setLevelsOpen(false);
 	}, [onError]);
 
 	const pick = useCallback(
@@ -54,14 +76,48 @@ export function ModelMenu({ modelId, onOpenSettings, onError }: ModelMenuProps):
 		[onError],
 	);
 
+	const pickThinkingLevel = useCallback(
+		(level: ThinkingLevel) => {
+			setOpen(false);
+			setLevelsOpen(false);
+			// 无本地回写：daemon 推 session_state，pill 与勾选随之刷新（同 pick 模型）。
+			window.kami.setThinkingLevel(level).catch((error: unknown) => {
+				onError(error instanceof Error ? error.message : String(error));
+			});
+		},
+		[onError],
+	);
+
 	const providerName = new Map((snapshot?.providers ?? []).map((p) => [p.id, p.name]));
 	// 只列可用的：主页是切换器不是管理页；未配置的模型点了必然报错。
 	const available: readonly ModelInfo[] = (snapshot?.models ?? []).filter((m) => m.available);
+
+	// pill 档位后缀：档位未知不显示；可用档位只有一档（含非推理模型的 ["off"]）
+	// 时后缀没有信息量，也不显示。
+	const levelSuffix =
+		thinkingLevel !== undefined && (availableThinkingLevels === undefined || availableThinkingLevels.length > 1)
+			? THINKING_LEVEL_LABELS[thinkingLevel]
+			: undefined;
+
+	// 「推理强度」行只在非推理模型（可用档位恰为 ["off"]）时隐藏；pristine
+	// （undefined，能力未解析）照常显示 —— 此时用户正需要在建宿主前选档。
+	const thinkingRowVisible = !(
+		availableThinkingLevels !== undefined &&
+		availableThinkingLevels.length === 1 &&
+		availableThinkingLevels[0] === "off"
+	);
+
+	// pristine 时列表未按模型裁剪（能力未解析），先给全量七档；pi 建宿主时会
+	// clamp 到模型实际可用档位，UI 不自建模型能力表（SessionState 注释同口径）。
+	// 档位顺序取 THINKING_LEVEL_LABELS 的声明序（off→max），键序即档位序。
+	const thinkingOptions: readonly ThinkingLevel[] =
+		availableThinkingLevels ?? (Object.keys(THINKING_LEVEL_LABELS) as ThinkingLevel[]);
 
 	return (
 		<div className="menu-zone">
 			<button type="button" className="bar-btn bar-btn-text" title={modelId ?? "尚未选择模型"} onClick={toggle}>
 				{shortModelName(modelId)}
+				{levelSuffix !== undefined && <span className="model-menu-level">{levelSuffix}</span>}
 				<IconChevronDown size={13} />
 			</button>
 
@@ -85,25 +141,73 @@ export function ModelMenu({ modelId, onOpenSettings, onError }: ModelMenuProps):
 						</>
 					) : (
 						<>
-							{available.map((model) => {
-								const key = `${model.providerId}/${model.id}`;
-								const active = key === modelId;
-								return (
+							{/*
+								滚动只包模型列表：弹层若整体 overflow-y:auto，向左飞出的
+								档位子菜单会被滚动容器裁掉（overflow 一轴非 visible，
+								另一轴也按非 visible 处理）。列表滚动、底部功能区固定。
+							*/}
+							<div className="model-menu-list">
+								{available.map((model) => {
+									const key = `${model.providerId}/${model.id}`;
+									const active = key === modelId;
+									return (
+										<button
+											key={key}
+											type="button"
+											className={`model-menu-item${active ? " active" : ""}`}
+											onClick={() => pick(key)}
+										>
+											<span className="model-menu-name">{model.name}</span>
+											<span className="model-menu-meta">
+												{providerName.get(model.providerId) ?? model.providerId} ·{" "}
+												{Math.round(model.contextWindow / 1000)}K
+											</span>
+											{active && <IconCheck size={14} className="model-menu-check" />}
+										</button>
+									);
+								})}
+							</div>
+							{/*
+								推理强度行（WorkBuddy 的「高 >」）：右侧是当前档位 label，
+								点击/hover 展开档位子菜单。非推理模型整行不渲染（见上）。
+							*/}
+							{thinkingRowVisible && (
+								<div
+									className="model-menu-thinking-zone"
+									onMouseEnter={() => setLevelsOpen(true)}
+									onMouseLeave={() => setLevelsOpen(false)}
+								>
 									<button
-										key={key}
 										type="button"
-										className={`model-menu-item${active ? " active" : ""}`}
-										onClick={() => pick(key)}
+										className="model-menu-thinking"
+										aria-expanded={levelsOpen}
+										onClick={() => setLevelsOpen((v) => !v)}
 									>
-										<span className="model-menu-name">{model.name}</span>
-										<span className="model-menu-meta">
-											{providerName.get(model.providerId) ?? model.providerId} ·{" "}
-											{Math.round(model.contextWindow / 1000)}K
+										<span>推理强度</span>
+										<span className="model-menu-thinking-current">
+											{thinkingLevel !== undefined && THINKING_LEVEL_LABELS[thinkingLevel]}
+											<span className="model-menu-thinking-caret" aria-hidden="true">
+												›
+											</span>
 										</span>
-										{active && <IconCheck size={14} className="model-menu-check" />}
 									</button>
-								);
-							})}
+									{levelsOpen && (
+										<div className="pop-menu model-menu-levels">
+											{thinkingOptions.map((level) => (
+												<button
+													key={level}
+													type="button"
+													className={`model-menu-level-item${level === thinkingLevel ? " active" : ""}`}
+													onClick={() => pickThinkingLevel(level)}
+												>
+													{THINKING_LEVEL_LABELS[level]}
+													{level === thinkingLevel && <IconCheck size={14} className="model-menu-check" />}
+												</button>
+											))}
+										</div>
+									)}
+								</div>
+							)}
 							<button
 								type="button"
 								className="model-menu-goto"

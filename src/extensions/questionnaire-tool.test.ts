@@ -128,23 +128,52 @@ describe("作答回程", () => {
 		expect(asked[0]?.questions).toEqual(params.questions);
 	});
 
-	it("作答 → JSON 问答对，details 标记未跳过", async () => {
+	it("作答 → 按所问逐题结算成 JSON 问答对，details 标记未跳过", async () => {
 		const { tool } = mount({
 			answer: (request) => ({
 				id: request.id,
 				skipped: false,
-				answers: [
-					{ question: "按哪个方向改？", answer: "求职" },
-					{ question: "目标公司类型？", answer: "（其他）国企" },
-				],
+				answers: request.questions.map((q) => ({
+					question: q.question,
+					answer: q.options[0] ?? "",
+				})),
 			}),
 		});
-		const result = await tool.execute("t1", oneQuestion());
+		const result = await tool.execute("t1", {
+			questions: [
+				{ question: "按哪个方向改？", options: ["求职", "晋升"] },
+				{ question: "要什么风格？", options: ["克制", "活泼"] },
+			],
+		});
 
 		const parsed: unknown = JSON.parse(result.content[0]?.text ?? "");
 		expect(parsed).toEqual([
 			{ question: "按哪个方向改？", answer: "求职" },
-			{ question: "目标公司类型？", answer: "（其他）国企" },
+			{ question: "要什么风格？", answer: "克制" },
+		]);
+		expect(result.details?.skipped).toBe(false);
+	});
+
+	it("逐题跳过（分页弹层）：未答的题明确标「未回答」，其余照实配对", async () => {
+		const { tool } = mount({
+			answer: (request) => ({
+				id: request.id,
+				skipped: false,
+				// 只答了第二题 —— 第一题被用户逐题跳过。
+				answers: [{ question: "要什么风格？", answer: "克制" }],
+			}),
+		});
+		const result = await tool.execute("t1", {
+			questions: [
+				{ question: "按哪个方向改？", options: ["求职", "晋升"] },
+				{ question: "要什么风格？", options: ["克制", "活泼"] },
+			],
+		});
+
+		const parsed: unknown = JSON.parse(result.content[0]?.text ?? "");
+		expect(parsed).toEqual([
+			{ question: "按哪个方向改？", answer: "（用户未回答此题）" },
+			{ question: "要什么风格？", answer: "克制" },
 		]);
 		expect(result.details?.skipped).toBe(false);
 	});

@@ -128,11 +128,12 @@ import {
 	type WebSearchTestResult,
 } from "../shared/settings.ts";
 import { searchWeb } from "../core/web-search.ts";
-import type {
-	ModeDescriptor,
-	SessionEvent,
-	SessionEventEnvelope,
-	SessionState,
+import {
+	isThinkingLevel,
+	type ModeDescriptor,
+	type SessionEvent,
+	type SessionEventEnvelope,
+	type SessionState,
 } from "../shared/session-events.ts";
 import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
@@ -489,6 +490,10 @@ const automationScheduler = new AutomationScheduler({
 		compose: async (cwd, sceneId, interactionId, piContext) =>
 			(await composeSystemPrompt(cwd, sceneId, interactionId, piContext)).prompt,
 		getPermissions: () => activePermissions,
+		// 全局默认推理强度现读偏好不缓存：run 会话建宿主才走这条读路径，
+		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
+		// 工具调用都要读）。用户在设置页改完，下一次 run 即刻生效。
+		getThinkingLevel: () => readPreferences().thinkingLevel,
 		protectedDirs: PROTECTED_DIRS,
 		isTempCwd,
 		isOwnWorkspace: (dir) =>
@@ -780,22 +785,27 @@ const pendingQuestionnaires = new Map<
 >();
 
 function requestQuestionnaireAnswers(
-	request: Omit<QuestionnaireRequest, "id">,
+	request: QuestionnaireRequest,
 ): Promise<QuestionnaireResponse> {
-	const id = randomUUID();
-	// 与审批同款的审计点：事后能还原「当时问了什么、用户答了什么」。
-	// 不记题目与答案全文 —— 内容已随会话落盘，id 足够把两边对上。
+	/*
+	 * id 用工具生成的那一个（questionnaire-tool 的契约：id 由工具生成后传入），
+	 * 不许在这里另发 —— 曾经另发并按 { id, ...request } 推 payload，展开时
+	 * request.id 把新 id 盖掉：renderer 按工具 id 应答，在 pendingQuestionnaires
+	 * （键是另发的 id）里查无此项被静默丢弃，工具 execute 永久悬挂，
+	 * 用户看到工具卡永远「正在处理」（2026-09-10 实踩，日志里
+	 * questionnaire_request 之后没有 questionnaire_response 就是它）。
+	 */
 	eventLog.append({
 		kind: "questionnaire_request",
-		id,
+		id: request.id,
 		questionCount: request.questions.length,
 	});
 	return new Promise<QuestionnaireResponse>((resolve, reject) => {
-		pendingQuestionnaires.set(id, { resolve, reject });
+		pendingQuestionnaires.set(request.id, { resolve, reject });
 		post({
 			kind: "push",
 			channel: PUSH.questionnaireRequest,
-			payload: { id, ...request },
+			payload: request,
 		});
 	});
 }
@@ -851,6 +861,9 @@ const subagentRunner = createSubagentRunner({
 	getModelKey: () => activeModelKey,
 	resources: RESOURCES,
 	getPermissions: () => activePermissions,
+	// 全局默认推理强度（现读偏好，理由同 automation 装配处）：子代理会话
+	// 每次新建、逐会话还原不适用，全局默认即口径。
+	getThinkingLevel: () => readPreferences().thinkingLevel,
 	protectedDirs: PROTECTED_DIRS,
 	isTempCwd,
 	isOwnWorkspace: (dir) =>
@@ -866,10 +879,18 @@ const subagentRunner = createSubagentRunner({
  * 沿用旧 hostPromise 的缓存语义，只是从单例升级为按桶：同一桶只建一次，
  * 并发取宿主拿到同一个 promise；失败的 promise 不缓存（清回 undefined），
  * 用户配好模型后重试才有效。
+ *
+ * 建成即 adoptHost 注册（pristine 桶唯一的注册点，resume/saveToWorkspace
+ * 有自己的注册路径）：不入表则信封 sessionId 全程空串、listSessions 的
+ * current/running 标不上、resume 同一文件还会开出第二个宿主
+ * （同文件双写禁区）（2026-09-10 实踩：并发版首日这个注册点就缺失）。
  */
 function getHost(bucket: SessionBucket<SessionHost>): Promise<SessionHost> {
 	if (bucket.hostPromise === undefined) {
-		const attempt = createHost(bucket);
+		const attempt = createHost(bucket).then((host) => {
+			adoptHost(bucket, host);
+			return host;
+		});
 		bucket.hostPromise = attempt;
 		attempt.catch(() => {
 			if (bucket.hostPromise === attempt) bucket.hostPromise = undefined;
@@ -949,6 +970,23 @@ async function createHost(
 	 */
 	const mcpClient = createMcpClient({ cwd });
 
+	/*
+	 * 推理强度初始档，**仅全新会话**（无 sessionManager）注入：
+	 * 会话内已选档（pristine 桶经 setThinkingLevel 记档）优先于全局默认
+	 *（preferences.thinkingLevel）；都未配置时不带该键，pi 走自己的
+	 * medium 默认链。
+	 * resume / saveToWorkspace 重建路径（带 sessionManager）绝不传 ——
+	 * pi 的 options.thinkingLevel 优先级高于会话文件里的
+	 * thinking_level_change 条目，传了会毁掉逐会话还原
+	 *（core/session-host.ts 该选项的同源注释）。
+	 * 档位现读偏好不缓存：建宿主才走这条读路径，不在热路径上
+	 *（与 activePermissions 的模块级缓存不同，那个每次工具调用都要读）。
+	 */
+	const initialThinkingLevel =
+		sessionManager === undefined
+			? (bucket.conversation.state.thinkingLevel ?? readPreferences().thinkingLevel)
+			: undefined;
+
 	const host = await SessionHost.create({
 		catalog,
 		modelKey: activeModelKey,
@@ -959,6 +997,7 @@ async function createHost(
 		emit: (event) => emitSessionEvent(bucket, event),
 		resources: RESOURCES,
 		...(sessionManager === undefined ? {} : { sessionManager }),
+		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
 		// （依赖方向是 extensions → core，见 AGENTS.md §1）。
 		extensions: [
@@ -1938,6 +1977,32 @@ const handlers: Record<string, Handler> = {
 		else updateStateLocally(currentBucket, { modelId: key });
 	},
 
+	/**
+	 * 切换当前会话的推理强度档位。目标 = 当前桶：多任务并发下档位按桶独立，
+	 * A 会话的切换不影响 B 会话（spec：会话内推理强度切换）。
+	 * 逐会话持久化与 resume 还原全由 pi 负责（thinking_level_change 条目），
+	 * 这里不做第二份持久化。
+	 */
+	[INVOKE.setThinkingLevel]: async ([level]) => {
+		// 双端校验（同 setModel / setPermissions 的做法）：UI 只列当前模型
+		// 可用档，这里防绕过 —— 非法值响亮报错，不放行给 pi。
+		if (!isThinkingLevel(level)) {
+			throw new Error(`未知的推理强度档位：${String(level)}`);
+		}
+		const bucket = currentBucket;
+		const hostPromise = bucket.hostPromise;
+		if (hostPromise === undefined) {
+			// pristine 桶（宿主未建）：参照 setScene 的 pristine 语义只记档 ——
+			// availableThinkingLevels 此刻无从知晓（要问 pi 才知道），建宿主时
+			// 由 createHost 的取值优先级（会话内选择 > 全局默认）把这个选择带进去。
+			updateStateLocally(bucket, { thinkingLevel: level });
+			return;
+		}
+		// pi 恒 clamp 到模型可用档位、不抛错；host.setThinkingLevel 会
+		// emitState 重推权威值（clamp 后的实际生效值），UI 自动刷新，这里不另推。
+		(await hostPromise).setThinkingLevel(level);
+	},
+
 	/* ── 联网搜索配置 ───────────────────────────────────────────────── */
 
 	[INVOKE.getWebSearchConfig]: async (): Promise<WebSearchConfigInfo> => {
@@ -2035,6 +2100,26 @@ const handlers: Record<string, Handler> = {
 		// 读改写：偏好文件里还有模型选择与联网搜索配置，整存会清掉它们。
 		writePreferences({ ...readPreferences(), permissions: settings });
 		return buildPermissionInfo(settings);
+	},
+
+	/* ── 全局默认推理强度 ─────────────────────────────────────────── */
+
+	// 未配置回 medium：pi 的内置默认就是 medium（createAgentSession 未传
+	// thinkingLevel 时的取值链），兜底与 pi 不漂移。
+	[INVOKE.getThinkingLevelDefault]: async () => ({
+		level: readPreferences().thinkingLevel ?? "medium",
+	}),
+
+	[INVOKE.setThinkingLevelDefault]: async ([level]) => {
+		// 双端校验（同 setPermissions）：设置页即时校验 + 这里防绕过。
+		if (!isThinkingLevel(level)) {
+			throw new Error(`未知的推理强度档位：${String(level)}`);
+		}
+		// 读改写：偏好文件里还有模型选择、权限设置等其他键，整存覆盖会清掉它们。
+		// 语义：只影响**之后新建**的会话（含定时任务 run 会话与子代理会话，
+		// 见 createHost 与两个 runner 的注入点）—— 既有会话以各自会话内
+		// 选择为准，不被本键回溯修改（spec：全局默认不回溯既有会话）。
+		writePreferences({ ...readPreferences(), thinkingLevel: level });
 	},
 
 	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
@@ -2208,8 +2293,17 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.questionnaireResponse]: async ([response]) => {
 		const answer = response as QuestionnaireResponse;
 		const slot = pendingQuestionnaires.get(answer.id);
-		// 与审批同口径：重复应答/悬空 id 静默忽略，不落审计（那不是一次真实的选择）。
-		if (slot === undefined) return;
+		if (slot === undefined) {
+			// 重复应答（连点）是正常的，静默忽略；但查无此项也可能是契约错配
+			// （2026-09-10 的 id 覆盖事故就是静默丢应答导致工具永久悬挂）——
+			// 留一行证据，下次不用猜。
+			eventLog.append({
+				kind: "ipc_error",
+				channel: "questionnaire:response",
+				message: `问卷应答找不到在途请求（重复应答或契约错配）：${answer.id}`,
+			});
+			return;
+		}
 		pendingQuestionnaires.delete(answer.id);
 		eventLog.append({
 			kind: "questionnaire_response",

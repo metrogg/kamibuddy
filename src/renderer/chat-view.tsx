@@ -1161,7 +1161,13 @@ export function ChatView({
 					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
 					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
 				*/}
-					<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
+					<ModelMenu
+						modelId={conversation.state.modelId}
+						thinkingLevel={conversation.state.thinkingLevel}
+						availableThinkingLevels={conversation.state.availableThinkingLevels}
+						onOpenSettings={onOpenSettings}
+						onError={onError}
+					/>
 					<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 						<IconMic size={16} />
 					</button>

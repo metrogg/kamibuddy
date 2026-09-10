@@ -187,6 +187,15 @@ export function App(): React.JSX.Element {
 		// 其余折叠进对应桶（ref，不重渲染），切回时现场完整（Task 3.1）。
 		const offEvent = window.kami.onSessionEvent(({ sessionId, event }: SessionEventEnvelope) => {
 			if (sessionId !== visibleSessionIdRef.current) {
+				// pristine → 认领的换档时刻：首次 prompt 建宿主后 daemon adoptHost
+				// 发出带真 id 的 session_state，而可见指针还是空串 —— 这正是当前
+				// 会话拿到 id 的瞬间（run 只可能在当前会话发起，不会是后台会话）。
+				// 按权威快照重指指针，否则后续带真 id 的事件全部落进后台桶，
+				// 可见视图冻结在空历史上。
+				if (event.type === "session_state" && visibleSessionIdRef.current === "") {
+					resyncSnapshot();
+					return;
+				}
 				// ── 后台会话：只维护桶与通知，绝不动可见视图 ──
 				if (event.type === "history_reset") {
 					viewCacheRef.current.delete(sessionId);
@@ -914,6 +923,8 @@ export function App(): React.JSX.Element {
 					scenes={conversation.availableScenes}
 					sceneId={conversation.state.sceneId}
 					modelId={conversation.state.modelId}
+					thinkingLevel={conversation.state.thinkingLevel}
+					availableThinkingLevels={conversation.state.availableThinkingLevels}
 					cwd={conversation.state.cwd}
 					interactions={conversation.availableModes}
 					interactionId={conversation.state.interactionId}

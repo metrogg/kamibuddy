@@ -9,7 +9,7 @@
 
 import { useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
-import type { ModeDescriptor } from "@shared/session-events.ts";
+import type { ModeDescriptor, ThinkingLevel } from "@shared/session-events.ts";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ModelMenu } from "./model-menu.tsx";
@@ -39,6 +39,13 @@ interface HomeViewProps {
 	readonly sceneId: string;
 	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
 	readonly modelId: string | undefined;
+	/**
+	 * 当前推理档位与当前模型的可用档位（session_state 直传，与 modelId 同一数据源）。
+	 * pristine 桶（首页未建宿主）两者都可能 undefined —— ModelMenu 此时给全量七档入口，
+	 * 选档经 daemon 记入 pristine state、建宿主时带入。
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
+	readonly availableThinkingLevels?: readonly ThinkingLevel[];
 	/** 当前工作空间目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态。 */
 	readonly cwd: string | undefined;
 	/** 交互轴选项（「+」菜单的模式子菜单数据源），与对话页头部 ModeSwitch 同源。 */
@@ -95,6 +102,8 @@ export function HomeView({
 	scenes,
 	sceneId,
 	modelId,
+	thinkingLevel,
+	availableThinkingLevels,
 	cwd,
 	interactions,
 	interactionId,
@@ -178,7 +187,13 @@ export function HomeView({
 								trailing={
 									<>
 										{/* 右组：模型 chip / 麦克风（WorkBuddy 首页底行「左 + 右 模型·麦克风·发送」）。 */}
-										<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
+										<ModelMenu
+											modelId={modelId}
+											thinkingLevel={thinkingLevel}
+											availableThinkingLevels={availableThinkingLevels}
+											onOpenSettings={onOpenSettings}
+											onError={onError}
+										/>
 										<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
 											<IconMic size={16} />
 										</button>

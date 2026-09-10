@@ -17,7 +17,7 @@ import type { AutomationTask, Schedule } from "./automation.ts";
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEventEnvelope, SessionSnapshot } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
 import type {
 	CustomProviderInput,
 	SettingsSnapshot,
@@ -77,6 +77,12 @@ export const INVOKE = {
 	setInteraction: "session:set-interaction",
 	/** 切换模型。 */
 	setModel: "session:set-model",
+	/**
+	 * 切换当前会话的推理强度档位。作用于当前会话桶的宿主；
+	 * pi 恒 clamp 到模型能力内并逐会话持久化（resume 自动还原），
+	 * 生效值随下一条 session_state 下发。
+	 */
+	setThinkingLevel: "session:set-thinking-level",
 	/**
 	 * 历史会话列表（全部工作目录，含临时任务）。
 	 * title / isTempTask 等展示字段由 daemon 组装好，UI 不再推导。
@@ -209,6 +215,17 @@ export const INVOKE = {
 	 * （对齐 WorkBuddy「修改后不影响已有数据」）。
 	 */
 	setDefaultWorkspacePath: "settings:set-default-workspace-path",
+	/**
+	 * 读全局默认推理强度（之后新建会话的初始档位）。
+	 * 未配置时 daemon 回 medium 兜底 —— pi 的内置默认就是 medium
+	 * （sdk.ts 的 DEFAULT_THINKING_LEVEL），两处默认值不漂移。
+	 */
+	getThinkingLevelDefault: "settings:get-thinking-level-default",
+	/**
+	 * 写全局默认推理强度。只影响之后新建的会话；
+	 * 既有会话以各自会话内选择为准，不被全局改动回溯（spec 方案 B）。
+	 */
+	setThinkingLevelDefault: "settings:set-thinking-level-default",
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 
@@ -500,6 +517,7 @@ export interface InvokeMap {
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
+	[INVOKE.setThinkingLevel]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.sessionList]: { args: []; result: SessionSummary[] };
 	[INVOKE.sessionResume]: { args: [path: string]; result: void };
 	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
@@ -539,6 +557,8 @@ export interface InvokeMap {
 		result: { effective: string; custom: string | undefined; isDefault: boolean };
 	};
 	[INVOKE.setDefaultWorkspacePath]: { args: [path: string]; result: { effective: string } };
+	[INVOKE.getThinkingLevelDefault]: { args: []; result: { level: ThinkingLevel } };
+	[INVOKE.setThinkingLevelDefault]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
 

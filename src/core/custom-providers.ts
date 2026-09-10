@@ -17,12 +17,13 @@
  *
  * §字段依据（pi 0.85.1 的 model-config.ts schema）：
  *   ProviderConfigSchema: name? baseUrl? apiKey? api? oauth? headers? compat? models? modelOverrides?
- *   ModelDefinitionSchema: id name? api? baseUrl? reasoning? input? cost? contextWindow? maxTokens? compat?
+ *   ModelDefinitionSchema: id name? api? baseUrl? reasoning? thinkingLevelMap? input? cost? contextWindow? maxTokens? compat?
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { CustomModelInput, CustomProviderInput } from "../shared/settings.ts";
+import type { ThinkingLevel } from "../shared/session-events.ts";
 
 /** models.json 里一个 provider 条目的形状（只含我们会写的字段）。 */
 interface ModelsJsonProvider {
@@ -40,6 +41,14 @@ interface ModelsJsonModel {
 	id: string;
 	name?: string;
 	reasoning?: boolean;
+	/**
+	 * 档位名 → 提供商侧取值 的映射（pi-ai 的形状：Partial<Record<ThinkingLevel, string|null>>，
+	 * null 表示该档显式关闭）。我们从不经表单写它 —— 设置表单没有对应字段，
+	 * 它只会来自用户手编 models.json（pi 文档教的用法）；白名单里显式声明它，
+	 * 是为了 upsert 重建 models 数组时能按 id 继承（见 toModelsJsonModel），
+	 * 否则自定义推理模型的档位会被 pi 裁成只剩 off。
+	 */
+	thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
 	input?: ("text" | "image")[];
 	contextWindow?: number;
 	maxTokens?: number;
@@ -107,11 +116,21 @@ export function readModelsJson(path: string): ModelsJson {
 	return { ...(parsed as object), providers: providers as Record<string, ModelsJsonProvider> };
 }
 
-function toModelsJsonModel(model: CustomModelInput): ModelsJsonModel {
+function toModelsJsonModel(model: CustomModelInput, existing: ModelsJsonModel | undefined): ModelsJsonModel {
 	return {
 		id: model.id,
 		name: model.name,
 		reasoning: model.reasoning,
+		/*
+		 * thinkingLevelMap 不在表单模型里（CustomModelInput 没有该字段），
+		 * 只能来自用户手编 models.json。upsert 是白名单重建，不继承就会把
+		 * 手编的映射抹掉 —— 用户刚声明完自定义推理模型的档位，回设置页
+		 * 改个 baseUrl 保存，map 就没了，档位恒被 pi 裁成 off 且无处可查。
+		 * 按模型 id 从旧条目原样继承（形状即 pi 的形状，不做转换）。
+		 */
+		...(existing?.thinkingLevelMap !== undefined
+			? { thinkingLevelMap: existing.thinkingLevelMap }
+			: {}),
 		input: model.vision ? ["text", "image"] : ["text"],
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
@@ -139,7 +158,9 @@ export function upsertCustomProvider(path: string, input: CustomProviderInput): 
 		name: input.name,
 		baseUrl: input.baseUrl,
 		api: input.api,
-		models: input.models.map(toModelsJsonModel),
+		models: input.models.map((model) =>
+			toModelsJsonModel(model, existing?.models?.find((m) => m.id === model.id)),
+		),
 	};
 
 	// compat 只对 OpenAI 兼容接口有意义；其他协议写了会被 schema 的 union 拒掉。

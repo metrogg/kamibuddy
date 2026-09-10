@@ -28,7 +28,7 @@ import type {
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEventEnvelope, SessionSnapshot } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
 import type {
 	CustomProviderInput,
 	SettingsSnapshot,
@@ -72,6 +72,11 @@ export interface KamiBridge {
 	/** 切换交互模式（ask / craft / plan / expert）。 */
 	readonly setInteraction: (interactionId: string) => Promise<void>;
 	readonly setModel: (modelId: string) => Promise<void>;
+	/**
+	 * 切换当前会话的推理强度。pi 恒 clamp 不抛错；
+	 * 生效档位与可用档位随下一条 session_state 下发（renderer 不本地乐观改）。
+	 */
+	readonly setThinkingLevel: (level: ThinkingLevel) => Promise<void>;
 
 	/* ── 会话管理（历史会话） ────────────────────────────────────── */
 
@@ -156,6 +161,13 @@ export interface KamiBridge {
 	}>;
 	/** 设置默认存储路径；传空串 = 还原内置默认。只影响之后新建的任务与工作空间。 */
 	readonly setDefaultWorkspacePath: (path: string) => Promise<{ effective: string }>;
+
+	/* ── 推理强度（全局默认） ────────────────────────────────────── */
+
+	/** 读全局默认推理强度（未配置时 daemon 回 medium，与 pi 内置默认一致）。 */
+	readonly getThinkingLevelDefault: () => Promise<{ level: ThinkingLevel }>;
+	/** 写全局默认推理强度。只影响之后新建的会话，既有会话不回溯。 */
+	readonly setThinkingLevelDefault: (level: ThinkingLevel) => Promise<void>;
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 

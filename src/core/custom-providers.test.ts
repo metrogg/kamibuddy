@@ -160,6 +160,36 @@ describe("写入", () => {
 		expect(providers["my-gateway"]?.["name"]).toBe("改名了");
 		expect(Object.keys(providers)).toHaveLength(1);
 	});
+
+	/*
+	 * thinkingLevelMap 只会来自用户手编 models.json（表单没有该字段）；
+	 * upsert 是白名单重建，不继承就会把声明抹掉，自定义推理模型的档位
+	 * 会被 pi 裁成只剩 off。这里钉住「编辑 provider 不丢 map」。
+	 */
+	it("手编的 thinkingLevelMap 在再次 upsert 后原样保留", () => {
+		upsertCustomProvider(path, input());
+		// 用户按 pi 文档手编：给模型声明档位映射。
+		const raw = readRaw();
+		const providers = raw["providers"] as Record<string, Record<string, unknown>>;
+		const models = providers["my-gateway"]?.["models"] as Record<string, unknown>[];
+		if (models[0] !== undefined) models[0]["thinkingLevelMap"] = { high: "high", max: "max" };
+		writeFileSync(path, JSON.stringify(raw));
+
+		// 回设置页改 baseUrl 再保存（同 id 编辑路径）。
+		upsertCustomProvider(path, { ...input(), baseUrl: "https://gateway2.example.com/v1" });
+
+		const after = readRaw()["providers"] as Record<string, Record<string, unknown>>;
+		const afterModels = after["my-gateway"]?.["models"] as Record<string, unknown>[];
+		expect(afterModels[0]?.["thinkingLevelMap"]).toEqual({ high: "high", max: "max" });
+		expect(after["my-gateway"]?.["baseUrl"]).toBe("https://gateway2.example.com/v1");
+	});
+
+	it("未声明 thinkingLevelMap 的模型行为不变（落盘不带该键）", () => {
+		upsertCustomProvider(path, input());
+		const providers = readRaw()["providers"] as Record<string, Record<string, unknown>>;
+		const models = providers["my-gateway"]?.["models"] as Record<string, unknown>[];
+		expect(models[0]).not.toHaveProperty("thinkingLevelMap");
+	});
 });
 
 describe("归属守卫", () => {

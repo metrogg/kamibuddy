@@ -14,12 +14,36 @@
  * 只要 SessionHost 还透传 pi 的 isStreaming，测试必红。
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { SessionHost, type SessionHostOptions } from "./session-host.ts";
+
+/*
+ * 「初始档位注入」要走 create() 的真实装配路径，断言对象是
+ * 「传给 createAgentSession 的 options」而不是 pi 的行为，
+ * 所以把 pi 模块的装配件全部换成空壳。
+ */
+const { createAgentSessionMock } = vi.hoisted(() => ({
+	createAgentSessionMock: vi.fn(),
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	createAgentSession: (options: unknown) => createAgentSessionMock(options),
+	DefaultResourceLoader: class {
+		async reload(): Promise<void> { }
+		getSkills(): { skills: unknown[] } {
+			return { skills: [] };
+		}
+	},
+	SettingsManager: { create: () => ({}) },
+	SessionManager: { create: () => ({}), open: () => ({}) },
+}));
 
 type SessionStateEvent = Extract<SessionEvent, { type: "session_state" }>;
 
@@ -30,6 +54,9 @@ function createFakeSession(): unknown {
 		model: undefined,
 		isStreaming: true,
 		getContextUsage: () => undefined,
+		// state getter 对档位两字段是现读的，假会话必须提供（pi 会话恒有这两个成员）。
+		thinkingLevel: "medium",
+		getAvailableThinkingLevels: () => ["off", "medium"],
 	};
 }
 
@@ -368,5 +395,141 @@ describe("工具卡片生成期上屏", () => {
 			(e): e is StreamStartedEvent => e.type === "tool_stream_started",
 		)?.card;
 		expect(card).toMatchObject({ toolName: "write", label: "生成中", generating: true });
+	});
+});
+
+/*
+ * 推理强度档位桥。钉住三件事：
+ *   1. state 的 thinkingLevel / availableThinkingLevels 是对 pi getter 的现读
+ *      （pi 的 thinking_level_changed 事件 payload 无 availableLevels，
+ *      且 setModel 会联动 re-clamp —— 任何缓存副本都会漂移）；
+ *   2. setThinkingLevel 转发 pi 并重推 state（pi 恒 clamp 不抛错，
+ *      生效值以现读为准）；
+ *   3. create() 只在 options.thinkingLevel 非 undefined 时传给 createAgentSession
+ *      —— pi 的优先级是该选项高于会话文件的 thinking_level_change 条目
+ *      （sdk.ts:226-238），resume 传了会覆盖逐会话还原值。
+ */
+describe("推理强度档位", () => {
+	/** 档位可变的假会话：level/available 是「pi 侧真相」，set 记录转发并模拟生效。 */
+	function thinkingSession(): {
+		session: unknown;
+		sets: string[];
+		piState: { level: string; available: string[] };
+	} {
+		const piState = { level: "medium", available: ["off", "low", "medium", "high"] };
+		const sets: string[] = [];
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			get thinkingLevel() {
+				return piState.level;
+			},
+			getAvailableThinkingLevels: () => piState.available,
+			setThinkingLevel: (level: string) => {
+				sets.push(level);
+				piState.level = level; // pi clamp 后生效；这里用透传值模拟
+			},
+		};
+		return { session, sets, piState };
+	}
+
+	it("state 携带当前档位与可用档位（getter 现读）", () => {
+		const { session, piState } = thinkingSession();
+		const host = createHost(session, () => { });
+
+		expect(host.state.thinkingLevel).toBe("medium");
+		expect(host.state.availableThinkingLevels).toEqual(piState.available);
+	});
+
+	it("setThinkingLevel 转发给 pi，重推的 state 携带新档位与可用档位", () => {
+		const events: SessionEvent[] = [];
+		const { session, sets } = thinkingSession();
+		const host = createHost(session, (e) => events.push(e));
+
+		host.setThinkingLevel("high");
+
+		expect(sets).toEqual(["high"]);
+		const pushed = events
+			.filter((e): e is SessionStateEvent => e.type === "session_state")
+			.at(-1);
+		expect(pushed?.state.thinkingLevel).toBe("high");
+		expect(pushed?.state.availableThinkingLevels).toEqual(["off", "low", "medium", "high"]);
+	});
+
+	it("thinking_level_changed 事件后 state 现读更新（不落成员字段）", () => {
+		const events: SessionEvent[] = [];
+		const { session, piState } = thinkingSession();
+		const host = createHost(session, (e) => events.push(e));
+
+		// pi 侧先行变化（cycleThinkingLevel / setModel re-clamp），事件只是通知。
+		piState.level = "low";
+		translate(host, { type: "thinking_level_changed", level: "low" } as unknown as AgentSessionEvent);
+
+		const pushed = events
+			.filter((e): e is SessionStateEvent => e.type === "session_state")
+			.at(-1);
+		expect(pushed?.state.thinkingLevel).toBe("low");
+	});
+});
+
+describe("初始档位注入（create → createAgentSession）", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "kami-host-"));
+		// create() 会取 getConfigDir() 拼 agentDir，隔离到临时目录（mock 不读写，但路径别指向真实家目录）。
+		process.env["KAMIBUDDY_CONFIG_DIR"] = dir;
+		createAgentSessionMock.mockReset();
+	});
+
+	afterEach(() => {
+		delete process.env["KAMIBUDDY_CONFIG_DIR"];
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	function baseOptions(): SessionHostOptions {
+		return {
+			catalog: {} as unknown as ModelCatalog,
+			modelKey: undefined,
+			cwd: join(dir, "ws"),
+			isTempTask: false,
+			sceneId: "work",
+			interactionId: "craft",
+			emit: () => { },
+			resources: { scenes: [], modes: [] },
+		};
+	}
+
+	function fakePiSession(): unknown {
+		return {
+			sessionId: "s1",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			thinkingLevel: "medium",
+			getAvailableThinkingLevels: () => ["off", "medium"],
+			setThinkingLevel: () => { },
+			subscribe: () => { },
+		};
+	}
+
+	it("options.thinkingLevel 非 undefined 时透传给 createAgentSession", async () => {
+		createAgentSessionMock.mockResolvedValue({ session: fakePiSession() });
+
+		await SessionHost.create({ ...baseOptions(), thinkingLevel: "high" });
+
+		expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+		expect(createAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({ thinkingLevel: "high" });
+	});
+
+	it("options.thinkingLevel 为 undefined 时不带该键（resume 由 pi 从会话文件还原）", async () => {
+		createAgentSessionMock.mockResolvedValue({ session: fakePiSession() });
+
+		await SessionHost.create(baseOptions());
+
+		expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+		expect(createAgentSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("thinkingLevel");
 	});
 });

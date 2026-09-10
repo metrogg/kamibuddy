@@ -28,6 +28,7 @@ import {
 import type {
 	SessionEvent,
 	SessionState,
+	ThinkingLevel,
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
@@ -304,6 +305,13 @@ export interface SessionHostOptions {
 	 * 子代理会话没有切换器，创建时一次注入即终身不变（同 cwd 的绑定语义）。
 	 */
 	readonly toolsOverride?: readonly string[];
+	/**
+	 * 初始推理强度（daemon 注入全局默认用）。**仅非 undefined 时**才传给
+	 * createAgentSession：pi 的优先级是 options.thinkingLevel 高于会话文件里的
+	 * thinking_level_change 条目（sdk.ts:226-238 —— 只有未传该选项时 pi 才从
+	 * 既有会话还原），所以 resume 路径绝不传它，否则逐会话还原值会被全局默认覆盖。
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
 }
 
 export class SessionHost {
@@ -433,6 +441,10 @@ export class SessionHost {
 			sessionManager: options.sessionManager ?? SessionManager.create(cwd, getSessionsDir()),
 			settingsManager,
 			resourceLoader,
+			// 仅新会话注入全局默认档；resume 不传（pi 从会话文件还原，见 options 注释）。
+			...(options.thinkingLevel === undefined
+				? {}
+				: { thinkingLevel: options.thinkingLevel }),
 			tools:
 				options.toolsOverride !== undefined
 					? [...options.toolsOverride]
@@ -580,6 +592,21 @@ export class SessionHost {
 		const model = this.options.catalog.resolveModel(modelKey);
 		if (model === undefined) throw new Error("该模型不可用");
 		await this.session.setModel(model);
+		// availableThinkingLevels 随模型联动变化（pi 在 setModel 内 re-clamp），
+		// state 两字段都从 getter 现读，这次 emitState 一并覆盖。
+		this.emitState();
+	}
+
+	/**
+	 * 切换当前会话的推理强度档位。
+	 *
+	 * pi 的 setThinkingLevel 恒 clamp 到当前模型可用档位、不抛错
+	 * （agent-session.ts:1684），实际变化时才落 thinking_level_change 条目 ——
+	 * 逐会话持久化与 resume 还原全由 pi 负责，我们不做第二份持久化。
+	 * 生效值以 emitState 里 getter 现读为准（clamp 后的值可能与入参不同）。
+	 */
+	setThinkingLevel(level: ThinkingLevel): void {
+		this.session.setThinkingLevel(level);
 		this.emitState();
 	}
 
@@ -631,6 +658,15 @@ export class SessionHost {
 			// 覆盖 run_finished 刚置的 false —— UI 永久卡在「正在思考…」。
 			// 用自家的 run 记账：agent_start 置、agent_end 清，时序完全由本文件控制。
 			isStreaming: this.currentRunId !== undefined,
+			/*
+			 * 档位两字段都从 getter 现读，不落成员字段：
+			 * pi 的 thinking_level_changed 事件 payload 只有 level（无 availableLevels），
+			 * 而 setModel 后可用档位会联动 re-clamp —— 任何一处缓存副本都会和
+			 * pi 的真实状态漂移。非推理模型 getAvailableThinkingLevels 返回 ["off"]，
+			 * UI 据此不显示档位行。
+			 */
+			thinkingLevel: this.session.thinkingLevel,
+			availableThinkingLevels: this.session.getAvailableThinkingLevels(),
 			// tokens 可能为 null（刚压缩完、还没下一次响应），此时不下发用量。
 			...(usage === undefined || usage.tokens === null
 				? {}
@@ -957,6 +993,12 @@ export class SessionHost {
 				return;
 			}
 
+			/*
+			 * 档位/会话信息变化：不重造任何成员字段，直接重推权威 state。
+			 * thinking_level_changed 的 payload 只有 level（无 availableLevels），
+			 * 而 state 两字段都从 getter 现读（见 state 注释），一次 emitState
+			 * 同时覆盖「切档位」与「切模型后档位联动 re-clamp」两种来源。
+			 */
 			case "thinking_level_changed":
 			case "session_info_changed":
 				this.emitState();

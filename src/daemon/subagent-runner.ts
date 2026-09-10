@@ -37,7 +37,7 @@ import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
-import type { SessionEvent } from "../shared/session-events.ts";
+import type { SessionEvent, ThinkingLevel } from "../shared/session-events.ts";
 
 /**
  * 单个子代理的执行上限：超过即 abort 记超时。
@@ -85,6 +85,11 @@ export interface SubagentRunnerDeps {
 	readonly getModelKey: () => string | undefined;
 	readonly resources: LoadedResources;
 	readonly getPermissions: () => PermissionSettings;
+	/**
+	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。子代理会话每次新建，
+	 * 逐会话还原不适用；不做每子代理独立档位（spec 方案 C 明确不做）。
+	 */
+	readonly getThinkingLevel: () => ThinkingLevel | undefined;
 	readonly protectedDirs: readonly string[];
 	readonly isTempCwd: (cwd: string) => boolean;
 	/** 自家目录判定（生效根 / 配置目录内直接信任，见 project-trust.ts）。 */
@@ -168,6 +173,9 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): SubagentRunner {
 				interactionId: "craft",
 				emit,
 				resources: deps.resources,
+				// 初始档 = 全局默认；未配置时为 undefined，SessionHost 只把非
+				// undefined 传给 pi（pi 走自己的 medium 默认链）。
+				thinkingLevel: deps.getThinkingLevel(),
 				toolsOverride: agent.tools,
 				extensions: buildSubagentExtensions(deps, agent, cwd, () => host),
 			});
