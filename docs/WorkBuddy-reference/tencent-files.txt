@@ -1,0 +1,724 @@
+﻿2192	 		node_modules/@tencent/aegis-electron-sdk-v2/CODE_CONDUCT.MD
+550	 		node_modules/@tencent/aegis-electron-sdk-v2/LICENSE
+57272	 		node_modules/@tencent/aegis-electron-sdk-v2/lib/aegis.min.js
+475	 		node_modules/@tencent/aegis-electron-sdk-v2/package.json
+2218	 		node_modules/@tencent/aegis-web-sdk-v2/CODE_CONDUCT.MD
+550	 		node_modules/@tencent/aegis-web-sdk-v2/LICENSE
+123936	 		node_modules/@tencent/aegis-web-sdk-v2/lib/aegis.f.min.js
+123742	 		node_modules/@tencent/aegis-web-sdk-v2/lib/aegis.global.min.js
+215448	 		node_modules/@tencent/aegis-web-sdk-v2/lib/aegis.ie.min.js
+123936	 		node_modules/@tencent/aegis-web-sdk-v2/lib/aegis.min.js
+463	 		node_modules/@tencent/aegis-web-sdk-v2/package.json
+472	 		node_modules/@tencent/beacon-main-core/package.json
+1668	 		node_modules/@tencent/beacon-main-core/src/common/constant.ts
+1671	 		node_modules/@tencent/beacon-main-core/src/common/errorReport.ts
+90	 		node_modules/@tencent/beacon-main-core/src/common/index.ts
+1987	 		node_modules/@tencent/beacon-main-core/src/common/model.ts
+5482	 		node_modules/@tencent/beacon-main-core/src/common/remoteStrategy.ts
+4221	 		node_modules/@tencent/beacon-main-core/src/core.ts
+173	 		node_modules/@tencent/beacon-main-core/src/index.ts
+130	 		node_modules/@tencent/beacon-main-core/src/interface/index.ts
+749	 		node_modules/@tencent/beacon-main-core/src/interface/network.ts
+93	 		node_modules/@tencent/beacon-main-core/src/interface/plugin.ts
+317	 		node_modules/@tencent/beacon-main-core/src/interface/send.ts
+1196	 		node_modules/@tencent/beacon-main-core/src/interface/storage.ts
+955	 		node_modules/@tencent/beacon-main-core/src/pipes/index.ts
+2065	 		node_modules/@tencent/beacon-main-core/src/util/event-emiter.ts
+1360	 		node_modules/@tencent/beacon-main-core/src/util/index.ts
+501	 		node_modules/@tencent/beacon-main-core/tsconfig.json
+58501	 		node_modules/@tencent/beacon-node-new-sdk/lib/beacon_node.min.js
+124	 		node_modules/@tencent/beacon-node-new-sdk/lib/beacon_node.min.js.LICENSE.txt
+213625	 		node_modules/@tencent/beacon-node-new-sdk/lib/beacon_node.min.js.map
+1359	 		node_modules/@tencent/beacon-node-new-sdk/package.json
+468	 		node_modules/@tencent/beacon-node-new-sdk/tsconfig.json
+472	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/package.json
+1558	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/common/constant.ts
+1671	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/common/errorReport.ts
+90	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/common/index.ts
+1919	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/common/model.ts
+5482	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/common/remoteStrategy.ts
+3992	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/core.ts
+173	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/index.ts
+130	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/interface/index.ts
+749	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/interface/network.ts
+93	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/interface/plugin.ts
+317	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/interface/send.ts
+1196	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/interface/storage.ts
+955	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/pipes/index.ts
+2065	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/util/event-emiter.ts
+1360	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/src/util/index.ts
+501	 		node_modules/@tencent/beacon-node-new-sdk/node_modules/@tencent/beacon-main-core/tsconfig.json
+30666	 		node_modules/@tencent/beacon-web-sdk/lib/beacon_web.es.min.js
+30762	 		node_modules/@tencent/beacon-web-sdk/lib/beacon_web.iife.min.js
+30903	 		node_modules/@tencent/beacon-web-sdk/lib/beacon_web.min.js
+2640	 		node_modules/@tencent/beacon-web-sdk/package.json
+104311	 		node_modules/@tencent/drive-sdk/dist/index.cjs
+234700	 		node_modules/@tencent/drive-sdk/dist/index.cjs.map
+82913	 		node_modules/@tencent/drive-sdk/dist/index.d.mts
+103832	 		node_modules/@tencent/drive-sdk/dist/index.js
+234697	 		node_modules/@tencent/drive-sdk/dist/index.js.map
+722	 		node_modules/@tencent/drive-sdk/package.json
+3605	 		node_modules/@tencent/ovb-indexed-db/lib/index.es.js
+3888	 		node_modules/@tencent/ovb-indexed-db/lib/index.umd.js
+2413	 		node_modules/@tencent/ovb-indexed-db/package.json
+5664	 		node_modules/@tencent/ovb-request/lib/index.es.js
+5972	 		node_modules/@tencent/ovb-request/lib/index.umd.js
+2477	 		node_modules/@tencent/ovb-request/package.json
+13244	 		node_modules/@tencent/ovb-utils/lib/index.es.js
+13499	 		node_modules/@tencent/ovb-utils/lib/index.umd.js
+2364	 		node_modules/@tencent/ovb-utils/package.json
+419	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.node.recipe
+3352	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/CL.command.1.tlog
+16202	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/CL.read.1.tlog
+686	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/CL.write.1.tlog
+340	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/Cl.items.tlog
+2194	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/link.command.1.tlog
+4922	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/link.read.1.tlog
+558	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/link.secondary.1.tlog
+1116	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/link.write.1.tlog
+289	U		node_modules/@tencent/qimei-node/build/Release/obj/qimei/qimei.tlog/qimei.lastbuildstate
+1243136	U		node_modules/@tencent/qimei-node/build/Release/qimei.dll
+17008	U		node_modules/@tencent/qimei-node/build/Release/qimei.iobj
+3120	U		node_modules/@tencent/qimei-node/build/Release/qimei.ipdb
+105984	U		node_modules/@tencent/qimei-node/build/Release/qimei.node
+12414	U		node_modules/@tencent/qimei-node/build/qimei.vcxproj
+3608	U		node_modules/@tencent/qimei-node/build/qimei.vcxproj.filters
+404	U		node_modules/@tencent/qimei-node/package.json
+1105	U		node_modules/@tencent/qimei-node/scripts/copy-deps.js
+131	U		node_modules/@tencent/qimei-node/src/index.js
+683	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/Info.plist
+970	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QGKInteface.h
+713	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QimeiAuditService.h
+167	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QimeiCommon.h
+482	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QimeiContent.h
+3988	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QimeiService.h
+620	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/QimeiServiceConfig.h
+4805	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/ckey.h
+11456	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/ckey_lib.h
+1133	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Headers/uskey.h
+5221240	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/QimeiSDKMac
+1359	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/Resources/Info.plist
+152	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/_CodeSignature/CodeDirectory
+12	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/_CodeSignature/CodeRequirements
+200	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/_CodeSignature/CodeRequirements-1
+4448	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/_CodeSignature/CodeResources
+0	U		node_modules/@tencent/qimei-node/src/mac/QimeiSDKMac.xcframework/macos-arm64_x86_64/QimeiSDKMac.framework/_CodeSignature/CodeSignature
+252	U		node_modules/@tencent/qimei-node/src/mac/README.md
+3386	U		node_modules/@tencent/qimei-node/src/mac/index.js
+5132	U		node_modules/@tencent/qimei-node/src/mac/wrapper.mm
+96	U		node_modules/@tencent/qimei-node/src/win/README.md
+1055	U		node_modules/@tencent/qimei-node/src/win/client.h
+1441	U		node_modules/@tencent/qimei-node/src/win/index-backup.js
+8718	U		node_modules/@tencent/qimei-node/src/win/index.js
+1243136	U		node_modules/@tencent/qimei-node/src/win/qimei.dll
+8406	U		node_modules/@tencent/qimei-node/src/win/qimeisdk.cpp
+3089	U		node_modules/@tencent/qimei-node/src/win/qimeisdk.h
+1536	U		node_modules/@tencent/qimei-node/src/win/uskeysdk.cpp
+302	U		node_modules/@tencent/qimei-node/src/win/uskeysdk.h
+2604	U		node_modules/@tencent/qimei-node/src/win/wrapper.cpp
+9	U		node_modules/@tencent/tencent-docs-ai-engine/bin/win32-x64/.editor-sdk-version
+186234928	U		node_modules/@tencent/tencent-docs-ai-engine/bin/win32-x64/editor_sdk.exe
+8610368	U		node_modules/@tencent/tencent-docs-ai-engine/bin/win32-x64/icudt72l.dat
+202	U		node_modules/@tencent/tencent-docs-ai-engine/editor-sdk-version.json
+788	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/document-types.d.ts.map
+3772	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/document-types.js
+2995	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/document-types.js.map
+872	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/engine-port-file.d.ts.map
+6674	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/engine-port-file.js
+2849	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/engine-port-file.js.map
+417	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/extensions.d.ts.map
+3109	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/extensions.js
+576	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/extensions.js.map
+1259	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/index.d.ts.map
+8420	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/index.js
+1174	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/index.js.map
+337	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/mcp-constants.d.ts.map
+1641	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/mcp-constants.js
+356	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/mcp-constants.js.map
+830	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/preview-runtime.d.ts.map
+2563	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/preview-runtime.js
+1942	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/preview-runtime.js.map
+1422	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/routing-prompt.d.ts.map
+18353	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/routing-prompt.js
+6990	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/routing-prompt.js.map
+480	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/scenario-detector.d.ts.map
+5195	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/scenario-detector.js
+1601	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/scenario-detector.js.map
+538	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/selection-prompt.d.ts.map
+2582	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/selection-prompt.js
+1157	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/selection-prompt.js.map
+5065	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/tencent-docs-service.d.ts.map
+52689	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/tencent-docs-service.js
+31362	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/tencent-docs-service.js.map
+308	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/types.d.ts.map
+173	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/types.js
+123	U		node_modules/@tencent/tencent-docs-ai-engine/lib/common/types.js.map
+148	U		node_modules/@tencent/tencent-docs-ai-engine/lib/mcp/stdio-mcp-bridge.d.ts.map
+646884	U		node_modules/@tencent/tencent-docs-ai-engine/lib/mcp/stdio-mcp-bridge.js
+995153	U		node_modules/@tencent/tencent-docs-ai-engine/lib/mcp/stdio-mcp-bridge.js.map
+1441	U		node_modules/@tencent/tencent-docs-ai-engine/package.json
+442	U		node_modules/@tencent/tencent-docs-ai-engine/scripts/allowed-hosts.cjs
+13636	U		node_modules/@tencent/tencent-docs-ai-engine/scripts/download-editor-sdk.js
+1725	U		node_modules/@tencent/tencent-docs-ai-engine/scripts/editor-sdk-platforms.js
+3089	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/document-types.spec.ts
+3878	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/document-types.ts
+4870	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/editor-sdk-platforms.spec.ts
+4528	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/engine-port-file.ts
+2468	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/extensions.spec.ts
+2975	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/extensions.ts
+2808	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/index.ts
+1349	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/mcp-constants.ts
+2709	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/preview-runtime.ts
+30640	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/routing-prompt.spec.ts
+23413	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/routing-prompt.ts
+5718	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/scenario-detector.spec.ts
+3845	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/scenario-detector.ts
+3390	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/selection-prompt.spec.ts
+3558	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/selection-prompt.ts
+40302	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/tencent-docs-service.spec.ts
+57353	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/tencent-docs-service.ts
+566	U		node_modules/@tencent/tencent-docs-ai-engine/src/common/types.ts
+5788	U		node_modules/@tencent/tencent-docs-ai-engine/src/mcp/stdio-mcp-bridge.ts
+321	U		node_modules/@tencent/tencent-docs-ai-engine/supported-extensions.cjs
+1071	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/LICENSE
+2869	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth-extensions.d.ts.map
+10650	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth-extensions.js
+6138	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth-extensions.js.map
+6475	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth.d.ts.map
+41502	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth.js
+23213	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/auth.js.map
+4388	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/index.d.ts.map
+29978	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/index.js
+18742	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/index.js.map
+1281	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/middleware.d.ts.map
+10264	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/middleware.js
+4895	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/middleware.js.map
+1592	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/sse.d.ts.map
+8750	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/sse.js
+6609	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/sse.js.map
+1307	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/stdio.d.ts.map
+6879	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/stdio.js
+4920	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/stdio.js.map
+2561	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.d.ts.map
+22778	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js
+14099	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/streamableHttp.js.map
+610	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/websocket.d.ts.map
+1976	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/websocket.js
+1753	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/websocket.js.map
+161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/elicitationUrlExample.d.ts.map
+26524	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/elicitationUrlExample.js
+18862	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/elicitationUrlExample.js.map
+165	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/multipleClientsParallel.d.ts.map
+5103	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/multipleClientsParallel.js
+4018	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/multipleClientsParallel.js.map
+165	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/parallelToolCallsClient.d.ts.map
+6733	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/parallelToolCallsClient.js
+4788	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/parallelToolCallsClient.js.map
+191	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleClientCredentials.d.ts.map
+2856	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleClientCredentials.js
+1857	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleClientCredentials.js.map
+153	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClient.d.ts.map
+15035	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClient.js
+11402	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClient.js.map
+1015	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClientProvider.d.ts.map
+1568	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClientProvider.js
+1167	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleOAuthClientProvider.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleStreamableHttp.d.ts.map
+35279	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleStreamableHttp.js
+27128	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleStreamableHttp.js.map
+188	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleTaskInteractiveClient.d.ts.map
+6377	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleTaskInteractiveClient.js
+5689	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/simpleTaskInteractiveClient.js.map
+151	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/ssePollingClient.d.ts.map
+3689	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/ssePollingClient.js
+2487	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/ssePollingClient.js.map
+189	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/streamableHttpWithSseFallbackClient.d.ts.map
+6420	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/streamableHttpWithSseFallbackClient.js
+4454	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/client/streamableHttpWithSseFallbackClient.js.map
+1422	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/demoInMemoryOAuthProvider.d.ts.map
+8014	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/demoInMemoryOAuthProvider.js
+6031	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/demoInMemoryOAuthProvider.js.map
+163	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationFormExample.d.ts.map
+18545	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationFormExample.js
+11194	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationFormExample.js.map
+161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationUrlExample.d.ts.map
+28687	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationUrlExample.js
+16206	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/elicitationUrlExample.js.map
+192	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/honoWebStandardStreamableHttp.d.ts.map
+3528	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/honoWebStandardStreamableHttp.js
+1949	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/honoWebStandardStreamableHttp.js.map
+171	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/jsonResponseStreamableHttp.d.ts.map
+6557	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/jsonResponseStreamableHttp.js
+4138	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/jsonResponseStreamableHttp.js.map
+173	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/mcpServerOutputSchema.d.ts.map
+3494	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/mcpServerOutputSchema.js
+2392	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/mcpServerOutputSchema.js.map
+166	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/progressExample.d.ts.map
+1784	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/progressExample.js
+1632	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/progressExample.js.map
+149	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleSseServer.d.ts.map
+6503	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleSseServer.js
+4332	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleSseServer.js.map
+177	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStatelessStreamableHttp.d.ts.map
+5811	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStatelessStreamableHttp.js
+4129	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStatelessStreamableHttp.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStreamableHttp.d.ts.map
+30701	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStreamableHttp.js
+19715	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleStreamableHttp.js.map
+178	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleTaskInteractive.d.ts.map
+23571	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleTaskInteractive.js
+18461	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/simpleTaskInteractive.js.map
+191	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/sseAndStreamableHttpCompatibleServer.d.ts.map
+10312	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/sseAndStreamableHttpCompatibleServer.js
+5964	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/sseAndStreamableHttpCompatibleServer.js.map
+153	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/ssePollingExample.d.ts.map
+4741	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/ssePollingExample.js
+3175	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/ssePollingExample.js.map
+187	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/standaloneSseWithGetStreamableHttp.d.ts.map
+4953	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/standaloneSseWithGetStreamableHttp.js
+3874	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/standaloneSseWithGetStreamableHttp.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/toolWithSampleServer.d.ts.map
+2683	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/toolWithSampleServer.js
+1300	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/server/toolWithSampleServer.js.map
+657	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/shared/inMemoryEventStore.d.ts.map
+2414	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/shared/inMemoryEventStore.js
+1784	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/examples/shared/inMemoryEventStore.js.map
+163	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/index.d.ts.map
+1142	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/index.js
+167	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/index.js.map
+1718	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/client.d.ts.map
+7876	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/client.js
+2867	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/client.js.map
+645	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/helpers.d.ts.map
+2610	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/helpers.js
+1127	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/helpers.js.map
+452	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/index.d.ts.map
+1804	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/index.js
+371	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/index.js.map
+4151	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/interfaces.d.ts.map
+671	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/interfaces.js
+290	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/interfaces.js.map
+1289	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/mcp-server.d.ts.map
+1421	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/mcp-server.js
+774	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/mcp-server.js.map
+1774	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/server.d.ts.map
+10254	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/server.js
+4145	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/server.js.map
+1736	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/stores/in-memory.d.ts.map
+9691	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/stores/in-memory.js
+6704	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/stores/in-memory.js.map
+560	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/types.d.ts.map
+3202	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/types.js
+530	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/experimental/tasks/types.js.map
+882	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/inMemory.d.ts.map
+1870	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/inMemory.js
+1313	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/inMemory.js.map
+21	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/package.json
+453	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/clients.d.ts.map
+112	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/clients.js
+127	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/clients.js.map
+1850	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/errors.d.ts.map
+7999	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/errors.js
+3036	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/errors.js.map
+604	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/authorize.d.ts.map
+9048	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/authorize.js
+5699	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/authorize.js.map
+304	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/metadata.d.ts.map
+940	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/metadata.js
+613	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/metadata.js.map
+638	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/register.d.ts.map
+4062	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/register.js
+2774	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/register.js.map
+504	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/revoke.d.ts.map
+3063	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/revoke.js
+2175	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/revoke.js.map
+501	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/token.d.ts.map
+6792	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/token.js
+4242	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/handlers/token.js.map
+269	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/allowedMethods.d.ts.map
+891	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/allowedMethods.js
+618	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/allowedMethods.js.map
+645	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/bearerAuth.d.ts.map
+3617	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/bearerAuth.js
+2664	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/bearerAuth.js.map
+519	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/clientAuth.d.ts.map
+3088	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/clientAuth.js
+1780	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/middleware/clientAuth.js.map
+1477	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/provider.d.ts.map
+113	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/provider.js
+129	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/provider.js.map
+1926	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/providers/proxyProvider.d.ts.map
+6467	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/providers/proxyProvider.js
+5198	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/providers/proxyProvider.js.map
+1687	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/router.d.ts.map
+7008	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/router.js
+4445	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/router.js.map
+428	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/types.d.ts.map
+110	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/types.js
+123	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/auth/types.js.map
+1356	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/completable.d.ts.map
+1652	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/completable.js
+921	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/completable.js.map
+385	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/express.d.ts.map
+2538	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/express.js
+915	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/express.js.map
+3312	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/index.d.ts.map
+21327	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/index.js
+13297	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/index.js.map
+9024	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.d.ts.map
+41771	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js
+30097	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.js.map
+345	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/middleware/hostHeaderValidation.d.ts.map
+2610	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/middleware/hostHeaderValidation.js
+1355	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/middleware/hostHeaderValidation.js.map
+1393	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/sse.d.ts.map
+6922	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/sse.js
+4766	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/sse.js.map
+799	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.d.ts.map
+2977	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js
+2057	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/stdio.js.map
+1773	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/streamableHttp.d.ts.map
+6779	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/streamableHttp.js
+2318	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/streamableHttp.js.map
+3007	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/webStandardStreamableHttp.d.ts.map
+34799	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/webStandardStreamableHttp.js
+21086	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/webStandardStreamableHttp.js.map
+2712	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-compat.d.ts.map
+8442	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-compat.js
+5555	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-compat.js.map
+633	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-json-schema-compat.d.ts.map
+3145	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-json-schema-compat.js
+1578	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/server/zod-json-schema-compat.js.map
+390	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth-utils.d.ts.map
+2448	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth-utils.js
+1401	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth-utils.js.map
+1767	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.d.ts.map
+9967	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js
+7741	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/auth.js.map
+341	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/metadataUtils.d.ts.map
+954	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/metadataUtils.js
+511	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/metadataUtils.js.map
+6657	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/protocol.d.ts.map
+52787	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/protocol.js
+33750	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/protocol.js.map
+1169	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/responseMessage.d.ts.map
+588	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/responseMessage.js
+677	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/responseMessage.js.map
+425	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/stdio.d.ts.map
+1142	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/stdio.js
+1104	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/stdio.js.map
+446	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/toolNameValidation.d.ts.map
+4003	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/toolNameValidation.js
+2298	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/toolNameValidation.js.map
+1298	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/transport.d.ts.map
+1637	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/transport.js
+987	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/transport.js.map
+716	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/uriTemplate.d.ts.map
+8859	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/uriTemplate.js
+8809	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/shared/uriTemplate.js.map
+23243	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/spec.types.d.ts.map
+1307	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/spec.types.js
+494	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/spec.types.js.map
+29917	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.d.ts.map
+82159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js
+37973	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/types.js.map
+473	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/ajv-provider.d.ts.map
+3189	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/ajv-provider.js
+1268	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/ajv-provider.js.map
+609	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/cfworker-provider.d.ts.map
+2371	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/cfworker-provider.js
+1003	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/cfworker-provider.js.map
+232	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/index.d.ts.map
+1047	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/index.js
+155	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/index.js.map
+705	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/types.d.ts.map
+110	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/types.js
+119	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/cjs/validation/types.js.map
+2869	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth-extensions.d.ts.map
+9171	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth-extensions.js
+6088	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth-extensions.js.map
+6475	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.d.ts.map
+40372	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js
+23414	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js.map
+4388	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.d.ts.map
+29673	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js
+19154	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js.map
+1281	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/middleware.d.ts.map
+9918	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/middleware.js
+4881	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/middleware.js.map
+1592	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.d.ts.map
+8434	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js
+6714	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/sse.js.map
+1307	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.d.ts.map
+6338	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
+4996	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js.map
+2561	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.d.ts.map
+22393	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js
+14222	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js.map
+610	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/websocket.d.ts.map
+1800	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/websocket.js
+1773	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/client/websocket.js.map
+161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/elicitationUrlExample.d.ts.map
+26379	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/elicitationUrlExample.js
+19156	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/elicitationUrlExample.js.map
+165	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/multipleClientsParallel.d.ts.map
+5020	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/multipleClientsParallel.js
+4123	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/multipleClientsParallel.js.map
+165	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/parallelToolCallsClient.d.ts.map
+6662	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/parallelToolCallsClient.js
+4906	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/parallelToolCallsClient.js.map
+191	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleClientCredentials.d.ts.map
+2737	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleClientCredentials.js
+1960	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleClientCredentials.js.map
+153	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClient.d.ts.map
+14823	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClient.js
+11642	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClient.js.map
+1015	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClientProvider.d.ts.map
+1385	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClientProvider.js
+1156	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleOAuthClientProvider.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleStreamableHttp.d.ts.map
+35160	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleStreamableHttp.js
+27448	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleStreamableHttp.js.map
+188	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleTaskInteractiveClient.d.ts.map
+6264	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleTaskInteractiveClient.js
+5847	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/simpleTaskInteractiveClient.js.map
+151	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/ssePollingClient.d.ts.map
+3606	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/ssePollingClient.js
+2590	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/ssePollingClient.js.map
+189	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/streamableHttpWithSseFallbackClient.d.ts.map
+6338	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/streamableHttpWithSseFallbackClient.js
+4603	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/streamableHttpWithSseFallbackClient.js.map
+1422	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/demoInMemoryOAuthProvider.d.ts.map
+7419	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/demoInMemoryOAuthProvider.js
+6114	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/demoInMemoryOAuthProvider.js.map
+163	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationFormExample.d.ts.map
+18405	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationFormExample.js
+11329	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationFormExample.js.map
+161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationUrlExample.d.ts.map
+28190	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationUrlExample.js
+16548	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/elicitationUrlExample.js.map
+192	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/honoWebStandardStreamableHttp.d.ts.map
+2326	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/honoWebStandardStreamableHttp.js
+2083	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/honoWebStandardStreamableHttp.js.map
+171	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/jsonResponseStreamableHttp.d.ts.map
+5376	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/jsonResponseStreamableHttp.js
+4274	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/jsonResponseStreamableHttp.js.map
+173	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/mcpServerOutputSchema.d.ts.map
+2365	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/mcpServerOutputSchema.js
+2451	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/mcpServerOutputSchema.js.map
+166	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/progressExample.d.ts.map
+1685	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/progressExample.js
+1719	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/progressExample.js.map
+149	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleSseServer.d.ts.map
+5364	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleSseServer.js
+4418	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleSseServer.js.map
+177	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStatelessStreamableHttp.d.ts.map
+4661	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStatelessStreamableHttp.js
+4215	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStatelessStreamableHttp.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStreamableHttp.d.ts.map
+29421	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStreamableHttp.js
+20052	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleStreamableHttp.js.map
+178	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleTaskInteractive.d.ts.map
+23423	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleTaskInteractive.js
+18711	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/simpleTaskInteractive.js.map
+191	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/sseAndStreamableHttpCompatibleServer.d.ts.map
+9072	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/sseAndStreamableHttpCompatibleServer.js
+6164	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/sseAndStreamableHttpCompatibleServer.js.map
+153	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/ssePollingExample.d.ts.map
+4401	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/ssePollingExample.js
+3325	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/ssePollingExample.js.map
+187	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/standaloneSseWithGetStreamableHttp.d.ts.map
+4794	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/standaloneSseWithGetStreamableHttp.js
+4004	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/standaloneSseWithGetStreamableHttp.js.map
+159	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/toolWithSampleServer.d.ts.map
+1554	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/toolWithSampleServer.js
+1359	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/server/toolWithSampleServer.js.map
+657	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/shared/inMemoryEventStore.d.ts.map
+2258	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/shared/inMemoryEventStore.js
+1773	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/shared/inMemoryEventStore.js.map
+163	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/index.d.ts.map
+367	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/index.js
+161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/index.js.map
+1718	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.d.ts.map
+7647	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js
+2902	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js.map
+645	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.d.ts.map
+2397	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js
+1107	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js.map
+452	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/index.d.ts.map
+610	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/index.js
+413	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/index.js.map
+4151	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.d.ts.map
+568	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
+281	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js.map
+1289	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.d.ts.map
+1241	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js
+763	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/mcp-server.js.map
+1774	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.d.ts.map
+10095	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
+4178	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js.map
+1736	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/stores/in-memory.d.ts.map
+9358	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/stores/in-memory.js
+6720	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/stores/in-memory.js.map
+560	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/types.d.ts.map
+769	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/types.js
+381	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/types.js.map
+882	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.d.ts.map
+1717	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js
+1302	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js.map
+19	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/package.json
+453	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/clients.d.ts.map
+46	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/clients.js
+127	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/clients.js.map
+1850	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.d.ts.map
+6442	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js
+2927	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js.map
+604	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/authorize.d.ts.map
+7532	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/authorize.js
+5809	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/authorize.js.map
+304	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/metadata.d.ts.map
+584	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/metadata.js
+655	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/metadata.js.map
+638	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/register.d.ts.map
+3585	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/register.js
+2946	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/register.js.map
+504	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/revoke.d.ts.map
+2631	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/revoke.js
+2356	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/revoke.js.map
+501	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/token.d.ts.map
+5290	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/token.js
+4443	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/handlers/token.js.map
+269	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/allowedMethods.d.ts.map
+777	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/allowedMethods.js
+638	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/allowedMethods.js.map
+645	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/bearerAuth.d.ts.map
+3434	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/bearerAuth.js
+2711	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/bearerAuth.js.map
+519	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/clientAuth.d.ts.map
+1884	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/clientAuth.js
+1827	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/middleware/clientAuth.js.map
+1477	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/provider.d.ts.map
+47	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/provider.js
+129	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/provider.js.map
+1926	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/providers/proxyProvider.d.ts.map
+6255	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/providers/proxyProvider.js
+5257	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/providers/proxyProvider.js.map
+1687	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/router.d.ts.map
+6408	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/router.js
+4536	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/router.js.map
+428	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/types.d.ts.map
+44	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/types.js
+123	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/types.js.map
+1356	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.d.ts.map
+1346	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
+907	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js.map
+385	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/express.d.ts.map
+2186	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/express.js
+946	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/express.js.map
+3312	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.d.ts.map
+21161	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
+13647	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js.map
+9024	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.d.ts.map
+40694	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
+30370	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js.map
+345	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/middleware/hostHeaderValidation.d.ts.map
+2435	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/middleware/hostHeaderValidation.js
+1336	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/middleware/hostHeaderValidation.js.map
+1393	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/sse.d.ts.map
+6488	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/sse.js
+4890	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/sse.js.map
+799	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.d.ts.map
+2607	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
+2095	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js.map
+1773	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.d.ts.map
+6534	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js
+2362	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js.map
+3007	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.d.ts.map
+34492	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js
+21132	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/webStandardStreamableHttp.js.map
+2712	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.d.ts.map
+6942	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
+5506	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js.map
+633	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.d.ts.map
+1833	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js
+1614	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-json-schema-compat.js.map
+390	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.d.ts.map
+2271	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js
+1383	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js.map
+1767	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.d.ts.map
+8232	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js
+7851	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js.map
+341	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/metadataUtils.d.ts.map
+843	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/metadataUtils.js
+501	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/metadataUtils.js.map
+6657	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.d.ts.map
+51762	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
+33941	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js.map
+1169	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/responseMessage.d.ts.map
+455	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/responseMessage.js
+672	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/responseMessage.js.map
+425	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.d.ts.map
+928	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+1108	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js.map
+446	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.d.ts.map
+3790	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
+2273	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js.map
+1298	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.d.ts.map
+1478	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
+970	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js.map
+716	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.d.ts.map
+8724	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
+8798	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js.map
+23243	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/spec.types.d.ts.map
+1042	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/spec.types.js
+574	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/spec.types.js.map
+29917	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/types.d.ts.map
+73271	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js
+39367	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js.map
+473	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.d.ts.map
+2814	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js
+1289	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js.map
+609	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/cfworker-provider.d.ts.map
+2169	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/cfworker-provider.js
+1021	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/cfworker-provider.js.map
+232	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/index.d.ts.map
+981	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/index.js
+154	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/index.js.map
+705	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/types.d.ts.map
+44	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/types.js
+119	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/dist/esm/validation/types.js.map
+3814	U		node_modules/@tencent/tencent-docs-ai-engine/node_modules/@modelcontextprotocol/sdk/package.json
+564	 		node_modules/@tencent/universal-report/lib/base-plugin.js
+74328	 		node_modules/@tencent/universal-report/lib/electron-main-plugin.js
+5037	 		node_modules/@tencent/universal-report/lib/electron-render-plugin.js
+11851	 		node_modules/@tencent/universal-report/lib/external-h5-visual-plugin.js
+122734	 		node_modules/@tencent/universal-report/lib/index.esm.js
+122975	 		node_modules/@tencent/universal-report/lib/index.js
+9429	 		node_modules/@tencent/universal-report/lib/pixui-plugin.js
+4825	 		node_modules/@tencent/universal-report/package.json
+1183	 		node_modules/@tencent/universal-report/node_modules/ws/LICENSE
+176	 		node_modules/@tencent/universal-report/node_modules/ws/browser.js
+796	 		node_modules/@tencent/universal-report/node_modules/ws/index.js
+3056	 		node_modules/@tencent/universal-report/node_modules/ws/lib/buffer-util.js
+node : shown=716 total=20226
+At C:\Users\wangzhendong\AppData\Local\Temp\trae-agent-toolhost\jobs\job-afa80e7887454b738d48d8c5cbf23aa5\command.ps1:1
+5 char:7485
++ ... pgrep\bin'; node "C:\Program Files\WorkBuddy\_analysis\wb-list.js" "C ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (shown=716 total=20226:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+503	 		node_modules/@tencent/universal-report/node_modules/ws/lib/constants.js
+7321	 		node_modules/@tencent/universal-report/node_modules/ws/lib/event-target.js
+6183	 		node_modules/@tencent/universal-report/node_modules/ws/lib/extension.js
+1034	 		node_modules/@tencent/universal-report/node_modules/ws/lib/limiter.js
+14532	 		node_modules/@tencent/universal-report/node_modules/ws/lib/permessage-deflate.js
+17802	 		node_modules/@tencent/universal-report/node_modules/ws/lib/receiver.js
+16886	 		node_modules/@tencent/universal-report/node_modules/ws/lib/sender.js
+4204	 		node_modules/@tencent/universal-report/node_modules/ws/lib/stream.js
+1498	 		node_modules/@tencent/universal-report/node_modules/ws/lib/subprotocol.js
+3903	 		node_modules/@tencent/universal-report/node_modules/ws/lib/validation.js
+17026	 		node_modules/@tencent/universal-report/node_modules/ws/lib/websocket-server.js
+37371	 		node_modules/@tencent/universal-report/node_modules/ws/lib/websocket.js
+1309	 		node_modules/@tencent/universal-report/node_modules/ws/package.json
+554	 		node_modules/@tencent/universal-report/node_modules/ws/wrapper.mjs

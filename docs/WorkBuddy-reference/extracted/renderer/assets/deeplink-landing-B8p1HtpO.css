@@ -1,0 +1,222 @@
+/**
+ * DeeplinkLanding 样式 —— 按 Ardot「文档分享到 WorkBuddy」中转页还原。
+ *
+ * 复杂视觉（整页背景、右下机器人、Header、卡片头图）使用设计稿导出的 webp 资源；
+ * Modal 背景按 15:585 的渐变与光斑节点用 CSS 还原，避免导出透明节点带入异常背景。
+ * 文件图标渐变色来自设计稿视觉资产，非语义色，暂不抽成主题 token。
+ * TODO: 此文件超过样式软阈值(200)，后续可把 card / file-row / background 拆到同名子样式文件。
+ */
+.deeplink-landing {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0 32px 66px;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--wb-text-strong);
+  background: var(--wb-bg-primary);
+}
+.deeplink-landing__bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: url('./page-bg-Dc0SKSwj.webp') center / cover no-repeat;
+  pointer-events: none;
+}
+.deeplink-landing__robot {
+  position: absolute;
+  right: -206px;
+  bottom: -228px;
+  z-index: 0;
+  width: 720px;
+  height: 720px;
+  background: url('./robot-C5Z5pzro.webp') center / contain no-repeat;
+  pointer-events: none;
+}
+.deeplink-landing__brand {
+  position: relative;
+  z-index: 1;
+  align-self: stretch;
+  width: calc(100% + 64px);
+  height: 80px;
+  margin: 0 -32px;
+  background: url('./header-BW5aRrnv.webp') left top / 1440px 80px no-repeat;
+}
+.deeplink-landing__card {
+  position: relative;
+  z-index: 1;
+  width: 400px;
+  margin-top: clamp(72px, calc((100vh - 495px) / 2), 196px);
+  overflow: hidden;
+  background: radial-gradient(155px 93px at 402px 4px, rgba(205, 246, 218, 0.56) 0%, rgba(205, 246, 218, 0) 76%), radial-gradient(188px 93px at 142px -8px, rgba(233, 228, 255, 0.54) 0%, rgba(233, 228, 255, 0) 76%), linear-gradient(118deg, #f5f8fb 0%, #fff 76%);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+.deeplink-landing__card::before {
+  content: "";
+  position: absolute;
+  top: -178px;
+  left: -112px;
+  z-index: 0;
+  width: 353px;
+  height: 159px;
+  background: rgba(180, 213, 255, 0.56);
+  border-radius: 999px;
+  filter: blur(120px);
+  pointer-events: none;
+}
+.deeplink-landing__card > * {
+  position: relative;
+  z-index: 1;
+}
+.deeplink-landing__hero {
+  height: 148px;
+  background: url('./card-hero-GhjWaUYt.webp') center / cover no-repeat;
+}
+.deeplink-landing__content {
+  padding: 0 24px;
+}
+.deeplink-landing__title {
+  margin: 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--wb-text-strong);
+}
+.deeplink-landing__file-panel {
+  display: flex;
+  align-items: center;
+  min-height: 57px;
+  padding: 11px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+}
+.deeplink-landing__file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 32px;
+}
+.deeplink-landing__file-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.deeplink-landing__file-body {
+  min-width: 0;
+}
+.deeplink-landing__file-name,
+.deeplink-landing__file-content {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--wb-text-strong);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.deeplink-landing__file-content {
+  color: var(--wb-text-weak);
+}
+.deeplink-landing__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 24px;
+}
+.deeplink-landing__cta,
+.deeplink-landing__cta.wb-button,
+.deeplink-landing__cta.wb-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  box-sizing: border-box;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  color: #fff;
+  text-decoration: none;
+  background: #1a1a1a;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.deeplink-landing__cta.wb-button:hover:not(:disabled),
+.deeplink-landing__cta:hover {
+  background: #333;
+  filter: none;
+}
+.deeplink-landing__cta:active {
+  transform: translateY(1px);
+}
+.deeplink-landing__status {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--wb-text-weak);
+  text-align: center;
+}
+.deeplink-landing__hint {
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--wb-color-text-warning-default);
+  background: var(--wb-status-warning-soft);
+  border-radius: 10px;
+}
+.deeplink-landing__invalid-desc {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--wb-text-weak);
+}
+.deeplink-landing__footer {
+  position: absolute;
+  bottom: 24px;
+  z-index: 1;
+  font-size: 12px;
+  line-height: 18px;
+  color: rgba(0, 0, 0, 0.26);
+  text-align: center;
+}
+@media (max-width: 640px) {
+  .deeplink-landing {
+    padding: 0 16px 48px;
+  }
+  .deeplink-landing__brand {
+    width: calc(100% + 32px);
+    height: 64px;
+    margin: 0 -16px;
+    background-size: 1152px 64px;
+  }
+  .deeplink-landing__card {
+    width: 100%;
+    max-width: 400px;
+    margin-top: 80px;
+  }
+  .deeplink-landing__robot {
+    right: -206px;
+    bottom: -180px;
+    width: 520px;
+    height: 520px;
+  }
+  .deeplink-landing__footer {
+    right: 16px;
+    left: 16px;
+    bottom: 16px;
+  }
+}

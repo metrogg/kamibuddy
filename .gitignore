@@ -27,6 +27,9 @@ logs/
 # Local reference clones; source is not part of the application artifact
 开源项目/
 
+# WorkBuddy 完整解包素材（~1.2GB，本地调研用；入库的是精选子集 docs/WorkBuddy-reference/）
+docs/WorkBuddy/
+
 # Operating-system files
 .DS_Store
 Thumbs.db

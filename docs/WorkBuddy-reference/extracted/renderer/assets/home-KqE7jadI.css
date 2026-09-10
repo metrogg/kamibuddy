@@ -1,0 +1,251 @@
+@charset "UTF-8";.wb-home-route {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-home-bg-secondary);
+}
+.wb-home-route__body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.wb-home-route__body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.wb-home-route__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.wb-home-route__body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+.wb-home-route__body:hover {
+  scrollbar-color: var(--wb-scrollbar-thumb) transparent;
+}
+.wb-home-route__body:hover::-webkit-scrollbar-thumb {
+  background: var(--wb-scrollbar-thumb);
+}
+.wb-home-route__body:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--wb-scrollbar-thumb-hover);
+}
+.wb-home-route__body > .wb-home-page {
+  min-height: max(calc(432px + var(--wb-home-slot-reserve, 220px)), 100%);
+}
+.wb-home-route__input-wrap {
+  position: relative;
+  width: 100%;
+}
+.wb-home-route__input {
+  width: 100%;
+}
+.wb-home-route .wb-home-composer__input-slot {
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.wb-home-route .cr-input-editor-host {
+  min-height: 74px;
+}
+.wb-home-route .cr-input-editor-host [data-slate-editor] {
+  min-height: 74px !important;
+}
+.wb-home-route__growth-buddy {
+  position: absolute;
+  top: -78px;
+  right: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.wb-home-cloud-header {
+  flex: none;
+  padding: var(--wb-spacing-2) var(--wb-spacing-6);
+  background: var(--wb-home-bg-secondary);
+  border-bottom: 1px solid var(--wb-border-subtle);
+}
+.wb-home-cloud-header__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wb-spacing-4);
+  width: 100%;
+}
+.wb-home-cloud-header__logo {
+  display: flex;
+  align-items: center;
+}
+.wb-home-cloud-header__logo img {
+  width: auto;
+  height: var(--wb-spacing-5);
+}
+.wb-home-cloud-header__nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--wb-spacing-2);
+  flex: 1;
+}
+.wb-home-cloud-header__nav-item {
+  padding: var(--wb-spacing-2) var(--wb-spacing-3);
+  color: var(--wb-color-text-primary);
+  border-radius: var(--wb-radius-md);
+  text-decoration: none;
+  font-size: var(--wb-font-body-size);
+  line-height: var(--wb-font-body-line-height);
+}
+.wb-home-cloud-header__nav-item:hover {
+  color: var(--wb-color-text-link);
+  background: var(--wb-bg-tertiary);
+}
+
+/**
+ * TaskTargetPicker —— 首页输入框「本地任务 / 云端任务」切换 chip（issue #76366 v2）。
+ *
+ * 视觉与 WbWorkspacePickerChip 对齐：chip 高 32 / 字号 14 / 圆角 999 / hover 加深 + 字重 500；
+ * 面板走 floating-ui `top-start`，简化版（无搜索、无 footer、只 2 选项 + ✓ 选中态）。
+ */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * chip 触发器（对齐 workspace-picker.module.scss::.chip）
+ * ═════════════════════════════════════════════════════════════════════════ */
+._chip_1ofo0_9 {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cb-text-tertiary);
+  font-size: 14px;
+  font-weight: normal;
+  line-height: 20px;
+  cursor: pointer;
+  transition: color 0.15s ease, font-weight 0.15s ease;
+  flex-shrink: 0;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+._chip_1ofo0_9:hover:not(:disabled) {
+  color: var(--cb-text-primary);
+  font-weight: 500;
+}
+._chip_1ofo0_9:focus-visible {
+  outline: 2px solid var(--cb-focus-border, #007fd4);
+  outline-offset: 2px;
+}
+
+._chipIcon_1ofo0_38 {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  flex-shrink: 0;
+}
+
+._chipLabel_1ofo0_48 {
+  white-space: nowrap;
+}
+
+._chipChevron_1ofo0_52 {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  flex-shrink: 0;
+  transition: transform 0.42s cubic-bezier(0.25, 0.8, 0.3, 1);
+  transform-origin: center;
+}
+
+._chipOpen_1ofo0_64 {
+  color: var(--cb-text-primary);
+  font-weight: 500;
+}
+._chipOpen_1ofo0_64 ._chipChevron_1ofo0_52 {
+  transform: rotate(180deg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 弹层
+ * ═════════════════════════════════════════════════════════════════════════ */
+/* 面板走 wb-search-panel 同款 token（cb-chat-ui → cb-bridge 桥接到 wb 设计 token），
+ * 让本地 / 云端切换菜单跟随浅色 / 深色主题一起切换，避免在深色主题下出现白底黑字。 */
+._panel_1ofo0_77 {
+  min-width: 200px;
+  padding: 8px;
+  background: var(--cb-dropdown-bg-color);
+  border: 0.5px solid var(--cb-popover-border);
+  border-radius: 16px;
+  box-shadow: var(--cb-shadow-popover);
+  box-sizing: border-box;
+  z-index: 40;
+  outline: none;
+  animation: _taskTargetPanelPopIn_1ofo0_1 0.18s ease-out both;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@keyframes _taskTargetPanelPopIn_1ofo0_1 {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+._item_1ofo0_99 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  box-sizing: border-box;
+  color: var(--cb-text-primary);
+  font-size: 14px;
+  line-height: 20px;
+}
+._item_1ofo0_99 + ._item_1ofo0_99 {
+  margin-top: 2px;
+}
+._item_1ofo0_99:hover {
+  background: var(--cb-dropdown-item-hover-bg-color);
+}
+
+._itemLabel_1ofo0_119 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+._itemDescription_1ofo0_124 {
+  display: block;
+  font-size: 12px;
+  color: var(--cb-text-tertiary);
+  margin-top: 2px;
+  line-height: 16px;
+}
+
+._itemCheck_1ofo0_132 {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 用主题绿（浅色 = 品牌绿，深色由 theme-dark 覆盖），
+   * 与 workspace-picker itemCheck ✓ 视觉同源。 */
+  color: var(--cb-green-color);
+}

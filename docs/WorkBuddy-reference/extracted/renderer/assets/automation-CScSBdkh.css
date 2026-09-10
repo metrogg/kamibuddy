@@ -1,0 +1,2416 @@
+.atm-detail-modal {
+  box-sizing: border-box;
+  width: min(80vw, 720px);
+  max-width: calc(100vw - 48px);
+  height: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--wb-border-weak);
+  border-radius: 16px;
+  background: var(--wb-bg-modal);
+  box-shadow: var(--wb-shadow-xl);
+  padding: 0 24px;
+}
+.atm-inbox-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 0 4px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--wb-bg-modal);
+}
+.atm-detail-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--wb-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.atm-detail-subtitle-row {
+  padding: 4px 0 12px;
+}
+.atm-detail-subtitle,
+.atm-detail-time,
+.atm-detail-evidence,
+.atm-detail-artifact-path {
+  font-size: 12px;
+  color: var(--wb-color-text-secondary);
+  line-height: 20px;
+}
+.atm-detail-close.wb-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: var(--wb-color-text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease, outline-color 0.15s ease;
+}
+.atm-detail-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  flex-wrap: wrap;
+}
+.atm-detail-status,
+.atm-detail-evidence {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--wb-border-weak);
+  background: transparent;
+  font-size: 12px;
+  line-height: 20px;
+}
+.atm-detail-status.success {
+  color: var(--wb-color-text-success-default);
+  background: var(--wb-bg-success-vivid-soft);
+  border-color: color-mix(in srgb, var(--wb-status-success-vivid) 24%, transparent);
+}
+.atm-detail-status.failed {
+  color: var(--wb-color-text-error-default);
+  background: var(--wb-status-error-soft-bg);
+  border-color: var(--wb-border-error-vivid-subtle);
+}
+.atm-detail-status.neutral {
+  color: var(--wb-color-text-warning-default);
+  background: var(--wb-bg-warning-vivid-soft);
+  border-color: color-mix(in srgb, var(--wb-status-warning-vivid) 24%, transparent);
+}
+.atm-detail-status.running {
+  color: var(--wb-color-text-secondary);
+  background: var(--wb-bg-hover);
+  border-color: var(--wb-border-weak);
+}
+.atm-detail-section {
+  margin: 0 0 16px;
+}
+.atm-detail-section-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-color-text-primary);
+}
+.atm-detail-text,
+.atm-detail-run,
+.atm-detail-artifact {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--wb-color-text-primary);
+  word-break: break-word;
+}
+.atm-detail-run,
+.atm-detail-artifact {
+  padding: 12px 14px;
+  border: 1px solid var(--wb-border-subtle-soft);
+  border-radius: 10px;
+  background: var(--wb-bg-modal);
+}
+.atm-detail-runs,
+.atm-detail-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.atm-detail-run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--wb-color-text-secondary);
+}
+.atm-detail-run-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.atm-detail-run .success {
+  color: var(--wb-color-text-success-default);
+}
+.atm-detail-run .failed {
+  color: var(--wb-color-text-error-default);
+}
+.atm-detail-run .neutral {
+  color: var(--wb-color-text-warning-default);
+}
+.atm-detail-artifact-name {
+  font-weight: 500;
+}
+.atm-detail-summary-main {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--wb-color-text-primary);
+}
+.atm-detail-summary-main .cb-markdown {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+.atm-detail-summary-main .cb-markdown > :last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.atm-detail-summary-technical,
+.atm-detail-run-block {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--wb-color-text-primary);
+  font-family: var(--cb-vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+}
+.atm-detail-summary-technical,
+.atm-detail-run-technical {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--wb-bg-modal);
+  border: 1px solid var(--wb-border-weak);
+}
+.atm-detail-run-error {
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border-weak);
+  border-left: 2px solid var(--wb-status-error);
+  border-radius: 8px;
+  background: var(--wb-bg-modal);
+}
+.atm-detail-run-block.error {
+  color: var(--wb-color-text-secondary);
+}
+.atm-detail-run-truncated,
+.atm-detail-run-technical-title {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-detail-run-expand-btn.wb-button,
+.atm-detail-run-technical {
+  margin-top: 8px;
+}
+.atm-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  margin-top: 8px;
+  position: sticky;
+  bottom: 0;
+  background: var(--wb-bg-modal);
+}
+.atm-detail-primary-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.atm-status-icon-spinning {
+  animation: atm-status-icon-spin 1.2s linear infinite;
+  transform-origin: center;
+}
+@keyframes atm-status-icon-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+/**
+ * AutomationPermissionConfirmDialog styles.
+ * Overlay + centered dialog for fullAccess risk confirmation.
+ */
+.automation-permission-confirm__dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--wb-spacing-5);
+  padding: 28px var(--wb-spacing-8) var(--wb-spacing-7);
+}
+.automation-permission-confirm__header {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-spacing-3);
+}
+.automation-permission-confirm__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--wb-warning);
+}
+.automation-permission-confirm__title {
+  font-size: var(--wb-spacing-5);
+  font-weight: 600;
+  color: var(--wb-text-strong);
+  margin: 0;
+  line-height: 1.4;
+}
+.automation-permission-confirm__desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--wb-text-medium);
+  margin: 0;
+}
+.automation-permission-confirm__list {
+  margin: 0;
+  padding-left: var(--wb-spacing-6);
+  list-style: disc;
+}
+.automation-permission-confirm__list li {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--wb-text-strong);
+}
+.automation-permission-confirm__checkbox {
+  align-items: flex-start;
+  margin-top: var(--wb-spacing-2);
+}
+.automation-permission-confirm__checkbox .wb-checkbox__control {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+.automation-permission-confirm__checkbox .wb-checkbox__box {
+  width: 18px;
+  height: 18px;
+  border-color: var(--wb-color-text-hint);
+}
+.automation-permission-confirm__checkbox.wb-checkbox:hover .wb-checkbox__input:not(:disabled):not(:checked) + .wb-checkbox__box {
+  border-color: var(--wb-color-text-secondary);
+}
+.automation-permission-confirm__checkbox .wb-checkbox__label {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--wb-text-strong);
+}
+.automation-permission-confirm__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-spacing-4);
+  margin-top: var(--wb-spacing-3);
+}
+.automation-permission-confirm__fallback-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.automation-permission-confirm__fallback-link:hover {
+  text-decoration: underline;
+}
+.automation-permission-confirm__actions-right {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-spacing-3);
+  margin-left: auto;
+}
+/**
+ * AutomationPermissionPicker chip styles.
+ * Renders inline with SkillSelector & ExpertSelector in the ChatInput bottom toolbar.
+ * Uses same height/padding/border-radius conventions as .skill-selector__btn and .expert-selector__btn.
+ */
+.automation-permission-picker {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.automation-permission-picker__trigger {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: var(--wb-spacing-2);
+  border: none;
+  border-radius: var(--wb-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  outline: none;
+}
+.automation-permission-picker__trigger.wb-button {
+  color: var(--wb-color-text-primary);
+  font-family: "PingFang SC";
+  font-size: 14px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 22px;
+  text-decoration-line: none;
+}
+.automation-permission-picker__trigger.wb-button.wb-button--ghost:hover:not(:disabled):not(.wb-button--disabled) {
+  background-color: var(--wb-dropdown-item-hover-bg-color, var(--wb-bg-hover));
+  color: var(--wb-color-text-primary);
+}
+.automation-permission-picker__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.automation-permission-picker__trigger--warning.wb-button {
+  color: var(--wb-color-text-primary);
+}
+.automation-permission-picker__trigger--warning.wb-button .wb-icon {
+  color: var(--wb-warning);
+}
+.automation-permission-picker__trigger--warning.wb-button.wb-button--ghost:hover:not(:disabled):not(.wb-button--disabled) {
+  background-color: var(--wb-dropdown-item-hover-bg-color, var(--wb-bg-hover));
+  color: var(--wb-color-text-primary);
+}
+.automation-permission-picker__trigger--warning.wb-button.wb-button--ghost:hover:not(:disabled):not(.wb-button--disabled) .wb-icon {
+  color: var(--wb-warning);
+}
+.automation-permission-picker__trigger--safe.wb-button {
+  color: var(--wb-color-text-primary);
+}
+.automation-permission-picker__label {
+  line-height: 1;
+}
+.automation-permission-picker__caret {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 1px;
+  line-height: 1;
+}
+.automation-permission-picker__dropdown .wb-dropdown__list {
+  width: 360px;
+  max-height: min(388px, calc(100vh - 48px));
+  overflow-y: auto;
+}
+.automation-permission-picker__dropdown .wb-dropdown__item {
+  align-items: stretch;
+  min-height: auto;
+  padding: 12px 16px;
+}
+.automation-permission-picker__dropdown .wb-dropdown__label {
+  flex: 1;
+  min-width: 0;
+}
+.automation-permission-picker__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+.automation-permission-picker__check-col {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.automation-permission-picker__icon-col {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.automation-permission-picker__option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+.automation-permission-picker__option-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wb-text-strong);
+  line-height: 1.4;
+}
+.automation-permission-picker__option-recommend {
+  font-weight: 400;
+  color: var(--wb-text-weak);
+  font-size: 13px;
+  margin-left: 4px;
+}
+.automation-permission-picker__option-desc {
+  font-size: 12px;
+  color: var(--wb-text-weak);
+  line-height: 1.5;
+  white-space: normal;
+  max-width: 320px;
+}
+/**
+ * ConnectorSelector field styles.
+ * Independent form field with dropdown multi-select checkboxes.
+ */
+.connector-selector-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.connector-selector-field__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--wb-border-input);
+  border-radius: 6px;
+  background: var(--wb-bg-modal);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+  min-height: 38px;
+}
+.connector-selector-field__trigger.wb-button.wb-button--ghost {
+  border: 1px solid var(--wb-border-input);
+  background: var(--wb-bg-modal);
+}
+.connector-selector-field__trigger.wb-button.wb-button--ghost:hover:not(:disabled):not(.wb-button--disabled) {
+  border: 1px solid var(--wb-border-focus);
+}
+.connector-selector-field__trigger .wb-button__content {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.connector-selector-field__trigger--open.wb-button.wb-button--ghost {
+  border: 1px solid var(--wb-border-focus);
+}
+.connector-selector-field__trigger--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.connector-selector-field__trigger--disabled.wb-button.wb-button--ghost:hover:not(:disabled):not(.wb-button--disabled) {
+  border: 1px solid var(--wb-border-default);
+}
+.connector-selector-field__trigger-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--wb-color-text-primary);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connector-selector-field__trigger-text--placeholder {
+  color: var(--wb-color-text-tertiary);
+}
+.connector-selector-field__arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-color-text-secondary);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.connector-selector-field__arrow--open {
+  transform: rotate(180deg);
+}
+.connector-selector-field__dropdown {
+  width: var(--connector-selector-dropdown-width, 280px);
+  background: var(--wb-bg-popover);
+  border: 0.5px solid var(--wb-border-popover);
+  border-radius: 6px;
+  box-shadow: var(--wb-shadow-xl);
+  max-height: min(388px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.connector-selector-field__list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.connector-selector-field__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.connector-selector-field__item:hover {
+  background-color: var(--wb-bg-hover);
+}
+.connector-selector-field__checkbox {
+  flex: 1;
+  min-width: 0;
+}
+.connector-selector-field__checkbox .wb-checkbox__box {
+  width: 16px;
+  height: 16px;
+  border-color: var(--wb-checkbox-border-default);
+}
+.connector-selector-field__checkbox.wb-checkbox:hover .wb-checkbox__input:not(:disabled):not(:checked) + .wb-checkbox__box {
+  border-color: var(--wb-checkbox-border-selected);
+}
+.connector-selector-field__checkbox .wb-checkbox__label {
+  min-width: 0;
+}
+.connector-selector-field__item-name {
+  font-size: 13px;
+  color: var(--wb-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.connector-selector-field__empty {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--wb-color-text-disabled);
+  text-align: center;
+}
+.connector-selector-field__manage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--wb-color-text-tertiary);
+  cursor: pointer;
+  border-top: 1px solid var(--wb-border-default);
+  transition: background-color 0.12s ease;
+}
+.connector-selector-field__manage:hover {
+  background-color: var(--wb-bg-hover);
+  color: var(--wb-color-text-primary);
+}
+.connector-selector-field__manage svg {
+  flex-shrink: 0;
+}
+.expert-selector {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.expert-selector__btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  padding: 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-color-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  outline: none;
+}
+.expert-selector__btn .wb-button__content > svg:last-child {
+  transition: transform 0.42s cubic-bezier(0.25, 0.8, 0.3, 1);
+  transform-origin: center;
+}
+.expert-selector__btn[aria-expanded="true"] .wb-button__content > svg:last-child {
+  transform: rotate(180deg);
+}
+.expert-selector__avatar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.expert-selector__avatar--small {
+  width: 18px;
+  height: 18px;
+}
+.expert-selector__avatar.wb-avatar--fallback {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--wb-text-white);
+}
+.expert-selector__label-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+.expert-selector__label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-color-text-primary);
+  font-family: "PingFang SC";
+  font-size: 14px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 22px;
+  text-decoration-line: none;
+}
+.expert-selector__label-identity {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--wb-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.expert-selector__dropdown {
+  background: var(--wb-dropdown-bg-color);
+  border: 0.5px solid var(--wb-border-popover);
+  border-radius: var(--wb-radius-lg, 16px);
+  box-shadow: var(--wb-shadow-popover);
+  padding: var(--wb-spacing-2, 8px);
+  min-width: 200px;
+  max-width: 280px;
+  max-height: min(388px, calc(100vh - 48px));
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.expert-selector__list {
+  display: flex;
+  flex-direction: column;
+}
+.expert-selector__section-title {
+  font-size: 11px;
+  color: var(--wb-color-text-tertiary);
+  padding: 6px 10px 4px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.expert-selector__divider {
+  height: 1px;
+  background: var(--wb-border-subtle);
+  margin: 4px 8px;
+}
+.expert-selector__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px var(--wb-spacing-2, 8px);
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--wb-radius-md, 8px);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  text-align: left;
+}
+.expert-selector__item:hover {
+  background: var(--wb-dropdown-item-hover-bg-color);
+}
+.expert-selector__item--selected {
+  background: var(--wb-bg-secondary);
+  color: var(--wb-color-text-primary);
+}
+.expert-selector__item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.expert-selector__item-profession {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--wb-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expert-selector__item--selected .expert-selector__item-profession {
+  font-weight: 600;
+}
+.expert-selector__item-name {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 12px;
+  color: var(--wb-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  max-width: 180px;
+}
+.atm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  box-sizing: border-box;
+  padding: 0 20px;
+  gap: 12px;
+  flex-wrap: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+.atm-toolbar > * {
+  -webkit-app-region: no-drag;
+}
+/**
+ * mac 桌面端 sidebar 折叠后，.atm-toolbar 成为整页最左侧内容，需给窗口红绿灯（traffic lights）
+ * 让出空间，否则「展开侧边栏 / 新建任务」按钮会被红绿灯压住。
+ * JSX 侧 needTrafficLightOffset = isDesktopMac && sidebarCollapsed && !isFullscreen 已保证：
+ * Windows/Linux、web、mac 全屏、sidebar 展开态均不挂此 class，故这里无条件让位即可。
+ */
+.atm-toolbar--traffic-light-offset {
+  margin-left: 67px;
+}
+.atm-toolbar-left,
+.atm-toolbar-right,
+.atm-batch-info {
+  display: flex;
+  align-items: center;
+}
+.atm-toolbar--traffic-light-offset,
+.automation-editor-form--page .atm-detail-header--traffic-light-offset {
+  margin-left: 67px;
+}
+.atm-toolbar-left {
+  gap: 4px;
+}
+.atm-toolbar-tabs {
+  --wb-segmented-track-color-bg: transparent;
+  --wb-segmented-thumb-color-bg: var(--wb-bg-tertiary);
+  --wb-segmented-thumb-color-shadow: none;
+  --wb-segmented-item-icon-size: 16px;
+}
+.atm-toolbar-right {
+  gap: 12px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.atm-toolbar-right .atm-toolbar-btn {
+  padding-right: 12px;
+  color: var(--wb-color-text-primary);
+}
+.atm-toolbar-right .atm-create-split {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--wb-button-border-radius-medium);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--wb-color-text-primary) 10%, transparent);
+  overflow: hidden;
+}
+.atm-toolbar-right .atm-create-btn {
+  min-width: 0;
+  padding: 0 6px 0 12px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: none;
+}
+.atm-toolbar-right .atm-create-menu-btn.wb-button {
+  width: 30px;
+  min-width: 30px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: none;
+  position: relative;
+}
+.atm-batch-info {
+  gap: 12px;
+}
+.atm-batch-count {
+  font-size: 14px;
+  color: var(--wb-text-strong);
+  font-weight: 400;
+}
+.atm-search-input {
+  width: 200px;
+  flex-shrink: 1;
+  min-width: 80px;
+}
+.atm-search-input.wb-input-wrapper--filled {
+  background: var(--wb-bg-inset-strong);
+  border-color: transparent;
+}
+.atm-search-input.wb-input-wrapper--filled .wb-input--filled {
+  background: var(--wb-bg-inset-strong);
+}
+.atm-search-input.wb-input-wrapper--filled:hover:not(.wb-input-wrapper--disabled),
+.atm-search-input.wb-input-wrapper--filled:focus-within:not(.wb-input-wrapper--disabled) {
+  background: var(--wb-bg-tertiary);
+  border-color: transparent;
+}
+.atm-search-input.wb-input-wrapper--filled:hover:not(.wb-input-wrapper--disabled) .wb-input--filled,
+.atm-search-input.wb-input-wrapper--filled:focus-within:not(.wb-input-wrapper--disabled) .wb-input--filled {
+  background: var(--wb-bg-tertiary);
+}
+.atm-filter-wrap {
+  position: relative;
+}
+.atm-filter-btn {
+  position: relative;
+  color: var(--wb-color-text-secondary);
+}
+.atm-filter-btn:hover:not(:disabled) {
+  color: var(--wb-color-text-primary);
+}
+.atm-filter-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-status-error);
+}
+.atm-template-back-btn.wb-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 4px;
+  height: 24px;
+  min-width: 0;
+  border-radius: 6px;
+}
+.atm-template-back-btn.wb-button:hover:not(:disabled) {
+  color: var(--wb-color-text-primary);
+  background: var(--wb-bg-tertiary);
+}
+.atm-template-back-btn.wb-button .wb-button__icon {
+  width: 20px;
+  height: 20px;
+}
+.atm-breadcrumb-separator,
+.atm-breadcrumb-current {
+  color: var(--wb-color-text-secondary);
+  font-size: 14px;
+}
+.atm-template-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px 24px;
+}
+.atm-empty-state {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  /* 左侧 14px 原先由父级 .automation-workspace__content 的横向 padding 提供，
+       父级去掉横向 padding 后在这里补回，保持空态布局不变。 */
+  padding: 0 20px 20px 14px;
+  justify-content: space-between;
+  gap: 24px;
+}
+.atm-empty-state-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 200px;
+  padding: 24px 24px 0;
+}
+.atm-empty-state-icon {
+  color: var(--wb-color-text-tertiary);
+}
+.atm-empty-state-text {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--wb-color-text-secondary);
+  text-align: center;
+}
+.atm-empty-state-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.atm-empty-action-btn.wb-button {
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.atm-empty-state-templates {
+  width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.atm-empty-state-templates-title {
+  color: var(--wb-color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.atm-template-section {
+  margin: 16px 0 40px;
+}
+.atm-template-list,
+.atm-template-list--compact {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.atm-template-card--compact {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--wb-border-card-static);
+  border-radius: 16px;
+  background: var(--wb-bg-card);
+  box-shadow: 0 16px 32px -8px color-mix(in srgb, var(--wb-color-text-primary) 3%, transparent);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.atm-template-card--compact:hover {
+  background: var(--wb-bg-card-hover);
+  box-shadow: 0 16px 32px -8px color-mix(in srgb, var(--wb-color-text-primary) 8%, transparent);
+}
+.atm-template-compact-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-color-text-primary);
+}
+.atm-template-compact-icon {
+  width: 20px;
+  height: 20px;
+}
+.atm-template-compact-texts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.atm-template-compact-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--wb-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.atm-template-compact-desc {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--wb-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 1100px) {
+  .atm-template-list,
+  .atm-template-list--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .atm-template-list,
+  .atm-template-list--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.atm-task-list,
+.atm-records-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* 横向留白收进滚动容器自身的 padding：滚动条画在 border 边缘（紧贴右侧），
+       内容仍保留左右间距。与 toolbar 对齐取 20px。 */
+  padding: 0 20px 20px;
+  /* 滚动条默认隐藏，hover 时才显现，与本模块 .atm-detail-history-list 等保持一致。 */
+  scrollbar-color: transparent transparent;
+}
+.atm-task-list::-webkit-scrollbar-thumb,
+.atm-records-list::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+.atm-task-list:hover,
+.atm-records-list:hover {
+  scrollbar-color: var(--wb-color-text-disabled) transparent;
+}
+.atm-task-list:hover::-webkit-scrollbar-thumb,
+.atm-records-list:hover::-webkit-scrollbar-thumb {
+  background-color: var(--wb-color-text-disabled);
+}
+.atm-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.atm-records-list {
+  margin-top: 0;
+}
+.atm-task-group-label,
+.atm-records-group-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 0 6px 12px;
+  color: var(--wb-color-text-tertiary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+.atm-task-group-label {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.atm-records-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+.atm-task-group-label,
+.atm-records-group-label {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.atm-records-group-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.atm-records-group-chevron--collapsed {
+  transform: rotate(-90deg);
+}
+.atm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  min-height: 36px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  gap: 24px;
+  position: relative;
+  width: 100%;
+  text-align: left;
+}
+.atm-row:hover {
+  background: var(--wb-bg-hover-light);
+  border-radius: 8px;
+}
+.atm-row-left,
+.atm-row-content,
+.atm-row-meta,
+.atm-row-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.atm-row-left,
+.atm-row-content,
+.atm-row-meta {
+  flex: 1;
+  overflow: hidden;
+}
+.atm-row-left,
+.atm-row-content,
+.atm-row-main,
+.atm-row-meta {
+  gap: 8px;
+}
+.atm-row-leading {
+  width: 16px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--wb-color-text-disabled);
+}
+.atm-row-main {
+  flex: 0 1 auto;
+  max-width: 28%;
+}
+.automation-workspace__name-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.atm-row-name,
+.atm-row-workspace,
+.atm-row-schedule,
+.atm-row-next,
+.atm-row-result-label,
+.atm-row-summary,
+.atm-row-time,
+.atm-row-paused-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  line-height: 22px;
+}
+.atm-row-name {
+  font-weight: 400;
+  color: var(--wb-color-text-primary);
+}
+.atm-row-workspace,
+.atm-row-schedule,
+.atm-row-result-label,
+.atm-row-summary,
+.atm-row-next,
+.atm-row-time,
+.atm-row-paused-label {
+  color: var(--wb-color-text-tertiary);
+}
+.atm-row-workspace {
+  max-width: 28%;
+  flex: 0 1 auto;
+}
+.atm-row-schedule {
+  max-width: 42%;
+  flex: 0 1 auto;
+}
+.atm-row-result-label {
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+.atm-row-right {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.atm-row-right-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.atm-row-hover-actions {
+  display: none;
+  align-items: center;
+  gap: 12px;
+}
+.atm-row:hover .atm-row-hover-actions,
+.atm-row--menu-open .atm-row-hover-actions {
+  display: flex;
+}
+.atm-row:hover .atm-row-right-text,
+.atm-row--menu-open .atm-row-right-text {
+  display: none;
+}
+.atm-row-action-btn.wb-button.wb-button--icon-only.wb-button--ghost {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: var(--wb-color-text-secondary);
+}
+.atm-row-action-btn.wb-button.wb-button--icon-only.wb-button--ghost:hover:not(:disabled) {
+  color: var(--wb-color-text-primary);
+}
+.automation-workspace__history-row {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.automation-workspace__history-row .atm-row-name {
+  max-width: 50%;
+  flex: 0 1 auto;
+}
+.automation-workspace__history-row .atm-row-result-label {
+  flex: 0 1 auto;
+  color: var(--wb-color-text-tertiary);
+}
+.automation-workspace__history-row .atm-row-right-text {
+  margin-left: auto;
+}
+.atm-row-record-actions {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.automation-workspace__history-row:hover .atm-row-record-actions {
+  display: inline-flex;
+}
+.automation-editor-form--page {
+  background: var(--wb-bg-primary);
+}
+.automation-editor-form--page .atm-detail-header {
+  height: 56px;
+  padding: 0 20px 0 24px;
+  border-bottom: 1px solid transparent;
+}
+.automation-editor-form--page .atm-detail-header-left {
+  gap: 4px;
+}
+.automation-editor-form--page .atm-detail-breadcrumb-back.wb-button {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  line-height: 24px;
+  color: var(--wb-color-text-primary);
+}
+.automation-editor-form--page .atm-detail-breadcrumb-current {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.automation-editor-form--page .atm-detail-content {
+  display: flex;
+  gap: 24px;
+  margin-top: 8px;
+  padding: 0 20px 0 24px;
+  overflow: hidden;
+}
+.automation-editor-form--page .atm-modal-body {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding-right: 0;
+}
+.atm-detail-content--with-side {
+  align-items: stretch;
+}
+.atm-detail-history {
+  width: 280px;
+  min-width: 280px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--wb-color-border-tertiary);
+  padding-left: 20px;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-detail-history-header {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.atm-detail-history-title {
+  font-size: 13px;
+  color: var(--wb-color-text-secondary);
+}
+.atm-detail-history-filter {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--wb-color-text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.atm-detail-history-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  margin: 0 -12px;
+  scrollbar-color: transparent transparent;
+}
+.atm-detail-history-list::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+.atm-detail-history-list:hover {
+  scrollbar-color: var(--wb-color-text-disabled) transparent;
+}
+.atm-detail-history-list:hover::-webkit-scrollbar-thumb {
+  background-color: var(--wb-color-text-disabled);
+}
+.atm-detail-history-empty {
+  padding: 12px;
+  color: var(--wb-color-text-tertiary);
+  font-size: 12px;
+}
+.atm-detail-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.atm-detail-history-row:hover {
+  background: var(--wb-bg-hover-light);
+}
+.atm-detail-history-row:hover .atm-detail-history-name {
+  color: var(--wb-color-text-primary);
+}
+.atm-detail-history-row:hover .atm-detail-history-meta {
+  display: none;
+}
+.atm-detail-history-row:hover .atm-detail-history-actions {
+  display: inline-flex;
+}
+.atm-detail-history-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.atm-detail-history-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--wb-color-text-primary);
+}
+.atm-detail-history-result,
+.atm-detail-history-meta,
+.atm-detail-history-actions {
+  display: inline-flex;
+  align-items: center;
+}
+.atm-detail-history-result {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-detail-history-meta {
+  gap: 8px;
+  font-size: 14px;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-detail-history-actions {
+  display: none;
+  gap: 12px;
+}
+.main-content--automation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.main-content--automation .automation-main-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.automation-workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--wb-color-text-primary);
+}
+.automation-workspace__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px 24px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--wb-border-error-vivid-subtle);
+  border-radius: 8px;
+  background: var(--wb-status-error-soft-bg);
+  color: var(--wb-color-text-error-default);
+  font-size: 13px;
+}
+.automation-workspace__error-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 16px;
+  padding: 0;
+}
+.automation-workspace__error--editor {
+  margin: 0;
+  flex-shrink: 0;
+}
+.automation-workspace__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 不加横向 padding：横向留白下沉到滚动容器（.atm-task-list / .atm-records-list）的
+       padding 上，让滚动条紧贴右侧边缘，而不是被 padding 顶出一段间距。 */
+  padding: 0;
+}
+.atm-loading {
+  color: var(--wb-color-text-secondary);
+  font-size: 12px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.automation-editor-form {
+  flex: 1;
+  min-height: 0;
+}
+.atm-detail-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-home-bg-secondary);
+}
+.automation-editor-modal .atm-detail-page {
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 96px);
+  border-radius: 16px;
+  background: var(--wb-bg-primary);
+  box-shadow: var(--wb-shadow-dialog);
+}
+body[data-electron-desktop="true"][data-platform="windows"] .automation-editor-modal-overlay,
+body[data-electron-desktop="true"]:not([data-platform="mac"]):not([data-platform="windows"]) .automation-editor-modal-overlay {
+  padding-top: calc(var(--wb-modal-spacing-10) + 30px);
+}
+body[data-electron-desktop="true"][data-platform="windows"] .automation-editor-modal .atm-detail-page,
+body[data-electron-desktop="true"]:not([data-platform="mac"]):not([data-platform="windows"]) .automation-editor-modal .atm-detail-page {
+  max-height: calc(100vh - 126px);
+}
+.atm-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  gap: 6px;
+  height: 56px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  background: inherit;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+.atm-detail-header button,
+.atm-detail-header a,
+.atm-detail-header input {
+  -webkit-app-region: no-drag;
+}
+.automation-editor-form--modal .atm-detail-header {
+  -webkit-app-region: no-drag;
+}
+.automation-editor-form--modal .atm-detail-footer {
+  margin-top: 0;
+  border-top: 0;
+  background: var(--wb-bg-primary);
+}
+.automation-editor-form--modal .atm-detail-breadcrumb-current {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+.atm-detail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.atm-detail-header-right,
+.atm-detail-icon-actions,
+.atm-detail-btn-actions,
+.atm-detail-footer {
+  display: flex;
+  align-items: center;
+}
+.atm-detail-header-right {
+  gap: 12px;
+}
+.atm-detail-icon-actions {
+  gap: 12px;
+}
+.atm-detail-btn-actions {
+  gap: 8px;
+}
+.atm-detail-footer {
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 24px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.atm-detail-breadcrumb-back.wb-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  font-size: 18px;
+  line-height: 24px;
+  color: var(--wb-color-text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 6px;
+}
+.atm-detail-breadcrumb-back.wb-button:hover:not(:disabled) {
+  color: var(--wb-color-text-primary);
+  background: var(--wb-bg-tertiary);
+}
+.atm-detail-breadcrumb-back.wb-button .wb-button__icon {
+  width: 20px;
+  height: 20px;
+}
+.atm-detail-breadcrumb-separator {
+  color: var(--wb-color-text-tertiary);
+  font-size: 14px;
+}
+.atm-detail-breadcrumb-current {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--wb-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.atm-detail-icon-btn.wb-button.wb-button--icon-only {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  color: var(--wb-color-text-secondary);
+}
+.atm-detail-icon-btn.wb-button.wb-button--icon-only:hover:not(:disabled) {
+  background: var(--wb-bg-tertiary);
+}
+.atm-detail-close-btn.wb-button.wb-button--icon-only {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 24px;
+}
+.atm-detail-content,
+.atm-detail-content > .atm-modal-body {
+  scrollbar-color: var(--wb-scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+.atm-detail-content::-webkit-scrollbar,
+.atm-detail-content > .atm-modal-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.atm-detail-content::-webkit-scrollbar-track,
+.atm-detail-content > .atm-modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.atm-detail-content::-webkit-scrollbar-thumb,
+.atm-detail-content > .atm-modal-body::-webkit-scrollbar-thumb {
+  background-color: var(--wb-scrollbar-thumb);
+  border-radius: var(--wb-radius-full);
+}
+.atm-detail-content::-webkit-scrollbar-thumb:hover,
+.atm-detail-content > .atm-modal-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--wb-scrollbar-thumb-hover);
+}
+.atm-modal-body {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  margin-bottom: 20px;
+}
+.atm-modal-body.atm-model-selector-open {
+  overflow: visible;
+}
+.atm-modal-body.atm-model-selector-open .atm-modal-chat-input {
+  position: relative;
+  z-index: 2;
+}
+.atm-modal-label {
+  color: var(--wb-color-text-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.atm-modal-body > .atm-modal-input,
+.atm-modal-body > .atm-modal-chat-input {
+  margin-bottom: 12px;
+}
+.atm-modal-hint,
+.atm-modal-hint-inline {
+  color: var(--wb-color-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.atm-modal-hint-inline {
+  margin-left: 4px;
+}
+.atm-modal-input,
+.atm-modal-textarea {
+  width: 100%;
+}
+.atm-modal-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid var(--wb-border-default);
+  border-radius: 6px;
+  background: var(--wb-bg-primary);
+  box-sizing: border-box;
+}
+.atm-modal-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--wb-bg-card-strong);
+  color: var(--wb-color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.atm-modal-tag-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.atm-repo-add-btn {
+  width: 24px;
+  height: 24px;
+}
+.atm-modal-chat-input {
+  --cb-content-background: transparent;
+  --cb-main-area-background: var(--wb-bg-primary);
+  --cb-input-background: var(--wb-bg-primary);
+  --cb-input-border-color: var(--wb-border-default);
+  --cb-panel-border-color: var(--wb-border-default);
+  --cb-hover-bg: var(--wb-bg-hover);
+  --cb-text-primary: var(--wb-color-text-primary);
+  --cb-text-secondary: var(--wb-color-text-secondary);
+  --cb-input-foreground: var(--wb-color-text-primary);
+  --cb-text-placeholder: var(--wb-color-text-placeholder);
+}
+.atm-modal-chat-input [class*="_mainArea_"] {
+  border-color: var(--wb-color-border-primary) !important;
+  box-shadow: none !important;
+}
+.atm-modal-chat-input:focus-within [class*="_mainArea_"] {
+  border-color: var(--wb-palette-black-30) !important;
+}
+.atm-modal-chat-input * {
+  scrollbar-color: transparent transparent;
+}
+.atm-modal-chat-input *::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+.atm-modal-chat-input:hover * {
+  scrollbar-color: var(--wb-color-text-disabled) transparent;
+}
+.atm-modal-chat-input:hover *::-webkit-scrollbar-thumb {
+  background-color: var(--wb-color-text-disabled);
+}
+[data-theme="dark"] .atm-modal-chat-input [class*="_mainArea_"],
+.vscode-dark .atm-modal-chat-input [class*="_mainArea_"],
+.dark .atm-modal-chat-input [class*="_mainArea_"] {
+  border-color: var(--wb-color-border-secondary) !important;
+}
+[data-theme="dark"] .atm-modal-chat-input:focus-within [class*="_mainArea_"],
+.vscode-dark .atm-modal-chat-input:focus-within [class*="_mainArea_"],
+.dark .atm-modal-chat-input:focus-within [class*="_mainArea_"] {
+  border-color: var(--wb-palette-white-30) !important;
+}
+.atm-modal-chat-input--error {
+  --cb-input-border-color: var(--wb-status-error);
+  --cb-panel-border-color: var(--wb-status-error);
+}
+.automation-editor-input [class*="input-toolbar__send"] {
+  display: none;
+}
+.automation-editor-input [data-slate-editor="true"] {
+  min-height: 96px;
+}
+.atm-chat-bottom-slots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.atm-chat-bottom-slots > button {
+  color: var(--wb-color-text-primary);
+  font-weight: 400;
+}
+.atm-chat-bottom-slots > button:hover:not(:disabled),
+.atm-chat-bottom-slots > button[class*="chipOpen"] {
+  background: var(--wb-bg-hover);
+  color: var(--wb-color-text-primary);
+  font-weight: 400;
+}
+.automation-add-menu[data-wb-input-add='true'] {
+  flex-shrink: 0;
+}
+.atm-bottom-slot-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--wb-bg-inset-strong);
+  color: var(--wb-color-text-secondary);
+  font-size: 12px;
+}
+.atm-bottom-slot-pill--disabled {
+  opacity: 0.7;
+}
+/* WeCom bot delivery source selection — task detail row, pill dropdown, dialogs. */
+.atm-schedule-push-toggle--wecom {
+  align-items: flex-start;
+}
+.atm-push-toggle-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* 开关始终紧跟标题行（.atm-push-toggle-left）之后，与上方「推送到机器人」行保持一致；
+   来源 pill 无论开关开/关都排在这行下方，而不是把开关顶到 pill 列的一侧。 */
+.atm-push-toggle-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+/* ---- Source pill ---- */
+.atm-wbs-source-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.atm-wbs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--wb-border-default, #e7e5e2);
+  border-radius: 999px;
+  background: var(--wb-bg-primary, #fff);
+  color: var(--wb-color-text-secondary, #3a3d42);
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+.atm-wbs-pill:hover:not(:disabled) {
+  background: var(--wb-bg-hover, #fafaf9);
+}
+.atm-wbs-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.atm-wbs-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wb-color-text-success-default, #2f6f4e);
+}
+.atm-wbs-pill-dot--stale {
+  background: var(--wb-color-text-error-default, #b0403f);
+}
+.atm-wbs-pill-label {
+  color: var(--wb-color-text-primary, #17181a);
+}
+.atm-wbs-pill-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-color-text-tertiary, #8b8f95);
+  line-height: 1;
+  margin-left: 2px;
+}
+.atm-wbs-url-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--wb-status-warning-soft, #fdf3e6);
+  color: var(--wb-color-text-warning-default, #c8730a);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: default;
+}
+.atm-wbs-url-tag-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--wb-status-error, #e5484d);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.atm-wbs-url-warn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--wb-status-warning-soft, #f8f1e3);
+  color: var(--wb-color-text-warning-default, #8a5a00);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: help;
+}
+.atm-wbs-url-warn--danger {
+  background: var(--wb-status-error-soft-bg, #fbecec);
+  color: var(--wb-color-text-error-default, #b0403f);
+}
+.atm-wbs-pill-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wb-color-text-tertiary, #8b8f95);
+  font-size: 11px;
+}
+.atm-wbs-hint-sep {
+  color: var(--wb-color-text-tertiary, #b9bcc0);
+}
+.atm-wbs-rebind-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--wb-info, #35548a);
+  cursor: pointer;
+}
+.atm-wbs-rebind-link:hover {
+  text-decoration: underline;
+}
+/* ---- Source dropdown menu ---- */
+.atm-wbs-menu {
+  min-width: 300px;
+  padding: 4px;
+}
+.atm-wbs-menu-item {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-color-text-primary, #17181a);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.atm-wbs-menu-item:hover {
+  background: var(--wb-bg-hover, #fafaf9);
+}
+.atm-wbs-menu-check {
+  color: var(--wb-color-text-primary, #17181a);
+  font-size: 11px;
+}
+.atm-wbs-menu-title {
+  display: inline-flex;
+  align-items: center;
+}
+.atm-wbs-menu-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.6;
+}
+.atm-wbs-menu-status--connected {
+  color: var(--wb-color-text-success-default, #2f6f4e);
+  background: var(--wb-status-success-soft-bg, #eef4f0);
+}
+.atm-wbs-menu-status--disconnected {
+  color: var(--wb-info, #35548a);
+  background: var(--wb-bg-info, #eef2f7);
+}
+/* ---- Guide dialog cards ---- */
+.atm-wbs-choice-list {
+  display: grid;
+  gap: 8px;
+}
+.atm-wbs-choice-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+.atm-wbs-choice-card {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--wb-border-default, #e7e5e2);
+  border-radius: 8px;
+  background: var(--wb-bg-primary, #fff);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.14s, background 0.14s;
+}
+.atm-wbs-choice-card:hover {
+  border-color: var(--wb-color-text-primary, #17181a);
+  background: var(--wb-bg-hover, #fafaf9);
+}
+.atm-wbs-choice-card:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.atm-wbs-choice-card:disabled:hover {
+  border-color: var(--wb-border-default, #e7e5e2);
+  background: transparent;
+}
+.atm-wbs-choice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.atm-wbs-choice-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.atm-wbs-choice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-color-text-primary, #17181a);
+}
+.atm-wbs-choice-desc {
+  color: var(--wb-color-text-tertiary, #8b8f95);
+  font-size: 12px;
+  line-height: 1.55;
+}
+/* ---- WebSocket suggestion dialog ---- */
+/* 说明区块（未绑定引导时通过 ConfirmDialog 的 detailContent 展示）。 */
+.atm-wbs-advice-box {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--wb-border-default, #e7e5e2);
+  border-radius: 8px;
+  background: var(--wb-bg-secondary, #fafaf9);
+}
+.atm-wbs-advice-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.atm-wbs-advice-tick,
+.atm-wbs-advice-cross {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.atm-wbs-advice-tick {
+  background: var(--wb-status-success-soft-bg, #eef4f0);
+  color: var(--wb-color-text-success-default, #2f6f4e);
+}
+.atm-wbs-advice-cross {
+  background: var(--wb-status-warning-soft, #f8f1e3);
+  color: var(--wb-color-text-warning-default, #8a5a00);
+}
+.atm-wbs-advice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-color-text-primary, #17181a);
+  margin-bottom: 2px;
+}
+.atm-wbs-advice-desc {
+  font-size: 12px;
+  color: var(--wb-color-text-tertiary, #8b8f95);
+  line-height: 1.55;
+}
+.atm-schedule-row,
+.atm-delivery-options,
+.atm-periodic-fields,
+.atm-frequency-panel-row,
+.atm-frequency-controls,
+.atm-schedule-interval,
+.atm-interval-weekday-row,
+.atm-interval-every-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.atm-schedule-row {
+  max-width: 100%;
+  gap: 16px;
+  flex-wrap: nowrap;
+}
+.atm-schedule-field {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.atm-schedule-field--frequency {
+  flex: 0 1 auto;
+}
+.atm-schedule-field--validity {
+  flex: 0 0 auto;
+}
+.atm-schedule-control-label,
+.atm-schedule-interval-prefix,
+.atm-schedule-interval-unit {
+  color: var(--wb-color-text-tertiary);
+  font-size: 14px;
+  font-weight: 400;
+}
+.atm-schedule-trigger.wb-button {
+  max-width: 100%;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: none;
+  border-radius: 8px;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--wb-color-text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+}
+.atm-schedule-trigger.wb-button:hover:not(:disabled) {
+  background: var(--wb-bg-hover-light);
+}
+.atm-schedule-trigger.wb-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.atm-schedule-trigger-label {
+  color: inherit;
+}
+.atm-schedule-trigger-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.atm-custom-select-trigger-arrow {
+  margin-left: 4px;
+  color: var(--wb-color-text-secondary);
+}
+.atm-frequency-popover.wb-popover,
+.atm-validity-popover.wb-popover {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--wb-bg-primary);
+  border: 1px solid var(--wb-border-default);
+  box-shadow: var(--wb-shadow-dialog);
+}
+.atm-frequency-popover .wb-select-popover {
+  border-radius: 12px;
+  box-shadow: var(--wb-shadow-dialog);
+}
+.atm-frequency-mode-tabs.wb-segmented {
+  width: fit-content;
+  background: var(--wb-bg-hover-light);
+}
+.atm-frequency-mode-tabs.wb-segmented .wb-segmented__item {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 22px;
+}
+.atm-frequency-panel,
+.atm-frequency-panel-stack,
+.atm-validity-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.atm-frequency-panel {
+  width: max-content;
+  min-width: 304px;
+  max-width: calc(100vw - 64px);
+}
+.atm-validity-panel {
+  width: 240px;
+}
+.atm-frequency-panel-row--interval {
+  width: fit-content;
+  max-width: calc(100vw - 96px);
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.atm-schedule-control-label {
+  white-space: nowrap;
+}
+.atm-frequency-select {
+  width: 240px;
+}
+.atm-frequency-panel-stack--once .atm-frequency-select,
+.atm-frequency-panel-stack--once .atm-schedule-time-input,
+.atm-frequency-panel-stack--once .atm-schedule-date-input {
+  width: 100%;
+}
+.atm-schedule-once-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--wb-color-text-warning-default);
+}
+.atm-frequency-panel-row--interval .atm-weekday-select {
+  flex: 0 1 auto;
+  width: min(360px, calc(100vw - 420px));
+  min-width: 240px;
+  max-width: 360px;
+}
+.atm-periodic-fields .atm-weekday-select {
+  width: 100%;
+}
+.atm-periodic-fields,
+.atm-frequency-panel-stack--once {
+  width: 304px;
+}
+.atm-periodic-fields {
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+}
+.atm-periodic-fields .atm-frequency-select,
+.atm-periodic-fields .atm-weekday-select,
+.atm-periodic-fields .atm-month-select,
+.atm-periodic-fields .atm-month-day-select,
+.atm-periodic-fields .atm-schedule-time-input,
+.atm-frequency-panel-stack--once .atm-frequency-select,
+.atm-frequency-panel-stack--once .atm-schedule-time-input,
+.atm-frequency-panel-stack--once .atm-schedule-date-input {
+  width: 100%;
+  max-width: none;
+}
+.atm-schedule-interval-input.atm-modal-input {
+  flex: 0 0 72px;
+  width: 72px;
+  text-align: center;
+}
+.atm-schedule-time-input,
+.atm-schedule-date-input {
+  width: 100%;
+}
+/* DatePicker / TimePicker 的 trigger 默认不撑满父容器：
+ * TimePicker trigger 固定 200px（组件预留 --wb-timepicker-trigger-width 供覆盖），
+ * DatePicker trigger 是 inline-block、宽度随内容。
+ * 这里只把宽度拉满，与同一面板内的 Select（fullWidth）对齐，不覆盖任何视觉样式。 */
+.atm-frequency-panel .wb-timepicker,
+.atm-validity-panel .wb-timepicker {
+  --wb-timepicker-trigger-width: 100%;
+}
+.atm-frequency-panel .wb-datepicker-trigger,
+.atm-validity-panel .wb-datepicker-trigger {
+  width: 100%;
+}
+.atm-delivery-options--inline {
+  flex-direction: row;
+  gap: 8px 24px;
+}
+.atm-delivery-options--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.atm-schedule-push-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 32px;
+  width: fit-content;
+  padding: 0 4px;
+}
+.atm-schedule-push-toggle--disabled {
+  opacity: 0.65;
+}
+.atm-push-toggle-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.atm-toggle-text {
+  color: var(--wb-color-text-primary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.atm-push-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-color-text-tertiary);
+}
+.atm-schedule-days {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  width: fit-content;
+  flex-wrap: nowrap;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+}
+.atm-schedule-day {
+  min-width: 0;
+  height: 32px;
+  padding: 5px 16px;
+  border-radius: 0;
+  border: 1px solid var(--wb-color-border-primary, #E5E5E5);
+  background: var(--wb-bg-primary);
+  color: var(--wb-color-text-secondary);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
+  position: relative;
+}
+.atm-schedule-day + .atm-schedule-day {
+  margin-left: -1px;
+}
+.atm-schedule-day:first-child {
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+.atm-schedule-day:last-child {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.atm-schedule-day:hover:not(.active) {
+  z-index: 1;
+  border-color: var(--wb-border-focus);
+  color: var(--wb-color-text-primary);
+}
+.atm-schedule-day.active {
+  z-index: 2;
+  background: var(--wb-bg-hover-light);
+  border-color: var(--wb-color-text-tertiary);
+  color: var(--wb-color-text-primary);
+  font-weight: 500;
+}
+.atm-schedule-day:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.atm-schedule-datetime-input {
+  max-width: 260px;
+}

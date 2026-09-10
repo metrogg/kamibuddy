@@ -1,0 +1,358 @@
+#!/usr/bin/env node
+
+/**
+ * cbc-prewarm —— 预热进程轻量管理 CLI
+ *
+ * 设计要点：这是一个**纯 Node 脚本**，只使用内置模块（net/fs/os/path），
+ * 故意**不** require 主 bundle（dist/codebuddy*.js ~16MB）、不启动 CellJS 容器、
+ * 不做产品配置加载。它的唯一职责是作为 prewarm IPC 的客户端 + 发现工具，
+ * 让外部（脚本 / 调度器 / daemon）能以毫秒级开销 list / ping / status / activate
+ * 预热进程。
+ *
+ * 地址约定与进程侧 `src/node/prewarm/prewarm-protocol.ts::resolvePrewarmIpcPath`
+ * 保持同构（codebuddy-prewarm-<id>，unix=<dir>/*.sock，win=\\.\pipe\*；unix 落盘
+ * 目录默认 /tmp，可由 CODEBUDDY_CODE_PREWARM_SOCKET_PATH env 覆盖）。
+ * 发现目录复用 daemon 的 ~/.codebuddy/sessions/（PidFileEntry.kind==='prewarm'）。
+ *
+ * 用法：
+ *   cbc-prewarm list [--all|-a]
+ *   cbc-prewarm ping <id>
+ *   cbc-prewarm status <id>
+ *   cbc-prewarm activate <id> [--cwd <dir>] [-- <cbc args...>]
+ *   cbc-prewarm kill <id>
+ *   cbc-prewarm -v | --version
+ */
+
+'use strict';
+
+const net = require('net');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const PREWARM_ADDRESS_PREFIX = 'codebuddy-prewarm-';
+const CONNECT_TIMEOUT_MS = 3000;
+/** kill 后等待进程消失的轮询窗口（优雅退出宽限） */
+const KILL_GRACEFUL_TIMEOUT_MS = 5000;
+const KILL_POLL_INTERVAL_MS = 100;
+
+// ── 版本号解析（与主 bin/codebuddy 取值逻辑保持一致） ───────────────
+
+function resolveVersion() {
+    try {
+        const pkg = require('../package.json');
+        return (pkg && pkg.publishConfig && pkg.publishConfig.customPackage && pkg.publishConfig.customPackage.version)
+            || (pkg && pkg.version)
+            || 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
+
+// ── 地址 / 目录解析（与进程侧约定保持一致） ─────────────────────────
+
+function resolveIpcPath(id) {
+    const address = `${PREWARM_ADDRESS_PREFIX}${id}`;
+    if (process.platform === 'win32') {
+        return `\\\\.\\pipe\\${address}`;
+    }
+    // 自定义落盘目录：与进程侧 resolvePrewarmSocketDir 同构
+    // （CODEBUDDY_CODE_PREWARM_SOCKET_PATH，默认 /tmp）。
+    const custom = process.env.CODEBUDDY_CODE_PREWARM_SOCKET_PATH;
+    const dir = custom && custom.trim() !== '' ? custom.trim() : '/tmp';
+    return path.join(dir, `${address}.sock`);
+}
+
+function getSessionsDir() {
+    const configDir = process.env.CODEBUDDY_CONFIG_DIR;
+    const root = configDir && configDir.trim() !== ''
+        ? configDir
+        : path.join(os.homedir(), '.codebuddy');
+    return path.join(root, 'sessions');
+}
+
+// ── 进程存活检测（kill -0） ─────────────────────────────────────────
+
+function isProcessRunning(pid) {
+    if (!pid || typeof pid !== 'number') return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (e) {
+        return e && e.code === 'EPERM'; // 存在但无权限也算活着
+    }
+}
+
+// ── 发现：扫 sessions 目录里 kind==='prewarm' 的条目 ────────────────
+
+function discoverPrewarms() {
+    const dir = getSessionsDir();
+    let files;
+    try {
+        files = fs.readdirSync(dir);
+    } catch {
+        return [];
+    }
+    const result = [];
+    for (const f of files) {
+        if (!f.endsWith('.json')) continue;
+        try {
+            const raw = fs.readFileSync(path.join(dir, f), 'utf-8');
+            const entry = JSON.parse(raw);
+            if (entry && entry.kind === 'prewarm') {
+                result.push(entry);
+            }
+        } catch {
+            // 跳过损坏 / 半写入的文件
+        }
+    }
+    return result;
+}
+
+// ── IPC 单次请求：连接 → 发一行 JSON → 读一行 JSON → 关闭 ──────────
+
+function sendRequest(id, payload) {
+    return new Promise((resolve, reject) => {
+        const socketPath = resolveIpcPath(id);
+        const sock = net.connect(socketPath);
+        let buffer = '';
+        let settled = false;
+
+        const done = (err, res) => {
+            if (settled) return;
+            settled = true;
+            try { sock.destroy(); } catch { /* noop */ }
+            err ? reject(err) : resolve(res);
+        };
+
+        const timer = setTimeout(() => done(new Error(`timeout after ${CONNECT_TIMEOUT_MS}ms`)), CONNECT_TIMEOUT_MS);
+        timer.unref && timer.unref();
+
+        sock.on('connect', () => {
+            sock.write(JSON.stringify(payload) + '\n');
+        });
+        sock.setEncoding('utf-8');
+        sock.on('data', (chunk) => {
+            buffer += chunk;
+            const nl = buffer.indexOf('\n');
+            if (nl >= 0) {
+                clearTimeout(timer);
+                const line = buffer.slice(0, nl).trim();
+                try {
+                    done(null, JSON.parse(line));
+                } catch (e) {
+                    done(new Error(`invalid response: ${line}`));
+                }
+            }
+        });
+        sock.on('error', (err) => { clearTimeout(timer); done(err); });
+        sock.on('close', () => { clearTimeout(timer); done(new Error('connection closed before response')); });
+    });
+}
+
+// ── 命令实现 ────────────────────────────────────────────────────────
+
+function cmdList(opts) {
+    const showAll = !!(opts && opts.all);
+    const entries = discoverPrewarms();
+    // 默认只展示活进程：dead 条目（含其残留 socket）会误导人，且会随下次同 id
+    // 启动被自愈清理，故默认隐藏；--all/-a 显式查看全部用于排障。
+    const rows = entries.map((e) => {
+        const meta = e.meta || {};
+        const alive = isProcessRunning(e.pid);
+        return {
+            id: meta.prewarmId || '(unknown)',
+            pid: e.pid,
+            status: meta.status || e.status || '(unknown)',
+            proc: alive ? 'alive' : 'dead',
+            socket: meta.socketPath || resolveIpcPath(meta.prewarmId || String(e.pid)),
+            alive,
+        };
+    });
+    const visible = showAll ? rows : rows.filter((r) => r.alive);
+    const hiddenDead = rows.length - visible.length;
+
+    if (visible.length === 0) {
+        console.log('No prewarm processes found.');
+        if (hiddenDead > 0) {
+            console.log(`(${hiddenDead} dead hidden; use --all to show)`);
+        }
+        return;
+    }
+
+    // 简洁表格输出
+    console.log(['ID', 'PID', 'STATUS', 'PROC', 'SOCKET'].join('\t'));
+    for (const r of visible) {
+        console.log([r.id, r.pid, r.status, r.proc, r.socket].join('\t'));
+    }
+    if (hiddenDead > 0) {
+        console.log(`(${hiddenDead} dead hidden; use --all to show)`);
+    }
+}
+
+async function cmdPing(id) {
+    requireId(id, 'ping');
+    const res = await sendRequest(id, { cmd: 'ping' });
+    console.log(JSON.stringify(res, null, 2));
+}
+
+async function cmdStatus(id) {
+    requireId(id, 'status');
+    const res = await sendRequest(id, { cmd: 'status' });
+    console.log(JSON.stringify(res, null, 2));
+}
+
+async function cmdActivate(id, opts) {
+    requireId(id, 'activate');
+    // --cwd 可选：省略时预热进程保持其冷启动 cwd（不 chdir）。
+    const payload = { cmd: 'activate', args: opts.args || [] };
+    if (opts.cwd) payload.cwd = path.resolve(opts.cwd);
+    if (opts.sessionId) payload.sessionId = opts.sessionId;
+    if (opts.env && Object.keys(opts.env).length > 0) payload.env = opts.env;
+    const res = await sendRequest(id, payload);
+    console.log(JSON.stringify(res, null, 2));
+    if (!res.ok) process.exitCode = 1;
+}
+
+/** 从发现的 prewarm 条目里按 id 找 pid。 */
+function findPrewarmById(id) {
+    return discoverPrewarms().find((e) => (e.meta && e.meta.prewarmId) === id);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function cmdKill(id) {
+    requireId(id, 'kill');
+
+    const entry = findPrewarmById(id);
+    if (!entry || !entry.pid) {
+        fail(`kill: prewarm not found: ${id}`);
+    }
+    const pid = entry.pid;
+
+    if (!isProcessRunning(pid)) {
+        console.log(`Prewarm ${id} (pid ${pid}) is already dead.`);
+        return;
+    }
+
+    // 优雅终止：先发 SIGTERM（进程侧 SIGTERM handler 会 close IPC + 清理 socket），
+    // 在宽限窗口内轮询存活；超时仍在则升级为 SIGKILL。
+    try {
+        process.kill(pid, 'SIGTERM');
+    } catch (e) {
+        fail(`kill: failed to signal pid ${pid}: ${e && e.message ? e.message : e}`);
+    }
+
+    const deadline = Date.now() + KILL_GRACEFUL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        if (!isProcessRunning(pid)) {
+            console.log(`Prewarm ${id} (pid ${pid}) terminated.`);
+            return;
+        }
+        await sleep(KILL_POLL_INTERVAL_MS);
+    }
+
+    // 优雅超时，强制 kill。
+    try {
+        process.kill(pid, 'SIGKILL');
+        console.log(`Prewarm ${id} (pid ${pid}) force-killed (SIGKILL after ${KILL_GRACEFUL_TIMEOUT_MS}ms).`);
+    } catch (e) {
+        fail(`kill: SIGKILL failed for pid ${pid}: ${e && e.message ? e.message : e}`);
+    }
+}
+
+// ── 参数解析（极简，避免引入 commander 等依赖） ─────────────────────
+
+function parseActivateOpts(rest) {
+    const opts = { args: [], env: {} };
+    const addEnv = (kv) => {
+        // KEY=VALUE 形式；VALUE 中含 = 时按首个 = 切。
+        const idx = kv.indexOf('=');
+        if (idx <= 0) {
+            fail(`--env value must be KEY=VALUE, got: ${kv}`);
+        }
+        opts.env[kv.slice(0, idx)] = kv.slice(idx + 1);
+    };
+    for (let i = 0; i < rest.length; i++) {
+        const a = rest[i];
+        if (a === '--cwd') { opts.cwd = rest[++i]; }
+        else if (a.startsWith('--cwd=')) { opts.cwd = a.slice('--cwd='.length); }
+        else if (a === '--session-id') { opts.sessionId = rest[++i]; }
+        else if (a.startsWith('--session-id=')) { opts.sessionId = a.slice('--session-id='.length); }
+        else if (a === '--env') { addEnv(rest[++i]); }
+        else if (a.startsWith('--env=')) { addEnv(a.slice('--env='.length)); }
+        else if (a === '--') { opts.args = rest.slice(i + 1); break; }
+        else { /* 忽略未知 flag，留给 -- 之后 */ }
+    }
+    return opts;
+}
+
+function requireId(id, cmd) {
+    if (!id) fail(`${cmd} requires <id>`);
+}
+
+function fail(msg) {
+    console.error(`cbc-prewarm: ${msg}`);
+    printUsage();
+    process.exit(1);
+}
+
+function printUsage() {
+    console.error([
+        '',
+        'Usage:',
+        '  cbc-prewarm list [--all|-a]                         List prewarm processes (alive only; --all includes dead)',
+        '  cbc-prewarm ping <id>                               Liveness probe',
+        '  cbc-prewarm status <id>                             Query status (idle/activating/active)',
+        '  cbc-prewarm activate <id> [--cwd <dir>] [--env KEY=VAL]... [-- <args>]  Bind cwd (optional) and run',
+        '  cbc-prewarm kill <id>                               Terminate a prewarm process (SIGTERM, then SIGKILL)',
+        '  cbc-prewarm -v | --version                          Print version',
+        '',
+    ].join('\n'));
+}
+
+// ── 入口 ────────────────────────────────────────────────────────────
+
+async function main() {
+    const [cmd, id, ...rest] = process.argv.slice(2);
+
+    switch (cmd) {
+        case 'list':
+        case 'ls': {
+            const all = [id, ...rest].some((a) => a === '--all' || a === '-a');
+            cmdList({ all });
+            break;
+        }
+        case 'ping':
+            await cmdPing(id);
+            break;
+        case 'status':
+            await cmdStatus(id);
+            break;
+        case 'activate':
+            await cmdActivate(id, parseActivateOpts(rest));
+            break;
+        case 'kill':
+            await cmdKill(id);
+            break;
+        case '-v':
+        case '--version':
+            console.log(resolveVersion());
+            break;
+        case undefined:
+        case '-h':
+        case '--help':
+        case 'help':
+            printUsage();
+            break;
+        default:
+            fail(`unknown command: ${cmd}`);
+    }
+}
+
+main().catch((err) => {
+    console.error(`cbc-prewarm: ${err && err.message ? err.message : err}`);
+    process.exit(1);
+});

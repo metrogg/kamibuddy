@@ -1,0 +1,162 @@
+#!/usr/bin/env node
+
+// Suppress Node.js DEP0040 (punycode) deprecation warning triggered by dependencies
+const originalEmit = process.emit;
+process.emit = function (name, data, ...args) {
+    if (name === 'warning' && data && data.name === 'DeprecationWarning' && data.code === 'DEP0040') {
+        return false;
+    }
+    return originalEmit.call(process, name, data, ...args);
+};
+
+// 记录真正的进程启动时间（在任何模块加载之前）
+global.__CODEBUDDY_PROCESS_START_TIME__ = Date.now();
+
+// Exit early if on an older version of Node.js (< 18.20.8)
+const PRODUCT_CLI_NAME = 'CodeBuddy Code';
+const minNode = '18.20.8';
+
+function compareVersions(current, required) {
+    // Extract numeric version parts, ignoring pre-release identifiers (e.g., '14.19.0-rc.0' -> '14.19.0')
+    const currentVersion = current.split('-')[0];
+    const currentParts = currentVersion.split('.').map(Number);
+    const requiredParts = required.split('.').map(Number);
+
+    // If version format is invalid (e.g., less than 3 parts or contains NaN), skip check
+    if (currentParts.length < 3 || currentParts.some(isNaN)) {
+        return 0; // Treat as passing the check
+    }
+
+    for (let i = 0; i < 3; i++) {
+        const curr = currentParts[i] || 0;
+        const req = requiredParts[i] || 0;
+        if (curr < req) return -1;
+        if (curr > req) return 1;
+    }
+    return 0;
+}
+
+if (compareVersions(process.versions.node, minNode) < 0) {
+    // eslint-disable-next-line no-console
+    console.error(
+        '\n' +
+        `${PRODUCT_CLI_NAME} requires Node.js v${minNode} or newer.\n` +
+        `You are running Node.js v${process.versions.node}.\n` +
+        'Please upgrade Node.js: https://nodejs.org/en/download/\n',
+    );
+    process.exit(1);
+}
+
+require('events').EventEmitter.defaultMaxListeners = 50;
+
+// Enable V8 compile cache so the large bundle's parse/compile cost (~130ms for the
+// ~16MB TUI bundle) is paid only on the first run. Subsequent starts reuse the cached
+// bytecode, cutting bundle load time by ~37% (measured ~400ms -> ~254ms).
+//
+// `module.enableCompileCache` is available on Node.js >= 22.8.0. On older runtimes the
+// API is absent, so we guard it and silently skip (no extra dependency, no behavior change).
+//
+// Set CODEBUDDY_DISABLE_COMPILE_CACHE=1 to opt out (e.g. for troubleshooting a suspected
+// stale-cache issue, or on read-only filesystems where writing the cache is undesirable).
+if (process.env.CODEBUDDY_DISABLE_COMPILE_CACHE !== '1') {
+    try {
+        const { enableCompileCache, getCompileCacheDir, constants } = require('module');
+
+        if (typeof enableCompileCache === 'function') {
+            // No directory argument => Node picks a per-user temp location keyed by the
+            // module's mtime + Node version, so a stale cache after an upgrade is invalidated.
+            const cacheRet = enableCompileCache();
+
+            if (process.env.CODEBUDDY_COMPILE_CACHE_DEBUG === '1') {
+                console.log('compileCacheInfo', cacheRet);
+            }
+        }
+    } catch (_e) {
+        // Compile cache is a pure optimization; never let it block startup.
+    }
+}
+
+// windows数据
+// 之前
+// 8.12s + 8.41s + 8.06s + 8.45s + 8.15s
+// v8cache 热启动
+// 6.97s + 7.32s + 7.14s + 7.15s + 7.34s
+// v8cache 冷启动
+// 10.2s + 9.48s + 8.96s
+
+// Fast path for --version / -v: print version and exit before loading any bundle.
+// This avoids the full DI container initialization (~150 components), network requests,
+// and stdin reads that can cause multi-second startup delays on first install.
+{
+    const args = process.argv.slice(2);
+    const hasVersionFlag = args.includes('--version') || args.includes('-v');
+    // Only apply fast path when no positional sub-command is present
+    // (e.g. "cbc mcp add -v somevalue" should NOT be treated as a version request)
+    const hasSubCommand = args.some(a => !a.startsWith('-'));
+    if (hasVersionFlag && !hasSubCommand) {
+        try {
+            const pkg = require('../package.json');
+            const version = (pkg && pkg.publishConfig && pkg.publishConfig.customPackage && pkg.publishConfig.customPackage.version)
+                || (pkg && pkg.version)
+                || 'unknown';
+            // eslint-disable-next-line no-console
+            console.log(version);
+        } catch (_e) {
+            // eslint-disable-next-line no-console
+            console.log('unknown');
+        }
+        process.exit(0);
+    }
+}
+
+// 注入产品版本号到 env，供下游 @genie/product ProductManager.getCacheKey() 做版本隔离。
+// 放在 fast-path 之后：fast-path 直接 process.exit(0) 不进 bundle，无需此 env，
+// 把开销留给真正进 bundle 的路径（相对 ~254ms 的 bundle 加载，require pkg.json 的 ~0.6ms 可忽略；
+// 而且 fast-path 命中时其实已经 require 过 pkg.json，这里走 require.cache 命中也不会重新解析）。
+// 必须早于下方 require('../dist/codebuddy*') —— 否则 ProductManager 在 @PostConstruct 同步
+// loadFromCache 时会读不到 CLIENT_INFO_PRODUCT_VERSION，退到无版本号的兼容 key
+// （CodeBuddy-Product-Cache），跨版本升级时旧 schema 字段就会通过 _stableConfiguration 污染
+// 新版本的合并 base。
+// 不覆盖外部已设置的值（例如父进程通过 spawn env 注入），优先级父进程 > 本兜底。
+if (!process.env.CLIENT_INFO_PRODUCT_VERSION) {
+    try {
+        const pkg = require('../package.json');
+        // 与上方 fast-path（--version 分支）的取值逻辑保持一致：
+        // 发布产物的版本号在 publishConfig.customPackage.version 里，开发态 fallback 到 pkg.version。
+        const version = (pkg && pkg.publishConfig && pkg.publishConfig.customPackage && pkg.publishConfig.customPackage.version)
+            || (pkg && pkg.version);
+        if (version) {
+            process.env.CLIENT_INFO_PRODUCT_VERSION = version;
+        }
+    } catch (_e) {
+        // 拿不到版本号是非致命的；继续启动，cache 退回兼容 key（与未启用版本隔离前行为一致）。
+    }
+}
+
+// Route to headless bundle when TUI is not needed
+const args = process.argv.slice(2);
+const isHeadless = args.includes('--print') || args.includes('-p')
+    || args.includes('--acp')
+    || args.some(a => a === '--input-format' || a.startsWith('--input-format='))
+    || args.some(a => a === '--output-format' || a.startsWith('--output-format='))
+    || args.includes('--version') || args.includes('-v')
+    || args.includes('--help') || args.includes('-h') || args.includes('help')
+    // Daemon and background session commands
+    || args[0] === 'daemon'
+    || ['ps', 'logs', 'attach', 'kill'].includes(args[0])
+    || args.includes('--bg') || args.includes('--background')
+
+try {
+    if (isHeadless) {
+        require('../dist/codebuddy-headless');
+    } else {
+        require('../dist/codebuddy');
+    }
+} catch (e) {
+    // Fallback to full bundle if headless bundle is not available
+    if (isHeadless && e.code === 'MODULE_NOT_FOUND') {
+        require('../dist/codebuddy');
+    } else {
+        throw e;
+    }
+}
