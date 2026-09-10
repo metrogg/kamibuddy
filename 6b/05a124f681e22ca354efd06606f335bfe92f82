@@ -1,0 +1,36 @@
+docs/workbuddy对齐清单.md
+  s_c5c899a6c86841::t_035c71b23a7433 1-358
+README.md
+  s_c5c899a6c86841::t_035c71b23a7433 6-7,11-33,65-67,74,80-81,90-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "6b05a124f681e22ca354efd06606f335bfe92f82",
+  "prompts": {},
+  "sessions": {
+    "s_c5c899a6c86841": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa04212f850234b77c2fba0",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "operation_id": "6aa25f0df850234b77c35ec6",
+        "session_id": "6aa04212f850234b77c2fba0",
+        "display_model_name": "Kimi-K3",
+        "tool_use_id": "6aa25f0df850234b77c35ec6",
+        "external_session_id": "6aa04212f850234b77c2fba0",
+        "runtime_client": "trae-tob-git-ai",
+        "checkpoint_content_bytes": "45714",
+        "client_type": "ide",
+        "source_scene": "agent",
+        "included_file_count": "2",
+        "edit_kind": "bash",
+        "tool_name": "RunCommand",
+        "original_file_count": "2"
+      }
+    }
+  }
+}
