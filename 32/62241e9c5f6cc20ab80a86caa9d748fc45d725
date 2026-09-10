@@ -1,0 +1,150 @@
+.agents/skills/openspec-explore/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-343
+.trae/specs/add-thinking-level/tasks.md
+  s_c5c899a6c86841::t_52bc10c36412f6 3-8
+  s_c5c899a6c86841::t_318dde18bb139d 9
+  s_c5c899a6c86841::t_fb6857a81acba1 1-2,10-14
+src/extensions/questionnaire-tool.ts
+  s_c5c899a6c86841::t_4b23fee2d01411 107-113,117
+src/renderer/questionnaire-dialog.tsx
+  s_c5c899a6c86841::t_813c99ab764193 6-7,9-14,17,38-40,46-47,53,56-59,61,63-65,67-71,74,77,80-84,87-145,149-170,173-176,178,180-197,199,202,204,208,210,212-226,228-244,247-248,250-255
+src/shared/ipc.ts
+  s_c5c899a6c86841::t_3197c31455819c 560-561
+  s_c5c899a6c86841::t_0c8114f3f0d650 81-85
+  s_c5c899a6c86841::t_183fc8b94d11da 20,80
+  s_c5c899a6c86841::t_c8ffb5a4394e84 218-228
+  s_c5c899a6c86841::t_8e16aa2025f365 520
+src/preload/index.ts
+  s_c5c899a6c86841::t_417d989cdbfdd5 38-39
+  s_c5c899a6c86841::t_e418ebac0b93da 96-100
+.agents/skills/openspec-update-change/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-91
+src/core/preferences.ts
+  s_c5c899a6c86841::t_d1121771684d6f 83
+  s_c5c899a6c86841::t_784f4dc1d4b54f 21
+  s_c5c899a6c86841::t_bb214ded913ca5 102-110
+  s_c5c899a6c86841::t_6865349c12dd8d 113-120,128
+  s_c5c899a6c86841::t_4852c624fae318 41-46
+.agents/skills/openspec-sync-specs/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-262
+src/shared/bridge.ts
+  s_c5c899a6c86841::t_a374449594b5d0 75-79
+  s_c5c899a6c86841::t_b2fc26b3d80da2 165-171
+  s_c5c899a6c86841::t_07887ca526521f 31
+src/core/session-host.test.ts
+  s_c5c899a6c86841::t_a9928ecc94f4ec 17-20,27-47,57-59
+  s_c5c899a6c86841::t_01a7afc8fa43e1 400-535
+src/daemon/automation-runner.ts
+  s_c5c899a6c86841::t_c465804020ce01 63-67
+  s_c5c899a6c86841::t_242910eeac64c1 112-114
+  s_c5c899a6c86841::t_246dcbdc660604 43
+src/renderer/settings-view.tsx
+  s_c5c899a6c86841::t_bdfde7342f4a07 1000-1001
+  s_c5c899a6c86841::t_7fd73b696c742d 24-25
+  s_c5c899a6c86841::t_ffb9390c6fe386 349-421
+src/renderer/home-view.tsx
+  s_c5c899a6c86841::t_e0609157dfa658 12
+  s_c5c899a6c86841::t_20472d8144bdcc 105-106
+  s_c5c899a6c86841::t_6017f5647ef460 190-196
+  s_c5c899a6c86841::t_3bdc7bf753c85c 42-48
+src/core/custom-providers.test.ts
+  s_c5c899a6c86841::t_5ab1b663abb926 166
+  s_c5c899a6c86841::t_91088cbacc1254 163-165,167-192
+.agents/skills/openspec-apply-change/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-188
+src/core/model-catalog.ts
+  s_c5c899a6c86841::t_d6e301a653a540 216-227
+src/shared/session-events.ts
+  s_c5c899a6c86841::t_d72975148d0868 212-217,232-235
+  s_c5c899a6c86841::t_280aca6e8a2bf5 29-60,62-74
+  s_c5c899a6c86841::t_82f66f1f7defb2 61
+  s_c5c899a6c86841::t_5f638151ba95aa 311-325
+src/renderer/index.css
+  s_c5c899a6c86841::t_799d5d3538dbc6 4347-4348,5294,5299-5367
+  s_c5c899a6c86841::t_24cba841df5f2f 4485
+  s_c5c899a6c86841::t_90a7cd9d879d55 4342-4346
+  s_c5c899a6c86841::t_9807df0b890643 4412-4484,4486-4487
+src/core/custom-providers.ts
+  s_c5c899a6c86841::t_18297ce67dbd53 161-163
+  s_c5c899a6c86841::t_45b0f6c00574f4 44-51
+  s_c5c899a6c86841::t_0bcea671907556 119,124-133
+  s_c5c899a6c86841::t_2eb284e768d5af 20,26
+.agents/skills/openspec-archive-change/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-182
+openspec/config.yaml
+  s_c5c899a6c86841::t_2aafac132dd15c 1-28
+.trae/specs/add-thinking-level/checklist.md
+  s_c5c899a6c86841::t_616efa6284680c 1-2
+  s_c5c899a6c86841::t_0c4661587d051b 3-14
+.trae/specs/add-thinking-level/spec.md
+  s_c5c899a6c86841::t_ef03ad2a71232b 1-79
+src/daemon/index.ts
+  s_c5c899a6c86841::t_8d1bfa9ddbbe2c 493-496
+  s_c5c899a6c86841::t_e7dac32bdf69d8 2302
+  s_c5c899a6c86841::t_e7eeb3d77837cd 131-136
+  s_c5c899a6c86841::t_9cf647766cdf8a 1980-2005
+  s_c5c899a6c86841::t_7d32b081868a39 2105-2124
+  s_c5c899a6c86841::t_5aab8491d37a00 788,790-797,800,804,808
+  s_c5c899a6c86841::t_9c64c44c0be5bb 882-886,890-893
+  s_c5c899a6c86841::t_b675a401a66154 2296-2301,2303-2306
+  s_c5c899a6c86841::t_02b6da9f9055ee 864-866
+  s_c5c899a6c86841::t_ac2bd0cb1ae6f3 973-985,989
+  s_c5c899a6c86841::t_d39671d1694dce 986-988,1000
+src/renderer/chat-view.tsx
+  s_c5c899a6c86841::t_eb3c3f560d862f 1164-1170
+src/daemon/subagent-runner.ts
+  s_c5c899a6c86841::t_3cd62b5a53218b 176-178
+  s_c5c899a6c86841::t_b98b2228621e23 40
+  s_c5c899a6c86841::t_f231d7c0e8bd46 88-92
+src/core/session-host.ts
+  s_c5c899a6c86841::t_ba289ce111536d 661-669
+  s_c5c899a6c86841::t_2a1fdfff949a29 31
+  s_c5c899a6c86841::t_4a770e3688ab99 308-314
+  s_c5c899a6c86841::t_08c6f9a3dfd8dc 595-605,607-609
+  s_c5c899a6c86841::t_f795a4530cb35d 996-1001
+  s_c5c899a6c86841::t_50a1b4dfa002a3 606
+  s_c5c899a6c86841::t_772db7e3d93e6a 444-447
+src/renderer/App.tsx
+  s_c5c899a6c86841::t_9df95e26486b88 190-198
+  s_c5c899a6c86841::t_fc19173ac3e290 926-927
+src/renderer/model-menu.tsx
+  s_c5c899a6c86841::t_d20ec8f3eefa55 14-15,20-29,115
+  s_c5c899a6c86841::t_a3b33af345f60e 41-47,50-51,65-66,79-90,95-114,120
+  s_c5c899a6c86841::t_8867c574bdbc1d 170-179,182-184,186-191,194-210
+  s_c5c899a6c86841::t_713ebef6654d34 144-169
+.agents/skills/openspec-propose/SKILL.md
+  s_c5c899a6c86841::t_2aafac132dd15c 1-163
+.agents/skills/.openspec-target
+  s_c5c899a6c86841::t_2aafac132dd15c 1
+src/extensions/questionnaire-tool.test.ts
+  s_c5c899a6c86841::t_eff4296ba1d796 131,136-139,142-147,152-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "3262241e9c5f6cc20ab80a86caa9d748fc45d725",
+  "prompts": {},
+  "sessions": {
+    "s_c5c899a6c86841": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa04212f850234b77c2fba0",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "runtime_client": "trae-tob-git-ai",
+        "session_id": "6aa04212f850234b77c2fba0",
+        "tool_id": "Edit",
+        "dedupe_key": "6aa04212f850234b77c2fba0:6aa27740f850234b77c36303:afterEdit:5359776a",
+        "client_type": "ide",
+        "tool_type": "agent",
+        "operation_id": "6aa27740f850234b77c36303",
+        "edit_kind": "file_edit",
+        "external_session_id": "6aa04212f850234b77c2fba0",
+        "source_scene": "unknown",
+        "tool_use_id": "6aa27740f850234b77c36303"
+      }
+    }
+  }
+}
