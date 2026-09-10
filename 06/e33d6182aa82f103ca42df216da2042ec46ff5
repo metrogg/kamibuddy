@@ -1,0 +1,134 @@
+src/renderer/task-status.ts
+  s_02a19f96eca1d5::t_10474043ef54a1 1-24
+src/daemon/index.ts
+  s_02a19f96eca1d5::t_3e72e4a057a41e 570-571,576-578
+  s_02a19f96eca1d5::t_85b9c670f9e40e 748,751-753,755-758,760,763-780
+  s_02a19f96eca1d5::t_fe9331c16cb26f 882,884,888,899,902-903,909-911,922-923
+  s_02a19f96eca1d5::t_4c91614a998e62 1514-1518,1521-1528,1531-1535,1539-1547
+  s_02a19f96eca1d5::t_d86319ad216b02 2130-2132,2135
+  s_02a19f96eca1d5::t_da2f34e7aa9aa0 787-792,794-797
+  s_02a19f96eca1d5::t_3392c881a248ac 85-90
+  s_02a19f96eca1d5::t_55c766493986d4 1106,1108-1110,1112-1114,1116-1118,1150-1158,1160,1163,1168,1175,1177-1178,1186,1189-1198,1200-1208,1210,1215,1219,1222-1224,1230-1231,1233-1234,1242-1246,1249-1250,1254,1256
+  s_02a19f96eca1d5::t_8a9aa67716859e 1129-1130,1132-1145
+  s_02a19f96eca1d5::t_d433dd29ffa50b 1884
+  s_02a19f96eca1d5::t_a9962a285375cd 311,313-316,318
+  s_02a19f96eca1d5::t_e3838841679204 1006-1013,1016,1028-1029
+  s_02a19f96eca1d5::t_465c0c53ed19d9 441-444,450-452,454
+  s_02a19f96eca1d5::t_0e9a796979f61c 1581-1590,1596,1599
+  s_02a19f96eca1d5::t_83707057b2d01d 1844,1854-1856,1871-1872,1874,1878,1881-1883
+  s_02a19f96eca1d5::t_ce695b61223364 1605-1613,1620
+  s_02a19f96eca1d5::t_f0cc5a47a70000 1664
+  s_02a19f96eca1d5::t_6de77664e0d49c 1120-1127
+  s_02a19f96eca1d5::t_7ce9eacdb68237 1471-1473
+  s_02a19f96eca1d5::t_85ddb9879535b4 1375-1382,1384-1411
+  s_02a19f96eca1d5::t_2a24eed4d79e01 1677,1679,1682,1686
+  s_02a19f96eca1d5::t_b2d95f9c87cddd 851,853-861
+  s_02a19f96eca1d5::t_46d2844e1b6dad 41
+  s_02a19f96eca1d5::t_d836207b0d4e56 426-428
+  s_02a19f96eca1d5::t_9fc5158bc8cb41 351-353,355-356,358-425,429-431
+  s_02a19f96eca1d5::t_95ea23d9ccd12f 589-603,605-609,611-632,634-650
+  s_02a19f96eca1d5::t_6db77031d47a34 1262-1265,1267-1271,1273-1275,1282-1293,1295-1317,1319-1326,1328,1330-1335,1337,1339,1341,1343-1344,1346,1348-1349,1351-1356,1367-1368
+  s_02a19f96eca1d5::t_35276c15e68c83 1357-1366
+  s_02a19f96eca1d5::t_f84a287b724c80 1914-1921,1924-1927,1935
+  s_02a19f96eca1d5::t_b0059044581e81 1416-1425
+  s_02a19f96eca1d5::t_76944a2f497f79 1631,1635-1637,1639-1640,1642,1644-1646,1649
+  s_02a19f96eca1d5::t_6e8acb98144d12 813-816,824-826
+  s_02a19f96eca1d5::t_1bbda3f2cfaf11 2006-2010,2012,2018-2020,2022-2025,2027-2029,2032
+  s_02a19f96eca1d5::t_05d3b1888d7a52 119,610,932,954,958,1107,1159,1199,1247,1266
+  s_02a19f96eca1d5::t_c335f7f73038f0 931,933-935,953,955-957,959-965
+  s_02a19f96eca1d5::t_af601120e16a17 1551,1553-1556,1559,1565-1566
+  s_02a19f96eca1d5::t_01016e192a882c 1690-1693,1707-1709
+src/preload/index.ts
+  s_02a19f96eca1d5::t_da1bbb778cc6bd 66
+  s_02a19f96eca1d5::t_49b5abc0c07247 108
+  s_02a19f96eca1d5::t_dd716a5603a208 26
+src/renderer/sidebar.tsx
+  s_02a19f96eca1d5::t_264cb930d67682 201-207
+  s_02a19f96eca1d5::t_47cd01dd665912 87
+  s_02a19f96eca1d5::t_371422a4a8b9df 45,48
+src/renderer/diagnostics-view.tsx
+  s_02a19f96eca1d5::t_56335708293327 208
+src/renderer/App.tsx
+  s_02a19f96eca1d5::t_972adffd688fb2 770-771,780,784
+  s_02a19f96eca1d5::t_01ec7258a5f22c 726,731,738,742-743,751,757
+  s_02a19f96eca1d5::t_2fb87ba6734ad4 849
+  s_02a19f96eca1d5::t_24f796084e5885 302
+  s_02a19f96eca1d5::t_aa9666f4768cae 120,122-123,125
+  s_02a19f96eca1d5::t_6ed4aa3507410d 684-685,705
+  s_02a19f96eca1d5::t_496129be845b1d 78-101
+  s_02a19f96eca1d5::t_bb31449c12329e 137,139-143,145
+  s_02a19f96eca1d5::t_052eaa888fa847 20,527
+  s_02a19f96eca1d5::t_f5d329d53211d5 395-398,400-428
+  s_02a19f96eca1d5::t_afeae52af3a417 167,170-174,178-212,219-221,223-246,262-264,277-284
+  s_02a19f96eca1d5::t_2dca526a74738d 517-523,525-526,528-541,543-561,563-564,569
+  s_02a19f96eca1d5::t_2d763b0156b8a5 574-576,599-601,608,612-625,633,636,646,649-652,655,658-667,673
+  s_02a19f96eca1d5::t_c7c36d917773d5 24,28
+src/shared/ipc.ts
+  s_02a19f96eca1d5::t_fd3dec75e2d9d4 396-401
+  s_02a19f96eca1d5::t_dfa187ad88b113 20
+  s_02a19f96eca1d5::t_0b2509a79b8fd7 445
+  s_02a19f96eca1d5::t_c791e2e9465f90 510-511
+  s_02a19f96eca1d5::t_81a4e69fbdfacd 46-51
+  s_02a19f96eca1d5::t_dbb2b330ced13f 264,266-278
+  s_02a19f96eca1d5::t_7d7fece97c5676 159-167
+  s_02a19f96eca1d5::t_5999f7e5f9e24d 473
+src/daemon/session-registry.ts
+  s_02a19f96eca1d5::t_d7248eed26f6eb 80-83
+  s_02a19f96eca1d5::t_afd5d9debb2a30 1-79,84-104,107-156
+  s_02a19f96eca1d5::t_07affcd0607d16 105-106
+src/shared/bridge.ts
+  s_02a19f96eca1d5::t_42f46de3158e06 114-118
+  s_02a19f96eca1d5::t_c80e40aae2866f 186-190
+  s_02a19f96eca1d5::t_0bee273a13e400 48-49
+  s_02a19f96eca1d5::t_aca66e3577b9a1 28
+src/daemon/session-registry.test.ts
+  s_02a19f96eca1d5::t_44c1a2347606c0 1-168
+src/renderer/task-status.test.ts
+  s_02a19f96eca1d5::t_534db0179a370c 1-81
+src/shared/session-events.ts
+  s_02a19f96eca1d5::t_cbdc178c32da5e 214-228
+  s_02a19f96eca1d5::t_f097e3de678a62 287-292
+src/core/preview-server.ts
+  s_02a19f96eca1d5::t_41c9bb852f0852 140-201
+src/renderer/session-groups.test.ts
+  s_02a19f96eca1d5::t_2429c5d988f5d8 14
+src/core/preview-server.test.ts
+  s_02a19f96eca1d5::t_aa68eaf22a5361 5
+  s_02a19f96eca1d5::t_90330491066f11 108-158
+.trae/specs/support-concurrent-tasks/tasks.md
+  s_02a19f96eca1d5::t_755973fe27ca7a 3-6,8-16,18-22,24-25
+docs/STATUS.md
+  s_02a19f96eca1d5::t_7a3ac01523c71a 3
+  s_02a19f96eca1d5::t_eba7dc4b530912 601-630
+.trae/specs/support-concurrent-tasks/checklist.md
+  s_02a19f96eca1d5::t_2788d273b073e3 3-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "06e33d6182aa82f103ca42df216da2042ec46ff5",
+  "prompts": {},
+  "sessions": {
+    "s_02a19f96eca1d5": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa039a5f850234b77c2f872",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_use_id": "6aa19b32f850234b77c34a79",
+        "source_scene": "unknown",
+        "edit_kind": "file_edit",
+        "operation_id": "6aa19b32f850234b77c34a79",
+        "dedupe_key": "6aa039a5f850234b77c2f872:6aa19b32f850234b77c34a79:afterEdit:6ce469cc",
+        "external_session_id": "6aa039a5f850234b77c2f872",
+        "tool_type": "agent",
+        "client_type": "ide",
+        "tool_id": "Edit",
+        "session_id": "6aa039a5f850234b77c2f872",
+        "runtime_client": "trae-tob-git-ai"
+      }
+    }
+  }
+}
