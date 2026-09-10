@@ -212,6 +212,21 @@ export type SessionEvent =
 	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail };
 
 /**
+ * PUSH.sessionEvent 的信封：事件本体 + 路由键。
+ *
+ * sessionId 是**路由键，不是事件内容**：SessionEvent 表达的是会话内事实，
+ * reducer 折叠它时不感知自己属于哪个会话（reducer 无侵入）；
+ * 持有方（daemon 注册表 / renderer 的 Map<sessionId, ConversationView>）
+ * 按信封上的 sessionId 把事件分桶进对应会话的视图——后台会话的流式事件
+ * 因此不会污染当前视图，切回时现场完整。不给每个事件本体塞会话 id，
+ * 是因为那是 16 个事件变体各加一个重复字段，而路由只需要一份。
+ */
+export interface SessionEventEnvelope {
+	readonly sessionId: string;
+	readonly event: SessionEvent;
+}
+
+/**
  * 会话的当前状态。变化时整体重发——字段少，不值得做差量。
  *
  * 模式是**两个正交的轴**，照 WorkBuddy 的结构来（其内置插件目录即证据）：
@@ -269,7 +284,12 @@ export interface TurnTiming {
 	readonly cancelled?: boolean;
 }
 
-/** 渲染进程挂载或热重载后拉取的完整状态。 */
+/**
+ * 渲染进程挂载或热重载后拉取的完整状态。
+ *
+ * 会话 id 不单独列字段：它在 state.sessionId（SessionState），
+ * 多任务并发后按 id 缓存快照时以那个为准，这里不再复制一份制造两个口径。
+ */
 export interface SessionSnapshot {
 	readonly state: SessionState;
 	readonly entries: readonly ConversationEntry[];

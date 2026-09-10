@@ -11,6 +11,7 @@ function summary(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
 		modifiedAt: 0,
 		messageCount: 1,
 		current: false,
+		running: false,
 		...overrides,
 	};
 }

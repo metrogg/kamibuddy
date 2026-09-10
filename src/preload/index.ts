@@ -23,7 +23,7 @@ function subscribe<T>(
 
 const bridge: KamiBridge = {
 	daemonStatus: () => ipcRenderer.invoke(INVOKE.daemonStatus),
-	snapshot: () => ipcRenderer.invoke(INVOKE.snapshot),
+	snapshot: (sessionId) => ipcRenderer.invoke(INVOKE.snapshot, sessionId),
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
 	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
@@ -63,6 +63,7 @@ const bridge: KamiBridge = {
 	readArtifact: (path) => ipcRenderer.invoke(INVOKE.readArtifact, path),
 	saveArtifactAs: (request) =>
 		ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
+	previewBaseUrl: (cwd) => ipcRenderer.invoke(INVOKE.previewBaseUrl, cwd),
 
 	settingsSnapshot: () => ipcRenderer.invoke(INVOKE.settingsSnapshot),
 	setApiKey: (providerId, apiKey) =>
@@ -104,6 +105,7 @@ const bridge: KamiBridge = {
 	runAutomationNow: (id) => ipcRenderer.invoke(INVOKE.automationRunNow, id),
 
 	onSessionEvent: (listener) => subscribe(PUSH.sessionEvent, listener),
+	onTaskListChanged: (listener) => subscribe(PUSH.taskListChanged, listener),
 	onUiRequest: (listener) => subscribe(PUSH.uiRequest, listener),
 	onPermissionRequest: (listener) =>
 		subscribe(PUSH.permissionRequest, listener),

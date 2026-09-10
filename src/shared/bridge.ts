@@ -25,7 +25,7 @@ import type {
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot } from "./session-events.ts";
 import type {
 	CustomProviderInput,
 	SettingsSnapshot,
@@ -45,7 +45,8 @@ export interface KamiBridge {
 	 * 只依赖 onDaemonReady 推送会漏掉「推送早于监听器注册」的情况。
 	 */
 	readonly daemonStatus: () => Promise<DaemonStatus>;
-	readonly snapshot: () => Promise<SessionSnapshot>;
+	/** 拉取完整会话状态。sessionId 缺省 = 当前活动会话；指定 id 拉对应会话（后台会话视图恢复用）。 */
+	readonly snapshot: (sessionId?: string) => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
 	/** 新建任务：作废旧会话、开一个全新会话（在当前工作空间语义下）。 */
@@ -110,6 +111,11 @@ export interface KamiBridge {
 	readonly saveArtifactAs: (
 		request: SaveArtifactRequest,
 	) => Promise<string | undefined>;
+	/**
+	 * 查询指定 cwd 的预览服务 base URL（PreviewServer 按 cwd 多实例）。
+	 * 该 cwd 的服务未启动时返回 undefined（面板显示引导文案，不是错误）。
+	 */
+	readonly previewBaseUrl: (cwd: string) => Promise<string | undefined>;
 
 	/* ── 设置 ─────────────────────────────────────────────────────── */
 
@@ -177,7 +183,11 @@ export interface KamiBridge {
 	readonly runAutomationNow: (id: string) => Promise<void>;
 
 	readonly onSessionEvent: (
-		listener: (event: SessionEvent) => void,
+		listener: (envelope: SessionEventEnvelope) => void,
+	) => Unsubscribe;
+	/** 任务列表变更（run 开始/结束等），携带 daemon 组装好的完整最新列表。 */
+	readonly onTaskListChanged: (
+		listener: (sessions: readonly SessionSummary[]) => void,
 	) => Unsubscribe;
 	readonly onUiRequest: (listener: (request: UiRequest) => void) => Unsubscribe;
 	readonly onPermissionRequest: (

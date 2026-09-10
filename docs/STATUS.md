@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（定时任务自动化核心闭环，spec：.trae/specs/add-automation-scheduler/；同日早前：plan 模式、Composer 统一 + 渲染层去重、文档读取）
+> 最后更新：2026-09-09（多任务并发：会话注册表 + 后台保活 + 任务状态可见，spec：.trae/specs/support-concurrent-tasks/；同日早前：定时任务自动化、plan 模式、文档读取）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -597,6 +597,36 @@ before_agent_start 每轮重组 → 每个新 run 时间新鲜（composePrompt �
 另：同日规则变更——AGENTS.md §2「文档流水线」改为按 WorkBuddy 用 Python venv
 （托管 `~/.venv-html-to-docx` + `uv` 独立 Python 3.12），不再要求用户预装
 Python / Git for Windows，决策记录见 ARCHITECTURE.md §4.4。
+
+## 多任务并发（2026-09-09 落地）
+
+此前同一时间只能跑一个任务（切换时 streaming 直接拒绝）。两路调研证实：
+pi 对多 AgentSession 并发无实质障碍（automation-runner 早就在跑双宿主）；
+WorkBuddy 模型 = 运行不设硬上限、空闲 LRU 回收、切走照跑、完成通知。
+单任务假设全在我们侧，本次逐处拆除（spec：`.trae/specs/support-concurrent-tasks/`）：
+
+- **会话注册表**（`daemon/session-registry.ts` 纯模块 + index.ts 接线）：
+  `hostPromise` 单例 → `Map<sessionId, Promise<SessionHost>>`。键选 sessionId
+  （建宿主即有真值）；同文件单写者不变式三层守：文件名内嵌 id + resume 先查表 +
+  `resumeChainByFile` 串行锁。全局保留模型/权限档（改动对后续生效），
+  会话状态（宿主/折叠历史/cwd/running/互斥链）全部入桶。
+- **后台保活**：newTask/resume/applyWorkspace 不再因 streaming 拒绝，旧宿主留注册表
+  继续跑；applyWorkspace 语义 = 新建任务默认 cwd 来源（既有会话 cwd 终身绑定不变）。
+- **按会话互斥**：`enqueue(bucket, op)` 同桶串行、跨桶并行、失败不毒链；
+  **abort 不进链**（它是信号不是写操作，排在整段 run 后面停止键就废了）。
+- **事件会话维度**：信封 `SessionEventEnvelope{sessionId,event}`（BREAKING 契约，
+  同仓库同构建无版本负担）；daemon 每会话折叠，renderer `viewCacheRef` 多桶缓存——
+  **后台事件折叠零重渲染**，切回不丢流式现场（snapshot(sessionId) 兜底）。
+- **任务状态可见**：`SessionSummary.running` daemon 权威 + `PUSH.taskListChanged`
+  全量推送（替代拉式 refreshTasks）；侧栏运行转圈、后台完成未读（running 翻转检测，
+  查看即清）、完成 toast（toast 无点击能力只文案）。
+- **空闲宿主 LRU 回收**：保 5 个空闲（`MAX_IDLE_HOSTS`），运行中/审批待答/链上有活/
+  当前/pristine 豁免；回收 = dispose（JSONL 历史不丢，可重开）。
+- **PreviewServers 多根池**（Map<cwd, server>），不同 cwd 会话预览互不影响。
+- 范围外：消息排队 UI（沿用 pi steer）、系统级通知、每会话一进程、同 cwd 冲突防护。
+
+784 个测试全绿（注册表/互斥/回收 13 例 + 侧栏状态 7 例新增），
+smoke:session 14/14、smoke:permission 10/10；automation-runner 零改动回归无恙。
 
 ## 已知坑
 

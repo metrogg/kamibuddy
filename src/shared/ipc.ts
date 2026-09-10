@@ -17,7 +17,7 @@ import type { AutomationTask, Schedule } from "./automation.ts";
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEvent, SessionSnapshot } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot } from "./session-events.ts";
 import type {
 	CustomProviderInput,
 	SettingsSnapshot,
@@ -43,7 +43,12 @@ export const INVOKE = {
 	 * 界面卡在"正在启动"且无法恢复。渲染进程挂载后主动查一次即可消除竞态。
 	 */
 	daemonStatus: "daemon:status",
-	/** 拉取完整会话状态。渲染进程挂载、或 HMR 之后调用。 */
+	/**
+	 * 拉取完整会话状态。渲染进程挂载、或 HMR 之后调用。
+	 * sessionId 缺省 = 当前活动会话（保持既有调用方语义）；
+	 * 指定 id 时拉取对应会话的快照——多任务并发后 renderer 按 id 缓存
+	 * 各会话视图，后台会话的现场恢复/兜底重拉走这里。
+	 */
 	snapshot: "session:snapshot",
 	/** 发送一条用户消息。 */
 	prompt: "session:prompt",
@@ -151,6 +156,15 @@ export const INVOKE = {
 	 * 返回大小与文本（二进制/超大不给文本）。
 	 */
 	readArtifact: "artifact:read",
+	/**
+	 * 查询指定 cwd 的产物预览服务 base URL（http://127.0.0.1:端口，根=该目录）。
+	 *
+	 * PreviewServer 按 cwd 多实例（每 cwd 一个端口，懒建），renderer 按
+	 * 当前会话的 cwd 查询——不同 cwd 的会话预览互不影响。
+	 * 该 cwd 的服务未启动时返回 undefined：面板显示引导文案即可，不视为错误。
+	 * 形状在此钉死，daemon 多根实现（Task 2.7）与 renderer 取用（Task 3.4）并行不漂移。
+	 */
+	previewBaseUrl: "preview:base-url",
 
 	/* ── 设置 ─────────────────────────────────────────────────────── */
 
@@ -247,8 +261,21 @@ export const INVOKE = {
 
 /** daemon → renderer，单向推送（webContents.send）。 */
 export const PUSH = {
-	/** 会话事件流。 */
+	/** 会话事件流。payload 为 SessionEventEnvelope（sessionId 路由键 + 事件本体）。 */
 	sessionEvent: "session:event",
+	/**
+	 * 任务列表有变更（run 开始/结束、会话增删改），payload 为**完整最新列表**
+	 * （与 INVOKE.sessionList 同元素类型），renderer 收到直接替换本地 state。
+	 *
+	 * 为什么新推一条而不是沿用旧机制：现状是 renderer 在 run_finished 事件里
+	 * 重新 invoke sessionList 拉取（拉式），run 开始/结束都要刷新 running 标记后，
+	 * 拉式得在两类事件里各挂一次重拉、每个 run 边界多一次往返，且刷新时机
+	 * 依赖 renderer 记得订阅；daemon 是列表真相的持有者，变了就推是单向数据流。
+	 * 为什么全量而非增量：列表条数小（几十到几百条小对象），增量协议要为
+	 * 增/删/改/排序各写一套；daemon 已把 title/current/running 组装好，
+	 * 全量替换与重拉等价但少一次往返。首屏仍走 invoke 主动拉一次。
+	 */
+	taskListChanged: "session:list-changed",
 	/** daemon 请求 UI 交互，需要 renderer 用 INVOKE.uiResponse 应答。 */
 	uiRequest: "ui:request",
 	/** 权限审批请求，需要用 INVOKE.permissionResponse 应答。 */
@@ -366,6 +393,12 @@ export interface SessionSummary {
 	readonly messageCount: number;
 	/** 是否为当前活动会话（至多一条 true）。 */
 	readonly current: boolean;
+	/**
+	 * 是否有正在进行的 run。daemon 权威值（会话注册表的运行态），
+	 * renderer 不再用本地 streaming 标记推导列表行状态——
+	 * 多任务并发后后台会话也在跑，本地推导只看得见当前会话。
+	 */
+	readonly running: boolean;
 }
 
 /** 「空间」分组的元数据：一个工作目录一条。组本身由会话文件派生（磁盘真相），这里只承载名称覆盖。 */
@@ -409,7 +442,7 @@ export type AutomationEvent =
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
-	[INVOKE.snapshot]: { args: []; result: SessionSnapshot };
+	[INVOKE.snapshot]: { args: [sessionId?: string]; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
 	[INVOKE.newTask]: { args: []; result: void };
@@ -437,6 +470,7 @@ export interface InvokeMap {
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
 	[INVOKE.saveArtifactAs]: { args: [SaveArtifactRequest]; result: string | undefined };
 	[INVOKE.readArtifact]: { args: [path: string]; result: ArtifactContent };
+	[INVOKE.previewBaseUrl]: { args: [cwd: string]; result: string | undefined };
 
 	[INVOKE.settingsSnapshot]: { args: []; result: SettingsSnapshot };
 	[INVOKE.setApiKey]: { args: [providerId: string, apiKey: string]; result: void };
@@ -473,7 +507,8 @@ export interface InvokeMap {
 
 /** push 通道的 payload 映射。 */
 export interface PushMap {
-	[PUSH.sessionEvent]: SessionEvent;
+	[PUSH.sessionEvent]: SessionEventEnvelope;
+	[PUSH.taskListChanged]: readonly SessionSummary[];
 	[PUSH.uiRequest]: UiRequest;
 	[PUSH.permissionRequest]: PermissionRequest;
 	[PUSH.daemonReady]: void;

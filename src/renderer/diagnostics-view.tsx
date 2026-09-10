@@ -205,7 +205,7 @@ export function DiagnosticsView({
 	useEffect(() => {
 		refresh();
 		// 会话事件 = 统计变了的信号。delta 类事件不改变聚合结果，跳过免得空转。
-		const off = window.kami.onSessionEvent((event) => {
+		const off = window.kami.onSessionEvent(({ event }) => {
 			if (
 				event.type === "assistant_text_delta" ||
 				event.type === "assistant_thinking_delta" ||

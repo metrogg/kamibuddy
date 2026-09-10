@@ -38,7 +38,7 @@ import {
 	readPreferences,
 	writePreferences,
 } from "../core/preferences.ts";
-import { PreviewServer } from "../core/preview-server.ts";
+import { PreviewServers } from "../core/preview-server.ts";
 import {
 	composePrompt,
 	formatSkillsSection,
@@ -82,6 +82,12 @@ import {
 	conversationReducer,
 	type ConversationView,
 } from "../shared/conversation.ts";
+import {
+	createBucket,
+	enqueue,
+	pickEvictions,
+	type SessionBucket,
+} from "./session-registry.ts";
 import type {
 	DaemonOutbound,
 	DaemonRequest,
@@ -110,6 +116,7 @@ import { searchWeb } from "../core/web-search.ts";
 import type {
 	ModeDescriptor,
 	SessionEvent,
+	SessionEventEnvelope,
 	SessionState,
 } from "../shared/session-events.ts";
 import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
@@ -301,14 +308,14 @@ async function composeSystemPrompt(
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
 /**
- * 当前工作空间（会话 cwd）。临时任务模型下**必有值**：
- * 新建任务默认 = 临时任务，cwd 是生效根下的共享临时目录（`<根>/临时任务`），
- * 工具集、权限门、预览服务与正式工作空间完全同待遇。
+ * 新建任务的默认 cwd 来源（applyWorkspace 的唯一语义）。
  *
- * 会话与 cwd 终身绑定（cwd 在建会话时一次性注入 pi 的工具集），
- * 所以换空间 = 作废当前会话重开，见 applyWorkspace。
+ * 多任务并发后「当前工作空间」不再等于「当前会话的 cwd」：会话与 cwd 终身
+ * 绑定（cwd 在建会话时一次性注入 pi 的工具集），切换工作空间只决定**后续
+ * 新建任务**落在哪，既有会话原地不动（WorkBuddy 同模型）。
+ * 临时任务模型下必有值：默认 = 生效根下的共享临时目录（`<根>/临时任务`）。
  */
-let workspaceDir: string = tempTasksDir();
+let defaultWorkspaceDir: string = tempTasksDir();
 
 /**
  * 临时任务的共享目录。**现算不缓存**：生效根 = env > 设置项 > 内置默认
@@ -341,28 +348,87 @@ function isTempCwd(cwd: string): boolean {
 }
 
 /**
- * 会话历史。用 shared 的 reducer 折叠，与渲染进程**同一份实现** ——
- * 各写一份会漂移，症状是「重开界面后内容变了」，极难排查（shared/conversation.ts 的注释）。
+ * 全新会话的初始视图（ pristine 桶的 conversation）。
+ * 用 shared 的 reducer 折叠，与渲染进程**同一份实现** —— 各写一份会漂移，
+ * 症状是「重开界面后内容变了」，极难排查（shared/conversation.ts 的注释）。
  *
- * daemon 持有它是为了让渲染进程重新挂载时能经 snapshot 拿回完整历史。
+ * daemon 每会话折叠一份（注册表桶持有），渲染进程重新挂载时按 sessionId
+ * 经 snapshot 拉回对应会话的完整历史。
  */
-let conversation: ConversationView = {
-	state: {
-		sessionId: "",
-		// 启动即临时任务：cwd 是共享临时目录（真实路径），不再是「无目录」。
-		cwd: workspaceDir,
-		isTempTask: true,
-		sceneId: "work",
-		interactionId: "craft",
-		modelId: activeModelKey,
-		isStreaming: false,
-	},
-	entries: [],
-	availableScenes: SCENES,
-	availableModes: INTERACTIONS,
-	cancelledTurns: [],
-	artifacts: [],
-};
+function freshConversation(cwd: string, sceneId: string, interactionId: string): ConversationView {
+	return {
+		state: {
+			sessionId: "",
+			// 启动即临时任务：cwd 是共享临时目录（真实路径），不再是「无目录」。
+			cwd,
+			isTempTask: isTempCwd(cwd),
+			sceneId,
+			interactionId,
+			modelId: activeModelKey,
+			isStreaming: false,
+		},
+		entries: [],
+		availableScenes: SCENES,
+		availableModes: INTERACTIONS,
+		cancelledTurns: [],
+		artifacts: [],
+	};
+}
+
+/* ── 会话注册表（多任务并发核心，纯逻辑在 session-registry.ts） ────── */
+
+/**
+ * 已注册会话桶：sessionId → 桶。 pristine 桶（宿主未建、sessionId 未定）
+ * 不入表，只被 currentBucket 持有 —— 它没有文件、没有历史，切走即丢弃。
+ */
+const bucketsById = new Map<string, SessionBucket<SessionHost>>();
+
+/**
+ * 当前会话指针。指向桶而不是 sessionId：pristine 桶还没有 id，
+ * 但已经是「用户正在看的会话」，必须可被指针表达。
+ */
+let currentBucket: SessionBucket<SessionHost> = createBucket({
+	cwd: defaultWorkspaceDir,
+	conversation: freshConversation(defaultWorkspaceDir, "work", "craft"),
+});
+
+/** 按会话文件查注册表（resume/rename/delete/export 守「同文件单写者」不变式）。 */
+function findBucketByFile(path: string): SessionBucket<SessionHost> | undefined {
+	const resolved = resolve(path);
+	for (const bucket of bucketsById.values()) {
+		if (bucket.sessionFilePath !== undefined && resolve(bucket.sessionFilePath) === resolved) {
+			return bucket;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * 切换当前会话指针。被切走的 pristine 桶随之丢弃（无宿主无历史，
+ * 没有任何可保留的现场）；其余旧桶留在注册表里后台保活。
+ * 每次指针变更都可能让旧当前桶变成可回收的空闲桶，顺手检查一轮。
+ */
+function setCurrentBucket(bucket: SessionBucket<SessionHost>): void {
+	currentBucket = bucket;
+	bucket.lastUsedAt = Date.now();
+	evictIdleHosts();
+}
+
+/** 空闲宿主 LRU 回收：dispose + 出表。历史在 JSONL，resume 可完整重开。 */
+function evictIdleHosts(): void {
+	for (const bucket of pickEvictions(bucketsById.values(), currentBucket)) {
+		bucketsById.delete(bucket.sessionId);
+		// pickEvictions 已排除 pristine（无 hostPromise）与 running / 审批待答 /
+		// 链上有活的桶 —— 这里拿到的必然是空闲宿主，dispose 不会杀到任何 run。
+		const hostPromise = bucket.hostPromise;
+		if (hostPromise === undefined) continue;
+		eventLog.append({ kind: "session_evicted", sessionId: bucket.sessionId });
+		// 已注册桶的 hostPromise 必然已 resolve（adoptHost 赋的 Promise.resolve(host)），
+		// dispose 在紧随的微任务里同步完成；任何后续 resume 走 IPC 消息（更晚的
+		// 宏任务），到得了 SessionManager.open 时旧宿主必已销毁 —— 无双写窗口。
+		void hostPromise.then((host) => host.dispose());
+	}
+}
 
 /* ── 可观测性 ─────────────────────────────────────────────────────── */
 
@@ -372,16 +438,20 @@ let conversation: ConversationView = {
  * daemon 没有界面，console 只打到终端，终端一关现场就没了——
  * 这两件是「出问题时唯一的现场证据」（WorkBuddy 把启动即可观测列为 P0）。
  * 聚合口径是进程内累计，不做历史持久化（core/observability.ts 的注释）。
+ *
+ * 多任务并发后口径不变：**进程级聚合，不按会话分桶**（spec：
+ * support-concurrent-tasks E —— 诊断页看的是「daemon 整体花了多少」，
+ * 按会话拆桶的收益不抵复杂度，YAGNI）。
  */
 const eventLog = new EventLog(join(getConfigDir(), "logs"));
 const observability = new ObservabilityStore();
 
 /**
- * 产物预览静态服务（根 = 当前工作区，core/preview-server.ts 的注释是安全契约）。
- * 临时任务也起服务（根 = 共享临时目录）—— 有产物就该能预览。
- * 换工作空间时随 applyWorkspace 换根。
+ * 产物预览静态服务池：按 cwd 多实例（每 cwd 一个端口，懒建，
+ * core/preview-server.ts 的注释是安全契约与回收决策）。
+ * 会话切走不再断预览 —— 旧根的服务继续跑。
  */
-const previewServer = new PreviewServer();
+const previewServers = new PreviewServers();
 
 /* ── 定时任务 ─────────────────────────────────────────────────────── */
 
@@ -497,14 +567,15 @@ function toggleAutomation(id: string): AutomationTask {
 const ARTIFACT_TEXT_MAX = 512 * 1024;
 
 /**
- * 读产物文件内容（readArtifact 通道）。路径限当前工作区内：
- * 相对路径对工作区 resolve；绝对路径必须落在工作区里——
+ * 读产物文件内容（readArtifact 通道）。路径限**当前会话**的工作区内：
+ * 相对路径对该会话 cwd resolve；绝对路径必须落在其内——
  * 预览面板能看的文件与权限门放行的写范围必须同界（配置目录里的密钥
  * 绝不能经这条通道被读出来）。
  */
 function readArtifactContent(path: string): ArtifactContent {
-	const abs = resolve(workspaceDir, path);
-	if (abs !== workspaceDir && !abs.startsWith(workspaceDir + sep)) {
+	const cwd = currentBucket.cwd;
+	const abs = resolve(cwd, path);
+	if (abs !== cwd && !abs.startsWith(cwd + sep)) {
 		throw new Error("路径超出当前工作区");
 	}
 	const stat = statSync(abs); // 不存在让 ENOENT 直接抛给调用方（响亮失败）
@@ -515,13 +586,68 @@ function readArtifactContent(path: string): ArtifactContent {
 	return { size, text: buf.toString("utf8") };
 }
 
-/** 最近一次组装的系统提示词 token 估算（compose 时更新），供上下文成分统计。 */
-let lastSystemPromptTokens = 0;
+function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEvent): void {
+	// 折叠进**该会话**的桶：多任务并发后后台会话的事件不能污染当前视图
+	//（renderer 按信封 sessionId 折叠进各自的缓存，daemon 侧同口径）。
+	bucket.conversation = conversationReducer(bucket.conversation, { type: "event", event });
+	// 运行态以折叠结果为准（reducer 在 run 边界与 session_state 上维护 isStreaming，
+	// 宿主又是从自家 run 记账算的 —— 两条路径同一个真相，取折叠值不另开口径）。
+	bucket.running = bucket.conversation.state.isStreaming;
+	observability.record(event);
+	eventLog.append({
+		kind: "session_event",
+		sessionId: bucket.sessionId,
+		event: sanitizeForLog(event),
+	});
+	const envelope: SessionEventEnvelope = { sessionId: bucket.sessionId, event };
+	post({ kind: "push", channel: PUSH.sessionEvent, payload: envelope });
 
-/** 最近一次组装的技能段 token 估算（compose 时更新），供上下文用量明细拆分类。 */
-let lastSkillsTokens = 0;
+	// run 边界推全量任务列表：侧栏的 running 标记靠它即时刷新（契约见 shared/ipc.ts）。
+	if (event.type === "run_started" || event.type === "run_finished") {
+		pushTaskListChanged();
+		if (event.type === "run_finished") evictIdleHosts();
+	}
 
-/** 事件出口：折叠进本地历史、推给渲染进程、喂给统计与日志。四件事都必须做。 */
+	// 带用量的 session_state 到达后补发明细：used/total 是 pi 的精确值（刚折叠进
+	// 桶的 conversation.state），分类所需的系统提示词/技能段 token 只有这里知道。
+	// context_usage 自身不会再触发本分支，无递归。
+	if (event.type === "session_state" && event.state.contextUsage !== undefined) {
+		emitContextUsageDetail(bucket, event.state.contextUsage);
+	}
+}
+
+/** 组装并发出上下文用量明细（分类是估算值，UI 必须标注，见 shared/context-usage.ts）。 */
+function emitContextUsageDetail(
+	bucket: SessionBucket<SessionHost>,
+	contextUsage: { usedTokens: number; maxTokens: number },
+): void {
+	const usage = deriveContextUsageDetail({
+		entries: bucket.conversation.entries,
+		contextUsage,
+		systemPromptTokens: bucket.systemPromptTokens,
+		skillsTokens: bucket.skillsTokens,
+	});
+	if (usage === undefined) return;
+	emitSessionEvent(bucket, { type: "context_usage", usage });
+}
+
+/**
+ * 任务列表变更的统一推送（全量，契约理由见 shared/ipc.ts 的 PUSH.taskListChanged）。
+ * daemon 是列表真相的持有者：run 边界、会话增删改都从这里推，renderer 不拉。
+ */
+function pushTaskListChanged(): void {
+	void listSessions().then(
+		(sessions) => {
+			post({ kind: "push", channel: PUSH.taskListChanged, payload: sessions });
+		},
+		(error: unknown) => {
+			// 推送失败不致命（列表下次变更还会推），但现场必须留（AGENTS.md §7）。
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(`任务列表推送失败：${message}`);
+			eventLog.append({ kind: "ipc_error", channel: PUSH.taskListChanged, message });
+		},
+	);
+}
 /**
  * 并发竞速一个硬超时。
  *
@@ -560,32 +686,6 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 			"它能拦住助手主动的读写与命令，但不能约束已运行程序的行为。" +
 			"凭据目录（.ssh/.gnupg/.aws 等）在任何档位下都禁止读写。",
 	};
-}
-
-function emitSessionEvent(event: SessionEvent): void {
-	conversation = conversationReducer(conversation, { type: "event", event });
-	observability.record(event);
-	eventLog.append({ kind: "session_event", event: sanitizeForLog(event) });
-	post({ kind: "push", channel: PUSH.sessionEvent, payload: event });
-
-	// 带用量的 session_state 到达后补发明细：used/total 是 pi 的精确值（刚折叠进
-	// conversation.state），分类所需的系统提示词/技能段 token 只有这里知道。
-	// context_usage 自身不会再触发本分支，无递归。
-	if (event.type === "session_state" && event.state.contextUsage !== undefined) {
-		emitContextUsageDetail(event.state.contextUsage);
-	}
-}
-
-/** 组装并发出上下文用量明细（分类是估算值，UI 必须标注，见 shared/context-usage.ts）。 */
-function emitContextUsageDetail(contextUsage: { usedTokens: number; maxTokens: number }): void {
-	const usage = deriveContextUsageDetail({
-		entries: conversation.entries,
-		contextUsage,
-		systemPromptTokens: lastSystemPromptTokens,
-		skillsTokens: lastSkillsTokens,
-	});
-	if (usage === undefined) return;
-	emitSessionEvent({ type: "context_usage", usage });
 }
 
 /**
@@ -644,38 +744,57 @@ function requestApproval(
 	});
 }
 
-let hostPromise: Promise<SessionHost> | undefined;
-
 /**
- * 最近一次非 plan 的交互模式。/plan 是进出开关：进入 plan 前记下当前模式，
- * 在 plan 中再发 /plan 就切回这里记的模式。缺省 craft（与初始 interactionId 一致）。
- * 只活在内存：重启后回 craft 可接受，不值得为它落盘。
- */
-let lastNonPlanInteraction = "craft";
-
-/**
- * 懒建会话。第一次发消息时才创建 —— 建会话需要一个可用模型，
+ * 懒建宿主。第一次发消息时才创建 —— 建会话需要一个可用模型，
  * 而用户可能先打开应用、再去设置里填 Key。
  *
- * 失败的 promise 不缓存，否则用户配好模型后仍然一直失败。
+ * 沿用旧 hostPromise 的缓存语义，只是从单例升级为按桶：同一桶只建一次，
+ * 并发取宿主拿到同一个 promise；失败的 promise 不缓存（清回 undefined），
+ * 用户配好模型后重试才有效。
  */
-function getHost(): Promise<SessionHost> {
-	if (hostPromise === undefined) {
-		const attempt = createHost();
-		hostPromise = attempt;
+function getHost(bucket: SessionBucket<SessionHost>): Promise<SessionHost> {
+	if (bucket.hostPromise === undefined) {
+		const attempt = createHost(bucket);
+		bucket.hostPromise = attempt;
 		attempt.catch(() => {
-			if (hostPromise === attempt) hostPromise = undefined;
+			if (bucket.hostPromise === attempt) bucket.hostPromise = undefined;
 		});
 	}
-	return hostPromise;
+	return bucket.hostPromise;
+}
+
+/**
+ * 宿主建好后的注册：赋 sessionId / 文件路径、入注册表、推权威状态。
+ *
+ * 顺序敏感：必须先赋 sessionId 再发 session_state —— 事件信封的路由键
+ * 取桶的 sessionId（emitSessionEvent），顺序反了这次事件会打着空 id 上路。
+ */
+function adoptHost(bucket: SessionBucket<SessionHost>, host: SessionHost): void {
+	bucket.hostPromise = Promise.resolve(host);
+	bucket.sessionId = host.state.sessionId;
+	bucket.sessionFilePath = host.sessionFilePath;
+	bucketsById.set(bucket.sessionId, bucket);
+	bucket.lastUsedAt = Date.now();
+	// 会话建好后 sessionId / cwd 才有真值，推一次让 UI 同步。
+	emitSessionEvent(bucket, { type: "session_state", state: host.state });
+	evictIdleHosts();
 }
 
 /**
  * 组装会话宿主的唯一入口。恢复历史会话时传入 open 出来的 SessionManager，
  * 其余（扩展、两轴、权限门、预览、当前模型选择）与新会话完全一致 ——
  * 恢复会话不改模型选择与权限设置（spec 决策）。
+ *
+ * 扩展工厂的闭包 getter 全部读**所属桶**（模式 / cwd / 产物出口），
+ * 只有全局设置（模型、权限档）读模块级 —— 两个并发会话的模式与
+ * 工作目录不会张冠李戴（spec：support-concurrent-tasks A）。
+ *
+ * 本函数不发事件：sessionId 要建好后才有真值，由调用方 adoptHost 统一注册。
  */
-async function createHost(sessionManager?: SessionManager): Promise<SessionHost> {
+async function createHost(
+	bucket: SessionBucket<SessionHost>,
+	sessionManager?: SessionManager,
+): Promise<SessionHost> {
 	const catalog = await getCatalog();
 
 	// 没选模型时不擅自挑一个：用户不知道在用哪家、也不知道会产生谁的费用。
@@ -691,9 +810,10 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 		);
 	}
 
-	// 临时任务模型下 cwd 必有值（正式空间或共享临时目录）。建会话前确保目录存在
-	//（SessionHost.create 里也会 mkdir，但权限门要先拿到一个已确定存在的目录）。
-	const cwd = workspaceDir;
+	// 会话与 cwd 终身绑定：桶在建任务/恢复时定好 cwd，这里只读取。
+	// 建会话前确保目录存在（SessionHost.create 里也会 mkdir，
+	// 但权限门要先拿到一个已确定存在的目录）。
+	const cwd = bucket.cwd;
 	mkdirSync(cwd, { recursive: true });
 
 	const host = await SessionHost.create({
@@ -701,9 +821,9 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 		modelKey: activeModelKey,
 		cwd,
 		isTempTask: isTempCwd(cwd),
-		sceneId: conversation.state.sceneId,
-		interactionId: conversation.state.interactionId,
-		emit: emitSessionEvent,
+		sceneId: bucket.conversation.state.sceneId,
+		interactionId: bucket.conversation.state.interactionId,
+		emit: (event) => emitSessionEvent(bucket, event),
 		resources: RESOURCES,
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -728,8 +848,17 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 				},
 				cwd,
 				// getter 而非快照：用户改了预设，下一次工具调用即生效。
+				// 权限档是全局设置（spec A）：一改对所有会话的后续工具调用生效。
 				getSettings: () => activePermissions,
-				requestApproval,
+				// 审批按桶计数：有待答审批的桶豁免 LRU 回收 ——
+				// 用户在答的框不能随宿主一起消失。
+				requestApproval: (request) => {
+					bucket.pendingApprovals += 1;
+					return requestApproval(request).finally(() => {
+						bucket.pendingApprovals -= 1;
+						evictIdleHosts();
+					});
+				},
 			}),
 			/*
 			 * 项目信任：**所有会话都装**（与权限门同理）。
@@ -750,12 +879,13 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 			// 产物交付：present_files 是产物的唯一入口（WorkBuddy 同构）。
 			// 只读工具，所有会话都注册（区外路径不 stat，见 extensions/present-files.ts）。
 			createPresentFiles({
-				getWorkspaceDir: () => workspaceDir,
+				getWorkspaceDir: () => bucket.cwd,
 				onPresent: ({ files, focusFile }) => {
-					emitSessionEvent({ type: "artifacts_presented", files, focusFile });
+					emitSessionEvent(bucket, { type: "artifacts_presented", files, focusFile });
 					// 产物清单持久化到会话文件（appendCustomEntry），恢复历史会话时
 					// buildConversationEntries 把它翻译回 artifacts_presented 事件，
 					// 产物卡与交付时状态一致。
+					const hostPromise = bucket.hostPromise;
 					if (hostPromise !== undefined) {
 						void hostPromise.then((host) => {
 							host.persistArtifacts(files, focusFile);
@@ -766,18 +896,19 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 				},
 			}),
 			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
-			// 两轴的权威状态经 conversation 折叠镜像读取；技能段取自宿主的 loader 发现结果。
+			// 两轴的权威状态读**所属桶**的折叠镜像；技能段取自宿主的 loader 发现结果。
 			createPromptSwitch({
 				getCurrent: () => ({
-					sceneId: conversation.state.sceneId,
-					interactionId: conversation.state.interactionId,
+					sceneId: bucket.conversation.state.sceneId,
+					interactionId: bucket.conversation.state.interactionId,
 				}),
 				compose: async (sceneId, interactionId, piContext) => {
 					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, piContext);
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
-					lastSystemPromptTokens = composed.systemTokens;
-					lastSkillsTokens = composed.skillsTokens;
+					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
+					bucket.systemPromptTokens = composed.systemTokens;
+					bucket.skillsTokens = composed.skillsTokens;
 					return composed.prompt;
 				},
 			}),
@@ -788,45 +919,25 @@ async function createHost(sessionManager?: SessionManager): Promise<SessionHost>
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
 			// 对话内 automation 工具（craft 白名单）：模型在对话里建/查/删定时任务。
-			// cwd 缺省取当前会话 cwd —— 工厂闭包拿不到会话状态，由这里注入 getter。
-			automationExtensionFactory(automationStore, () => workspaceDir),
+			// cwd 缺省取**所属会话**的 cwd —— 会话与 cwd 终身绑定，读桶即真相。
+			automationExtensionFactory(automationStore, () => bucket.cwd),
 		],
 	});
 
-	// 会话建好后 sessionId / cwd 才有真值，推一次让 UI 同步。
-	emitSessionEvent({ type: "session_state", state: host.state });
 	return host;
 }
 
 /**
- * 作废当前会话并清空本地历史。换空间与新建任务共用这一步：
- * 会话与 cwd 终身绑定，不存在「换目录/换任务继续聊」。
- */
-async function resetSession(): Promise<void> {
-	if (hostPromise !== undefined) {
-		(await hostPromise).dispose();
-		hostPromise = undefined;
-	}
-	/*
-	 * 走事件而不是直接改 conversation：reducer 两端共用（shared/conversation.ts），
-	 * daemon 本地折叠与 renderer 折叠的是同一个 history_reset，历史同步清零。
-	 * 此前只清本地再发 session_state —— reducer 对 session_state 不动 entries，
-	 * renderer 一直显示旧历史（/new 命令的幽灵历史就是这么来的）。
-	 */
-	emitSessionEvent({ type: "history_reset" });
-}
-
-/**
- * 切换工作空间。空串表示「临时任务」（共享临时目录，新建任务的默认态）。
+ * 切换工作空间 = 只改「新建任务的默认 cwd 来源」（spec MODIFIED：工作空间切换语义）。
+ *
+ * 不再作废旧会话：既有会话 cwd 终身绑定，旧宿主留在注册表里后台保活，
+ * 其 run 不受切换影响（WorkBuddy 同模型）。空串表示「临时任务」
+ * （共享临时目录，新建任务的默认态）。
  *
  * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
  * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
  * 临时目录是自家构造（生效根下），不过这道校验 —— 同 getEffectiveWorkspaceRoot
  * 的回退语义，非法根在那一层已被忽略。
- *
- * 换空间 = 作废当前会话：cwd 在建会话时一次性注入 pi 的工具集，
- * 不存在「换目录继续聊」（WorkBuddy 同样如此，它的 cwd 在 session.create 时绑定）。
- * 旧会话的本地历史一并清掉——它属于上一个空间，留着会让 UI 显示别处的对话。
  */
 async function applyWorkspace(dir: string): Promise<string> {
 	// 空串 = 临时任务。现算不缓存：改默认存储路径后，下一次切临时任务即刻用新根。
@@ -838,19 +949,20 @@ async function applyWorkspace(dir: string): Promise<string> {
 		});
 		if (error !== undefined) throw new Error(error);
 	}
-	if (next === workspaceDir) return workspaceDir;
-	if (conversation.state.isStreaming)
-		throw new Error("任务进行中，请先停止当前任务再切换工作空间");
-
 	mkdirSync(next, { recursive: true });
-	workspaceDir = next;
+	defaultWorkspaceDir = next;
 
-	// 预览服务随工作区换根（临时任务同样起服务：有产物就该能预览）。先于 resetSession：
-	// 服务换根失败（如端口异常）时工作区切换应该响亮失败，而不是带病继续。
-	await previewServer.setRoot(next);
+	// 多根预览池：按 cwd 各起一个实例，不再关旧根。仍 await —— 服务起不来时
+	// 工作区切换应该响亮失败（沿用旧 setRoot 的口径），而不是带病继续。
+	await previewServers.ensure(next);
 
-	await resetSession();
-	updateStateLocally({ cwd: next, isTempTask: isTempCwd(next) });
+	// 既有会话一律不动。唯一例外：pristine 桶（还没建宿主、没有任何历史）
+	// 换绑到新默认空间 —— 它还不算「一个既有会话」，用户切完空间发首条消息
+	// 理应落在新空间，而不是旧默认目录。
+	if (currentBucket.hostPromise === undefined && currentBucket.cwd !== next) {
+		currentBucket.cwd = next;
+		updateStateLocally(currentBucket, { cwd: next, isTempTask: isTempCwd(next) });
+	}
 	return next;
 }
 
@@ -881,12 +993,6 @@ function isEnoent(error: unknown): boolean {
 	);
 }
 
-/** 当前活动宿主持有的会话文件。host 未建（还没发过消息）为 undefined。 */
-async function currentSessionFile(): Promise<string | undefined> {
-	if (hostPromise === undefined) return undefined;
-	return (await hostPromise).sessionFilePath;
-}
-
 async function listSessions(): Promise<SessionSummary[]> {
 	let infos: SessionInfo[];
 	try {
@@ -897,9 +1003,17 @@ async function listSessions(): Promise<SessionSummary[]> {
 		if (isEnoent(error)) return [];
 		throw error;
 	}
-	const currentFile = await currentSessionFile();
+	// 会话文件 → 注册表桶：current / running 都以桶为准（daemon 是运行态真相，
+	// 后台会话的 run 也要在列表上可见 —— 不再只有当前会话可能 running）。
+	const byFile = new Map<string, SessionBucket<SessionHost>>();
+	for (const bucket of bucketsById.values()) {
+		if (bucket.sessionFilePath !== undefined) {
+			byFile.set(resolve(bucket.sessionFilePath), bucket);
+		}
+	}
 	return infos
 		.map((info): SessionSummary => {
+			const bucket = byFile.get(resolve(info.path));
 			return {
 				id: info.id,
 				path: info.path,
@@ -911,9 +1025,8 @@ async function listSessions(): Promise<SessionSummary[]> {
 				createdAt: info.created.getTime(),
 				modifiedAt: info.modified.getTime(),
 				messageCount: info.messageCount,
-				current:
-					currentFile !== undefined &&
-					resolve(currentFile) === resolve(info.path),
+				current: bucket !== undefined && bucket === currentBucket,
+				running: bucket?.running ?? false,
 			};
 		})
 		.sort((a, b) => b.modifiedAt - a.modifiedAt);
@@ -990,52 +1103,79 @@ async function listWorkspaceGroups(): Promise<WorkspaceGroupMeta[]> {
 }
 
 /**
- * 恢复历史会话为当前活动会话。编排与 applyWorkspace 同构：
- * 守卫 → 作废旧宿主 → 恢复工作空间语义 → 重建宿主 → 重建本地历史。
+ * 恢复历史会话为当前活动会话。
  *
- * 失败原子性：先验证，后切换。open / header 校验 / 工作目录校验全部在
- * dispose 旧宿主之前完成 —— 这些步骤都可能失败（文件损坏、缺头部、目录
- * 不合法），失败时旧会话必须原样保留（宿主、本地历史、工作目录、预览服务
- * 都不动），错误经 IPC 抛回 renderer toast 即可。若先 dispose 再验证，
- * 用户看到错误 toast 之后会发现当前会话已被静默清空（验收确证过的坑）。
+ * 多任务并发后语义简化：**不再作废旧会话** —— 旧宿主留在注册表里后台
+ * 保活（spec B：切换语义翻转）。编排为：查注册表 →（未注册时）验证 →
+ * 建桶建宿主 → 重建桶内历史 → 切指针。
  *
- * dispose 之后仍留一段非原子窗口：setRoot 换根、createHost 组装（如模型
- * 不可用）失败时，旧宿主已销毁、新宿主未建。这与 applyWorkspace 的失败
- * 语义一致（那里同样先 setRoot 再 resetSession，见该函数注释）——setRoot
- * 是「先 close 旧服务再 listen 新根」，前移它救不了 createHost，反而把
- * 预览服务也拖进中间态；要彻底关闭窗口需要「先建好后切换」的两阶段宿主
- * 交换，超出本次修复范围。
+ * 同文件单写者不变式：已注册的会话**绝不 open 第二个宿主**（pi 的
+ * SessionManager 各自缓存 entries，同文件双写者互相覆盖），命中注册表
+ * 直接切指针返回 —— 视图由 renderer 的 snapshot 重拉与既有事件缓存供给。
  *
- * 与 resetSession 的关键差别：**不发 history_reset**。renderer 在 resume
- * 返回后 resyncSnapshot 整体替换视图；若先发 history_reset，界面会先闪
- * 一下空屏再出内容。本地 conversation 也由重建结果整体赋值，不经事件。
+ * 失败原子性：open / header 校验 / 工作目录校验全部在建宿主之前完成，
+ * 失败时旧会话（宿主、历史、工作空间默认值、预览服务）毫发无损；
+ * 建宿主失败时桶未注册、指针未切，等价于没动过。
+ *
+ * 与旧 resetSession 模型的差别：**不发 history_reset**。renderer 在 resume
+ * 返回后按会话重拉 snapshot 整体替换该会话视图；桶内 conversation 由
+ * 重建结果整体赋值，不经事件。
+ *
+ * 并发护栏：dispatch 是即发即忘（无全局串行），两个并发 resume 同一文件
+ * 会双双通过「查注册表」再各建一个宿主 —— 同文件双写禁区。入口按文件
+ * 串一行（resumeChainByFile）：后到的等先到的落完，落完后它就能在
+ * 注册表里查到桶、直接切指针。本体在 resumeSessionOnce。
  */
+const resumeChainByFile = new Map<string, Promise<unknown>>();
+
 async function resumeSession(path: string): Promise<void> {
-	if (conversation.state.isStreaming)
-		throw new Error("任务进行中，请先停止当前任务");
+	const resolved = resolve(path);
+	const previous = resumeChainByFile.get(resolved) ?? Promise.resolve();
+	const attempt = previous.then(
+		() => resumeSessionOnce(path),
+		() => resumeSessionOnce(path),
+	);
+	const tracked = attempt.finally(() => {
+		if (resumeChainByFile.get(resolved) === tracked) resumeChainByFile.delete(resolved);
+	});
+	resumeChainByFile.set(resolved, tracked);
+	return attempt;
+}
+
+async function resumeSessionOnce(path: string): Promise<void> {
 	const sessionsDir = getSessionsDir();
 	const pathError = validateSessionFilePath(path, sessionsDir);
 	if (pathError !== undefined) throw new Error(pathError);
 
-	/* ── 切换前：做完所有可能失败的验证，此刻旧会话毫发无损 ── */
+	// 同文件单写者：已注册的会话直接切过去（含正在后台运行的）。
+	const existing = findBucketByFile(path);
+	if (existing !== undefined) {
+		defaultWorkspaceDir = existing.cwd;
+		setCurrentBucket(existing);
+		await previewServers.ensure(existing.cwd);
+		pushTaskListChanged(); // current 标记易主
+		return;
+	}
+
+	/* ── 建宿主前：做完所有可能失败的验证，此刻一切毫发无损 ── */
 
 	// open 是同步的（dist 类型：static open(...) : SessionManager），
-	// 不依赖旧宿主销毁；文件损坏/不可读在此抛出。
+	// 文件损坏/不可读在此抛出。
 	const manager = SessionManager.open(path, sessionsDir);
 	const header = manager.getHeader();
 	if (header === null) throw new Error("会话文件缺少头部，无法恢复");
 
-	// 从 header.cwd 推导目标工作空间，只算值不赋值：
+	// 从 header.cwd 推导会话工作目录，只算值不赋值：
 	//   - 旧 playground 占位目录（playground 时代的技术 cwd）→ 迁移到共享临时目录。
 	//     占位目录里本就不可能有产物（当时不注册文件工具），映射只改归类、不丢数据；
 	//     会话文件 header 不改写 —— 下次 resume 仍走这条映射，判定收在 isTempCwd 一处。
 	//   - 其余按工作空间校验同一套规则把关（会话本身没问题但目录不合法时拒，
 	//     如指向配置目录的旧会话）。目录可能已被用户删掉，补建与新建会话同口径
 	//     —— mkdir 幂等且不碰任何会话状态，可安全提前。
-	let nextWorkspaceDir: string;
+	let nextCwd: string;
 	if (header.cwd === join(getConfigDir(), "playground")) {
-		nextWorkspaceDir = tempTasksDir();
-		mkdirSync(nextWorkspaceDir, { recursive: true });
+		nextCwd = tempTasksDir();
+		mkdirSync(nextCwd, { recursive: true });
 	} else {
 		const wsError = validateWorkspacePath(header.cwd, {
 			configDir: getConfigDir(),
@@ -1043,53 +1183,55 @@ async function resumeSession(path: string): Promise<void> {
 		});
 		if (wsError !== undefined) throw new Error(`会话的工作目录不可用：${wsError}`);
 		mkdirSync(header.cwd, { recursive: true });
-		nextWorkspaceDir = header.cwd;
+		nextCwd = header.cwd;
 	}
 
-	/* ── 切换点：此后失败即进入上文的非原子窗口 ── */
+	// 两轴沿用当前会话的选择（与 newTask 同口径：恢复历史不改用户偏好）。
+	const bucket = createBucket<SessionHost>({
+		cwd: nextCwd,
+		conversation: freshConversation(
+			nextCwd,
+			currentBucket.conversation.state.sceneId,
+			currentBucket.conversation.state.interactionId,
+		),
+	});
+	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
 
-	if (hostPromise !== undefined) {
-		(await hostPromise).dispose();
-		hostPromise = undefined;
-	}
+	// hostPromise 先占位（createHost 的扩展闭包会读它），失败清回 ——
+	// 与 getHost 的缓存语义一致。此处失败：桶未注册、指针未切，会话原样可重试。
+	const attempt = createHost(bucket, manager);
+	bucket.hostPromise = attempt;
+	attempt.catch(() => {
+		if (bucket.hostPromise === attempt) bucket.hostPromise = undefined;
+	});
+	const host = await attempt;
+	adoptHost(bucket, host);
 
-	workspaceDir = nextWorkspaceDir;
-
-	// 预览服务随工作区换根（临时任务同样起服务），与 applyWorkspace 同口径。
-	await previewServer.setRoot(workspaceDir);
-
-	// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择），
-	// 只换 sessionManager。createHost 末尾会发 session_state，
-	// cwd / isTempTask / sessionId 随之同步给 UI。
-	const host = await createHost(manager);
-	hostPromise = Promise.resolve(host);
-
-	// 本地历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
+	// 桶内历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
 	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。turn / cancelledTurns
 	// 属于旧 run 的瞬态，清空；artifacts 从落盘的 artifacts_presented
 	// custom 条目恢复（buildConversationEntries 翻译 → artifactsFromEntries 折叠，
 	// 清成 [] 会让恢复出的会话丢掉产物卡）；state 保留现值 ——
-	// 它刚被 createHost 的 session_state 换成新会话的权威值。
+	// 它刚被 adoptHost 的 session_state 换成新会话的权威值。
 	//
 	// usageDetail 不在清空之列：它描述「当前上下文占用多少」而不是旧 run 的
 	// 瞬态 —— resume 后 pi 从落盘消息重建了上下文，getContextUsage() 仍然
-	// 有效，圆环理应立即恢复（曾经无条件 undefined，恢复后圆环消失、要等
-	// 下一次模型响应才回来）。contextUsage 缺失（压缩后无响应的空窗）时派生
+	// 有效，圆环理应立即恢复。contextUsage 缺失（压缩后无响应的空窗）时派生
 	// 结果为 undefined，圆环隐藏才是正确语义（shared/conversation.ts 的
 	// reducer 对 session_state 同口径）。派生必须等 entries 重建之后：
-	// createHost 末尾那次 session_state 已触发过一轮 emitContextUsageDetail，
-	// 彼时 conversation.entries 还是旧会话的 —— 那轮派生出的是旧会话成分
-	// （时序坑），下方补发的事件在顺序上后发覆盖它。
+	// adoptHost 那次 session_state 已触发过一轮 emitContextUsageDetail，
+	// 彼时桶内 entries 还是空的 —— 那轮派生的是空历史成分（时序坑），
+	// 下方补发的事件在顺序上后发覆盖它。
 	const rebuilt = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
 	const contextUsage = host.state.contextUsage;
 	const usageDetail = deriveContextUsageDetail({
 		entries: rebuilt,
 		contextUsage,
-		systemPromptTokens: lastSystemPromptTokens,
-		skillsTokens: lastSkillsTokens,
+		systemPromptTokens: bucket.systemPromptTokens,
+		skillsTokens: bucket.skillsTokens,
 	});
-	conversation = {
-		...conversation,
+	bucket.conversation = {
+		...bucket.conversation,
 		entries: rebuilt,
 		usageDetail,
 		turn: undefined,
@@ -1097,129 +1239,190 @@ async function resumeSession(path: string): Promise<void> {
 		artifacts: artifactsFromEntries(rebuilt),
 	};
 
+	defaultWorkspaceDir = nextCwd;
+	setCurrentBucket(bucket);
+
+	// 预览服务按 cwd 懒建（多根池，临时任务同样起服务）。
+	await previewServers.ensure(nextCwd);
+
 	// 补发一次 context_usage：reducer 对它直接覆盖 usageDetail（事件顺序上
-	// 后发的胜出），把 createHost 早发那轮旧会话成分派生顶掉，renderer 不必
-	// 等 resyncSnapshot 圆环就位。emitContextUsageDetail 读闭包里的
+	// 后发的胜出），把 adoptHost 早发那轮空历史成分派生顶掉，renderer 不必
+	// 等 resyncSnapshot 圆环就位。emitContextUsageDetail 读桶内
 	// conversation.entries —— 此刻已是重建结果，派生值与上面这份 usageDetail
 	// 一致（同一纯函数、同一输入）。
 	if (contextUsage !== undefined) {
-		emitContextUsageDetail(contextUsage);
+		emitContextUsageDetail(bucket, contextUsage);
 	}
+	pushTaskListChanged(); // current 标记易主
 }
 
 /**
  * 「保存到工作空间」：临时任务转正为命名空间。
  *
- * 编排与 resumeSession 同构（守卫 → 验证全做完 → dispose → 换 cwd 重建宿主），
- * 但有一个关键差别：**这不是 open 别人的会话文件，而是当前会话原地换 cwd** ——
- * 会话文件不动位置、消息历史不动、sessionId 不变，只重写 header.cwd（归组键）
- * 并以新 cwd 重建宿主（cwd 在建会话时一次性注入工具集，见 applyWorkspace 注释）。
- * 所以本地 conversation 视图原样保留，不需要 resume 那套 entries 重建。
+ * 这不是 open 别人的会话文件，而是**当前会话原地换 cwd** —— 会话文件
+ * 不动位置、消息历史不动、sessionId 不变，只重写 header.cwd（归组键）
+ * 并以新 cwd 重建宿主（cwd 在建会话时一次性注入工具集，见 createHost）。
+ * 所以桶与桶内 conversation 原样保留，不需要 resume 那套 entries 重建。
  *
- * 失败原子性与 resumeSession 同口径：守卫 / 名称校验 / 目录占用检查全部在
- * dispose 之前完成；dispose 之后进入同款非原子窗口（setRoot / createHost
- * 失败时旧宿主已销毁，见 resumeSession 注释）。
+ * 同会话写操作：整个流程排进当前桶的互斥链（session-registry.ts），
+ * 与该会话的 prompt / compact 串行 —— dispose/重建宿主绝不能与 run 并发。
+ * 链上执行时上一 run 必已收尾（prompt 在链上是整段 run）；流式守卫保留
+ * 为不变式断言 —— 若它触发说明存在绕过互斥链的起 run 路径，
+ * 响亮失败好过带着流式态拆宿主（pi 的 compact/重建对流式会话语义不明）。
+ *
+ * 失败原子性：守卫 / 名称校验 / 目录占用检查全部在 dispose 之前完成。
+ * dispose 之后重建失败（如模型被删）时旧宿主已销毁 —— 会话文件与历史
+ * 完好（JSONL 在盘），下次操作经 resume 可完整重开。
  *
  * 已生成文件留在临时目录不动（spec 决策）：共享临时目录是所有临时任务共用的，
  * 无法干净归属单个任务的文件，强行搬迁会带走别的任务的产物 ——
  * WorkBuddy 同为共享目录结构（spec：align-temp-task-workspace-model）。
  */
 async function saveToWorkspace(name: string): Promise<void> {
-	if (conversation.state.isStreaming)
-		throw new Error("任务进行中，请先停止当前任务");
-	if (hostPromise === undefined)
-		throw new Error("还没有会话，请先开始任务");
-	// 会话与 cwd 终身绑定，当前 cwd 即会话身份；临时判定用 reducer 折叠出的权威值。
-	if (!isTempCwd(conversation.state.cwd ?? workspaceDir))
-		throw new Error("只有临时任务可以保存到工作空间");
+	const bucket = currentBucket;
+	await enqueue(bucket, async () => {
+		if (bucket.running)
+			throw new Error("任务进行中，请先停止当前任务");
+		const hostPromise = bucket.hostPromise;
+		if (hostPromise === undefined)
+			throw new Error("还没有会话，请先开始任务");
+		// 会话与 cwd 终身绑定，当前 cwd 即会话身份；临时判定读桶的权威 cwd。
+		if (!isTempCwd(bucket.cwd))
+			throw new Error("只有临时任务可以保存到工作空间");
 
-	const root = getEffectiveWorkspaceRoot();
+		const root = getEffectiveWorkspaceRoot();
 
-	/*
-	 * siblings = 生效根下现有子目录名 + 现有外部空间组名（显示名覆盖优先）。
-	 * 复用显示名校验是因为命名规则同族（非空/非法字符/255/重名/保留名），
-	 * 但这里创建的是**真实目录**不是显示名覆盖 —— 所以根下子目录必须在
-	 * siblings 里（显示名校验只看组名的话，根下已有的非组目录会漏网）。
-	 * 根不存在按空数组：走到这里临时目录已建过（createHost 的 mkdir），根
-	 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续，
-	 * 下面的 mkdir 会把根连带补建。
-	 */
-	let dirNames: string[] = [];
-	try {
-		dirNames = readdirSync(root, { withFileTypes: true })
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-	}
-	const groupNames = (await listWorkspaceGroups()).map(
-		(g) => g.displayName ?? basename(g.cwd),
-	);
-	const trimmed = name.trim();
-	const nameError = validateDisplayName(trimmed, [...dirNames, ...groupNames]);
-	if (nameError !== undefined) throw new Error(nameError);
+		/*
+		 * siblings = 生效根下现有子目录名 + 现有外部空间组名（显示名覆盖优先）。
+		 * 复用显示名校验是因为命名规则同族（非空/非法字符/255/重名/保留名），
+		 * 但这里创建的是**真实目录**不是显示名覆盖 —— 所以根下子目录必须在
+		 * siblings 里（显示名校验只看组名的话，根下已有的非组目录会漏网）。
+		 * 根不存在按空数组：走到这里临时目录已建过（createHost 的 mkdir），根
+		 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续，
+		 * 下面的 mkdir 会把根连带补建。
+		 */
+		let dirNames: string[] = [];
+		try {
+			dirNames = readdirSync(root, { withFileTypes: true })
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		const groupNames = (await listWorkspaceGroups()).map(
+			(g) => g.displayName ?? basename(g.cwd),
+		);
+		const trimmed = name.trim();
+		const nameError = validateDisplayName(trimmed, [...dirNames, ...groupNames]);
+		if (nameError !== undefined) throw new Error(nameError);
 
-	/*
-	 * 「存在即拒」而非静默复用：validateDisplayName 的重名只查 sibling 名，
-	 * 根下存在同名**文件**（不是目录，readdir 过滤掉了）或校验后竞态冒出的
-	 * 占用都会漏过去。静默复用别人/别的任务的目录比报错更糟 —— 产物会
-	 * 混进一堆陌生文件里，用户以为是自己任务的成果。
-	 */
-	const target = join(root, trimmed);
-	if (existsSync(target)) throw new Error("该名称的目录已存在");
+		/*
+		 * 「存在即拒」而非静默复用：validateDisplayName 的重名只查 sibling 名，
+		 * 根下存在同名**文件**（不是目录，readdir 过滤掉了）或校验后竞态冒出的
+		 * 占用都会漏过去。静默复用别人/别的任务的目录比报错更糟 —— 产物会
+		 * 混进一堆陌生文件里，用户以为是自己任务的成果。
+		 */
+		const target = join(root, trimmed);
+		if (existsSync(target)) throw new Error("该名称的目录已存在");
 
-	/* ── 切换前：做完所有可能失败的验证，此刻会话毫发无损 ── */
+		/* ── 切换前：做完所有可能失败的验证，此刻会话毫发无损 ── */
 
-	const host = await hostPromise;
-	const sessionFile = host.sessionFilePath;
-	// 本应用的会话都是持久化的（SessionManager.create 走 sessions 目录），
-	// undefined 只出现在 pi 的 in-memory 形态 —— 真遇到就是上游语义变了，响亮失败。
-	if (sessionFile === undefined)
-		throw new Error("会话尚未落盘，无法保存到工作空间");
+		const host = await hostPromise;
+		const sessionFile = host.sessionFilePath;
+		// 本应用的会话都是持久化的（SessionManager.create 走 sessions 目录），
+		// undefined 只出现在 pi 的 in-memory 形态 —— 真遇到就是上游语义变了，响亮失败。
+		if (sessionFile === undefined)
+			throw new Error("会话尚未落盘，无法保存到工作空间");
 
-	mkdirSync(target, { recursive: true });
+		mkdirSync(target, { recursive: true });
 
-	/* ── 切换点：此后失败即进入 resumeSession 注释所述的非原子窗口 ── */
+		/* ── 切换点：dispose → 改写归组键 → 同文件同 id 重建宿主 ── */
 
-	host.dispose();
-	hostPromise = undefined;
+		host.dispose();
 
-	// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
-	rewriteSessionHeaderCwd(sessionFile, target);
+		// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
+		rewriteSessionHeaderCwd(sessionFile, target);
 
-	workspaceDir = target;
+		bucket.cwd = target;
 
-	// 预览服务随工作区换根，与 applyWorkspace / resumeSession 同口径。
-	await previewServer.setRoot(target);
+		// 预览服务按 cwd 懒建（多根池），与 applyWorkspace / resumeSession 同口径。
+		await previewServers.ensure(target);
 
-	// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择），
-	// 只换 cwd（createHost 读模块级 workspaceDir，上面已赋值）。
-	// SessionManager.open 重新打开同一文件：header 已是新 cwd，内存值随之正确。
-	const manager = SessionManager.open(sessionFile, getSessionsDir());
-	const nextHost = await createHost(manager);
-	hostPromise = Promise.resolve(nextHost);
-
-	// createHost 末尾的 session_state 已带权威值（cwd=target、isTempTask=false），
-	// 这里再显式声明一次落点，与 applyWorkspace 末尾同口径 —— 工作空间语义的
-	// 落点不依赖 createHost 那次顺带同步。
-	updateStateLocally({ cwd: target, isTempTask: false });
+		// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择）。
+		// SessionManager.open 重新打开同一文件：header 已是新 cwd，sessionId 不变
+		//（adoptHost 按同 id 重新入注册表，覆盖同一只桶）。
+		const manager = SessionManager.open(sessionFile, getSessionsDir());
+		const attempt = createHost(bucket, manager);
+		bucket.hostPromise = attempt;
+		try {
+			adoptHost(bucket, await attempt);
+		} catch (error) {
+			// 重建失败时旧宿主已 dispose：出表让会话回到「未打开」态
+			//（文件与历史在盘，resume 可完整重开）—— 不留「注册了却没有宿主」
+			// 的僵尸桶，否则下次 prompt 会在旧 id 名下静默开出新会话文件。
+			bucketsById.delete(bucket.sessionId);
+			bucket.hostPromise = undefined;
+			throw error;
+		}
+		pushTaskListChanged(); // isTempTask / 归组变了
+	});
 }
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
 
 type Handler = (args: readonly unknown[]) => Promise<unknown>;
 
-/** 新建任务：作废旧会话。INVOKE.newTask 与内置命令 /new 共用。 */
+/**
+ * 新建任务。INVOKE.newTask 与内置命令 /new 共用。
+ *
+ * 不再作废旧会话（spec B：切换语义翻转）—— 旧桶留在注册表里后台保活，
+ * 其 run 照跑；新任务开一个 pristine 桶（宿主懒建，首次 prompt 才占资源）。
+ * 工作空间选择保留：新任务落在 defaultWorkspaceDir（applyWorkspace 设定的
+ * 默认 cwd 来源）；两轴沿用旧会话的选择（开新活不是改偏好）。
+ */
 async function newTask(): Promise<void> {
-	if (conversation.state.isStreaming)
-		throw new Error("任务进行中，请先停止当前任务");
-	await resetSession();
-	updateStateLocally({});
+	if (currentBucket.hostPromise === undefined) {
+		// pristine 桶没有可保留的现场（无宿主无历史）：直接换绑到默认空间，
+		// 不另开新桶 —— 否则首开应用连点两次「新建任务」会留下一串空桶。
+		const next = defaultWorkspaceDir;
+		if (currentBucket.cwd !== next) {
+			currentBucket.cwd = next;
+			updateStateLocally(currentBucket, { cwd: next, isTempTask: isTempCwd(next) });
+		}
+		return;
+	}
+	const bucket = createBucket<SessionHost>({
+		cwd: defaultWorkspaceDir,
+		conversation: freshConversation(
+			defaultWorkspaceDir,
+			currentBucket.conversation.state.sceneId,
+			currentBucket.conversation.state.interactionId,
+		),
+	});
+	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
+	setCurrentBucket(bucket);
+	/*
+	 * 走事件而不是直接改 conversation：reducer 两端共用（shared/conversation.ts），
+	 * daemon 本地折叠与 renderer 折叠的是同一个 history_reset，该会话的历史
+	 * 同步清零。对新桶它是 no-op（本来就是空的），但 renderer 侧按信封折叠的
+	 * 当前视图随之清零，不会出现旧会话的幽灵历史。
+	 */
+	emitSessionEvent(bucket, { type: "history_reset" });
+	updateStateLocally(bucket, {});
 }
 
 const handlers: Record<string, Handler> = {
 	// 返回折叠后的真实历史。ConversationView 与 SessionSnapshot 结构一致。
-	[INVOKE.snapshot]: async () => conversation,
+	// sessionId 缺省 = 当前会话；指定 id 时按注册表查桶 —— 未注册
+	//（被 LRU 回收 / 从没打开）响亮报错，renderer 用自己的事件缓存兜底。
+	[INVOKE.snapshot]: async ([sessionId]) => {
+		if (sessionId === undefined) return currentBucket.conversation;
+		const bucket = bucketsById.get(sessionId as string);
+		if (bucket === undefined) {
+			throw new Error(`会话未在 daemon 打开（可能已被空闲回收）：${sessionId as string}`);
+		}
+		return bucket.conversation;
+	},
 
 	/* ── 设置：已可用 ─────────────────────────────────────────────── */
 
@@ -1265,9 +1468,9 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.statsSnapshot]: async () =>
 		observability.snapshot({
-			entries: conversation.entries,
-			systemPromptTokens: lastSystemPromptTokens,
-			contextUsage: conversation.state.contextUsage,
+			entries: currentBucket.conversation.entries,
+			systemPromptTokens: currentBucket.systemPromptTokens,
+			contextUsage: currentBucket.conversation.state.contextUsage,
 			logDir: eventLog.dir,
 		}),
 
@@ -1308,38 +1511,59 @@ const handlers: Record<string, Handler> = {
 			if (command.name === "plan") {
 				// 进出开关：非 plan 进 plan（applyInteraction 会记下当前模式）；
 				// 已在 plan 则切回记下的模式。
-				const current = conversation.state.interactionId;
-				await applyInteraction(current === "plan" ? lastNonPlanInteraction : "plan");
+				const current = currentBucket.conversation.state.interactionId;
+				await applyInteraction(
+					currentBucket,
+					current === "plan" ? currentBucket.lastNonPlanInteraction : "plan",
+				);
 				return;
 			}
-			// compact：pi 会先中断当前操作且不续跑，流式期间明确拒绝比被中断好。
-			if (conversation.state.isStreaming)
-				throw new Error("任务进行中，请先停止当前任务再压缩上下文");
+			/*
+			 * compact 是同会话写操作：排进互斥链，与该会话的 prompt 串行。
+			 * 决策（spec Task 2.3）：链上执行时上一 run 必已收尾（prompt 在链上
+			 * 是整段 run），pi 的 compact() 对流式会话会先中断且不续跑 ——
+			 * 排队执行天然避开那个语义；流式守卫保留为不变式断言，
+			 * 触发说明存在绕过互斥链的起 run 路径，响亮失败。
+			 */
+			const hostPromise = currentBucket.hostPromise;
 			if (hostPromise === undefined)
 				throw new Error("还没有会话，没有可压缩的上下文");
-			await (await hostPromise).compact(command.args === "" ? undefined : command.args);
+			await enqueue(currentBucket, async () => {
+				if (currentBucket.running)
+					throw new Error("任务进行中，请先停止当前任务再压缩上下文");
+				await (await hostPromise).compact(command.args === "" ? undefined : command.args);
+			});
 			return;
 		}
 
-		const host = await getHost();
-		await host.prompt(text, whileStreaming, images);
+		// 同会话写操作排互斥链（session-registry.ts）：同会话严格按到达顺序
+		// 串行，跨会话互不阻塞。prompt 在链上是整段 run（await 到 agent 循环
+		// 收尾），后续写操作执行时本 run 必然已结束。
+		const bucket = currentBucket;
+		bucket.lastUsedAt = Date.now();
+		await enqueue(bucket, async () => {
+			const host = await getHost(bucket);
+			await host.prompt(text, whileStreaming, images);
+		});
 	},
 
 	/**
-	 * 中断。**不走 getHost()** —— 没有会话时中断本就是空操作，
+	 * 中断。**不走 getHost** —— 没有会话时中断本就是空操作，
 	 * 为了中断而去创建一个会话是荒谬的（还会因为没配模型而报错）。
+	 *
+	 * 不进互斥链：abort 是信号不是写操作，排在 prompt（整段 run）后面
+	 * 会让停止键失效 —— run 不停、abort 永远轮不到执行。
+	 * pi 的 abort 本就设计为 run 进行中从外部调用。
 	 */
 	[INVOKE.abort]: async () => {
+		const hostPromise = currentBucket.hostPromise;
 		if (hostPromise === undefined) return;
 		await (await hostPromise).abort();
 	},
 
 	/**
-	 * 新建任务：作废旧会话、在当前工作空间语义下开一个全新会话。
-	 *
-	 * 关键点：工作空间选择**保留**（用户在哪个空间就在哪个空间开新任务），
-	 * 但会话上下文清零——这是「任务干扰」的根治：两个任务不再共享 pi 的消息历史。
-	 * 会话本体是懒建的（getHost），这里只需作废 + 清空，下次 prompt 自然建新的。
+	 * 新建任务：旧会话后台保活（宿主留注册表，run 照跑），开一个全新
+	 * pristine 桶为当前会话（见 newTask）。
 	 */
 	[INVOKE.newTask]: async () => newTask(),
 
@@ -1354,38 +1578,46 @@ const handlers: Record<string, Handler> = {
 		const trimmed = (name as string).trim();
 		if (trimmed === "") throw new Error("名称不能为空");
 
-		// 当前活动会话必须走活实例：pi 的 SessionManager 各自缓存 entries，
-		// 同一文件出现两个活写者会互相覆盖。
-		const host = hostPromise === undefined ? undefined : await hostPromise;
-		const currentFile = host?.sessionFilePath;
-		if (host !== undefined && currentFile !== undefined && resolve(currentFile) === resolve(target)) {
-			host.renameSession(trimmed);
-			return;
+		// 已注册的会话（含后台保活的）必须走活实例：pi 的 SessionManager
+		// 各自缓存 entries，同一文件出现两个活写者会互相覆盖。
+		const bucket = findBucketByFile(target);
+		if (bucket !== undefined) {
+			const hostPromise = bucket.hostPromise;
+			if (hostPromise !== undefined) {
+				(await hostPromise).renameSession(trimmed);
+				pushTaskListChanged();
+				return;
+			}
 		}
 
 		const pathError = validateSessionFilePath(target, getSessionsDir());
 		if (pathError !== undefined) throw new Error(pathError);
 
-		// 非当前会话：临时 open 写完即弃。实例不持有、不注册到任何地方 ——
+		// 未注册会话：临时 open 写完即弃。实例不持有、不注册到任何地方 ——
 		// 它若日后成为活会话，会经 resume 重新 open，不存在双写者窗口。
 		SessionManager.open(target, getSessionsDir()).appendSessionInfo(trimmed);
+		pushTaskListChanged();
 	},
 
 	[INVOKE.sessionDelete]: async ([path]) => {
 		const target = path as string;
 
-		// 当前活动会话拒删：宿主还持有这个文件的活写者，删掉后续写会失败，
-		// 且用户正在看的对话会变成一个打不开的历史项。
-		const host = hostPromise === undefined ? undefined : await hostPromise;
-		const currentFile = host?.sessionFilePath;
-		if (currentFile !== undefined && resolve(currentFile) === resolve(target)) {
-			throw new Error("这是当前任务，请先新建任务再删除");
+		// 已注册会话拒删：宿主还持有这个文件的活写者（可能正在后台跑），
+		// 删掉后续写会失败，且打开中的对话会变成一个打不开的历史项。
+		const bucket = findBucketByFile(target);
+		if (bucket !== undefined) {
+			throw new Error(
+				bucket === currentBucket
+					? "这是当前任务，请先新建任务再删除"
+					: "该任务正在后台保持打开，请先切换到它并停止运行后再删除",
+			);
 		}
 
 		const pathError = validateSessionFilePath(target, getSessionsDir());
 		if (pathError !== undefined) throw new Error(pathError);
 
 		moveToTrash(target);
+		pushTaskListChanged();
 	},
 
 	[INVOKE.sessionExport]: async ([path]) => {
@@ -1396,25 +1628,25 @@ const handlers: Record<string, Handler> = {
 		if (pathError !== undefined) throw new Error(pathError);
 
 		/*
-		 * 目标是历史会话时「先恢复再导出」：pi 的导出能力只挂在活会话上
+		 * 目标是未注册会话时「先恢复再导出」：pi 的导出能力只挂在活会话上
 		 * （AgentSession.exportToHtml），独立入口 exportFromFile 没有从包根
 		 * 导出（深引内部路径实测 ERR_PACKAGE_PATH_NOT_EXPORTED），包根导出
 		 * 面下这是唯一正路。直接复用 resumeSession 而不复制它的逻辑 ——
-		 * 流式守卫、open+header 校验、失败原子性（验证全在 dispose 旧宿主
-		 * 之前）都随之生效；resume 失败则导出中止，错误原样上抛。
+		 * open+header 校验、失败原子性都随之生效；resume 失败则导出中止，
+		 * 错误原样上抛。已注册（含后台保活）的会话直接用其宿主导出，
+		 * 不打扰当前指针。
 		 */
-		const currentFile = await currentSessionFile();
-		if (currentFile === undefined || resolve(currentFile) !== resolve(target)) {
+		let bucket = findBucketByFile(target);
+		if (bucket === undefined) {
 			await resumeSession(target);
+			bucket = findBucketByFile(target);
 		}
-
-		// 此处目标必为当前会话：原本就是，或 resume 刚切过去（成功必设
-		// hostPromise）。这个分支现实中不可达，但 hostPromise 的类型需要
-		// 窄化；真走到就说明 resume 的语义变了 —— 响亮失败，不静默兜底。
-		if (hostPromise === undefined) {
+		// 走到这里目标必然已注册（resume 成功必入表）。这个分支现实中不可达，
+		// 但类型需要窄化；真走到就说明 resume 的语义变了 —— 响亮失败，不静默兜底。
+		if (bucket === undefined || bucket.hostPromise === undefined) {
 			throw new Error("还没有会话，没有可导出的内容");
 		}
-		const host = await hostPromise;
+		const host = await bucket.hostPromise;
 
 		/*
 		 * 输出固定落默认根的 exports/（getWorkspaceDir()，不是当前工作区）：
@@ -1429,7 +1661,7 @@ const handlers: Record<string, Handler> = {
 		// 时回退会话 id —— 刚恢复的会话列表理应含它，回退只为不留裸时间戳。
 		const resolvedTarget = resolve(target);
 		const summary = (await listSessions()).find((s) => resolve(s.path) === resolvedTarget);
-		const title = summary?.title ?? conversation.state.sessionId;
+		const title = summary?.title ?? bucket.sessionId;
 
 		const outputPath = buildExportPath(exportsDir, title, new Date());
 		// 空会话的「该会话还没有内容可导出」由 exportHtml 抛出，自然上抛给 UI。
@@ -1442,20 +1674,23 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");
-		if (hostPromise === undefined) {
+		if (currentBucket.hostPromise === undefined) {
 			// 会话还没建：只记住选择。建会话时会把它带进去（见 createHost）。
-			updateStateLocally({ sceneId: id });
+			updateStateLocally(currentBucket, { sceneId: id });
 			return;
 		}
-		(await hostPromise).setScene(id);
+		(await currentBucket.hostPromise).setScene(id);
 	},
 
 	[INVOKE.setInteraction]: async ([interactionId]) =>
-		applyInteraction(interactionId as string),
+		applyInteraction(currentBucket, interactionId as string),
 
 	/**
 	 * 切换模型。不依赖会话 —— 设置界面在会话建立前就要能用。
-	 * 会话已存在时同步切过去，避免「设置里显示 A、实际还在用 B」。
+	 *
+	 * 全局设置（spec A）：写入 activeModelKey 后，**之后新建的宿主**都用它；
+	 * 当前会话同步切过去（避免「设置里显示 A、实际还在用 B」）；
+	 * 后台保活的宿主保留各自模型 —— 进行中的 run 不换引擎。
 	 */
 	[INVOKE.setModel]: async ([modelKey]) => {
 		const key = modelKey as string;
@@ -1469,8 +1704,9 @@ const handlers: Record<string, Handler> = {
 		// 读改写：偏好文件里还有别的键（如联网搜索），整存覆盖会清掉它们。
 		writePreferences({ ...readPreferences(), activeModelKey: key });
 
-		if (hostPromise !== undefined) await (await hostPromise).setModel(key);
-		else updateStateLocally({ modelId: key });
+		if (currentBucket.hostPromise !== undefined)
+			await (await currentBucket.hostPromise).setModel(key);
+		else updateStateLocally(currentBucket, { modelId: key });
 	},
 
 	/* ── 联网搜索配置 ───────────────────────────────────────────────── */
@@ -1605,7 +1841,7 @@ const handlers: Record<string, Handler> = {
 	/* ── 输入框补全数据源（@ 文件 + / 命令） ────────────────────────── */
 
 	[INVOKE.completions]: async () => ({
-		files: indexFiles(workspaceDir),
+		files: indexFiles(currentBucket.cwd),
 		commands: [
 			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
 			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
@@ -1615,9 +1851,9 @@ const handlers: Record<string, Handler> = {
 				source: "skill" as const,
 			})),
 			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
-			// 发现目录必须与会话实际生效的一致 —— cwd 镜像 SessionHost 的取值
-			//（临时任务模型下就是 workspaceDir 本身）。
-			...listPromptTemplates(workspaceDir, getConfigDir()).map((t) => ({
+			// 发现目录必须与会话实际生效的一致 —— cwd 取当前会话桶的 cwd
+			//（会话与 cwd 终身绑定，桶即真相）。
+			...listPromptTemplates(currentBucket.cwd, getConfigDir()).map((t) => ({
 				name: t.name,
 				description: t.description,
 				source: "template" as const,
@@ -1632,13 +1868,19 @@ const handlers: Record<string, Handler> = {
 
 	/* ── 工作空间 ───────────────────────────────────────────────────── */
 
+	// current = 新建任务的默认 cwd 来源（applyWorkspace 设定）——
+	// 多任务并发后「当前空间」不再等于「当前会话的 cwd」（会话 cwd 终身绑定）。
 	[INVOKE.workspaceSnapshot]: async () => ({
-		current: workspaceDir,
+		current: defaultWorkspaceDir,
 		// 生效根现读（不缓存）：改默认存储路径后，空间列表即刻反映新根。
 		defaultRoot: getEffectiveWorkspaceRoot(),
 		workspaces: listWorkspaces(getEffectiveWorkspaceRoot()),
-		previewBaseUrl: previewServer.baseUrl,
+		previewBaseUrl: previewServers.baseUrlFor(defaultWorkspaceDir),
 	}),
+
+	// 按 cwd 查多根实例表（每 cwd 一个端口，懒建）；未启动返回 undefined ——
+	// 面板显示引导文案即可，不视为错误（契约见 shared/ipc.ts）。
+	[INVOKE.previewBaseUrl]: async ([cwd]) => previewServers.baseUrlFor(cwd as string),
 
 	[INVOKE.createWorkspace]: async ([name]) =>
 		applyWorkspace(createWorkspace(getEffectiveWorkspaceRoot(), name as string)),
@@ -1669,18 +1911,19 @@ const handlers: Record<string, Handler> = {
 		const target = cwd as string;
 		const resolvedTarget = resolve(target);
 
-		// 一份列表同时服务守卫与收集：listSessions 的 current 标记与 cwd
-		// 都来自会话文件头部（磁盘真相），与组的派生口径一致。
-		const sessions = await listSessions();
-
-		// 当前任务所在空间拒删：宿主还持有该会话文件的活写者，移走后续写会失败，
-		// 且用户正在看的对话会凭空消失（sessionDelete 拒删当前会话的同一理由）。
-		// 判定按 header.cwd 而不是文件位置 —— 会话文件全部平铺在 sessions/ 下
-		// （SessionManager.create 传的是显式 sessionDir），与空间目录没有位置关系。
-		const current = sessions.find((s) => s.current);
-		if (current !== undefined && resolve(current.cwd) === resolvedTarget) {
-			throw new Error("这是当前任务所在空间，请先新建任务再移除");
+		// 有活宿主在该空间的会话一律拒删：宿主还持有会话文件的活写者
+		//（可能正在后台跑），移走文件后续写会失败（sessionDelete 拒删
+		// 已注册会话的同一理由）。判定按桶的 cwd（= 会话 header.cwd）而不是
+		// 文件位置 —— 会话文件全部平铺在 sessions/ 下，与空间目录没有位置关系。
+		for (const bucket of bucketsById.values()) {
+			if (bucket.hostPromise !== undefined && resolve(bucket.cwd) === resolvedTarget) {
+				throw new Error("该空间有正在打开的任务，请先切换到它并停止运行后再移除");
+			}
 		}
+
+		// 一份列表同时服务守卫与收集：cwd 来自会话文件头部（磁盘真相），
+		// 与组的派生口径一致。
+		const sessions = await listSessions();
 
 		for (const session of sessions) {
 			if (session.isTempTask || resolve(session.cwd) !== resolvedTarget) continue;
@@ -1689,6 +1932,7 @@ const handlers: Record<string, Handler> = {
 
 		// 空间目录本身不动：里面可能有用户自己的文件，我们只管会话文件。
 		removeDisplayName(target);
+		pushTaskListChanged();
 	},
 
 	/**
@@ -1759,26 +2003,33 @@ function requireReady(
 }
 
 /** 会话尚未建立时更新状态并推给 UI。会话建立后一律由 SessionHost 发权威状态。 */
-function updateStateLocally(changes: Partial<SessionState>): void {
-	emitSessionEvent({
+function updateStateLocally(
+	bucket: SessionBucket<SessionHost>,
+	changes: Partial<SessionState>,
+): void {
+	emitSessionEvent(bucket, {
 		type: "session_state",
-		state: { ...conversation.state, ...changes },
+		state: { ...bucket.conversation.state, ...changes },
 	});
 }
 
 /**
  * 交互模式切换的统一入口：setInteraction 通道与 /plan 内置命令都走这里。
- * 任何切到非 plan 模式的切换都刷新记忆 —— 用户从切换器切走后再发 /plan，
- * 回到的必须是刚切走的那个模式，而不是一条过时记忆。
+ * 任何切到非 plan 模式的切换都刷新**该会话**的记忆 —— 用户从切换器切走后
+ * 再发 /plan，回到的必须是刚切走的那个模式，而不是一条过时记忆。
+ * 记忆按桶存：A 会话的 /plan 不该切回 B 会话记下的模式。
  */
-async function applyInteraction(id: string): Promise<void> {
+async function applyInteraction(
+	bucket: SessionBucket<SessionHost>,
+	id: string,
+): Promise<void> {
 	const readyId = requireReady(INTERACTIONS, id, "交互模式");
-	if (readyId !== "plan") lastNonPlanInteraction = readyId;
-	if (hostPromise === undefined) {
-		updateStateLocally({ interactionId: readyId });
+	if (readyId !== "plan") bucket.lastNonPlanInteraction = readyId;
+	if (bucket.hostPromise === undefined) {
+		updateStateLocally(bucket, { interactionId: readyId });
 		return;
 	}
-	(await hostPromise).setInteraction(readyId);
+	(await bucket.hostPromise).setInteraction(readyId);
 }
 
 async function dispatch(request: DaemonRequest): Promise<void> {
@@ -1876,14 +2127,12 @@ function start(): void {
 		platform: `${process.platform}-${process.arch}`,
 	});
 
-	// 初始工作区（共享临时目录）的预览服务。applyWorkspace / resumeSession 之外
-	// 唯一一个换根点：启动时 workspaceDir 已是临时目录但还没有服务，不起服务
-	// 则首个临时任务交付的 HTML 产物无法预览。失败不阻断启动 —— 预览是增强
-	// 能力，聊天主链路不该被它拖死；记日志留现场。
-	void previewServer.setRoot(workspaceDir).catch((error: unknown) => {
+	// 初始工作区（共享临时目录）的预览服务（多根池里第一个实例）。
+	// 失败不阻断启动 —— 预览是增强能力，聊天主链路不该被它拖死；记日志留现场。
+	void previewServers.ensure(defaultWorkspaceDir).catch((error: unknown) => {
 		const message = error instanceof Error ? error.message : String(error);
 		console.error(`预览服务启动失败：${message}`);
-		eventLog.append({ kind: "ipc_error", channel: "preview:setRoot", message });
+		eventLog.append({ kind: "ipc_error", channel: "preview:ensure", message });
 	});
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，
