@@ -141,4 +141,22 @@ describe("真实 resources/ 的回归约束", () => {
 			expect(mode?.tools, `${id} 不应有 automation_create`).not.toContain("automation_create");
 		}
 	});
+
+	it("questionnaire 三模式白名单都有；powershell 只在 craft", () => {
+		// 与 present_files 同款防护。questionnaire 三模式都加（plan 尤其需要：
+		// 调研阶段就该把方向问清，spec: add-questionnaire-and-powershell）；
+		// powershell 只给 craft（ask / plan 是只读模式，不给 shell）。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { modes } = loadResources(realDir);
+		for (const id of ["craft", "ask", "plan"]) {
+			const mode = modes.find((m) => m.id === id);
+			expect(mode?.tools, `模式 ${id} 的 tools 应含 questionnaire`).toContain("questionnaire");
+		}
+		const craft = modes.find((m) => m.id === "craft");
+		expect(craft?.tools, "craft 的 tools 应含 powershell").toContain("powershell");
+		for (const id of ["ask", "plan"]) {
+			const mode = modes.find((m) => m.id === id);
+			expect(mode?.tools, `${id} 不应有 powershell`).not.toContain("powershell");
+		}
+	});
 });

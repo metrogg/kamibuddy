@@ -58,6 +58,17 @@ export function getAutomationsFile(): string {
 }
 
 /**
+ * MCP 连接器配置（mcp.json，用户级）。
+ *
+ * 对齐 WorkBuddy 的 ~/.codebuddy/.mcp.json：用户级放配置目录，
+ * 项目级是 <工作区>/.mcp.json（不在本文件 —— 它随 cwd 走，不是配置目录的事）。
+ * 读取、JSONC 解析、双级合并见 core/mcp-config.ts。
+ */
+export function getMcpConfigPath(): string {
+	return join(getConfigDir(), "mcp.json");
+}
+
+/**
  * 提示词与模式资源目录（仓库根的 resources/）。
  *
  * 定位用 import.meta 相对路径而不是 process.cwd()：

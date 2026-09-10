@@ -1,19 +1,20 @@
 /**
  * 技能页（侧栏「专家·技能·连接器」）。布局对标 WorkBuddy 的技能页：
- * 顶部三个页签 + 右上操作区 + 技能卡片网格。
+ * 顶部三个页签 + 右上操作区 + 内容区。
  *
  * 与它的差异（如实呈现，不画死按钮）：
  * - 没有市场/SkillHub —— 我们没有分发后端，本页只管理「已安装」。
  *   后接市场时（ROADMAP T2 之后）再补「精选技能」区。
- * - 专家 / 连接器两个页签还没做，点击给「待做」反馈。
+ * - 专家页签还没做，点击给「待做」反馈。
  * - 导入支持「含 SKILL.md 的文件夹」与「单个 .md」；zip 解包后排期。
  *
  * 导入成功后提示词在**下一轮对话**即生效（daemon 每轮现读技能清单），
- * 无需重启。
+ * 无需重启。连接器页签是独立面板（connectors-view.tsx），数据自管。
  */
 
 import { useCallback, useEffect, useState } from "react";
 import type { SkillsSnapshot, SkillInfo } from "@shared/settings.ts";
+import { ConnectorsView } from "./connectors-view.tsx";
 import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
 
 interface SkillsViewProps {
@@ -23,14 +24,17 @@ interface SkillsViewProps {
 	readonly onToast: (text: string) => void;
 }
 
-/** 顶部页签。专家 / 连接器未实现，仍列出（对齐 WorkBuddy 的信息架构）。 */
+/** 顶部页签。专家未实现，仍列出（对齐 WorkBuddy 的信息架构）。 */
 const TABS = [
 	{ id: "expert", label: "专家", ready: false },
 	{ id: "skills", label: "技能", ready: true },
-	{ id: "connectors", label: "连接器", ready: false },
+	{ id: "connectors", label: "连接器", ready: true },
 ] as const;
 
+type TabId = (typeof TABS)[number]["id"];
+
 export function SkillsView({ onClose, onTodo, onToast }: SkillsViewProps): React.JSX.Element {
+	const [tab, setTab] = useState<TabId>("skills");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [busy, setBusy] = useState(false);
@@ -89,51 +93,65 @@ export function SkillsView({ onClose, onTodo, onToast }: SkillsViewProps): React
 					<IconBack size={17} />
 				</button>
 				<nav className="skills-tabs">
-					{TABS.map((tab) => (
+					{TABS.map((t) => (
 						<button
-							key={tab.id}
+							key={t.id}
 							type="button"
-							className={`skills-tab${tab.ready ? " active" : ""}`}
+							className={`skills-tab${tab === t.id ? " active" : ""}`}
 							onClick={() => {
-								if (tab.ready) return;
-								onTodo(`「${tab.label}」`);
+								if (!t.ready) {
+									onTodo(`「${t.label}」`);
+									return;
+								}
+								setTab(t.id);
 							}}
 						>
-							{tab.label}
-							{!tab.ready && <span className="skills-tab-tag">待做</span>}
+							{t.label}
+							{!t.ready && <span className="skills-tab-tag">待做</span>}
 						</button>
 					))}
 				</nav>
 				<span className="bar-spacer" />
-				<button type="button" className="mini-btn" disabled={busy} onClick={openSkillsDir}>
-					<IconFolder size={13} />
-					打开技能目录
-				</button>
-				<button type="button" className="mini-btn" disabled={busy} onClick={importFolder}>
-					<IconPlus size={13} />
-					导入技能…
-				</button>
+				{/* 头部操作区是技能页的（导入/开目录）；连接器的操作在面板自己的工具行里。 */}
+				{tab === "skills" && (
+					<>
+						<button type="button" className="mini-btn" disabled={busy} onClick={openSkillsDir}>
+							<IconFolder size={13} />
+							打开技能目录
+						</button>
+						<button type="button" className="mini-btn" disabled={busy} onClick={importFolder}>
+							<IconPlus size={13} />
+							导入技能…
+						</button>
+					</>
+				)}
 			</header>
 
 			<div className="skills-body">
-				{error !== undefined && <div className="settings-error">{error}</div>}
-
-				{snapshot === undefined ? (
-					<p className="settings-empty">正在读取…</p>
-				) : snapshot.skills.length === 0 ? (
-					<div className="skills-empty">
-						<p>还没有安装任何技能。</p>
-						<p>
-							点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；
-							或把技能文件夹直接放进技能目录。
-						</p>
-					</div>
+				{tab === "connectors" ? (
+					<ConnectorsView onToast={onToast} />
 				) : (
-					<div className="skill-grid">
-						{snapshot.skills.map((skill) => (
-							<SkillCard key={skill.filePath} skill={skill} />
-						))}
-					</div>
+					<>
+						{error !== undefined && <div className="settings-error">{error}</div>}
+
+						{snapshot === undefined ? (
+							<p className="settings-empty">正在读取…</p>
+						) : snapshot.skills.length === 0 ? (
+							<div className="skills-empty">
+								<p>还没有安装任何技能。</p>
+								<p>
+									点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；
+									或把技能文件夹直接放进技能目录。
+								</p>
+							</div>
+						) : (
+							<div className="skill-grid">
+								{snapshot.skills.map((skill) => (
+									<SkillCard key={skill.filePath} skill={skill} />
+								))}
+							</div>
+						)}
+					</>
 				)}
 			</div>
 		</main>

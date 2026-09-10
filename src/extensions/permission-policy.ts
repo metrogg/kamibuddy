@@ -22,7 +22,7 @@
  *   3. 沙箱模式的范围约束（read-only 拒一切写与命令）
  *   4. 工具种类（shell 任何档都问；写工具按 应用目录内高风险询问 →
  *      工作区内放行 → 区外询问 的顺序判；改应用自身数据的
- *      automation_create/delete 询问；未知工具询问）
+ *      automation_create/delete 询问；MCP 工具询问；未知工具询问）
  *   5. 审批策略（ask → 弹窗；never → 确定性拒绝）
  * 顺序本身就是语义：靠后的阶段无法放行靠前阶段已经拒掉的东西。
  *
@@ -60,13 +60,13 @@ export type PermissionDecision =
 	| { readonly kind: "allow" }
 	| { readonly kind: "deny"; readonly reason: string }
 	| {
-			readonly kind: "ask";
-			readonly risk: "low" | "medium" | "high";
-			/** 面向用户的一句话，如「写入工作目录之外的文件」。 */
-			readonly summary: string;
-			/** 折叠展示的细节（路径、命令等）。 */
-			readonly details: string;
-	  };
+		readonly kind: "ask";
+		readonly risk: "low" | "medium" | "high";
+		/** 面向用户的一句话，如「写入工作目录之外的文件」。 */
+		readonly summary: string;
+		/** 折叠展示的细节（路径、命令等）。 */
+		readonly details: string;
+	};
 
 /** 判定所需的输入。与 pi 的事件类型解耦，便于单测。 */
 export interface ToolCallFacts {
@@ -125,12 +125,16 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
 /**
  * 只读工具：不改变任何状态。
  *
- * 其中 web_search / web_fetch / present_files / automation_list 没有本地路径概念，
- * 维持一律放行：不写本地、不改任何状态，且数据不是密钥。不可信内容的风险由工具层
- * （web-tools.ts）的标记 + 本门对「后续写操作」的拦截共同兜住。
+ * 其中 web_search / web_fetch / present_files / automation_list / questionnaire
+ * 没有本地路径概念，维持一律放行：不写本地、不改任何状态，且数据不是密钥。
+ * 不可信内容的风险由工具层（web-tools.ts）的标记 + 本门对「后续写操作」的
+ * 拦截共同兜住。
  * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
  * automation_list 同理：读的是 KamiBuddy 自己的任务库（automations.json），
  * 与 web_search 同类——不涉及用户文件系统，也没有路径参数可判。
+ * questionnaire 同理：它只是把问题递给 UI 等用户作答，输入全部来自用户本人，
+ * 不触文件系统、不改任何状态 —— read-only 档下也同样放行（问用户一个问题
+ * 不构成「修改文件或执行命令」）。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
  * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
@@ -147,6 +151,7 @@ const READ_ONLY = new Set([
 	"web_fetch",
 	"present_files",
 	"automation_list",
+	"questionnaire",
 ]);
 
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
@@ -155,8 +160,11 @@ const LOCAL_READ = new Set(["read", "read_document", "find", "grep", "ls"]);
 /** 会改文件的内置工具。 */
 const MUTATING = new Set(["write", "edit"]);
 
-/** 会执行任意命令的工具。默认工具集里没有它们，但扩展或设置可能启用。 */
+/** 会执行任意命令的工具。powershell 在 craft 白名单里；bash 默认工具集没有，但扩展或设置可能启用。 */
 const SHELL = new Set(["bash", "powershell"]);
+
+/** MCP 工具的命名前缀（mcp__<server>__<tool>，mcp-client.ts 的 sanitizeToolName 拼出）。 */
+const MCP_TOOL_PREFIX = "mcp__";
 
 /**
  * 改变 KamiBuddy 自身数据的工具（目前只有 automation_*，经 AutomationStore
@@ -307,17 +315,23 @@ function decideUnderMode(
 
 	if (SHELL.has(toolName)) {
 		/*
-		 * shell 无法靠路径判断影响范围，**任何模式下都询问**，并把完整命令给用户看。
+		 * powershell 在 danger-full-access 档放行：该档的语义就是完全访问、
+		 * 不再逐次询问；凭据目录已在阶段 1 拦掉，命令级的危险操作
+		 * （iex / 下载执行 / 递归删除 …）由工具层的危险命令检查器拦截 ——
+		 * 分工是「门管要不要问人，检查器管这条命令能不能跑」。
 		 *
-		 * 为什么 danger-full-access 也不放行：我们还没有危险命令分类器
-		 * （`iex` / `-EncodedCommand` / 递归删除 …），而没有 OS 沙箱时
-		 * 一条命令就能绕过上面所有路径保护（`type ~\.ssh\id_rsa`）。
-		 * 在有分类器之前，这里保持 fail-closed —— 我们既然批评了 WorkBuddy
-		 * broker shim 的 fail-open，自己就不能在同一处松手。
+		 * bash 任何档都维持高风险询问：没有为它配工具与检查器
+		 * （Windows 目标用户没有 Git for Windows，默认工具集不含 bash），
+		 * 没有 OS 沙箱时一条命令就能绕开上面所有路径保护
+		 * （`type ~\.ssh\id_rsa`），这里保持 fail-closed —— 我们既然批评了
+		 * WorkBuddy broker shim 的 fail-open，自己就不能在同一处松手。
 		 *
-		 * 配合审批策略：approval=never 时这会变成 deny（而非放行），
-		 * 所以「允许完全访问」预设的文案明确写了「系统命令仍会被拦下」。
+		 * 询问一律把完整命令给用户看。配合审批策略：approval=never 时
+		 * ask 会变成 deny（而非放行），无人值守下「不问」等于「不做」。
 		 */
+		if (toolName === "powershell" && mode === "danger-full-access") {
+			return { kind: "allow" };
+		}
 		return {
 			kind: "ask",
 			risk: "high",
@@ -374,13 +388,55 @@ function decideUnderMode(
 		};
 	}
 
-	// 未登记的工具（如将来的 MCP 工具）：交给人判断。
+	/*
+	 * MCP 工具（mcp__<server>__<tool>，mcp-client.ts 注册）：默认人工审批。
+	 *
+	 * 显式登记为询问，而不是依赖末尾「未知工具」的 fail-safe —— 理由同
+	 * APP_DATA_MUTATING：fail-safe 的默认值将来若变动，不该静默改变 MCP 的语义。
+	 *
+	 * 两个有意的保守选择：
+	 *  - 任何模式都询问（含 danger-full-access）：能力面由外部 server 定义，
+	 *    读/写/联网从名字上无从区分，与 shell 一样无法分类，保持 fail-closed。
+	 *    凭据路径拦截（阶段 1）先于本分支生效 —— filesystem 这类 server 的
+	 *    path 参数指的就是本机文件，`mcp__filesystem__read_file ~/.ssh/id_rsa`
+	 *    在阶段 1 就已拒掉。
+	 *  - read-only 档的拒绝在阶段 3 已生效，走不到这里：无法证明一个 MCP
+	 *    工具不改状态，只读档下一律拒，与 fall-through 的旧位置语义一致。
+	 *
+	 * 摘要里把 server 与工具名拆开给用户看（从工具名解析）；
+	 * 参数摘要沿用 fall-through 的 path/command 节选，在弹窗的折叠详情里展示。
+	 */
+	if (toolName.startsWith(MCP_TOOL_PREFIX)) {
+		const parsed = parseMcpToolName(toolName);
+		return {
+			kind: "ask",
+			risk: "medium",
+			summary:
+				parsed !== undefined
+					? `使用 MCP 服务器「${parsed.server}」的工具「${parsed.tool}」`
+					: `使用 MCP 工具「${toolName}」`,
+			details: rawPath ?? command ?? "",
+		};
+	}
+
+	// 未登记的工具：交给人判断（fail-safe，不静默放行也不静默阻断）。
 	return {
 		kind: "ask",
 		risk: "medium",
 		summary: `使用工具「${toolName}」`,
 		details: rawPath ?? command ?? "",
 	};
+}
+
+/**
+ * mcp__<server>__<tool> → { server, tool }；解析失败（畸形名）返回 undefined。
+ * 只服务审批文案，判定本身只靠前缀 —— 名字拼不出来不影响「要问」这件事。
+ */
+function parseMcpToolName(toolName: string): { readonly server: string; readonly tool: string } | undefined {
+	const rest = toolName.slice(MCP_TOOL_PREFIX.length);
+	const sepAt = rest.indexOf("__");
+	if (sepAt <= 0 || sepAt + 2 >= rest.length) return undefined;
+	return { server: rest.slice(0, sepAt), tool: rest.slice(sepAt + 2) };
 }
 
 /**

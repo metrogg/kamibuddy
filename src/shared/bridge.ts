@@ -12,10 +12,13 @@ import type {
 	DaemonStatus,
 	ArtifactContent,
 	CompletionData,
+	McpConfigSnapshot,
 	PermissionRequest,
 	PermissionResponse,
 	PickedInputFiles,
 	PromptRequest,
+	QuestionnaireRequest,
+	QuestionnaireResponse,
 	SaveArtifactRequest,
 	SessionSummary,
 	UiRequest,
@@ -104,6 +107,8 @@ export interface KamiBridge {
 
 	readonly respondToUi: (response: UiResponse) => Promise<void>;
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;
+	/** 应答 questionnaire 工具的问卷卡（作答或整卡跳过）。 */
+	readonly questionnaireResponse: (response: QuestionnaireResponse) => Promise<void>;
 
 	readonly openArtifact: (path: string) => Promise<void>;
 	/** 读产物文件内容（预览面板用）。 */
@@ -164,6 +169,15 @@ export interface KamiBridge {
 	readonly importSkill: (sourcePath: string) => Promise<SkillInfo>;
 	readonly pickSkillDirectory: () => Promise<string | undefined>;
 
+	/* ── MCP 连接器 ─────────────────────────────────────────────── */
+
+	/** MCP 配置快照：server 运行态列表 + 生效层级 mcp.json 原文。连接器页打开时调用。 */
+	readonly mcpConfigGet: () => Promise<McpConfigSnapshot>;
+	/** 整体写入 mcp.json（JSON 编辑器 / 添加表单的保存）。非法配置 reject 原因、不落盘。 */
+	readonly mcpConfigSet: (configJson: string) => Promise<void>;
+	/** 启用 / 禁用单个 server（写回其所在层级 mcp.json 的 disabled 字段）。 */
+	readonly mcpServerToggle: (serverName: string, enabled: boolean) => Promise<void>;
+
 	/* ── 诊断 ─────────────────────────────────────────────────────── */
 
 	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
@@ -192,6 +206,10 @@ export interface KamiBridge {
 	readonly onUiRequest: (listener: (request: UiRequest) => void) => Unsubscribe;
 	readonly onPermissionRequest: (
 		listener: (request: PermissionRequest) => void,
+	) => Unsubscribe;
+	/** questionnaire 工具发起的结构化提问（问卷卡逐题作答或整卡跳过）。 */
+	readonly onQuestionnaireRequest: (
+		listener: (request: QuestionnaireRequest) => void,
 	) => Unsubscribe;
 	readonly onDaemonReady: (listener: () => void) => Unsubscribe;
 	readonly onDaemonDown: (

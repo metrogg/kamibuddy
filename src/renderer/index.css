@@ -5,6 +5,49 @@
  * 届时文档流水线与应用 UI 的色值统一收口到 token；这里先用 CSS 变量集中管理。
  */
 
+/* 根部错误边界：渲染异常时的错误卡（白屏无反馈是体验缺陷，ErrorBoundary 是最后防线）。 */
+.error-boundary {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100vh;
+	background: var(--bg);
+}
+
+.error-boundary-card {
+	max-width: 480px;
+	padding: 32px;
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	text-align: center;
+}
+
+.error-boundary-card h2 {
+	margin: 0 0 16px;
+	font-size: 18px;
+	color: var(--text);
+}
+
+.error-boundary-message {
+	margin: 0 0 24px;
+	font-size: 13px;
+	color: var(--text-dim);
+	word-break: break-word;
+}
+
+.error-boundary-card button {
+	padding: 8px 16px;
+	background: var(--primary);
+	color: var(--primary-text);
+	border-radius: var(--radius-md);
+	font-size: 13px;
+}
+
+.error-boundary-card button:hover {
+	opacity: 0.88;
+}
+
 :root {
 	/* WorkBuddy 浅色主题同款配色（safe-delete-events-vjEg4QyO.css :1749-1917 提取）。
 	   主背景是纯白（bg-primary = white-100），侧栏 gray-3（#F2F2F2），
@@ -16,6 +59,10 @@
 	--bg-raised: #f7f7f7;
 	--border: #e6e6e6;
 	--text: #000000;
+	/* WorkBuddy 文字三级色：primary=black-100 / secondary=black-70 / tertiary=black-50
+	   （safe-delete-events …css --wb-color-text-*）。secondary 此前缺 token，
+	   首页 pills/能力 chip/案例标题都吃这一档，补齐。 */
+	--text-secondary: rgba(0, 0, 0, 0.7);
 	--text-dim: rgba(0, 0, 0, 0.5);
 	--primary: rgba(0, 0, 0, 0.9);
 	--primary-text: #ffffff;
@@ -24,6 +71,9 @@
 	--radius-lg: 16px;
 	--radius-md: 10px;
 	--shadow-card: 0 6px 24px rgb(0 0 0 / 6%);
+	/* WorkBuddy 输入卡阴影（--wb-main-area-box-shadow 原值），比 --shadow-card 轻得多：
+	   大而淡的铺底 + 小而实的贴边。只给输入卡用，弹层仍走 --shadow-card。 */
+	--shadow-input: 0 16px 32px -8px rgba(0, 0, 0, 0.03), 0 2px 4px -4px rgba(0, 0, 0, 0.06);
 	color-scheme: light;
 }
 
@@ -35,7 +85,10 @@ body {
 	margin: 0;
 	background: var(--bg);
 	color: var(--text);
-	font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+	/* WorkBuddy 全局字体栈原值（"PingFang SC" 在 macOS 生效，Windows 落到
+	   Segoe UI；"Microsoft YaHei" 是我们保留的 CJK 兜底，WB 栈里没有，
+	   但没有它 Windows 中文渲染依赖系统隐式回退，不确定性更高）。 */
+	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 button {
@@ -168,6 +221,8 @@ button {
 	gap: 4px;
 	padding: 0 8px 4px;
 	font-size: 12px;
+	/* WorkBuddy 侧栏分组标题（claw-sidebar-drawer__section-title）：12px/600/三级灰。 */
+	font-weight: 600;
 	color: var(--text-dim);
 }
 
@@ -519,74 +574,136 @@ button {
 .home {
 	flex: 1 1 auto;
 	overflow-y: auto;
-	background:
-		radial-gradient(60% 40% at 70% 0%, rgb(126 240 196 / 8%), transparent),
-		var(--bg);
+	/* WorkBuddy 首页主区纯白（--wb-home-bg-secondary = #fff），无装饰光晕。 */
+	background: var(--bg);
 }
 
 .home-inner {
-	max-width: 780px;
+	position: relative;
+	/* WorkBuddy .wb-home-page：max-width 848、左右 padding 24（≥1681px 才放到 1008，
+	   桌面主窗口区间恒为 848，不抄媒体查询）。 */
+	max-width: 848px;
+	/* WB 同款防重叠底：min-height = max(内容块 432 + 案例槽预留 220, 100%)，
+	   窗口过矮时转为滚动而不是英雄区压案例卡。 */
+	min-height: max(652px, 100%);
 	margin: 0 auto;
-	padding: 72px 32px 48px;
+	padding: 0 24px;
+	display: flex;
+	flex-direction: column;
+}
+
+/* 英雄区（标题+pills+能力行+输入卡）在扣除案例槽预留后垂直居中——
+   WorkBuddy 的 hero 不是顶部对齐，而是随窗口高度浮动居中。 */
+.home-main {
+	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
+	justify-content: center;
+	width: 100%;
+	/* 案例槽预留（WB --wb-home-slot-reserve 默认 220）。 */
+	padding-bottom: 220px;
 }
 
 .home-title {
-	margin: 0 0 22px;
-	font-size: 32px;
+	/* WorkBuddy .wb-home-header__title 原值：30px/42px/600/90% 黑/无字距。 */
+	margin: 0 0 16px;
+	font-size: 30px;
+	line-height: 42px;
 	font-weight: 600;
-	letter-spacing: 0.5px;
+	color: rgba(0, 0, 0, 0.9);
+	letter-spacing: 0;
 }
 
 .mode-tabs {
 	display: flex;
+	align-items: center;
 	gap: 2px;
-	padding: 3px;
+	/* WorkBuddy .wb-scene-tabs：容器高 36、padding 2（我们原为 padding 3 无固定高）。 */
+	height: 36px;
+	padding: 2px;
 	background: var(--bg-raised);
 	border-radius: 999px;
-	margin-bottom: 18px;
+	/* WB 场景 pills 与下方 composer 的间距原值 64px。 */
+	margin-bottom: 64px;
 }
 
 .mode-tab {
-	padding: 5px 18px;
+	display: inline-flex;
+	align-items: center;
+	/* WB .wb-scene-tabs__pill：高 32、padding 0 12、14px/22/500、文字二级色。 */
+	height: 32px;
+	padding: 0 12px;
 	border-radius: 999px;
-	font-size: 13px;
-	color: var(--text-dim);
+	font-size: 14px;
+	line-height: 22px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	transition: background-color 0.18s ease, color 0.18s ease;
 }
 
 .mode-tab.active {
-	background: var(--primary);
+	/* WB pill 选中态不是主按钮的 90% 黑，是 75% 黑（--wb-bg-pill-active），
+	   hover 加深到 82%；字重升到 600。 */
+	background: rgba(0, 0, 0, 0.75);
 	color: var(--primary-text);
+	font-weight: 600;
+}
+
+.mode-tab.active:hover {
+	background: rgba(0, 0, 0, 0.82);
 }
 
 .mode-tab:not(.active):hover {
+	/* WB pill hover：#fafafa 浅底 + 一级文字色（原只变色不起底）。 */
+	background: #fafafa;
 	color: var(--text);
 }
 
 .capability-row {
 	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
+	/* 单行不折行（用户明确要求「放在一条线上」）：6 个 chip 约 690px，
+	   主列内宽 ≥760px 时自然放得下；窗口再窄就横向滚动，不许换行。 */
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	scrollbar-width: none;
+	/* WB .wb-home-composer__chips：通栏左对齐（原我们居中），与输入卡同宽。 */
+	justify-content: flex-start;
+	width: 100%;
 	gap: 8px;
-	margin-bottom: 26px;
+	align-items: center;
+	min-height: 32px;
+	/* 与输入卡的间距 = WB .wb-home-composer 的 gap 12。 */
+	margin-bottom: 12px;
+}
+
+.capability-row::-webkit-scrollbar {
+	display: none;
 }
 
 .capability-chip {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 5px 12px;
+	/* 单行布局里不许被压缩变形（配套 .capability-row 的 nowrap）。 */
+	flex-shrink: 0;
+	/* WB .quick-actions__item：高 32、padding 0 12、gap 4、14px/400、
+	   文字二级色、白底细边、胶囊圆角 + 一层几乎不可见的投影（原值照抄）。 */
+	gap: 4px;
+	height: 32px;
+	padding: 0 12px;
 	border: 1px solid var(--border);
 	border-radius: 999px;
-	font-size: 13px;
-	color: var(--text);
+	font-size: 14px;
+	font-weight: 400;
+	color: var(--text-secondary);
 	background: var(--bg);
+	box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.02);
 }
 
 .capability-chip:hover {
-	border-color: var(--text-dim);
+	/* WB hover：#f2f2f2 底 + 一级文字色（原我们只加深边框）。 */
+	background: #f2f2f2;
+	color: var(--text);
 }
 
 /* 输入卡与吉祥物同处一个定位上下文，吉祥物浮在卡片右上。 */
@@ -595,12 +712,29 @@ button {
 	width: 100%;
 }
 
+/* WorkBuddy 首页输入框的外层渐变槽（.wb-home-composer__input-slot 原值）：
+   灰白渐变底 + 24px 圆角 + 上/左右 2px、下 4px 内边距 —— 白卡与下方的
+   工作空间/权限 chips 都坐在这一层浅灰渐变上（WB 注释：灰色由外层渐变透出）。
+   对话页没有这个槽，是首页专属。 */
+.composer-slot {
+	background: linear-gradient(180deg, #ebebeb 0%, #f5f5f5 100%);
+	border-radius: 24px;
+	padding: 2px 2px 4px;
+}
+
+/* 槽内白卡圆角 22（WB --cb-input-content-radius 首页值），比槽小 2 贴合。 */
+.composer-slot .composer-card {
+	border-radius: 22px;
+}
+
 .composer-card {
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-card);
-	padding: 12px 14px 10px;
+	/* WB 输入容器圆角 24（cr-input-container，对话页同值）；首页被槽覆写为 22。 */
+	border-radius: 24px;
+	box-shadow: var(--shadow-input);
+	/* WB：容器上 padding 12、编辑区左右 16（cr-input-editor-host padding 0 16）。 */
+	padding: 12px 16px;
 }
 
 .composer-card textarea {
@@ -609,7 +743,10 @@ button {
 	resize: none;
 	border: 0;
 	padding: 2px 0 8px;
-	font: inherit;
+	/* WB 编辑区原值：15px/1.75（cr-input-editor-host [data-slate-editor]）。 */
+	font-family: inherit;
+	font-size: 15px;
+	line-height: 1.75;
 	color: inherit;
 	background: transparent;
 }
@@ -1049,55 +1186,63 @@ button {
 /* 拖拽悬停高亮：边框与一圈主色描边双提示（对标常见拖放目标反馈）。 */
 .composer-card.drag-over {
 	border-color: var(--primary);
-	box-shadow: var(--shadow-card), 0 0 0 1px var(--primary);
+	box-shadow: var(--shadow-input), 0 0 0 1px var(--primary);
 }
 
-.mascot {
-	position: absolute;
-	right: -6px;
-	top: -58px;
-	width: 64px;
-	height: 64px;
-	/* 不挡输入卡的点击。 */
-	pointer-events: none;
-}
 
+
+/* WB 挂件行（.wb-input-footer 原值）：固定高 32、gap 4、左右 padding 12、
+   无背景（坐在渐变槽上）；行在槽内，不再有 12px 上外边距。 */
 .context-row {
 	display: flex;
-	gap: 10px;
-	margin-top: 12px;
-	align-self: flex-start;
+	align-items: center;
+	gap: 4px;
+	height: 32px;
+	padding: 0 12px;
 }
 
+/* WB workspace-picker / permission-setting chip 原值：高 32、padding 0 8、
+   胶囊圆角、透明底、三级灰 14/20；hover 只加深字色 + 字重 500，不起灰底。 */
 .context-chip {
 	display: flex;
 	align-items: center;
-	gap: 5px;
-	padding: 4px 10px;
-	border-radius: 8px;
-	font-size: 12px;
+	gap: 4px;
+	height: 32px;
+	padding: 0 8px;
+	border-radius: 999px;
+	font-size: 14px;
+	line-height: 20px;
 	color: var(--text-dim);
+	transition: color 0.15s ease, font-weight 0.15s ease;
 }
 
 .context-chip:hover {
-	background: var(--bg-hover);
 	color: var(--text);
+	font-weight: 500;
 }
 
 /* ── 案例卡片 ─────────────────────────────────────────────────── */
 
+/* WorkBuddy .wb-home-page__related-playbooks-slot：absolute 钉在首页底部 56px 处，
+   左右与主列同宽（home-inner 的 24 padding 不影响 absolute 子项，槽自己补 24）。 */
 .cases {
-	width: 100%;
-	margin-top: 44px;
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 56px;
+	padding: 0 24px;
 }
 
 .cases-header {
 	display: flex;
 	align-items: center;
 	gap: 10px;
+	/* WB playbooks 容器 gap 12（标题行与卡片行之间）。 */
 	margin-bottom: 12px;
-	font-size: 13px;
-	color: var(--text-dim);
+	/* WB __title：14px/22、二级色（原为 13px 三级色）。 */
+	font-size: 14px;
+	line-height: 22px;
+	color: var(--text-secondary);
 }
 
 .cases-header span:first-child {
@@ -1108,53 +1253,92 @@ button {
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	font-size: 12px;
-	color: var(--text-dim);
-	padding: 3px 6px;
-	border-radius: 6px;
+	/* WB __refresh/__view-more：高 24、padding 0 8、14px、圆角 12、二级色。 */
+	height: 24px;
+	padding: 0 8px;
+	font-size: 14px;
+	color: var(--text-secondary);
+	border-radius: 12px;
 }
 
 .cases-action:hover {
-	background: var(--bg-hover);
-	color: var(--text);
+	/* WB hover：字色 90% 黑 + tertiary 浅灰底（--bg-raised = #F7F7F7 同值）。 */
+	color: rgba(0, 0, 0, 0.9);
+	background: var(--bg-raised);
 }
 
 .case-grid {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
-	gap: 12px;
+	/* WB __row：4 列 gap 8（原我们 12）。 */
+	gap: 8px;
+	justify-content: start;
 }
 
 .case-card {
 	display: flex;
 	flex-direction: column;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	overflow: hidden;
-	background: var(--bg);
-	text-align: left;
-	transition: box-shadow 0.15s ease;
+	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。 */
+	gap: 8px;
+	border: 0;
+	background: transparent;
+	text-align: center;
+	transition: transform 0.18s ease;
 }
 
 .case-card:hover {
-	box-shadow: var(--shadow-card);
+	/* WB hover：整卡上浮 2px，阴影只落在封面上（不起整卡阴影）。 */
+	transform: translateY(-2px);
+}
+
+.case-card:hover .case-cover {
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .case-cover {
 	display: block;
-	aspect-ratio: 16 / 10;
+	width: 100%;
+	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 8% 黑描边。 */
+	aspect-ratio: 16 / 9;
+	border: 0.5px solid rgba(0, 0, 0, 0.08);
+	border-radius: 16px;
+	transition: box-shadow 0.18s ease;
 }
 
-.case-cover-0 { background: linear-gradient(135deg, #dfe9ff, #f6e6ff); }
-.case-cover-1 { background: linear-gradient(135deg, #dff5e3, #e8f7ff); }
-.case-cover-2 { background: linear-gradient(135deg, #fff0db, #ffe3e3); }
-.case-cover-3 { background: linear-gradient(135deg, #e3f0ff, #d8f5f0); }
-.case-cover-4 { background: linear-gradient(135deg, #f3e8ff, #e0edff); }
-.case-cover-5 { background: linear-gradient(135deg, #e8ecff, #fff4de); }
+.case-cover-0 {
+	background: linear-gradient(135deg, #dfe9ff, #f6e6ff);
+}
+
+.case-cover-1 {
+	background: linear-gradient(135deg, #dff5e3, #e8f7ff);
+}
+
+.case-cover-2 {
+	background: linear-gradient(135deg, #fff0db, #ffe3e3);
+}
+
+.case-cover-3 {
+	background: linear-gradient(135deg, #e3f0ff, #d8f5f0);
+}
+
+.case-cover-4 {
+	background: linear-gradient(135deg, #f3e8ff, #e0edff);
+}
+
+.case-cover-5 {
+	background: linear-gradient(135deg, #e8ecff, #fff4de);
+}
 
 .case-title {
-	padding: 8px 10px 10px;
-	font-size: 13px;
+	/* WB __card-title：14/22、400、二级色、居中省略（原 13px 左对齐带 padding）。 */
+	padding: 0;
+	font-size: 14px;
+	line-height: 22px;
+	font-weight: 400;
+	color: var(--text-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 /* ── 扫光（全局唯一「进行中」视觉语言）──────────────────────────── */
@@ -1169,12 +1353,10 @@ button {
  */
 .text-shimmer {
 	--shimmer-color: var(--text-dim);
-	background-image: linear-gradient(
-		110deg,
-		color-mix(in srgb, var(--shimmer-color) 26%, transparent) 40%,
-		color-mix(in srgb, var(--shimmer-color) 55%, transparent) 50%,
-		color-mix(in srgb, var(--shimmer-color) 26%, transparent) 60%
-	);
+	background-image: linear-gradient(110deg,
+			color-mix(in srgb, var(--shimmer-color) 26%, transparent) 40%,
+			color-mix(in srgb, var(--shimmer-color) 55%, transparent) 50%,
+			color-mix(in srgb, var(--shimmer-color) 26%, transparent) 60%);
 	background-size: 200% 100%;
 	background-clip: text;
 	color: transparent;
@@ -1185,6 +1367,7 @@ button {
 	from {
 		background-position: 200% 0;
 	}
+
 	to {
 		background-position: -200% 0;
 	}
@@ -1222,7 +1405,7 @@ button {
 
 /* 侧栏展开时左上角开关落在侧栏 brand 行内（brand 已让位），不压 header，
    恢复常规左内边距 —— 只有侧栏收起（无 .sidebar 兄弟）才需要让位。 */
-.sidebar ~ .chat .chat-header {
+.sidebar~.chat .chat-header {
 	padding-left: 12px;
 }
 
@@ -1267,6 +1450,7 @@ button {
 		opacity: 0;
 		transform: translateY(10px);
 	}
+
 	to {
 		opacity: 1;
 		transform: translateY(0);
@@ -1334,13 +1518,59 @@ button {
 		opacity: 0;
 		transform: translate(-50%, 6px);
 	}
+
 	to {
 		opacity: 1;
 		transform: translate(-50%, 0);
 	}
 }
 
-.stream > * {
+/* 消息导航刻度轨（Codex 风）：钉在 .stream-wrap 视口左缘的竖向 minimap，
+   每条 user 消息一个刻度，位置 = 消息顶端在 scrollHeight 中的比例。
+   刻度宽 12px 落在 .stream 的 24px 左 padding 区内，不遮消息文字，
+   内容区布局不动。容器 pointer-events:none 让左缘选字/滚动条不受干扰，
+   只有刻度本身可点。z-index 与 jump-to-bottom 同级（1），低于各弹层。 */
+.turn-rail {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 14px;
+	pointer-events: none;
+	z-index: 1;
+}
+
+.turn-rail-tick {
+	/* button 复位：只留一条小横杠。 */
+	appearance: none;
+	padding: 0;
+	border: none;
+	position: absolute;
+	left: 1px;
+	display: block;
+	width: 12px;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--text-dim);
+	opacity: 0.45;
+	/* top 按刻度中心给（ratio 是消息顶端），横杠自身高 2px 要上收一半。 */
+	transform: translateY(-50%);
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+.turn-rail-tick:hover {
+	opacity: 1;
+	background: var(--text);
+}
+
+/* 视口顶之上最近的用户消息：激活态用既有成功色，与全局「当前/进行」语义一致。 */
+.turn-rail-tick.active {
+	background: var(--ok);
+	opacity: 1;
+}
+
+.stream>* {
 	/* WorkBuddy 内容宽口径 832px，比此前的 760 更舒展。 */
 	max-width: 832px;
 }
@@ -1770,13 +2000,11 @@ button {
 /* 思考块：默认折叠成一行「深度思考」，点击展开（对标 WorkBuddy）。
    流式期间默认展开、标题扫光；该条消息完成后自动收起。 */
 .thinking-block {
+	/* 无矩形外框（对齐 WorkBuddy：整块就是文字流里的一段，只有「深度思考」
+	   标题行可交互）。曾经的 border+radius+bg 框，其背景其实是渐隐文字
+	   background-clip: text hack 的陪衬——渐隐改纯色后框就没有存在理由了。 */
 	margin: 0 0 8px;
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	overflow: hidden;
-	/* 正文用 background-clip: text 做渐隐后自身背景被裁到文字上，
-	   白底上提到整块（否则正文区会透出 entry 的灰底）。 */
-	background: var(--bg);
+	padding: 2px 0;
 }
 
 .thinking-head {
@@ -1784,44 +2012,41 @@ button {
 	align-items: center;
 	gap: 6px;
 	width: 100%;
-	padding: 6px 10px;
+	padding: 2px 0;
 	font-size: 12px;
 	color: var(--text-dim);
+	transition: color 0.16s ease;
 }
 
 .thinking-head:hover {
-	background: var(--bg-hover);
+	/* WorkBuddy 只变色不起背景块。 */
 	color: var(--text);
 }
 
 .thinking-caret {
+	/* 折叠朝右、展开朝下（WorkBuddy/VSCode 同款约定）。 */
+	transform: rotate(-90deg);
 	transition: transform 0.15s ease;
 }
 
 .thinking-caret.open {
-	transform: rotate(180deg);
+	transform: rotate(0deg);
 }
 
 .thinking-body {
 	margin: 0;
-	padding: 10px 12px;
-	border-top: 1px solid var(--border);
-	/* 左侧 4px 竖条：标识「推导过程」与最终回答的区隔（WorkBuddy 同形态），
-	   颜色用边界灰而非主色 —— 它是辅助线，不是强调。 */
+	/* WorkBuddy 实测值：上 2px、左 12px 内边距 + 4px 左边条标识「推导过程」。 */
+	padding: 2px 0 0 12px;
 	border-left: 4px solid var(--border);
 	font-size: 12px;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	/* WorkBuddy 规格：展开态限高 200px 内部滚动。 */
+	/* 展开态限高 200px 内部滚动（WorkBuddy 同值）。 */
 	max-height: 200px;
 	overflow-y: auto;
-	/* 上深下淡渐隐：上 20% 主色 → 下 80% 三级灰，background-clip: text 把渐变
-	   裁到文字上；background-attachment: local 让渐变跟随内部滚动
-	   （钉在元素盒上的话滚动时渐隐位置不动，看起来像 bug）。 */
-	background-image: linear-gradient(to bottom, var(--text) 20%, var(--text-dim) 80%);
-	background-clip: text;
-	background-attachment: local;
-	color: transparent;
+	/* 纯色三级灰（WorkBuddy 完成态为纯色文字，渐隐是流式 shimmer 的事，
+	   而 shimmer 已在标题行表达）。 */
+	color: var(--text-dim);
 }
 
 /* Markdown 渲染区：模型输出的结构化排版。 */
@@ -2128,6 +2353,7 @@ button {
    折叠展开过渡退化为瞬时切换。扫光、preview-panel、file-tree-chevron
    的覆盖在各自区块。 */
 @media (prefers-reduced-motion: reduce) {
+
 	.tool-dot.running,
 	.task-spinner,
 	.file-tree-spinner {
@@ -2646,7 +2872,7 @@ button {
 	line-height: 1.6;
 }
 
-.preview-diff > div {
+.preview-diff>div {
 	padding: 0 16px;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -2781,7 +3007,7 @@ button {
 	padding: 16px;
 }
 
-.office-docx .docx-wrapper > section.docx {
+.office-docx .docx-wrapper>section.docx {
 	background: #fff;
 	box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
 	margin: 0 auto 16px;
@@ -2954,7 +3180,8 @@ button {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	direction: rtl; /* 路径尾部比头部更有区分度，省略号留在开头 */
+	direction: rtl;
+	/* 路径尾部比头部更有区分度，省略号留在开头 */
 }
 
 .ws-current {
@@ -3098,6 +3325,7 @@ button {
 		opacity: 0;
 		transform: translateY(-6px);
 	}
+
 	to {
 		opacity: 1;
 		transform: translateY(0);
@@ -3136,8 +3364,8 @@ button {
 
 /* 侧栏展开时左上角开关落在侧栏 brand 行内，不压本行，恢复常规左内边距。
    diagnostics / skills 视图复用 .settings 骨架，同一条规则覆盖。 */
-.sidebar ~ .settings .settings-head,
-.sidebar ~ .skills .skills-head {
+.sidebar~.settings .settings-head,
+.sidebar~.skills .skills-head {
 	padding-left: 20px;
 }
 
@@ -3850,7 +4078,7 @@ button {
 	height: 26px;
 }
 
-.timeline-row + .timeline-row {
+.timeline-row+.timeline-row {
 	margin-top: 4px;
 }
 
@@ -4510,21 +4738,25 @@ button {
 	margin-top: 8px;
 }
 
-.auto-list {
+.auto-list,
+.mcp-list {
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
 }
 
-/* 任务行卡片：与 skill-card / preset-item 同档位（边框 + --radius-md）。 */
-.auto-row {
+/* 任务行卡片：与 skill-card / preset-item 同档位（边框 + --radius-md）。
+   连接器（MCP）服务器行同一骨架，选择器并集共用（同 .settings, .skills 先例）。 */
+.auto-row,
+.mcp-row {
 	padding: 12px 14px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
 }
 
-.auto-row-main {
+.auto-row-main,
+.mcp-row-main {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -4551,7 +4783,8 @@ button {
 	transform: rotate(0deg);
 }
 
-.auto-row-text {
+.auto-row-text,
+.mcp-row-text {
 	flex: 1 1 auto;
 	min-width: 0;
 	display: flex;
@@ -4559,14 +4792,16 @@ button {
 	gap: 2px;
 }
 
-.auto-row-title {
+.auto-row-title,
+.mcp-row-title {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
 }
 
-.auto-row-name {
+.auto-row-name,
+.mcp-row-name {
 	font-size: 14px;
 	font-weight: 600;
 	overflow: hidden;
@@ -4579,7 +4814,8 @@ button {
 	color: var(--text-dim);
 }
 
-.auto-row-ops {
+.auto-row-ops,
+.mcp-row-ops {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -4588,7 +4824,8 @@ button {
 
 /* 状态徽标：与 permission-badge 同尺寸语言；色阶用既有 --ok / --danger 的
    color-mix 档位（同 settings-error / mini-btn.danger 的混色手法）。 */
-.auto-badge {
+.auto-badge,
+.mcp-badge {
 	padding: 2px 8px;
 	border-radius: 5px;
 	background: var(--bg-raised);
@@ -4653,7 +4890,8 @@ button {
 	color: var(--danger);
 }
 
-.auto-run-error {
+.auto-run-error,
+.mcp-row-error {
 	color: var(--danger);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -4663,8 +4901,11 @@ button {
 }
 
 /* 表单弹层：骨架复用 modal-backdrop；卡片比 save-space 宽（字段多），
-   其余（圆角/阴影/内边距）保持同一尺寸语言。 */
-.auto-form-card {
+   其余（圆角/阴影/内边距）保持同一尺寸语言。
+   连接器（MCP）的添加表单与 JSON 编辑器同一卡片语言，选择器并集共用。 */
+.auto-form-card,
+.mcp-form-card,
+.mcp-editor-card {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
@@ -4677,6 +4918,11 @@ button {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+/* JSON 编辑器更宽：mcp.json 行普遍比表单字段长，窄卡会迫使频繁折行。 */
+.mcp-editor-card {
+	max-width: 640px;
 }
 
 /* 调度类型与星期 toggle 组：选中态给 mini-btn 加 active 反色
@@ -4697,7 +4943,9 @@ button {
    time / datetime-local / textarea —— 同一份视觉补齐全家福。 */
 .auto-form-card .field input[type="time"],
 .auto-form-card .field input[type="datetime-local"],
-.auto-form-card .field textarea {
+.auto-form-card .field textarea,
+.mcp-form-card .field textarea,
+.mcp-json-editor {
 	padding: 7px 10px;
 	border: 1px solid var(--border);
 	border-radius: 7px;
@@ -4707,8 +4955,279 @@ button {
 	font-size: 13px;
 }
 
-.auto-form-card .field textarea {
+.auto-form-card .field textarea,
+.mcp-form-card .field textarea {
 	min-height: 84px;
 	resize: vertical;
 	line-height: 1.6;
+}
+
+/* ── 连接器页（技能页「连接器」页签，MCP 服务器管理）─────────────
+ * 列表行 / 表单卡片 / 徽标基础与定时任务页同一骨架（选择器并集在上一节），
+ * 这里只有面板布局、状态色、启停开关与 JSON 编辑器的专属规则。
+ * ──────────────────────────────────────────────────────────────── */
+
+.mcp-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+/* 面板工具行：说明文字在左，操作按钮在右（头部操作区属于技能页签，见 skills-view）。 */
+.mcp-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.mcp-toolbar-hint {
+	font-size: 12px;
+	color: var(--text-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 已连接时的工具数：与徽章同行、小字弱化处理——它是佐证信息，不是状态本身。 */
+.mcp-row-tools {
+	font-size: 12px;
+	color: var(--text-dim);
+	flex: 0 0 auto;
+}
+
+/* 状态色：绿/红取既有 --ok / --danger 的 color-mix 档位（同 auto-run-badge）；
+   连接中的黄与 toast-warning 同色（#d9822b），token 体系统一时一并收口。 */
+.mcp-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	flex: 0 0 auto;
+}
+
+.mcp-badge-connecting {
+	background: color-mix(in srgb, #d9822b 12%, var(--bg));
+	color: #d9822b;
+}
+
+.mcp-badge-connected {
+	background: color-mix(in srgb, var(--ok) 12%, var(--bg));
+	color: var(--ok);
+}
+
+.mcp-badge-failed {
+	background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+	color: var(--danger);
+}
+
+/* 连接中的转圈：与 task-spinner 同一手法（border 旋转），缩小进徽章。 */
+.mcp-badge-spinner {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	border: 1.5px solid color-mix(in srgb, #d9822b 30%, var(--bg));
+	border-top-color: #d9822b;
+	border-radius: 50%;
+	animation: task-spin 0.8s linear infinite;
+}
+
+/* 启停开关：原生 checkbox 透明铺满 label（点击区 = 轨道），
+   轨道与滑块是纯展示层（pointer-events: none，点击落在 input 上）。 */
+.mcp-switch {
+	position: relative;
+	display: inline-flex;
+	flex: 0 0 auto;
+	width: 32px;
+	height: 18px;
+}
+
+.mcp-switch input {
+	position: absolute;
+	inset: 0;
+	margin: 0;
+	opacity: 0;
+	cursor: pointer;
+}
+
+.mcp-switch-track {
+	position: absolute;
+	inset: 0;
+	border-radius: 999px;
+	background: var(--border);
+	transition: background 0.15s ease;
+	pointer-events: none;
+}
+
+.mcp-switch-thumb {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: #ffffff;
+	box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
+	transition: transform 0.15s ease;
+}
+
+.mcp-switch input:checked~.mcp-switch-track {
+	background: var(--ok);
+}
+
+.mcp-switch input:checked~.mcp-switch-track .mcp-switch-thumb {
+	transform: translateX(14px);
+}
+
+.mcp-switch input:disabled {
+	cursor: default;
+}
+
+.mcp-switch input:disabled~.mcp-switch-track {
+	opacity: 0.5;
+}
+
+.mcp-switch input:focus-visible~.mcp-switch-track {
+	outline: 2px solid var(--primary);
+	outline-offset: 2px;
+}
+
+/* 传输方式 radio 组：原生控件 + 横排（任务规格指定 radio，不用 toggle 按钮组）。 */
+.mcp-radio-row {
+	display: flex;
+	gap: 16px;
+}
+
+.mcp-radio-row label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+/* JSON 编辑器：等宽 + 高文本区；输入档位（padding/border）并集在上一节。 */
+.mcp-json-editor {
+	min-height: 320px;
+	resize: vertical;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	font-size: 12px;
+	line-height: 1.6;
+	/* 保留原始缩进：JSON 的层级靠空白表达，折行交给横向滚动。 */
+	white-space: pre;
+	overflow-wrap: normal;
+}
+
+/* ── 问卷弹层 ─────────────────────────────────────────────────── */
+
+/*
+ * 与权限弹窗同族：modal-backdrop 共享，卡片同尺寸语言。
+ * 上限 4 题 × 7 个选项可能比视口高，卡内滚动而不是撑破遮罩。
+ */
+.questionnaire-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	width: 100%;
+	max-width: 460px;
+	max-height: calc(100vh - 48px);
+	overflow-y: auto;
+	padding: 18px 20px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+.questionnaire-title {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.questionnaire-desc {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.questionnaire-question {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.questionnaire-question-text {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.questionnaire-options {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* 选项整行可点（radio 语义、button 实现）；选中态描边 + 淡底，与
+   save-space-input 的 focus 描边同用 --primary 档。 */
+.questionnaire-option {
+	display: block;
+	width: 100%;
+	padding: 7px 10px;
+	text-align: left;
+	font-size: 13px;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+
+.questionnaire-option:hover {
+	background: var(--bg-hover);
+}
+
+.questionnaire-option.selected {
+	border-color: var(--primary);
+	background: var(--bg-raised);
+}
+
+/* 「其他…」自由输入：与 save-space-input 同输入档位。 */
+.questionnaire-other-input {
+	display: block;
+	width: 100%;
+	padding: 7px 10px;
+	font-size: 13px;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	outline: none;
+}
+
+.questionnaire-other-input:focus {
+	border-color: var(--primary);
+}
+
+.questionnaire-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+/* ── 侧栏「待确认」badge ─────────────────────────────────────── */
+
+/*
+ * 审批或问卷 pending 时亮在当前会话行（时间戳之前，flex:none 常驻可见）。
+ * 琥珀色与 toast-warning 同色（#d9822b），token 体系统一时一并收口
+ * （先例见 mcp-badge-connecting 的头注释）。
+ */
+.task-confirm-badge {
+	flex: none;
+	padding: 1px 6px;
+	border-radius: 5px;
+	font-size: 11px;
+	line-height: 1.5;
+	color: #d9822b;
+	background: color-mix(in srgb, #d9822b 12%, var(--bg));
 }

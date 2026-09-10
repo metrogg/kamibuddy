@@ -33,6 +33,8 @@ import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
+import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
+import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { AutomationTask } from "../shared/automation.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
@@ -181,6 +183,25 @@ function buildRunExtensions(
 				deps.compose(cwd, sceneId, interactionId, piContext),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
+		/*
+		 * 结构化提问的无人值守变体：craft 白名单含 questionnaire，run 会话
+		 * 必须注册同名工具（否则模型对着白名单调一个不存在的能力）；
+		 * 但 run 没有人在场，工具层直接返回不可用文案，不阻塞调度器。
+		 * requestAnswers 不可达（unattended 分支先短路）—— 真被调到说明
+		 * questionnaire-tool 的语义变了，让它响，别静默放行。
+		 */
+		questionnaireExtensionFactory({
+			unattended: true,
+			requestAnswers: () => {
+				throw new Error("无人值守会话不应发起提问");
+			},
+		}),
+		/*
+		 * shell 的无人值守变体：craft 白名单含 powershell，run 会话必须注册
+		 * 同名工具（否则模型对着白名单调一个不存在的能力）；但定时任务后台
+		 * 跑 shell 等于无人审批的执行权，无论权限档一律在工具层直接拒。
+		 */
+		powershellExtensionFactory({ unattended: true }),
 		createDocReadTool(),
 	];
 }

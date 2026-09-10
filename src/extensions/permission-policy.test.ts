@@ -279,17 +279,49 @@ describe("工作目录之外的写入", () => {
 });
 
 describe("shell 工具", () => {
-	it("bash / powershell 一律高风险询问", () => {
-		for (const toolName of ["bash", "powershell"]) {
-			const result = decide(facts({ toolName, command: "rm -rf /" }), PATHS, CWD);
-			expect(result).toMatchObject({ kind: "ask", risk: "high" });
-		}
+	it("bash 一律高风险询问", () => {
+		const result = decide(facts({ toolName: "bash", command: "rm -rf /" }), PATHS, CWD);
+		expect(result).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("powershell 三档：默认档高风险询问、只读档拒、完全访问档放行", () => {
+		// 默认档（workspace-write + ask）：命令无法靠路径判影响范围，高风险询问。
+		expect(decide(facts({ toolName: "powershell", command: "Remove-Item x" }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "high",
+		});
+		// 只读档：一切命令执行都拒（阶段 3，模式的全部含义）。
+		expect(
+			decide(facts({ toolName: "powershell", command: "Get-Date" }), PATHS, CWD, READONLY).kind,
+		).toBe("deny");
+		// 完全访问档：放行 —— 命令级危险操作由工具层的危险命令检查器拦，
+		// 与门分工（门管要不要问人）。凭据目录在阶段 1 已拦，不在此列。
+		expect(decide(facts({ toolName: "powershell", command: "Get-Date" }), PATHS, CWD, FULL)).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("bash 在完全访问档仍然拦（没有为它配检查器，保持 fail-closed）", () => {
+		// FULL 的 approval=never 会把 ask 转成 deny：结果是拒绝，而不是放行。
+		expect(decide(facts({ toolName: "bash", command: "rm -rf /" }), PATHS, CWD, FULL).kind).toBe("deny");
 	});
 
 	it("把完整命令给用户看", () => {
 		const result = decide(facts({ toolName: "bash", command: "git push --force" }), PATHS, CWD);
 		if (result.kind !== "ask") throw new Error("应为 ask");
 		expect(result.details).toBe("git push --force");
+	});
+});
+
+describe("questionnaire（结构化提问）", () => {
+	it("三档都放行 —— 不触文件系统，输入全部来自用户本人", () => {
+		// read-only 档也放行：问用户一个问题不构成「修改文件或执行命令」，
+		// READ_ONLY 分支先于阶段 3 的只读拒绝生效。
+		for (const settings of [undefined, READONLY, FULL]) {
+			expect(decide(facts({ toolName: "questionnaire" }), PATHS, CWD, settings)).toEqual({
+				kind: "allow",
+			});
+		}
 	});
 });
 
@@ -337,6 +369,55 @@ describe("automation 工具（读写 KamiBuddy 自身任务库，不涉及用户
 		// 这条钉住「完全访问档不为应用自身数据开口子」的保守选择：
 		// 定时任务会在后台无人值守地跑，创建它始终要有人点头。
 		expect(decide(facts({ toolName: "automation_create" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+});
+
+describe("MCP 工具（mcp__<server>__<tool> 前缀，默认人工审批）", () => {
+	it("mcp__ 前缀工具 → 询问 medium（显式登记，不依赖「未知工具」fail-safe）", () => {
+		// 与 automation_create/delete 同一条登记理由：fail-safe 默认值若变动，
+		// 不该静默改变 MCP 的语义（见 policy 里 MCP 分支注释）。
+		expect(decide(facts({ toolName: "mcp__filesystem__read_file" }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "medium",
+		});
+	});
+
+	it("询问摘要从工具名解析出服务器与工具（审批弹窗直接展示）", () => {
+		const result = decide(facts({ toolName: "mcp__filesystem__read_file" }), PATHS, CWD);
+		if (result.kind !== "ask") throw new Error("应为 ask");
+		expect(result.summary).toContain("filesystem");
+		expect(result.summary).toContain("read_file");
+	});
+
+	it("details 给出入参里的路径 —— 审批弹窗折叠详情展示的参数摘要", () => {
+		const target = join(HOME, "任意位置.txt");
+		const result = decide(facts({ toolName: "mcp__filesystem__read_file", path: target }), PATHS, CWD);
+		if (result.kind !== "ask") throw new Error("应为 ask");
+		expect(result.details).toBe(target);
+	});
+
+	it("目标路径在凭据目录内 → 拒绝（阶段 1 先于 MCP 登记，filesystem server 读的就是本机文件）", () => {
+		// 这是 MCP 场景最重要的边界：server 进程的读文件能力不能变成凭据外带通道。
+		expect(
+			decide(facts({ toolName: "mcp__filesystem__read_file", path: join(HOME, ".ssh", "id_rsa") }), PATHS, CWD)
+				.kind,
+		).toBe("deny");
+	});
+
+	it("read-only 档下 → 拒绝（能力面由外部 server 定义，无法证明它不改状态）", () => {
+		expect(decide(facts({ toolName: "mcp__filesystem__read_file" }), PATHS, CWD, READONLY).kind).toBe("deny");
+	});
+
+	it("danger-full-access 下维持询问（与 shell 同理：能力无法分类，fail-closed）", () => {
+		// FULL 的 approval=never 会把 ask 转成 deny：结果是拒绝，而不是放行。
+		// 钉住「完全访问档不为无法分类的外部能力开口子」这个保守选择。
+		expect(decide(facts({ toolName: "mcp__filesystem__read_file" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+
+	it("畸形的 mcp__ 名（缺工具段）不崩，摘要回落到完整工具名", () => {
+		const result = decide(facts({ toolName: "mcp__filesystem" }), PATHS, CWD);
+		if (result.kind !== "ask") throw new Error("应为 ask");
+		expect(result.summary).toContain("mcp__filesystem");
 	});
 });
 

@@ -42,10 +42,21 @@ interface SidebarProps {
 	/** 两区分组结果（App 用 groupSessions 算好）。取代旧的平铺 taskList。 */
 	readonly groups: SessionGroups;
 	/**
-	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
+	 * 正在流式的会话 path（该行显示转圈）。单 daemon 单会话架构下同
+	 * 一时刻至多一个 run，所以至多命中一行 —— 不需要集合。
+	 */
+	readonly streamingPath: string | undefined;
+	/**
+	 * 未读会话 path 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
 	 */
-	readonly unreadIds: ReadonlySet<string>;
+	readonly unreadPaths: ReadonlySet<string>;
+	/**
+	 * 有阻塞式请求在等用户应答（权限审批或问卷）。单 daemon 单会话下
+	 * 这类请求必然属于当前活动会话，所以 badge 画在当前会话行上；
+	 * 由 App 用两条本地请求队列合成（daemon 不推送 pending 计数）。
+	 */
+	readonly pendingConfirm: boolean;
 	readonly onNewTask: () => void;
 	readonly onResumeTask: (path: string) => void;
 	readonly onRenameTask: (path: string, name: string) => void;
@@ -84,7 +95,9 @@ const TASKS_COLLAPSED_COUNT = 5;
 export function Sidebar({
 	link,
 	groups,
-	unreadIds,
+	streamingPath,
+	unreadPaths,
+	pendingConfirm,
 	onNewTask,
 	onResumeTask,
 	onRenameTask,
@@ -198,13 +211,17 @@ export function Sidebar({
 					}}
 				>
 					<span className="task-item-title">
-					{unreadIds.has(task.id) && <span className="task-unread-dot" />}
-					{/* 运行中转圈以 SessionSummary.running 为准（daemon 权威，随
-						taskListChanged 推送更新）：多任务并发后同时可有多行在跑，
-						旧的「本地 streaming && 当前行」推导只看得见当前会话，已废。 */}
-					{task.running && <span className="task-spinner" />}
-					{task.title}
-				</span>
+						{unreadPaths.has(task.path) && <span className="task-unread-dot" />}
+						{/* 转圈只可能出现在当前会话行（单 run 架构事实），但这里不判
+							current —— streamingPath 由 App 算好，命中即画。 */}
+						{streamingPath === task.path && <span className="task-spinner" />}
+						{task.title}
+					</span>
+					{/* 「待确认」压在时间之前（flex:none，与 meta 同排常驻可见）；
+					    标题侧的圆点/转圈那套 inline 指示放不下文字徽章。 */}
+					{task.current && pendingConfirm && (
+						<span className="task-confirm-badge">待确认</span>
+					)}
 					{/* 标题+时间同排：标题左对齐省略，时间右对齐常驻（WorkBuddy 同款紧凑行）。 */}
 					<span className="task-item-meta">{meta}</span>
 				</button>
@@ -339,9 +356,9 @@ export function Sidebar({
 						}}
 					>
 						<IconFolder size={12} className="space-group-icon" />
-					<IconChevronDown size={12} className="space-group-chevron" />
-					<span className="space-group-name">{group.name}</span>
-				</button>
+						<IconChevronDown size={12} className="space-group-chevron" />
+						<span className="space-group-name">{group.name}</span>
+					</button>
 					<span className="space-group-actions">
 						<button
 							type="button"

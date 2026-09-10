@@ -248,16 +248,16 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				entries: replaceEntry(view.entries, event.id, (entry) =>
 					entry.role === "tool" && event.path !== undefined
 						? {
-								...entry,
-								label: generatingLabel(entry.toolName, event.changeType),
-								summary: event.path,
-								change: {
-									path: event.path,
-									added: event.added,
-									removed: 0,
-									changeType: event.changeType,
-								},
-							}
+							...entry,
+							label: generatingLabel(entry.toolName, event.changeType),
+							summary: event.path,
+							change: {
+								path: event.path,
+								added: event.added,
+								removed: 0,
+								changeType: event.changeType,
+							},
+						}
 						: entry,
 				),
 			};
@@ -293,6 +293,12 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				...view,
 				artifacts: mergePresentedArtifacts(view.artifacts, event.files, Date.now()),
 			};
+
+		default:
+			// 未知事件一律忽略而不是返回 undefined——多会话落地后事件路由变复杂，
+			// 信封未拆/契约错位时 reducer 返回 undefined 会把 conversation 毒化成空，
+			// 下一帧渲染访问 conversation.entries 抛 TypeError 整树白屏（已发生两次）。
+			return view;
 	}
 }
 

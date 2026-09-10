@@ -78,6 +78,8 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	web_search: "搜索中",
 	web_fetch: "抓取中",
 	present_files: "交付中",
+	// 等待用户作答期间卡片停在这个标题上（问卷弹层本身承载等待态）。
+	questionnaire: "向用户提问",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -91,6 +93,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	web_search: "已搜索",
 	web_fetch: "已抓取",
 	present_files: "已交付",
+	questionnaire: "已回答",
 };
 
 /**
@@ -299,6 +302,12 @@ export class SessionHost {
 	private currentAssistantId: string | undefined;
 	/** 当前 run 的 id，供 run_error / run_finished 关联。 */
 	private currentRunId: string | undefined;
+	/**
+	 * 本 run 最近一次失败的助手消息（stopReason "error"）的 errorMessage 记账。
+	 * pi 自动重试期间失败的 message_end 先到、终态后到 —— run_error 不能随消息发，
+	 * 必须等 agent_end（willRetry=false）确认重试耗尽/未开重试。成功的助手消息清账。
+	 */
+	private pendingRunError: string | undefined;
 	/** 已发出的工具卡片，tool_execution_end 时要在原卡上补 outcome 与 detail。 */
 	private readonly toolCards = new Map<string, ToolCard>();
 	/**
@@ -343,7 +352,7 @@ export class SessionHost {
 		private sceneId: string,
 		private interactionId: string,
 		private readonly skills: readonly SkillDescriptor[],
-	) {}
+	) { }
 
 	static async create(options: SessionHostOptions): Promise<SessionHost> {
 		const model =
@@ -600,11 +609,11 @@ export class SessionHost {
 			...(usage === undefined || usage.tokens === null
 				? {}
 				: {
-						contextUsage: {
-							usedTokens: usage.tokens,
-							maxTokens: usage.contextWindow,
-						},
-					}),
+					contextUsage: {
+						usedTokens: usage.tokens,
+						maxTokens: usage.contextWindow,
+					},
+				}),
 		};
 	}
 
@@ -671,6 +680,7 @@ export class SessionHost {
 			case "agent_start": {
 				const runId = this.nextId("run");
 				this.currentRunId = runId;
+				this.pendingRunError = undefined;
 				emit({ type: "run_started", runId });
 				this.emitState();
 				return;
@@ -694,10 +704,23 @@ export class SessionHost {
 				const cancelled = event.messages.some(
 					(m) => m.role === "assistant" && m.stopReason === "aborted",
 				);
-				emit({ type: "run_finished", runId, outcome: cancelled ? "cancelled" : "completed" });
+				/*
+				 * 失败记账优先于完成态：pendingRunError 未清说明本 run 最后停在错误上
+				 * （重试耗尽或未开重试）—— 这才是真的终态失败，此刻才发 run_error。
+				 * 先败后成的 run 走到这里账已被成功消息清空，正常落 run_finished。
+				 * 取消优先于错误：用户中断就是取消，不翻成错误卡。
+				 */
+				if (this.pendingRunError !== undefined && !cancelled) {
+					const message = this.pendingRunError;
+					this.pendingRunError = undefined;
+					emit({ type: "run_error", runId, message });
+				} else {
+					this.pendingRunError = undefined;
+					emit({ type: "run_finished", runId, outcome: cancelled ? "cancelled" : "completed" });
+				}
 				this.emitState();
 				return;
-		}
+			}
 
 			case "message_start": {
 				const message = event.message;
@@ -705,22 +728,22 @@ export class SessionHost {
 				this.streamToolCalls.clear();
 
 				if (message.role === "user") {
-				// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
-				// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
-				const { text, images } = userContentOf(message.content);
-				emit({
-					type: "user_message",
-					message: {
-						id: this.nextId("user"),
-						role: "user",
-						text,
-						// 无图不带字段：UserMessage.images 是可选契约，UI 按缺省渲染。
-						...(images === undefined ? {} : { images }),
-						at: message.timestamp,
-					},
-				});
-				return;
-			}
+					// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
+					// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
+					const { text, images } = userContentOf(message.content);
+					emit({
+						type: "user_message",
+						message: {
+							id: this.nextId("user"),
+							role: "user",
+							text,
+							// 无图不带字段：UserMessage.images 是可选契约，UI 按缺省渲染。
+							...(images === undefined ? {} : { images }),
+							at: message.timestamp,
+						},
+					});
+					return;
+				}
 
 				if (message.role === "assistant") {
 					const id = this.nextId("assistant");
@@ -807,22 +830,23 @@ export class SessionHost {
 					},
 				});
 
-				// 模型侧报错（超限、内容策略、网关故障）不会走 agent_end 的异常路径，
-				// 只体现在消息的 errorMessage 上。不单独提示的话用户只会看到空回复。
-				// stopReason "aborted" 除外：那是用户取消，pi 的收尾消息同样带
-				// errorMessage（如 "Request was aborted"），但取消不是错误 ——
-				// 终态由 agent_end 的 run_finished cancelled 表达，再发 run_error
-				// 会多出一条吓人的错误气泡。
+				// 模型侧报错（超限、内容策略、网关超时）只体现在消息的 errorMessage 上，
+				// 但**此刻不能发卡**：pi 有自动重试（agent_end 的 willRetry 标记 +
+				// auto_retry_start/end 事件，agent-session.ts:166-167/637），失败尝试的
+				// message_end 先到、agent_end(willRetry=true) 后到 —— 若在这里发 run_error，
+				// 重试成功后错误卡与正常回复就会并存（2026-09-10 用户实测：启动后首发
+				// 「你好」先弹 Request timed out. 错误卡，几秒后回复照常到达）。
+				// 所以只记账：终态判定挪到 agent_end —— 重试耗尽或未开重试时才发卡。
+				// stopReason "aborted" 不记：那是用户取消，终态由 run_finished cancelled 表达。
 				if (
 					message.errorMessage !== undefined &&
 					message.errorMessage !== "" &&
-					message.stopReason !== "aborted"
+					message.stopReason === "error"
 				) {
-					emit({
-						type: "run_error",
-						runId: this.currentRunId ?? "unknown",
-						message: message.errorMessage,
-					});
+					this.pendingRunError = message.errorMessage;
+				} else if (message.stopReason !== "aborted") {
+					// 成功的助手消息清账：同一 run 内先败后成（重试成功）不留错误残留。
+					this.pendingRunError = undefined;
 				}
 				return;
 			}

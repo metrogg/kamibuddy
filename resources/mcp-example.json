@@ -1,0 +1,38 @@
+{
+	// KamiBuddy MCP 连接器示例配置 —— 官方 filesystem server（stdio 传输）。
+	//
+	// 用法（二选一）：
+	//   1. 复制到用户级配置  ~/.kamibuddy/mcp.json
+	//      （Windows：C:\Users\<你>\.kamibuddy\mcp.json），对所有工作区生效；
+	//   2. 复制到某个工作区根目录下的 .mcp.json（项目级，仅该工作区生效，
+	//      同名 server 覆盖用户级）。
+	// 然后在「技能 → 连接器」页查看连接状态（保存即热生效，无需重启）。
+	//
+	// 格式是 JSONC（允许注释与尾逗号），与 VS Code 的 mcp.json 惯例一致。
+	// 配置格式、权限策略与已知限制详见 docs/mcp-connector.md。
+	"mcpServers": {
+		"filesystem": {
+			"command": "npx",
+			// 最后一个参数起是允许 AI 访问的目录（可多个），改成你自己的目录。
+			// 首次运行 npx 会联网下载 server 包（之后走本地缓存），
+			// 所以第一次连接较慢属正常；目录不存在时 server 会拒绝启动。
+			"args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\DongProject\\kamibuddy"]
+		},
+
+		// ── HTTP 传输（远程 server）示例：去掉注释并改成真实地址即可 ──
+		// "remote": {
+		// 	"url": "http://localhost:3000/mcp"
+		// },
+
+		// ── 凭据不落明文：字符串值里的 ${VAR} 会展开为同名环境变量 ──
+		// （变量未设置会在加载时响亮报错，不会静默替换成空串）：
+		// "some-server": {
+		// 	"command": "npx",
+		// 	"args": ["-y", "some-mcp-server"],
+		// 	"env": { "API_KEY": "${SOME_MCP_API_KEY}" }
+		// },
+
+		// ── 保留配置但暂停连接：加 "disabled": true ──
+		// （「连接器」页的启用/禁用开关落的就是这个字段）
+	}
+}

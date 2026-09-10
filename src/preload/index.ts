@@ -58,6 +58,8 @@ const bridge: KamiBridge = {
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
 	respondToPermission: (response) =>
 		ipcRenderer.invoke(INVOKE.permissionResponse, response),
+	questionnaireResponse: (response) =>
+		ipcRenderer.invoke(INVOKE.questionnaireResponse, response),
 
 	openArtifact: (path) => ipcRenderer.invoke(INVOKE.openArtifact, path),
 	readArtifact: (path) => ipcRenderer.invoke(INVOKE.readArtifact, path),
@@ -96,6 +98,11 @@ const bridge: KamiBridge = {
 	importSkill: (sourcePath) => ipcRenderer.invoke(INVOKE.importSkill, sourcePath),
 	pickSkillDirectory: () => ipcRenderer.invoke(INVOKE.pickSkillDirectory),
 
+	mcpConfigGet: () => ipcRenderer.invoke(INVOKE.mcpConfigGet),
+	mcpConfigSet: (configJson) => ipcRenderer.invoke(INVOKE.mcpConfigSet, configJson),
+	mcpServerToggle: (serverName, enabled) =>
+		ipcRenderer.invoke(INVOKE.mcpServerToggle, serverName, enabled),
+
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
 
 	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
@@ -109,6 +116,8 @@ const bridge: KamiBridge = {
 	onUiRequest: (listener) => subscribe(PUSH.uiRequest, listener),
 	onPermissionRequest: (listener) =>
 		subscribe(PUSH.permissionRequest, listener),
+	onQuestionnaireRequest: (listener) =>
+		subscribe(PUSH.questionnaireRequest, listener),
 	onDaemonReady: (listener) => subscribe(PUSH.daemonReady, () => listener()),
 	onDaemonDown: (listener) => subscribe(PUSH.daemonDown, listener),
 	onAutomationEvent: (listener) => subscribe(PUSH.automationEvent, listener),

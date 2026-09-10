@@ -90,22 +90,6 @@ const PRACTICE_CASES: readonly PracticeCase[] = [
 
 const PAGE_SIZE = 4;
 
-/** 首页右侧的吉祥物。原创 SVG（WorkBuddy 的机器人形象不能拿，§6）。 */
-function Mascot(): React.JSX.Element {
-	return (
-		<svg className="mascot" viewBox="0 0 96 96" fill="none" aria-hidden="true">
-			<rect x="20" y="26" width="56" height="48" rx="16" fill="#23262b" />
-			<rect x="30" y="40" width="12" height="14" rx="6" fill="#7ef0c4" />
-			<rect x="54" y="40" width="12" height="14" rx="6" fill="#7ef0c4" />
-			<path d="M40 62h16" stroke="#7ef0c4" strokeWidth="3" strokeLinecap="round" />
-			<path d="M48 26v-8" stroke="#23262b" strokeWidth="4" strokeLinecap="round" />
-			<circle cx="48" cy="14" r="4" fill="#7ef0c4" />
-			<rect x="10" y="40" width="8" height="18" rx="4" fill="#23262b" />
-			<rect x="78" y="40" width="8" height="18" rx="4" fill="#23262b" />
-		</svg>
-	);
-}
-
 export function HomeView({
 	ready,
 	scenes,
@@ -138,74 +122,89 @@ export function HomeView({
 	return (
 		<main className="home">
 			<div className="home-inner">
-				<h1 className="home-title">KamiBuddy，开工吧</h1>
+				{/*
+				英雄区垂直居中（案例槽预留 220px），案例卡 absolute 钉底部——
+				WorkBuddy .wb-home-page 的机制，不是顶对齐流式布局。
+			*/}
+				<div className="home-main">
+					<h1 className="home-title">KamiBuddy，开工吧</h1>
 
-				<div className="mode-tabs">
-					{scenes.map((scene) => (
-						<button
-							key={scene.id}
-							type="button"
-							className={`mode-tab${scene.id === sceneId ? " active" : ""}`}
-							title={scene.description}
-							// 未实现的场景仍然显示（对齐 WorkBuddy 的能力面），
-							// 点击给明确反馈而不是静默切过去。
-							onClick={() => (scene.ready ? onSceneChange(scene.id) : onTodo(`「${scene.label}」场景`))}
-						>
-							{scene.label}
-						</button>
-					))}
-				</div>
+					<div className="mode-tabs">
+						{scenes.map((scene) => (
+							<button
+								key={scene.id}
+								type="button"
+								className={`mode-tab${scene.id === sceneId ? " active" : ""}`}
+								title={scene.description}
+								// 未实现的场景仍然显示（对齐 WorkBuddy 的能力面），
+								// 点击给明确反馈而不是静默切过去。
+								onClick={() => (scene.ready ? onSceneChange(scene.id) : onTodo(`「${scene.label}」场景`))}
+							>
+								{scene.label}
+							</button>
+						))}
+					</div>
 
-				<div className="capability-row">
-					{CAPABILITIES.map(({ icon: Icon, label }) => (
-						<button key={label} type="button" className="capability-chip" onClick={() => onTodo(label)}>
-							<Icon size={15} />
-							{label}
-						</button>
-					))}
-				</div>
+					<div className="capability-row">
+						{CAPABILITIES.map(({ icon: Icon, label }) => (
+							<button key={label} type="button" className="capability-chip" onClick={() => onTodo(label)}>
+								<Icon size={16} />
+								{label}
+							</button>
+						))}
+					</div>
 
-				<div className="composer-zone">
-					{/*
-					输入卡机制（拖放/附件/IME/补全/字数闸）全部在 Composer 内部，
-					与对话页同一份实现 —— 此前两份手写重复，「+」菜单漏改即实例。
-					首页语义差异：不开输入历史、不开草稿持久（发送即跳对话页），
-					故不传 draftKey / enableHistory / streaming。
-				*/}
-					<Composer
-						ref={composerRef}
-						ready={ready}
-						placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
-						rows={3}
-						cwd={cwd}
-						modelId={modelId}
-						onSubmit={onSubmit}
-						onError={onError}
-					>
+					<div className="composer-zone">
 						{/*
-						「+」菜单与对话页同一个 PlusMenu：添加文件（经 composerRef 触发
-						Composer 内部的附件选择框）+ 模式子菜单 + 专家/技能/连接器占位。
+						渐变槽（composer-slot）是首页专属：白卡 + 工作空间/权限 chips 都
+						坐在上面（WorkBuddy input-slot 机制），对话页输入卡没有槽。
 					*/}
-						<PlusMenu
-							modes={interactions}
-							currentId={interactionId}
-							onInteractionChange={onInteractionChange}
-							onPickFiles={() => void composerRef.current?.pickFiles()}
-							onTodo={onTodo}
-						/>
-						{/* 就地快捷切换；管理与填 Key 在设置页（菜单底部有入口）。 */}
-						<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
-						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-							<IconMic size={16} />
-						</button>
-					</Composer>
-					<Mascot />
-				</div>
-
-				<div className="context-row">
-					<WorkspacePicker cwd={cwd} onChanged={onWorkspaceChanged} />
-					{/* 权限预设就地快切；两个独立旋钮与完整说明在设置页（菜单底部有入口）。 */}
-					<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+						<div className="composer-slot">
+							{/*
+						输入卡机制（拖放/附件/IME/补全/字数闸）全部在 Composer 内部，
+						与对话页同一份实现 —— 此前两份手写重复，「+」菜单漏改即实例。
+						首页语义差异：不开输入历史、不开草稿持久（发送即跳对话页），
+						故不传 draftKey / enableHistory / streaming。
+					*/}
+							<Composer
+								ref={composerRef}
+								ready={ready}
+								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
+								rows={3}
+								cwd={cwd}
+								modelId={modelId}
+								onSubmit={onSubmit}
+								onError={onError}
+								trailing={
+									<>
+										{/* 右组：模型 chip / 麦克风（WorkBuddy 首页底行「左 + 右 模型·麦克风·发送」）。 */}
+										<ModelMenu modelId={modelId} onOpenSettings={onOpenSettings} onError={onError} />
+										<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+											<IconMic size={16} />
+										</button>
+									</>
+								}
+							>
+								{/*
+							「+」菜单与对话页同一个 PlusMenu：添加文件（经 composerRef 触发
+							Composer 内部的附件选择框）+ 模式子菜单 + 专家/技能/连接器占位。
+						*/}
+								<PlusMenu
+									modes={interactions}
+									currentId={interactionId}
+									onInteractionChange={onInteractionChange}
+									onPickFiles={() => void composerRef.current?.pickFiles()}
+									onTodo={onTodo}
+								/>
+							</Composer>
+							{/* 工作空间/权限 chips：WorkBuddy wb-input-footer 同位置（白卡正下方、槽内）。 */}
+							<div className="context-row">
+								<WorkspacePicker cwd={cwd} onChanged={onWorkspaceChanged} />
+								{/* 权限预设就地快切；两个独立旋钮与完整说明在设置页（菜单底部有入口）。 */}
+								<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+							</div>
+						</div>
+					</div>
 				</div>
 
 				{casesVisible && (
@@ -213,7 +212,7 @@ export function HomeView({
 						<header className="cases-header">
 							<span>不知道做什么，试试这些</span>
 							<button type="button" className="cases-action" onClick={() => setCaseOffset((o) => o + PAGE_SIZE)}>
-								<IconRefresh size={13} />
+								<IconRefresh size={14} />
 								换一批
 							</button>
 							<button type="button" className="cases-action" aria-label="关闭" onClick={() => setCasesVisible(false)}>

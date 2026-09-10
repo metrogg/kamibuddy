@@ -147,6 +147,8 @@ export const INVOKE = {
 	uiResponse: "ui:response",
 	/** 应答权限审批。 */
 	permissionResponse: "permission:response",
+	/** 应答结构化提问（questionnaire 工具的问卷卡）。 */
+	questionnaireResponse: "questionnaire:response",
 	/** 在系统默认程序里打开产物文件。 */
 	openArtifact: "artifact:open",
 	/** 另存为。返回用户选择的路径，取消则返回 undefined。 */
@@ -233,6 +235,25 @@ export const INVOKE = {
 	 */
 	pickSkillDirectory: "skills:pick-directory",
 
+	/* ── MCP 连接器 ─────────────────────────────────────────────── */
+
+	/**
+	 * MCP 配置快照：各 server 的运行态（连接状态 + 工具数）+ 生效层级 mcp.json
+	 * 的原文（JSONC，供 JSON 编辑器显示）。连接器设置页打开时调用。
+	 */
+	mcpConfigGet: "mcp:config-get",
+	/**
+	 * 整体写入 mcp.json（JSON 编辑器的保存）。daemon 写入前做 schema 校验，
+	 * 坏了拒写（reject 原因带回），写成功后触发扩展重连。
+	 * 写入层级：当前会话有工作区写项目级 <工作区>/.mcp.json，临时任务写用户级。
+	 */
+	mcpConfigSet: "mcp:config-set",
+	/**
+	 * 切换单个 server 的启用状态：在定义它的那级 mcp.json 里写 disabled 字段
+	 * （jsonc-parser 最小编辑，注释与格式保留），写成功后触发扩展重连。
+	 */
+	mcpServerToggle: "mcp:server-toggle",
+
 	/* ── 诊断 ─────────────────────────────────────────────────────── */
 
 	/**
@@ -280,6 +301,8 @@ export const PUSH = {
 	uiRequest: "ui:request",
 	/** 权限审批请求，需要用 INVOKE.permissionResponse 应答。 */
 	permissionRequest: "permission:request",
+	/** 结构化提问请求（questionnaire 工具），需要用 INVOKE.questionnaireResponse 应答。 */
+	questionnaireRequest: "questionnaire:request",
 	/** daemon 就绪。renderer 收到后才拉 snapshot。 */
 	daemonReady: "daemon:ready",
 	/**
@@ -409,6 +432,32 @@ export interface WorkspaceGroupMeta {
 	readonly displayName?: string;
 }
 
+/** 一个 MCP server 的运行时状态（连接器设置页的列表行）。 */
+export interface McpServerInfo {
+	readonly name: string;
+	/**
+	 * connecting：首次连接进行中 / 断线重连排队中（尚未放弃）；
+	 * connected：已连接；failed：连接失败（含重连 5 次放弃），error 带原因；
+	 * disabled：配置里 disabled: true，未连接是预期行为不是故障。
+	 */
+	readonly status: "connecting" | "connected" | "failed" | "disabled";
+	/** 该 server 注册进工具面的工具数（mcp__<server>__<tool>）。 */
+	readonly toolCount: number;
+	/** 最近一次失败原因（failed / 断线待重连时有值）。 */
+	readonly error?: string;
+}
+
+/** mcpConfigGet 的返回：运行态列表 + 配置文件原文。 */
+export interface McpConfigSnapshot {
+	readonly servers: readonly McpServerInfo[];
+	/**
+	 * 生效层级 mcp.json 的原文（JSONC，注释保留），供 JSON 编辑器显示。
+	 * 与 mcpConfigSet 的写入目标同一条层级解析路径，不会出现「看的 A 文件、存的 B 文件」。
+	 * 两级文件都没有时为空串（编辑器从空白开始）。
+	 */
+	readonly configJson: string;
+}
+
 /**
  * automationSave 的入参：新建不带 id，编辑带 id。
  * status / runs / nextRunAt / 时间戳由 daemon 维护，不接受前端指定 ——
@@ -431,13 +480,13 @@ export interface AutomationSaveInput {
 export type AutomationEvent =
 	| { readonly kind: "changed" }
 	| {
-			readonly kind: "runFinished";
-			readonly taskId: string;
-			readonly taskName: string;
-			/** 运行会话 id（管理页点击运行记录 / toast 跳转定位用）。装配失败时为空串（无会话可跳）。 */
-			readonly sessionId: string;
-			readonly success: boolean;
-	  };
+		readonly kind: "runFinished";
+		readonly taskId: string;
+		readonly taskName: string;
+		/** 运行会话 id（管理页点击运行记录 / toast 跳转定位用）。装配失败时为空串（无会话可跳）。 */
+		readonly sessionId: string;
+		readonly success: boolean;
+	};
 
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
@@ -467,6 +516,7 @@ export interface InvokeMap {
 	[INVOKE.workspaceReveal]: { args: [cwd: string]; result: void };
 	[INVOKE.uiResponse]: { args: [UiResponse]; result: void };
 	[INVOKE.permissionResponse]: { args: [PermissionResponse]; result: void };
+	[INVOKE.questionnaireResponse]: { args: [QuestionnaireResponse]; result: void };
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
 	[INVOKE.saveArtifactAs]: { args: [SaveArtifactRequest]; result: string | undefined };
 	[INVOKE.readArtifact]: { args: [path: string]; result: ArtifactContent };
@@ -496,6 +546,10 @@ export interface InvokeMap {
 	[INVOKE.importSkill]: { args: [sourcePath: string]; result: SkillInfo };
 	[INVOKE.pickSkillDirectory]: { args: []; result: string | undefined };
 
+	[INVOKE.mcpConfigGet]: { args: []; result: McpConfigSnapshot };
+	[INVOKE.mcpConfigSet]: { args: [configJson: string]; result: void };
+	[INVOKE.mcpServerToggle]: { args: [serverName: string, enabled: boolean]; result: void };
+
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
 
 	[INVOKE.automationList]: { args: []; result: AutomationTask[] };
@@ -511,6 +565,7 @@ export interface PushMap {
 	[PUSH.taskListChanged]: readonly SessionSummary[];
 	[PUSH.uiRequest]: UiRequest;
 	[PUSH.permissionRequest]: PermissionRequest;
+	[PUSH.questionnaireRequest]: QuestionnaireRequest;
 	[PUSH.daemonReady]: void;
 	[PUSH.daemonDown]: { readonly reason: string };
 	[PUSH.automationEvent]: AutomationEvent;
@@ -533,20 +588,20 @@ export type UiRequest = {
 	/** 关联 id。daemon 侧以此 resolve 对应的 Promise。 */
 	readonly id: string;
 } & (
-	| { readonly method: "confirm"; readonly title: string; readonly message: string }
-	| { readonly method: "select"; readonly title: string; readonly options: readonly string[] }
-	| { readonly method: "input"; readonly title: string; readonly placeholder?: string }
-	/** 通知是 fire-and-forget，不需要应答，但仍带 id 便于日志关联。 */
-	| { readonly method: "notify"; readonly message: string; readonly level: "info" | "warning" | "error" }
-);
+		| { readonly method: "confirm"; readonly title: string; readonly message: string }
+		| { readonly method: "select"; readonly title: string; readonly options: readonly string[] }
+		| { readonly method: "input"; readonly title: string; readonly placeholder?: string }
+		/** 通知是 fire-and-forget，不需要应答，但仍带 id 便于日志关联。 */
+		| { readonly method: "notify"; readonly message: string; readonly level: "info" | "warning" | "error" }
+	);
 
 export type UiResponse = {
 	readonly id: string;
 } & (
-	| { readonly kind: "confirmed"; readonly value: boolean }
-	/** 选择框与输入框取消时 value 为 undefined，对应 pi 接口的 Promise<string | undefined>。 */
-	| { readonly kind: "value"; readonly value: string | undefined }
-);
+		| { readonly kind: "confirmed"; readonly value: boolean }
+		/** 选择框与输入框取消时 value 为 undefined，对应 pi 接口的 Promise<string | undefined>。 */
+		| { readonly kind: "value"; readonly value: string | undefined }
+	);
 
 /* ────────────────────────────────────────────────────────────────
  * 权限审批：自有通道
@@ -580,4 +635,40 @@ export interface PermissionResponse {
 	 * 避免用户误批一次后长期失效却不自知。
 	 */
 	readonly remember?: boolean;
+}
+
+/* ────────────────────────────────────────────────────────────────
+ * 结构化提问（questionnaire 工具）：自有通道
+ * ──────────────────────────────────────────────────────────────── */
+
+/**
+ * questionnaire 工具让模型在动手前就关键选择向用户提问（机制对齐 pi 官方
+ * plan-mode 示例的标配工具）。与权限审批同构：daemon 挂起等答，
+ * renderer 弹问卷卡逐题作答或整卡跳过，经 INVOKE.questionnaireResponse 回程。
+ * 单开一条通道而不是塞进 ctx.ui.select：一次可以问多题、每题带选项、
+ * 整卡可跳过，confirm/select 的纯文本承载不了。
+ */
+export interface QuestionnaireQuestion {
+	/** 问题正文。 */
+	readonly question: string;
+	/** 候选选项（2-6 个）。选项之外的自由补充由 renderer 的「其他」入口负责，不在此列。 */
+	readonly options: readonly string[];
+}
+
+export interface QuestionnaireRequest {
+	readonly id: string;
+	readonly questions: readonly QuestionnaireQuestion[];
+}
+
+/** 一条作答：问题原文 + 用户选中的选项文本（或「其他」自由输入的内容）。 */
+export interface QuestionnaireAnswer {
+	readonly question: string;
+	readonly answer: string;
+}
+
+export interface QuestionnaireResponse {
+	readonly id: string;
+	/** 用户整卡跳过。跳过时 answers 为空，工具结果会要求模型按现有信息继续、不追问。 */
+	readonly skipped: boolean;
+	readonly answers: readonly QuestionnaireAnswer[];
 }

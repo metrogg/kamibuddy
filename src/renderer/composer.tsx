@@ -71,6 +71,12 @@ interface ComposerProps {
 	readonly onAbort?: () => void;
 	/** composer-bar 左组按钮（渲染在 spacer 之前）；右组固定为字数余量 + 发送/停止。 */
 	readonly children: React.ReactNode;
+	/**
+	 * composer-bar 右组按钮（渲染在 spacer 之后、发送键之前）。
+	 * WorkBuddy 首页底行布局是「左 + 按钮，右 模型 chip/麦克风/发送」，
+	 * 对话页保持全左组（各页自己的对齐口径），故此槽位只有首页传。
+	 */
+	readonly trailing?: React.ReactNode;
 	/** 见 ComposerHandle：父组件拿它触发「添加文件」选择框。 */
 	readonly ref?: React.Ref<ComposerHandle>;
 }
@@ -88,6 +94,7 @@ export function Composer({
 	streaming,
 	onAbort,
 	children,
+	trailing,
 	ref,
 }: ComposerProps): React.JSX.Element {
 	// 草稿按 draftKey 存进模块级 Map（input-history.ts）：视图切换卸载组件后
@@ -178,7 +185,7 @@ export function Composer({
 				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
 				if (enableHistory === true) recordSent(text);
 			},
-			() => {},
+			() => { },
 		);
 	};
 
@@ -260,6 +267,8 @@ export function Composer({
 				{/* 左组按钮由调用方注入：home 与 chat 的组合不同。 */}
 				{children}
 				<span className="bar-spacer" />
+				{/* 右组（仅首页传）：模型 chip / 麦克风，贴在发送键左侧（WB 首页底行布局）。 */}
+				{trailing}
 				{/* 输入余量：接近上限才出现（等宽数字），超限变红。 */}
 				{chars.show && (
 					<span

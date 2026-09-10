@@ -153,7 +153,7 @@ describe("prompt 的图片透传", () => {
 
 	it("非流式：图片经 PromptOptions.images 传入，无图时不传 options", async () => {
 		const { session, calls } = recordingSession(false);
-		const host = createHost(session, () => {});
+		const host = createHost(session, () => { });
 
 		await host.prompt("看图", undefined, [
 			{ type: "image", data: "aGk=", mimeType: "image/png" },
@@ -173,16 +173,142 @@ describe("prompt 的图片透传", () => {
 		];
 
 		const steer = recordingSession(true);
-		await createHost(steer.session, () => {}).prompt("纠偏", "steer", images);
+		await createHost(steer.session, () => { }).prompt("纠偏", "steer", images);
 		expect(steer.calls.steer).toEqual([["纠偏", images]]);
 
 		const followUp = recordingSession(true);
-		await createHost(followUp.session, () => {}).prompt("追问", "followUp");
+		await createHost(followUp.session, () => { }).prompt("追问", "followUp");
 		expect(followUp.calls.followUp).toEqual([["追问", undefined]]);
 	});
 });
 
 type StreamStartedEvent = Extract<SessionEvent, { type: "tool_stream_started" }>;
+
+/*
+ * 2026-09-10 用户实测的回归护栏：启动后首发「你好」，先弹 Request timed out. 错误卡，
+ * 几秒后回复照常到达 —— 错误卡与正常回复并存。
+ * 根因：pi 有自动重试（agent_end 带 willRetry，auto_retry_start/end），失败尝试的
+ * message_end 先到、终态后到；SessionHost 原先在 message_end 看到 errorMessage
+ * 就发 run_error。修复：失败只记账（pendingRunError），agent_end（willRetry=false）
+ * 确认重试耗尽/未开重试才发卡；成功的助手消息清账。
+ */
+
+const USAGE = {
+	input: 1,
+	output: 1,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 2,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistantStart(host: SessionHost): void {
+	translate(host, {
+		type: "message_start",
+		message: { role: "assistant", content: "", timestamp: 1 },
+	} as unknown as AgentSessionEvent);
+}
+
+function assistantEnd(
+	host: SessionHost,
+	stopReason: string,
+	opts?: { errorMessage?: string; text?: string },
+): void {
+	translate(host, {
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: opts?.text ?? "",
+			stopReason,
+			...(opts?.errorMessage !== undefined ? { errorMessage: opts.errorMessage } : {}),
+			usage: USAGE,
+			timestamp: 1,
+		},
+	} as unknown as AgentSessionEvent);
+}
+
+function agentEnd(host: SessionHost, willRetry: boolean, messages: unknown[] = []): void {
+	translate(host, { type: "agent_end", messages, willRetry } as unknown as AgentSessionEvent);
+}
+
+function runStarted(host: SessionHost): void {
+	translate(host, { type: "agent_start" } as unknown as AgentSessionEvent);
+}
+
+describe("自动重试期的错误卡抑制（pendingRunError）", () => {
+	it("失败尝试的 message_end 不立即发 run_error", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+
+		expect(events.some((e) => e.type === "run_error")).toBe(false);
+	});
+
+	it("先败后成：willRetry=true 后重试成功 → run_finished completed，无 run_error", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, true);
+		assistantStart(host);
+		assistantEnd(host, "stop", { text: "你好！我是 KamiBuddy" });
+		agentEnd(host, false);
+
+		expect(events.some((e) => e.type === "run_error")).toBe(false);
+		const finished = events.find((e) => e.type === "run_finished");
+		expect(finished).toMatchObject({ outcome: "completed" });
+	});
+
+	it("重试未开/耗尽：agent_end(willRetry=false) 时才发 run_error，且只发一次", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, false);
+
+		const errors = events.filter((e) => e.type === "run_error");
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({ message: "Request timed out." });
+		expect(events.some((e) => e.type === "run_finished")).toBe(false);
+	});
+
+	it("重试后仍失败：willRetry=true 不发卡，终态 agent_end 才发一次", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, true);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, false);
+
+		expect(events.filter((e) => e.type === "run_error")).toHaveLength(1);
+	});
+
+	it("取消优先于错误记账：aborted 收尾 → run_finished cancelled，无 run_error", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		assistantStart(host);
+		assistantEnd(host, "aborted", { errorMessage: "Request was aborted" });
+		agentEnd(host, false, [{ role: "assistant", stopReason: "aborted" }]);
+
+		expect(events.some((e) => e.type === "run_error")).toBe(false);
+		expect(events.find((e) => e.type === "run_finished")).toMatchObject({ outcome: "cancelled" });
+	});
+});
 
 describe("工具卡片生成期上屏", () => {
 	/** 驱动一次「toolcall_start → 首个 delta（id/name 已稳定）」的最小事件序列。 */

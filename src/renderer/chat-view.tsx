@@ -40,6 +40,7 @@ import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { Markdown } from "./markdown.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
+import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
 
@@ -118,10 +119,13 @@ function ThinkingBlock({
  * 每次划过都会推动下方消息流抖动，长对话里非常刺眼。
  */
 function UserBubble({
+	entryId,
 	text,
 	at,
 	images,
 }: {
+	/** 刻度轨（TurnRail）的测量锚点：data-entry-id 落在根 div 上。 */
+	readonly entryId: string;
 	readonly text: string;
 	readonly at: number;
 	/** 本条消息携带的图片附件（仅 UI 展示；进模型的翻译在 daemon 侧）。 */
@@ -132,7 +136,7 @@ function UserBubble({
 	const [preview, setPreview] = useState<ImagePart | undefined>(undefined);
 
 	return (
-		<div className="entry user">
+		<div className="entry user" data-entry-id={entryId}>
 			<div className="user-bubble">
 				{text}
 				{images !== undefined && images.length > 0 && (
@@ -841,7 +845,7 @@ export function ChatView({
 
 	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
 	const retrySubmit = (text: string): void => {
-		onSubmit(text).catch(() => {});
+		onSubmit(text).catch(() => { });
 	};
 
 	/**
@@ -857,7 +861,7 @@ export function ChatView({
 		void window.kami.setInteraction("craft").then(
 			() => {
 				// 提交失败的原因 App 会落进错误卡（lastError），与手动发送同口径，不重复提示。
-				onSubmit("计划没问题，就按上面的计划开始执行吧。").catch(() => {});
+				onSubmit("计划没问题，就按上面的计划开始执行吧。").catch(() => { });
 			},
 			(error: unknown) => onError(error instanceof Error ? error.message : String(error)),
 		);
@@ -874,29 +878,29 @@ export function ChatView({
 	return (
 		<main className="chat">
 			<header className="chat-header">
-			<button type="button" className="bar-btn" aria-label="返回首页" onClick={onBack}>
-				<IconBack size={17} />
-			</button>
+				<button type="button" className="bar-btn" aria-label="返回首页" onClick={onBack}>
+					<IconBack size={17} />
+				</button>
 				<span className="chat-title" title={title}>
-				{title}
-			</span>
-			{/*
+					{title}
+				</span>
+				{/*
 				临时任务的转正入口（对标 WorkBuddy 头部「保存到工作空间」）。
 				只有临时任务显示：命名空间的会话不需要再转一次。
 				流式中禁用 —— daemon 也会拒，但按钮置灰比弹层里报错直观。
 			*/}
-			{conversation.state.isTempTask === true && (
-				<button
-					type="button"
-					className="bar-btn bar-btn-text"
-					disabled={!ready || streaming}
-					title={streaming ? "任务进行中，停止后可保存" : "保存到工作空间"}
-					onClick={() => setSaveOpen(true)}
-				>
-					保存到工作空间
-				</button>
-			)}
-			<ModeSwitch
+				{conversation.state.isTempTask === true && (
+					<button
+						type="button"
+						className="bar-btn bar-btn-text"
+						disabled={!ready || streaming}
+						title={streaming ? "任务进行中，停止后可保存" : "保存到工作空间"}
+						onClick={() => setSaveOpen(true)}
+					>
+						保存到工作空间
+					</button>
+				)}
+				<ModeSwitch
 					interactions={conversation.availableModes}
 					currentId={conversation.state.interactionId}
 					onChange={onInteractionChange}
@@ -912,7 +916,7 @@ export function ChatView({
 			*/}
 			<div className="stream-wrap">
 				<div className="stream" ref={scrollRef} onScroll={handleStreamScroll}>
-				{/*
+					{/*
 			渲染块流来自 buildRenderBlocks（shared/metafold.ts）：已完成回合的
 			连续工具卡折成 fold 块；回合头部（turn-header）与「用户已取消」
 			（cancelled）占位块的定位规则与折叠分组共享同一遍扫描，视觉位置
@@ -920,178 +924,186 @@ export function ChatView({
 			只有最后一个 user 消息所在的回合是「当前回合」—— 它的头部走表，
 			历史回合恒为已完成（computeTurnActive 同口径）。
 		*/}
-		{blocks.map((block) => {
-			switch (block.kind) {
-				case "turn-header":
-					return (
-						<TurnHeader
-							key={`turn-${block.userId}`}
-							active={streaming && block.userId === lastUserId}
-							turn={block.userId === lastUserId ? conversation.turn : undefined}
-						/>
-					);
-				case "cancelled":
-					return (
-						<div key={`cancelled-${block.userId}`} className="user-cancelled">
-							用户已取消
-						</div>
-					);
-				case "fold":
-					return (
-						<MetaFoldBlock
-							key={block.id}
-							leadIcon={block.leadIcon}
-							summary={block.summary}
-							cards={block.cards}
-							open={foldOpen.get(block.id) ?? false}
-							onToggle={() => toggleFold(block.id)}
-						/>
-					);
-				case "entry": {
-						const { entry } = block;
-						if (entry.role === "tool") {
-							// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
-							return <ToolEntry key={entry.id} card={entry} />;
-						}
-						// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
-						if (entry.role === "user") {
-							return <UserBubble key={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
-						}
-						// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
-						// conversation.artifacts，产物卡在消息流底部统一展示）。
-						if (entry.role === "artifacts_presented") {
-							return null;
-						}
-						return (
-							<div key={entry.id} className={`entry ${entry.role}`}>
-								{/*
+					{blocks.map((block) => {
+						switch (block.kind) {
+							case "turn-header":
+								return (
+									<TurnHeader
+										key={`turn-${block.userId}`}
+										active={streaming && block.userId === lastUserId}
+										turn={block.userId === lastUserId ? conversation.turn : undefined}
+									/>
+								);
+							case "cancelled":
+								return (
+									<div key={`cancelled-${block.userId}`} className="user-cancelled">
+										用户已取消
+									</div>
+								);
+							case "fold":
+								return (
+									<MetaFoldBlock
+										key={block.id}
+										leadIcon={block.leadIcon}
+										summary={block.summary}
+										cards={block.cards}
+										open={foldOpen.get(block.id) ?? false}
+										onToggle={() => toggleFold(block.id)}
+									/>
+								);
+							case "entry": {
+								const { entry } = block;
+								if (entry.role === "tool") {
+									// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
+									return <ToolEntry key={entry.id} card={entry} />;
+								}
+								// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
+								if (entry.role === "user") {
+									return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+								}
+								// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
+								// conversation.artifacts，产物卡在消息流底部统一展示）。
+								if (entry.role === "artifacts_presented") {
+									return null;
+								}
+								return (
+									<div key={entry.id} data-entry-id={entry.id} className={`entry ${entry.role}`}>
+										{/*
 									thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
 									assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
 									isStreaming 翻 false，扫光与自动展开同时停止。
 								*/}
-								{entry.thinking !== undefined && (
-									<ThinkingBlock
-										text={entry.thinking}
-										streaming={streaming && entry.id === lastEntry?.id}
-									/>
-								)}
-								{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-						<Markdown text={entry.text} />
-						{/*
+										{entry.thinking !== undefined && (
+											<ThinkingBlock
+												text={entry.thinking}
+												streaming={streaming && entry.id === lastEntry?.id}
+											/>
+										)}
+										{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
+										<Markdown text={entry.text} />
+										{/*
 							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
 						*/}
-						<AssistantActions
-							text={entry.text}
-							showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
-							onExecutePlan={executePlan}
-						/>
-					</div>
-						);
-					}
-					case "error": {
-						const { entry } = block;
-						return (
-							<ErrorCard
-								key={entry.id}
-								message={entry.message}
-								runId={entry.runId}
-								at={entry.at}
-								modelId={conversation.state.modelId}
-								retryText={retryText}
-								onRetry={() => {
-									if (retryText === undefined) return;
-									// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
-									retrySubmit(retryText);
-								}}
-							/>
-						);
-					}
-				}
-		})}
-				{/*
+										<AssistantActions
+											text={entry.text}
+											showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
+											onExecutePlan={executePlan}
+										/>
+									</div>
+								);
+							}
+							case "error": {
+								const { entry } = block;
+								return (
+									<ErrorCard
+										key={entry.id}
+										message={entry.message}
+										runId={entry.runId}
+										at={entry.at}
+										modelId={conversation.state.modelId}
+										retryText={retryText}
+										onRetry={() => {
+											if (retryText === undefined) return;
+											// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
+											retrySubmit(retryText);
+										}}
+									/>
+								);
+							}
+						}
+					})}
+					{/*
 				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
 				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
 				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
 			*/}
-			{streaming &&
-				(awaitingFirstResponse ? (
-					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
-				) : (
-					<div className="stream-pending">
-						<span className="text-shimmer">{pendingText(conversation.entries)}</span>
-					</div>
-				))}
-				{/*
+					{streaming &&
+						(awaitingFirstResponse ? (
+							<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
+						) : (
+							<div className="stream-pending">
+								<span className="text-shimmer">{pendingText(conversation.entries)}</span>
+							</div>
+						))}
+					{/*
 					产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
 					WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
 					交付一般发生在收尾，且流式中面板已被自动打开。
 				*/}
-				{!streaming && artifacts.length > 0 && (
-					<section className="artifacts">
-						<header className="artifacts-header">产物（{artifacts.length}）</header>
-						<div className="artifacts-grid">
-							{artifacts.map((a) => {
-								const isUrl = /^https?:\/\//i.test(a.path);
-								const isHtml = /\.html?$/i.test(a.path);
-								return (
-									<button
-										key={a.path}
-										type="button"
-										className="artifact-card"
-										title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
-										onClick={() => onPreviewArtifact(a.path)}
-									>
-										<IconDoc size={16} />
-										<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-										{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
-										{isHtml && !isUrl && (
-											<span
-												className="artifact-preview-btn"
-												role="button"
-												title="在预览面板打开"
-												onClick={(event) => {
-													event.stopPropagation();
-													onPreviewArtifact(a.path);
-												}}
-											>
-												🌐
-											</span>
-										)}
-									</button>
-								);
-							})}
-						</div>
-						<div className="artifacts-footer">
-							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
-								查看所有产物 ({artifacts.length}) ›
-							</button>
-							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
-								查看所有变更 ›
-							</button>
-						</div>
-					</section>
-				)}
-				{lastError !== undefined && (
-					<ErrorCard
-						message={lastError}
-						modelId={conversation.state.modelId}
-						retryText={retryText}
-						onRetry={() => {
-							if (retryText === undefined) return;
-							retrySubmit(retryText);
-						}}
-					/>
-				)}
+					{!streaming && artifacts.length > 0 && (
+						<section className="artifacts">
+							<header className="artifacts-header">产物（{artifacts.length}）</header>
+							<div className="artifacts-grid">
+								{artifacts.map((a) => {
+									const isUrl = /^https?:\/\//i.test(a.path);
+									const isHtml = /\.html?$/i.test(a.path);
+									return (
+										<button
+											key={a.path}
+											type="button"
+											className="artifact-card"
+											title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+											onClick={() => onPreviewArtifact(a.path)}
+										>
+											<IconDoc size={16} />
+											<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+											{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+											{isHtml && !isUrl && (
+												<span
+													className="artifact-preview-btn"
+													role="button"
+													title="在预览面板打开"
+													onClick={(event) => {
+														event.stopPropagation();
+														onPreviewArtifact(a.path);
+													}}
+												>
+													🌐
+												</span>
+											)}
+										</button>
+									);
+								})}
+							</div>
+							<div className="artifacts-footer">
+								<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
+									查看所有产物 ({artifacts.length}) ›
+								</button>
+								<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
+									查看所有变更 ›
+								</button>
+							</div>
+						</section>
+					)}
+					{lastError !== undefined && (
+						<ErrorCard
+							message={lastError}
+							modelId={conversation.state.modelId}
+							retryText={retryText}
+							onRetry={() => {
+								if (retryText === undefined) return;
+								retrySubmit(retryText);
+							}}
+						/>
+					)}
 				</div>
-			{/*
+				{/*
+				消息导航刻度轨：钉在 stream-wrap 视口左缘（与 stream-fade /
+				jump-to-bottom 同一定位基准）。不能放 .stream 内 —— 滚动容器里
+				absolute 子元素随内容滚走，且 .stream 挂载动画的 transform 期间
+				会让它变成后代包含块，刻度轨会短暂错位。scrollRef 与 entries
+				都是现成的，零新状态源。
+			*/}
+				<TurnRail entries={conversation.entries} scrollRef={scrollRef} />
+				{/*
 				底部渐隐（对标 WorkBuddy __bottom-mask）：渐变叠加层钉在
 				stream-wrap 视口底部，不随内容滚动。与「回到底部」共用同一可见
 				条件（不在底部才需要软收边）；常驻 DOM 只切 opacity，往返都有过渡。
 			*/}
-			<div className="stream-fade" data-visible={showJumpToBottom} />
-			{/* 不在底部时浮现（跟随已停）；点击平滑回底并恢复跟随。 */}
-			{showJumpToBottom && (
+				<div className="stream-fade" data-visible={showJumpToBottom} />
+				{/* 不在底部时浮现（跟随已停）；点击平滑回底并恢复跟随。 */}
+				{showJumpToBottom && (
 					<button
 						type="button"
 						className="jump-to-bottom"
@@ -1105,64 +1117,64 @@ export function ChatView({
 			</div>
 
 			<footer className="chat-composer">
-			{/*
+				{/*
 				输入卡机制（拖放/附件/IME/补全/历史/草稿/字数闸/停止确认）
 				全部在 Composer 内部；这里只注入 chat 的差异面。
 				流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
 			*/}
-			<Composer
-				ref={composerRef}
-				ready={ready}
-				placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
-				rows={2}
-				cwd={conversation.state.cwd}
-				modelId={conversation.state.modelId}
-				onSubmit={handleComposerSubmit}
-				onError={onError}
-				draftKey={sessionId}
-				enableHistory
-				streaming={streaming}
-				onAbort={onAbort}
-			>
-				{/*
+				<Composer
+					ref={composerRef}
+					ready={ready}
+					placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
+					rows={2}
+					cwd={conversation.state.cwd}
+					modelId={conversation.state.modelId}
+					onSubmit={handleComposerSubmit}
+					onError={onError}
+					draftKey={sessionId}
+					enableHistory
+					streaming={streaming}
+					onAbort={onAbort}
+				>
+					{/*
 					「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
 					触发 Composer 内部的附件选择框）+ 模式子菜单（与头部 ModeSwitch
 					同一数据源）+ 专家/技能/连接器占位。
 					弹层向上、左对齐，与下方 PermissionMenu 同一约定。
 				*/}
-				<PlusMenu
-					modes={conversation.availableModes}
-					currentId={conversation.state.interactionId}
-					onInteractionChange={onInteractionChange}
-					onPickFiles={() => void composerRef.current?.pickFiles()}
-					onTodo={onTodo}
-				/>
-				{/*
+					<PlusMenu
+						modes={conversation.availableModes}
+						currentId={conversation.state.interactionId}
+						onInteractionChange={onInteractionChange}
+						onPickFiles={() => void composerRef.current?.pickFiles()}
+						onTodo={onTodo}
+					/>
+					{/*
 					权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
 					时不必退回首页换档。弹层左对齐向上展开（300px），
 					贴右放会溢出窗口右缘被裁掉。
 				*/}
-				<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
-				{/*
+					<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+					{/*
 					模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
 					推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
 					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
 					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
 				*/}
-				<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
-				<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-					<IconMic size={16} />
-				</button>
-				{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
-				{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
-			</Composer>
-		</footer>
-		{saveOpen && (
-			<SaveToWorkspaceDialog
-				onSave={onSaveToWorkspace}
-				onClose={() => setSaveOpen(false)}
-			/>
-		)}
-	</main>
-);
+					<ModelMenu modelId={conversation.state.modelId} onOpenSettings={onOpenSettings} onError={onError} />
+					<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+						<IconMic size={16} />
+					</button>
+					{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
+					{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
+				</Composer>
+			</footer>
+			{saveOpen && (
+				<SaveToWorkspaceDialog
+					onSave={onSaveToWorkspace}
+					onClose={() => setSaveOpen(false)}
+				/>
+			)}
+		</main>
+	);
 }

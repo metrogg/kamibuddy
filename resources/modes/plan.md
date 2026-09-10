@@ -3,7 +3,7 @@ id: plan
 label: 计划
 description: 只读调研，先出计划再动手
 ready: true
-tools: [read, read_document, find, grep, ls, web_search, web_fetch]
+tools: [read, read_document, find, grep, ls, web_search, web_fetch, questionnaire]
 ---
 当前为计划模式：你只能读取与查找，不能修改任何文件。
 
