@@ -1,0 +1,136 @@
+.trae/specs/add-subagent-task-tool/tasks.md
+  s_c4023de03b1ef1::t_019c11e121db71 18-19,23,26,28,31
+  s_c4023de03b1ef1::t_15cc1c19efaaaf 35-38
+  s_c4023de03b1ef1::t_2884d221c71e24 1-17,20-22,24-25,27,29-30,32-34,39-43
+src/daemon/index.ts
+  s_c5c899a6c86841::t_b03d53e31062e0 769-772,803,805-813,816-818,820-836,839-847,849-860
+  s_c5c899a6c86841::t_7321c45a9cbcbc 141
+  s_c5c899a6c86841::t_c8d5f2d79fe079 1817-1827,1830-1842
+  s_c5c899a6c86841::t_de624b95585341 1052-1053,1055-1063,1071,1076-1091,1095
+  s_c5c899a6c86841::t_7573f777a70658 934-942,947-948
+  s_c5c899a6c86841::t_c6ef737fba9191 1611-1612,1621,1639-1641,1646
+  s_c5c899a6c86841::t_725c9682cc8243 76
+  s_c5c899a6c86841::t_3893776f40befe 49,97-102,327,329-332,334,367-372,374-391,394-395,397-398,400-447,457-460,466-468,470,586-587,592-594,605-619,621-648,650-666,863,866-868,870-873,875,878-895,902-907,909-912,928-931,957-959,984,986-994,1015,1017,1021,1032,1035-1036,1042-1044,1074-1075,1100-1104,1122-1134,1175-1182,1185,1197-1198,1275,1277-1279,1281-1283,1285-1296,1298-1299,1301-1314,1319-1329,1332,1337,1344,1346-1347,1355,1358-1377,1379,1384,1388,1391-1393,1399-1400,1402-1403,1411-1416,1418-1419,1423,1425,1431-1440,1442-1444,1451-1462,1464-1486,1488-1495,1497,1499-1504,1506,1508,1510,1512-1513,1515,1517-1518,1520-1537,1544-1551,1553-1580,1585-1594,1683-1685,1726-1730,1733-1740,1743-1747,1751-1759,1763,1765-1768,1771,1777-1778,1793-1802,1808,1811,1828-1829,1849,1860,1864-1866,1868-1869,1871,1873-1875,1878,1893,1906,1908,1911,1915,1919-1922,1936-1938,2073,2083-2085,2100-2101,2103,2107,2110-2112,2143-2150,2153-2156,2164,2251-2255,2257,2263-2265,2267-2270,2272-2274,2277,2375-2377,2380
+  s_c5c899a6c86841::t_aebd9a62e17f03 34
+src/renderer/turn-rail.tsx
+  s_c5c899a6c86841::t_ffba7f568aadfc 1
+  s_c5c899a6c86841::t_29f19d8940c72d 34
+  s_c5c899a6c86841::t_70f9ef2f1a38cf 60,65-67,76-80
+  s_c5c899a6c86841::t_06e8672d17c51e 17-18
+  s_c5c899a6c86841::t_98b154b7ddd223 19-20,22-23,33,42-43,61-64,68-75,82,84-94,97
+src/renderer/main.tsx
+  s_c5c899a6c86841::t_42ad14fe617a36 30-43
+src/daemon/session-registry.ts
+  s_c5c899a6c86841::t_527cccaa19b852 111
+  s_c5c899a6c86841::t_5ae5bdeb566a77 78,80-81
+  s_c5c899a6c86841::t_5a6fb6353d31fa 42-48
+  s_c5c899a6c86841::t_9975e5dabb7f7d 41
+src/core/agents.test.ts
+  s_c4023de03b1ef1::t_c97ac2b76d88ef 128-129,132,137
+  s_c4023de03b1ef1::t_8016152f598b49 1-127,130-131,133-136,138-145,147-155
+  s_c4023de03b1ef1::t_4b013c20c40075 146
+src/extensions/task-tool.test.ts
+  s_c4023de03b1ef1::t_a2cbfcabaa0171 1-342
+src/renderer/sidebar.tsx
+  s_c5c899a6c86841::t_07f329ddbb51ac 45,48,50-53,94,209-213
+src/core/agents.ts
+  s_c4023de03b1ef1::t_7371a29551866d 1-80
+src/extensions/permission-policy.test.ts
+  s_c4023de03b1ef1::t_01ec7fb17fe4af 328-339
+src/core/subagent-sanitize.test.ts
+  s_c4023de03b1ef1::t_6119cb5112d59b 1-67
+src/extensions/task-tool.ts
+  s_c4023de03b1ef1::t_f9200de805ac84 1-141,151-163,166-171,173-208,211-212,214-216,218,220-229,231-233,238-241,243-254,256-268,270-274
+  s_c4023de03b1ef1::t_c9538439f0d62a 142-150,164-165,172,209-210,213,217,219,230,234-237,242,255,269
+docs/ARCHITECTURE.md
+  s_c5c899a6c86841::t_9fd9cea3b9137a 26-32,93-97,158,181-186,225,257-270,273,283,303-309,316-327
+  s_c5c899a6c86841::t_b95752487665aa 328-330
+resources/agents/reviewer.md
+  s_c4023de03b1ef1::t_78aed4e5e8a451 1-11
+src/extensions/permission-policy.ts
+  s_c4023de03b1ef1::t_0ad6db45c380fe 138-142
+  s_c4023de03b1ef1::t_01e3d4a58f5cf4 160
+resources/agents/worker.md
+  s_c4023de03b1ef1::t_5b2234975671bb 1-14
+resources/agents/scout.md
+  s_c4023de03b1ef1::t_80ba1780d01efd 1-11
+src/daemon/subagent-runner.ts
+  s_c4023de03b1ef1::t_deac231f6ee228 1-289
+src/core/prompt-composer.ts
+  s_c4023de03b1ef1::t_1d6ebc5e87026e 177-202
+  s_c4023de03b1ef1::t_a95b3f4ac95920 141
+src/renderer/App.tsx
+  s_c5c899a6c86841::t_c97275c6a803c6 26,30,79,81-104,128,130-131,133,145,147-151,153,175,178-182,186-220,227-229,231-254,276-278,291-298,316,410-413,415-443,550-556,558-592,594,596-597,602,607-609,632-634,641,645-658,662,666,669,679,682-685,688,691-700,706,717-718,738,759,764,771,775-776,784,790,803-804,813,817,878-881,893
+.trae/specs/add-subagent-task-tool/checklist.md
+  s_c4023de03b1ef1::t_4e0584e023b803 1-4,6,8-10,19-21
+  s_c4023de03b1ef1::t_5bc90f80fe3ecf 5,7,11-18,22-23
+src/core/session-host.ts
+  s_c4023de03b1ef1::t_ed8cef39b3725d 299-306
+  s_c4023de03b1ef1::t_74cbe16484f588 436-441
+  s_c4023de03b1ef1::t_e24e5ff6e37faa 422
+  s_c4023de03b1ef1::t_db4bcd84564359 562-569
+  s_c4023de03b1ef1::t_8d596e97529ed9 83-84,561
+  s_c4023de03b1ef1::t_9604e5e6dee65d 99
+.trae/specs/add-subagent-task-tool/spec.md
+  s_c4023de03b1ef1::t_02f749d97ab020 1-111
+src/daemon/automation-runner.ts
+  s_c4023de03b1ef1::t_f74a535658424b 11-13
+resources/modes/craft.md
+  s_c4023de03b1ef1::t_9c0906386b4f79 6
+src/core/subagent-sanitize.ts
+  s_c4023de03b1ef1::t_6f5baed0359c3d 1-41
+resources/agents/planner.md
+  s_c4023de03b1ef1::t_1631ab253662fa 1-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "5a0c52415830cb52ff45056e9a60b78cfe8b9abe",
+  "prompts": {},
+  "sessions": {
+    "s_c4023de03b1ef1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a9feadcc981c232faa34c0c",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "tool_type": "agent",
+        "session_id": "6a9feadcc981c232faa34c0c",
+        "runtime_client": "trae-tob-git-ai",
+        "operation_id": "6aa2458cf850234b77c35d83",
+        "edit_kind": "file_edit",
+        "tool_id": "Edit",
+        "dedupe_key": "6a9feadcc981c232faa34c0c:6aa2458cf850234b77c35d83:afterEdit:34d0badf",
+        "client_type": "ide",
+        "external_session_id": "6a9feadcc981c232faa34c0c",
+        "source_scene": "unknown",
+        "tool_use_id": "6aa2458cf850234b77c35d83"
+      }
+    },
+    "s_c5c899a6c86841": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6aa04212f850234b77c2fba0",
+        "model": "kimi-k3__max"
+      },
+      "human_author": "metrogg <146624525+metrogg@users.noreply.github.com>",
+      "custom_attributes": {
+        "source_scene": "agent",
+        "client_type": "ide",
+        "external_session_id": "6aa04212f850234b77c2fba0",
+        "edit_kind": "bash",
+        "display_model_name": "Kimi-K3",
+        "checkpoint_content_bytes": "470402",
+        "tool_use_id": "6aa24f51f850234b77c35ea6",
+        "runtime_client": "trae-tob-git-ai",
+        "operation_id": "6aa24f51f850234b77c35ea6",
+        "original_file_count": "28",
+        "tool_name": "RunCommand",
+        "session_id": "6aa04212f850234b77c2fba0",
+        "included_file_count": "28"
+      }
+    }
+  }
+}
