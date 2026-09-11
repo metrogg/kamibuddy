@@ -101,6 +101,11 @@ const bridge: KamiBridge = {
 	setThinkingLevelDefault: (level) =>
 		ipcRenderer.invoke(INVOKE.setThinkingLevelDefault, level),
 
+	getStyle: () => ipcRenderer.invoke(INVOKE.getStyle),
+	setStyle: (styleId) => ipcRenderer.invoke(INVOKE.setStyle, styleId),
+
+	promptPreview: (request) => ipcRenderer.invoke(INVOKE.promptPreview, request),
+
 	getPermissions: () => ipcRenderer.invoke(INVOKE.getPermissions),
 	setPermissions: (settings) => ipcRenderer.invoke(INVOKE.setPermissions, settings),
 

@@ -5,7 +5,7 @@ description: 以选定专家的身份、方法论与输出规范工作
 ready: true
 # 工具面 = craft 全工具面 + task（spec: add-expert-mode —— 专家可委派子代理，
 # 与 craft 同能力；工具面由模式统一分配，专家文件本身不声明 tools）。
-tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert, task]
+tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, todo_write, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert, task]
 ---
 当前为专家模式：你正以「当前专家」段注入的身份工作。
 

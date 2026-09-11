@@ -9,7 +9,7 @@
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 193 条：**✅ 40 ／ 🟡 42 ／ ❌ 86 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
+> 当前 193 条：**✅ 41 ／ 🟡 42 ／ ❌ 85 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
 
 ## 怎么用这份清单
 
@@ -74,7 +74,7 @@ automation_create / automation_list / automation_delete / task。
 | C6 | 内联可视化 | `read_me`（拉设计指南模块 diagram/chart/mockup/interactive/art）+ `show_widget`（吐 SVG/HTML 片段内联渲染）；硬校验：禁 DOCTYPE/html/head/body、禁 localStorage、禁 position:fixed、禁 form、SVG viewBox 必须 `0 0 680 H` | `read_me`（diagram/chart 两模块，指南在 `resources/visualizer/`）+ `show_widget`（同款硬校验 + title 规范化）；sandbox iframe + postMessage（流式剥 script/完成保留、高度自适应 ≤2000px、主题跟随）；spec：`.trae/specs/add-inline-widgets/` | ✅ v1：mockup/interactive/art、mermaid、截图 PNG、sendPrompt 未做 |
 | C7 | 提问 | AskUserQuestion（多选 + 分页；浮层绑定会话、替换输入区，SESSION_MISMATCH 防串台） | `questionnaire-tool.ts`（单选 + 其他 + 跳过）；请求带 sessionId 按会话路由（后台不弹、badge 落归属行），v3 内联浮层替换 composer（样式对齐 lib-chat-ui QuestionFloating）；spec：`.trae/specs/bind-questionnaire-to-session/` | ✅ v1：无多选题；审批弹窗仍全局模态（安全闸取舍） |
 | C8 | 计划模式 | EnterPlanMode / ExitPlanMode（计划文件写入是 plan 下唯一额外放行项） | `resources/modes/plan.md` + `/plan` 命令 + 「执行计划」按钮；无显式进出工具 | 🟡 |
-| C9 | 任务清单 | TodoWrite + TaskCreate/Get/List/Update/Output/Stop 全套；依赖关系解除阻塞 | 无 | ❌ |
+| C9 | 任务清单 | TodoWrite + TaskCreate/Get/List/Update/Output/Stop 全套；依赖关系解除阻塞 | `todo_write`（全量替换 + 守则引导，见 L6）；Task 系列与依赖关系无 | 🟡 |
 | C10 | 子代理 | Agent 工具：`subagent_type`/`description`/`prompt`/`model`/`mode`/`detached`；4 类定义来源；独立上下文；maxTurns 下限 200 | `task-tool.ts`：单发/并行(≤8, 并发 4)/链式({previous})、深度 1、预算 20、输出去毒 | 🟡 无 detached、无独立模型 |
 | C11 | 多代理团队 | TeamCreate/TeamDelete/SendMessage + TeammateRunner + mailbox + delegate 模式 | 无 | ❌ |
 | C12 | 技能工具 | Skill / SkillManage / SlashCommand | 技能经 pi 原生 `/skill:name` 加载；无管理工具 | 🟡 |
@@ -128,14 +128,14 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 
 | 编号 | 能力 | WorkBuddy 机制（内部实现） | 我们 | 状态 |
 |---|---|---|---|---|
-| F1 | 组合式模板 | 主骨架 + `{% include %}` 片段；`workMode` 变量分发；条件槽空内容零 token | `core/prompt-composer.ts` 槽位替换（`{{interaction}}{{skills}}{{cwd}}`） | 🟡 有骨架、无 fragments 体系 |
+| F1 | 组合式模板 | 主骨架 + `{% include %}` 片段；`workMode` 变量分发；条件槽空内容零 token | `core/prompt-composer.ts`：`{{> fragment}}` 引擎（递归/环检测/缺失抛错，不引模板引擎）+ `resources/prompts/fragments/`（交付/工具纪律/Windows/地域，WB 搬用适配）+ **provenance 分段溯源** + 设置页「提示词预览」 | ✅ 另有预览可视化（WB 没有） |
 | F2 | 双面文件 | 一份 `.md` 的 frontmatter 给加载器读工具白名单，正文给模板引擎读提示片段 | modes/*.md 与 agents/*.md 都是双面文件 | ✅ |
-| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 1（work）× 交互 3（ask/craft/plan），expert 缺 | 🟡 |
+| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 2（work + code，code 骨架搬 welcomemode/code 适配）× 交互 4（expert 已由 add-expert-mode 落地）；design 维持占位（依赖 ardot 设计技能体系，E2 范畴） | 🟡 2×4；design 占位 |
 | F4 | 两代架构并存 | 单体 .tpl（9 份）→ 组合式 fragments；灰度迁移保留旧变量名 | 直接上组合式，无历史包袱 | ✅ |
 | F5 | 每轮 hidden context | `composeUserPrompt` 遍历 17 个 section：stage(every_turn/first_turn) × container(user-context/additional_data)，包成 `<system-reminder data-role=...>` 前置到用户消息；压缩时 additional-data 可剥离、user-context 常驻 | 无。systemPrompt 由 `before_agent_start` 整体替换，没有用户消息级动态注入 | ❌ 自评最大差距 |
 | F6 | 三层 reminder | 系统提示常驻条款 → 模式切换 reminder（含「This supersedes any other instructions」覆盖声明）→ 工具结果夹带 `<system-reminder>` 即时纠偏 | 无 | ❌ |
 | F7 | 身份系统 | SOUL.md / IDENTITY.md / USER.md / BOOTSTRAP.md（onboarding 自举后即焚）；人格可演进但须报备 | 无 | ❌ |
-| F8 | 风格系统 | 7 种 style-*.md（专业/亲和/高效/创意/毒舌/苏格拉底/直白），同构四小节全文注入 + 「style affects HOW, not WHAT」元规则隔离事实层 | 无 | ❌ |
+| F8 | 风格系统 | 7 种 style-*.md（专业/亲和/高效/创意/毒舌/苏格拉底/直白），同构四小节全文注入 + 「style affects HOW, not WHAT」元规则隔离事实层 | `resources/styles/` 7 个原样搬用 + preferences.styleId（默认专业/可关闭/漂移降级记日志）+ 设置页选择器 + composer 注入（交互段后带元规则）；子代理不注入 | ✅ |
 | F9 | 记忆提示 | 四层注入槽 + 写策略说明（云端只读 / 用户级显式 / 工作区 append-only + 30 天蒸馏） | 无 | ❌ |
 | F10 | 内容合规 | `<content_policy>`：提示保密（连结构存在性都禁暗示）+ 合规底线 + 反绕过（role-play、研究、假设场景都不行） | 无 | ❌ |
 | F11 | 个人文件安全 | `<personal_files_safety>` 是全提示最长章节：Trigger→Rules 结构，8 条规则（禁区目录、只读扫描、模糊先问、警告+列清单+确认、先备份、用回收站不用 rm、单批≤10、Windows 禁写非 ASCII 路径脚本） | 权限门做了机制层拦截，提示层无此章节 | 🟡 |
@@ -238,7 +238,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L3 | 右侧预览面板 | tab + 概览下拉 + pin + 外部打开；HTML 活预览（webview + 本地静态服务） | `artifact-panel.tsx`：多 tab + 概览 + 多格式渲染（HTML / Office / PDF / 代码），iframe + 127.0.0.1 静态服务 | ✅ |
 | L4 | 变更跟踪 UI | 工具行带绝对路径 + `+N −M` 徽章 + 「查看所有变更」 | 已对齐（真实 diff + 状态标签） | ✅ |
 | L5 | 产物卡片 | 文件名 + 大小 + 预览/打开图标 | 产物卡已对齐 | ✅ |
-| L6 | 任务清单面板 | 待办进度可见 | 无 | ❌ |
+| L6 | 任务清单面板 | TodoWrite 双数组全量覆写；渲染端把多次调用聚合成一张始终最新全量的清单卡（cr-tool-plan-task：三态 glyph、activeForm、窗口化 5 条锚定 in_progress、最新内容默认展开）；plan 快照随历史恢复 | `todo_write` 工具（单数组全量替换，0-50 项）+ `ToolCard.todos` 结构化（终态/恢复两路径同一 parseTodoArgs）+ `todo-projection.ts` 聚合投影（一张最新全量卡钉首次出现处）+ TodoListCard 三态渲染/窗口化/默认展开；spec：`.trae/specs/add-todo-task-list-panel/` | ✅ v1：无 merge 计数、任务行不可点（WorkBuddy 同样无 UI 消费） |
 | L7 | 侧栏任务区 | 任务/空间分组、未读点、hover 工具条 | `sidebar.tsx` 已对齐（含重命名/删除/导出） | ✅ |
 | L8 | 模式切换器 | 头部 switcher + Shift+Tab | 头部切换器 + 加号菜单 + `/plan` | ✅ |
 | L9 | 快捷键体系 | 全套 Emacs 风格键 + `keybindings.json` 自定义（16 个上下文）+ Web UI 可视化编辑 | 少量（Esc、Alt+↑↓） | 🟡 |

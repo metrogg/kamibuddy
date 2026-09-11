@@ -20,6 +20,8 @@ import type {
 	PermissionResponse,
 	PathStat,
 	PickedInputFiles,
+	PromptPreviewRequest,
+	PromptPreviewResult,
 	PromptRequest,
 	QuestionnaireRequest,
 	QuestionnaireResponse,
@@ -38,6 +40,7 @@ import type {
 	SettingsSnapshot,
 	SkillsSnapshot,
 	SkillInfo,
+	StyleConfigInfo,
 	WebSearchConfigInfo,
 	WebSearchConfigInput,
 	WebSearchTestResult,
@@ -181,6 +184,21 @@ export interface KamiBridge {
 	readonly getThinkingLevelDefault: () => Promise<{ level: ThinkingLevel }>;
 	/** 写全局默认推理强度。只影响之后新建的会话，既有会话不回溯。 */
 	readonly setThinkingLevelDefault: (level: ThinkingLevel) => Promise<void>;
+
+	/* ── 回复风格 ─────────────────────────────────────────────────── */
+
+	/** 读回复风格配置（可选项 + 当前值；未配置时 daemon 回默认风格 professional）。 */
+	readonly getStyle: () => Promise<StyleConfigInfo>;
+	/** 写回复风格；传空串 = 关闭风格注入。只影响之后的新 run。 */
+	readonly setStyle: (styleId: string) => Promise<void>;
+
+	/* ── 提示词预览 ─────────────────────────────────────────────── */
+
+	/**
+	 * 按 {场景, 模式, 风格} 现场组装系统提示词（设置页预览用，不需要活会话）。
+	 * styleId 传空串 = 关闭风格；省略 = 跟随当前偏好。id 非法时 reject 原因。
+	 */
+	readonly promptPreview: (request: PromptPreviewRequest) => Promise<PromptPreviewResult>;
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 

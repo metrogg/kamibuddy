@@ -33,6 +33,7 @@ import type {
 import type { PresentedFile } from "../shared/artifacts.ts";
 import type { TokenUsage } from "../shared/observability.ts";
 import type { ImagePart } from "../shared/image.ts";
+import { parseTodoArgs } from "./todo-parse.ts";
 
 /* pi 的具体消息类型不从包名直接 import（pi-ai 是 pi-coding-agent 的嵌套依赖，
  * 顶层 node_modules 不可达），而是从 SessionMessageEntry 结构推导 ——
@@ -186,6 +187,10 @@ export function buildConversationEntries(
 				// 执行从未发生，语义是 aborted。
 				const outcome: ToolOutcome =
 					result === undefined ? "aborted" : result.isError ? "error" : "ok";
+				// todo_write：清单从落盘 args 重建（与 live 路径同一个解析函数，
+				// core/todo-parse.ts），恢复出的清单卡与实时产出同形态；
+				// 脏 args → 键缺席，卡片照常落成。
+				const todos = block.name === "todo_write" ? parseTodoArgs(block.arguments) : undefined;
 				const card: ToolCard = {
 					id: block.id,
 					role: "tool",
@@ -194,6 +199,7 @@ export function buildConversationEntries(
 					summary: summarizeCall(block),
 					outcome,
 					detail: result === undefined ? undefined : detailOf(result, block.name),
+					...(todos === undefined ? {} : { todos }),
 					at,
 				};
 				out.push(card);

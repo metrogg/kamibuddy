@@ -40,6 +40,7 @@ import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
+import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { AutomationTask } from "../shared/automation.ts";
@@ -236,5 +237,12 @@ function buildRunExtensions(
 			 * widget 随会话历史可见（spec: add-inline-widgets）。
 			 */
 		visualizerExtensionFactory(),
+		/*
+		 * 待办清单：craft 白名单含 todo_write，run 会话注册同名真实工具
+		 * （否则模型对着白名单调一个不存在的能力）。无需 unattended 变体 ——
+		 * 它不像问卷需要人答：无副作用、无用户交互，清单只是消息流里的
+		 * 卡片数据，run 产出的清单卡随会话历史可见（同 visualizer 的取舍）。
+		 */
+		todoExtensionFactory(),
 	];
 }

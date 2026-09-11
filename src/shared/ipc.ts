@@ -23,6 +23,7 @@ import type {
 	SettingsSnapshot,
 	SkillsSnapshot,
 	SkillInfo,
+	StyleConfigInfo,
 	WebSearchConfigInfo,
 	WebSearchConfigInput,
 	WebSearchTestResult,
@@ -241,6 +242,22 @@ export const INVOKE = {
 	getThinkingLevelDefault: "settings:get-thinking-level-default",
 	/** 写全局默认推理强度。只影响之后新建的会话，既有会话不回溯。 */
 	setThinkingLevelDefault: "settings:set-thinking-level-default",
+
+	/* ── 回复风格 ─────────────────────────────────────────────────── */
+
+	/** 读回复风格配置（全部可选项 + 当前值）。未配置时 daemon 回默认风格 professional。 */
+	getStyle: "settings:get-style",
+	/** 写回复风格。传空串 = 关闭风格注入；只影响之后的新 run，不回溯既有会话。 */
+	setStyle: "settings:set-style",
+
+	/* ── 提示词预览 ─────────────────────────────────────────────── */
+
+	/**
+	 * 现场组装系统提示词供设置页预览：按 {场景, 模式, 风格} 走
+	 * composePromptWithMeta 同一条组装路径（不需要活会话），
+	 * 返回带来源标注的分段与总字数。scene/mode/style 非法即 reject。
+	 */
+	promptPreview: "prompt:preview",
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
 
@@ -580,6 +597,35 @@ export type AutomationEvent =
 		readonly success: boolean;
 	};
 
+/**
+ * prompt:preview 的入参：预览三轴的选择。
+ * styleId 三态：某风格 id = 指定风格；空串 = 关闭；缺省 = 跟随当前偏好设置。
+ */
+export interface PromptPreviewRequest {
+	readonly sceneId: string;
+	readonly modeId: string;
+	readonly styleId?: string;
+}
+
+/**
+ * 一个提示词分段（prompt:preview 的结果元素）。
+ * source 是 core PromptSegmentSource 的 IPC 镜像 —— shared 不许 import core，
+ * 这里按值传递字符串；取值集合：skeleton / fragment:<名> / mode:<id> /
+ * style:<id> / skills / pi-context / time / expert，renderer 按「:」前缀归类着色。
+ */
+export interface PromptPreviewSegment {
+	readonly source: string;
+	readonly text: string;
+	/** 段字数（UTF-16 code unit 数，与 text.length 一致）。 */
+	readonly chars: number;
+}
+
+/** prompt:preview 的返回：分段列表 + 总字数（顺序拼接 = 完整提示词）。 */
+export interface PromptPreviewResult {
+	readonly segments: readonly PromptPreviewSegment[];
+	readonly totalChars: number;
+}
+
 /** invoke 通道的入参与返回值映射。preload 和 renderer 共用，保证类型对齐。 */
 export interface InvokeMap {
 	[INVOKE.daemonStatus]: { args: []; result: DaemonStatus };
@@ -638,6 +684,9 @@ export interface InvokeMap {
 	[INVOKE.setDefaultWorkspacePath]: { args: [path: string]; result: { effective: string } };
 	[INVOKE.getThinkingLevelDefault]: { args: []; result: { level: ThinkingLevel } };
 	[INVOKE.setThinkingLevelDefault]: { args: [level: ThinkingLevel]; result: void };
+	[INVOKE.getStyle]: { args: []; result: StyleConfigInfo };
+	[INVOKE.setStyle]: { args: [styleId: string]; result: void };
+	[INVOKE.promptPreview]: { args: [PromptPreviewRequest]; result: PromptPreviewResult };
 	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
 

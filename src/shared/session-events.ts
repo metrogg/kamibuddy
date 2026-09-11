@@ -108,6 +108,19 @@ export interface AssistantMessage {
 	readonly at: number;
 }
 
+/**
+ * todo_write 清单的一项（工具卡的结构化载荷）。
+ *
+ * 与 extensions/todo-tool.ts 的 TodoItem 同构、各自定义：那份是 pi 工具的
+ * details 契约，这份是 UI 渲染契约 —— renderer 只许 import shared（AGENTS.md §1.3），
+ * 两处无法共用一个 import 源。字段语义见 todo-tool.ts 的 schema 描述。
+ */
+export interface TodoItem {
+	readonly content: string;
+	readonly activeForm?: string;
+	readonly status: "pending" | "in_progress" | "completed";
+}
+
 export interface ToolCard {
 	readonly id: ToolCallId;
 	readonly role: "tool";
@@ -146,6 +159,14 @@ export interface ToolCard {
 	 * tool_finished 后键缺席：终态内容以 detail（工具结果）为准。
 	 */
 	readonly streamArgs?: string;
+	/**
+	 * todo_write 的任务清单（结构化载荷）。仅 todo_write 卡填充：
+	 * 来自工具 args（全量替换语义，每次调用都是完整清单），恢复历史会话时
+	 * 由消息回放从落盘 args 重建（core/session-rebuild.ts）。
+	 * 模型手滑的脏 args 解析不出时键缺席 —— 清单只是卡片的增强展示，
+	 * 缺席不阻碍卡片照常落成。
+	 */
+	readonly todos?: readonly TodoItem[];
 	readonly at: number;
 }
 

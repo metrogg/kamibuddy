@@ -48,6 +48,7 @@ import {
 	writePreferences,
 } from "../core/preferences.ts";
 import { PreviewServers } from "../core/preview-server.ts";
+import { buildPromptPreview } from "./prompt-preview.ts";
 import {
 	composePrompt,
 	formatSkillsSection,
@@ -56,7 +57,7 @@ import {
 	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
-import { loadResources, toDescriptors } from "../core/resources.ts";
+import { DEFAULT_STYLE_ID, loadResources, resolveStyle, toDescriptors } from "../core/resources.ts";
 import { importSkill, userSkillsDir } from "../core/skill-install.ts";
 import { buildExportPath } from "../core/session-export.ts";
 import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
@@ -77,6 +78,7 @@ import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
+import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
 	DEFAULT_PERMISSIONS,
@@ -120,6 +122,7 @@ import {
 	type PermissionResponse,
 	type ArtifactContent,
 	type PathStat,
+	type PromptPreviewRequest,
 	type PromptRequest,
 	type QuestionnaireRequest,
 	type QuestionnaireResponse,
@@ -339,11 +342,29 @@ async function composeSystemPrompt(
 	// 一个并不存在的 read 工具（plan 模式就是这个坑）。
 	const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
 	const skillsSection = hasSkillReader ? formatSkillsSection(skills) : "";
+	/*
+	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
+	 * 无需重启）。三态：未配置 = 默认专业 / 空串 = 关闭 / 某 id = 指定。
+	 * 指定 id 不在资源库 = 配置漂移（风格被改名/删除）—— resolveStyle 降级
+	 * 默认风格，这里把漂移记进事件日志：降级可以是体验取舍，但不能无痕。
+	 */
+	const { style, driftedFrom } = resolveStyle(RESOURCES.styles, readPreferences().styleId);
+	if (driftedFrom !== undefined) {
+		eventLog.append({
+			kind: "style_drift",
+			requested: driftedFrom,
+			fallback: style?.id ?? DEFAULT_STYLE_ID,
+		});
+	}
 	const prompt = composePrompt({
 		sceneBody: scene.body,
 		modeBody: mode.body,
 		skillsSection,
 		cwd,
+		modeId: interactionId,
+		// 片段库查表：找不到返回 undefined → composer 抛错（不静默留洞上线）。
+		resolveFragment: (name) => RESOURCES.fragments.get(name),
+		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(expert === undefined ? {} : { expert }),
 		piContext,
 	});
@@ -1227,12 +1248,18 @@ async function createHost(
 			// cwd 缺省取**所属会话**的 cwd —— 会话与 cwd 终身绑定，读桶即真相。
 			automationExtensionFactory(automationStore, () => bucket.cwd),
 			/*
+			 * 待办清单（craft/expert 白名单含 todo_write）：无副作用、无用户交互，
+			 * 所有用户会话注册。工具本体只是载体 —— 清单状态由 renderer 从消息流
+			 * 聚合，历史恢复靠消息回放（见 extensions/todo-tool.ts 文件头）。
+			 */
+			todoExtensionFactory(),
+			/*
 			 * 子代理委派（craft 白名单）：只挂在用户会话——定时任务 run 会话
 			 * （automation-runner）不注册 task（无人值守下的递归委派明确不做）。
-			 * cwd 在此注入：子代理与主会话同一工作空间，产物落在用户看得见的地方。
-			 * spawn 预算按桶计（session-registry 的 SPAWN_BUDGET_PER_SESSION）：
-			 * 换桶即新预算，saveToWorkspace 原地换 cwd 不换桶、不复位。
-			 */
+				 * cwd 在此注入：子代理与主会话同一工作空间，产物落在用户看得见的地方。
+				 * spawn 预算按桶计（session-registry 的 SPAWN_BUDGET_PER_SESSION）：
+				 * 换桶即新预算，saveToWorkspace 原地换 cwd 不换桶、不复位。
+				 */
 			taskExtensionFactory({
 				runSubagent: (request) => subagentRunner.run({ ...request, cwd }),
 				listAgents: () => agents,
@@ -2280,6 +2307,42 @@ const handlers: Record<string, Handler> = {
 		// 选择为准，不被本键回溯修改（spec：全局默认不回溯既有会话）。
 		writePreferences({ ...readPreferences(), thinkingLevel: level });
 	},
+
+	/* ── 回复风格 ─────────────────────────────────────────────────── */
+
+	// 未配置回 DEFAULT_STYLE_ID（professional）：默认值的唯一出处在
+	// core/resources.ts，偏好文件保持「没写就是没写」（同 thinkingLevel 口径）。
+	[INVOKE.getStyle]: async () => ({
+		styles: RESOURCES.styles.map((s) => ({ id: s.id, label: s.label })),
+		styleId: readPreferences().styleId ?? DEFAULT_STYLE_ID,
+	}),
+
+	[INVOKE.setStyle]: async ([styleId]) => {
+		// 双端校验（同 setThinkingLevelDefault）：空串 = 关闭，是合法值；
+		// 其余必须是已加载的风格 id（RESOURCES 启动时已校验过文件名与映射）。
+		if (typeof styleId !== "string" || (styleId !== "" && !RESOURCES.styles.some((s) => s.id === styleId))) {
+			throw new Error(`未知的回复风格：${String(styleId)}`);
+		}
+		// 读改写（理由同 setThinkingLevelDefault）。语义：只影响之后的新 run ——
+		// 系统提示词在 run 开始时组装，进行中的 run 不追回（spec：F8 风格系统）。
+		writePreferences({ ...readPreferences(), styleId });
+	},
+
+	/* ── 提示词预览（设置页，spec: systematize-prompt-architecture Task 5） ── */
+
+	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
+	// cwd = 当前会话工作区（预览反映「此刻发消息会看到的提示词」），
+	// 技能清单现读（同 composeSystemPrompt 口径），风格偏好现读。
+	[INVOKE.promptPreview]: async ([request]) =>
+		buildPromptPreview(RESOURCES, request as PromptPreviewRequest, {
+			cwd: currentBucket.cwd,
+			skills: listSkills().map((s) => ({
+				name: s.name,
+				description: s.description,
+				filePath: s.filePath,
+			})),
+			preferredStyleId: readPreferences().styleId,
+		}),
 
 	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
 

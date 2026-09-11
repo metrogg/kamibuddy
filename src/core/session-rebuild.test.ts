@@ -346,6 +346,31 @@ describe("buildConversationEntries · 工具卡配对", () => {
 		expect(asTool(out[1]!).outcome).toBe("ok");
 		expect(asTool(out[2]!).outcome).toBe("ok");
 	});
+
+	it("todo_write 卡从落盘 args 重建 todos（与 live 路径同一解析函数），恢复标签「任务列表」", () => {
+		const out = buildConversationEntries(
+			[
+				assistantEntry("a1", [
+					call("c1", "todo_write", {
+						todos: [
+							{ content: "整理数据", status: "completed" },
+							{ content: "写报告", activeForm: "正在写报告", status: "in_progress" },
+							// 落盘数据可能脏（旧版/手滑）：脏项剔除，卡片照常重建。
+							{ content: "状态非法", status: "doing" },
+						],
+					}),
+				]),
+				toolResultEntry("r1", "c1", "待办清单已更新。"),
+			],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.label).toBe("任务列表");
+		expect(card.todos).toEqual([
+			{ content: "整理数据", status: "completed" },
+			{ content: "写报告", activeForm: "正在写报告", status: "in_progress" },
+		]);
+	});
 });
 
 describe("buildConversationEntries · 跳过项", () => {

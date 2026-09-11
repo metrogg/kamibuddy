@@ -2408,6 +2408,99 @@ button {
 	transform: translateY(0);
 }
 
+/* ── 任务清单卡（todo_write，WorkBuddy cr-tool-plan-task 同构） ──────────
+   开合机制整个复用 .tool-detail-box（常驻 DOM + 类切换），这里只覆盖
+   排版与底色：清单是 15px 文本行而不是等宽输出；底色用 gray-3 侧栏灰
+   （WorkBuddy 清单卡底色比工具输出的 gray-2 深一档）。 */
+.todo-list-box {
+	background: var(--bg-sidebar);
+	color: var(--text);
+	font-size: 14px;
+	font-family: inherit;
+	white-space: normal;
+}
+
+/* 内部细滚动条（窗口化后一般不触发，兜底超长占位）。 */
+.todo-list-box.open {
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+
+.todo-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.todo-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.todo-glyph {
+	flex: 0 0 16px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+}
+
+.todo-check {
+	color: var(--text-faint);
+}
+
+/* in_progress 的绿色 spinner（#0cbf5b = --ok）：浅绿轨道 + 实绿弧，旋转。 */
+.todo-spinner {
+	width: 14px;
+	height: 14px;
+	border: 1.5px solid rgba(12, 191, 91, 0.25);
+	border-top-color: var(--ok);
+	border-radius: 50%;
+	animation: todo-spin 2s linear infinite;
+}
+
+@keyframes todo-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* pending 的空心圆环。 */
+.todo-ring {
+	width: 12px;
+	height: 12px;
+	border: 1px solid var(--text-dim);
+	border-radius: 50%;
+}
+
+.todo-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 15px;
+	line-height: 1.75;
+}
+
+/* 完成态：删除线 + 灰化（rgba(0,0,0,0.3) = --text-faint）。 */
+.todo-text.done {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+.todo-row.running .todo-text {
+	font-weight: 600;
+}
+
+/* 接收中/已清空的一行占位（灰字，无 glyph）。 */
+.todo-placeholder {
+	color: var(--text-dim);
+	line-height: 1.75;
+}
+
 /* 减少动态偏好：呼吸点与 spinner 停转（静态点/静态环仍表达状态），
    折叠展开过渡退化为瞬时切换。扫光、preview-panel、file-tree-chevron
    的覆盖在各自区块。 */
@@ -2415,7 +2508,8 @@ button {
 
 	.tool-dot.running,
 	.task-spinner,
-	.file-tree-spinner {
+	.file-tree-spinner,
+	.todo-spinner {
 		animation: none;
 	}
 
@@ -3809,6 +3903,170 @@ button {
 .key-note {
 	font-size: 11px;
 	color: var(--text-dim);
+}
+
+/* ── 提示词预览（设置页） ─────────────────────────────────────── */
+
+/* 三选择器 + 视图切换同一行，空间不够时折行。 */
+.preview-controls {
+	display: flex;
+	align-items: flex-end;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.preview-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.preview-field-label {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+/* 与 .key-input select 同一套控件外观（边框/圆角/字号），不另立风格。 */
+.preview-field select {
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.preview-segments {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+}
+
+.seg-card {
+	border-bottom: 1px solid var(--border);
+}
+
+.seg-card:last-child {
+	border-bottom: 0;
+}
+
+.seg-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 12px;
+	background: var(--bg);
+	text-align: left;
+}
+
+.seg-head:hover {
+	background: var(--bg-sidebar);
+}
+
+/*
+ * 分段来源色块：按类别分色（skeleton 灰 / fragment 蓝 / mode 绿 / style 紫 /
+ * skills 黄 / pi-context 青 / time 橙 / expert 粉）。灰绿走既有 token，
+ * 其余色相是少量新增常量（同 #d9822b 的先例：color-mix 混到 bg/text 上，
+ * 深浅两档由一个 --seg 派生，加新类别只需加一行色值）。
+ */
+.seg-tag {
+	--seg: var(--text-dim);
+	padding: 1px 8px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--seg) 14%, var(--bg));
+	color: color-mix(in srgb, var(--seg) 75%, var(--text));
+	font-size: 11px;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	flex: 0 0 auto;
+	/* fragment:delivery-rules 这类名较长，超出省略而不是顶破卡片。 */
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 320px;
+}
+
+.seg-skeleton {
+	--seg: var(--text-dim);
+}
+
+.seg-fragment {
+	--seg: #3b82f6;
+}
+
+.seg-mode {
+	--seg: var(--ok);
+}
+
+.seg-style {
+	--seg: #8b5cf6;
+}
+
+.seg-skills {
+	--seg: #ca8a04;
+}
+
+.seg-pi-context {
+	--seg: #0891b2;
+}
+
+.seg-time {
+	--seg: #d9822b;
+}
+
+.seg-expert {
+	--seg: #db2777;
+}
+
+.seg-chars {
+	font-size: 11px;
+	color: var(--text-dim);
+	flex: 1 1 auto;
+	text-align: right;
+}
+
+.seg-chevron {
+	display: inline-flex;
+	color: var(--text-dim);
+	transition: transform 0.12s ease;
+}
+
+.seg-chevron.open {
+	transform: rotate(90deg);
+}
+
+/* 段内容与完整文本：等宽 + 保留换行，提示词里换行即结构。 */
+.seg-body,
+.preview-full {
+	margin: 0;
+	padding: 10px 12px;
+	font-size: 12px;
+	line-height: 1.6;
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--text-secondary);
+}
+
+.seg-body {
+	border-top: 1px solid var(--border);
+	background: var(--bg-raised);
+	/* 长段（技能清单 / 风格正文）限高滚动，不把设置页撑成无底洞。 */
+	max-height: 320px;
+	overflow-y: auto;
+}
+
+.preview-full {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-raised);
+	max-height: 480px;
+	overflow-y: auto;
 }
 
 .test-result {

@@ -237,8 +237,11 @@ export function buildRenderBlocks(
 			 * 使用工具 1 次」里图表就从消息流消失了，而它本身就是要给用户看的
 			 * 产物 —— 与 assistant 消息同待遇：打断工具连续性并单独成块
 			 * （渲染侧按 toolName 走 WidgetView，不走 ToolEntry）。
+			 * todo_write 同待遇：渲染侧投影（renderer/todo-projection.ts）已把
+			 * 多次调用合成一张「活」的清单卡，折进墓碑折叠单元后进度面板就从
+			 * 消息流消失了（渲染侧走 TodoListCard，不走 ToolEntry）。
 			 */
-			if (entry.toolName === "show_widget") {
+			if (entry.toolName === "show_widget" || entry.toolName === "todo_write") {
 				flushTools();
 				blocks.push({ kind: "entry", entry });
 				continue;

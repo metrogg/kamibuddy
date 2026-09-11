@@ -244,3 +244,19 @@ export interface WebSearchTestResult {
 	/** 成功时的返回条数（证明服务商真实应答）。 */
 	readonly count?: number;
 }
+
+/* ── 回复风格 ──────────────────────────────────────────────────── */
+
+/** 回复风格选项（设置页「回复风格」选择器的一项）。正文不经 IPC，组装时 daemon 自取。 */
+export interface StyleOption {
+	readonly id: string;
+	/** 中文名（如「专业严谨」）。 */
+	readonly label: string;
+}
+
+/** 设置页读回的回复风格配置：全部可选项 + 当前值（空串 = 关闭）。 */
+export interface StyleConfigInfo {
+	readonly styles: readonly StyleOption[];
+	/** 当前风格 id；空串 = 关闭风格注入。未配置时 daemon 回默认风格（professional）。 */
+	readonly styleId: string;
+}

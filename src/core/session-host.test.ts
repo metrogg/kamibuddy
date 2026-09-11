@@ -47,8 +47,8 @@ function createHost(session: unknown, emit: (event: SessionEvent) => void): Sess
 		sceneId: "work",
 		interactionId: "craft",
 		emit,
-		// 本测试不触达两轴资源；空列表即可（构造器不校验）。
-		resources: { scenes: [], modes: [] },
+		// 本测试不触达两轴与风格资源；空列表即可（构造器不校验）。
+		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -372,6 +372,101 @@ describe("工具卡片生成期上屏", () => {
 			(e): e is StreamStartedEvent => e.type === "tool_stream_started",
 		)?.card;
 		expect(card).toMatchObject({ toolName: "write", label: "生成中", generating: true });
+	});
+
+	it("todo_write 也在生成期上屏，标签「任务列表」（清单全在参数里、执行瞬时，同 show_widget 道理）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		streamToolCall(host, "todo_write");
+
+		const card = events.find(
+			(e): e is StreamStartedEvent => e.type === "tool_stream_started",
+		)?.card;
+		expect(card).toMatchObject({ toolName: "todo_write", label: "任务列表", generating: true });
+	});
+});
+
+describe("todo_write 清单卡", () => {
+	type ToolFinishedEvent = Extract<SessionEvent, { type: "tool_finished" }>;
+
+	/** 驱动一次 todo_write 的 execution_start（带 args）→ execution_end。 */
+	function runTodoWrite(host: SessionHost, args: unknown): void {
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "todo_write",
+			args,
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "todo_write",
+			isError: false,
+			result: { content: [{ type: "text", text: "待办清单已更新。" }] },
+		} as unknown as AgentSessionEvent);
+	}
+
+	function finishedCard(events: readonly SessionEvent[]): ToolFinishedEvent["card"] | undefined {
+		return events.find((e): e is ToolFinishedEvent => e.type === "tool_finished")?.card;
+	}
+
+	it("终态卡从 args 解析出 todos（执行态卡携带，finished 从 started 继承）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runTodoWrite(host, {
+			todos: [
+				{ content: "整理数据", status: "completed" },
+				{ content: "写报告", activeForm: "正在写报告", status: "in_progress" },
+				{ content: "交付产物", status: "pending" },
+			],
+		});
+
+		const card = finishedCard(events);
+		expect(card?.label).toBe("任务列表");
+		expect(card?.todos).toEqual([
+			{ content: "整理数据", status: "completed" },
+			{ content: "写报告", activeForm: "正在写报告", status: "in_progress" },
+			{ content: "交付产物", status: "pending" },
+		]);
+		// activeForm 缺省项键必须缺席（与 images/thinking 同口径：空值不占字段）。
+		const first = card?.todos?.[0];
+		expect(first !== undefined && "activeForm" in first).toBe(false);
+	});
+
+	it("空数组是收尾语义（清单关闭）：todos 落成 []，不是键缺席", () => {
+		const events: SessionEvent[] = [];
+		runTodoWrite(createHost(createFakeSession(), (e) => events.push(e)), { todos: [] });
+
+		expect(finishedCard(events)?.todos).toEqual([]);
+	});
+
+	it("脏 args 不抛错：todos 非数组 → 键缺席，卡片照常落成", () => {
+		const events: SessionEvent[] = [];
+		runTodoWrite(createHost(createFakeSession(), (e) => events.push(e)), { todos: "手滑了" });
+
+		const card = finishedCard(events);
+		expect(card).toBeDefined();
+		expect(card !== undefined && "todos" in card).toBe(false);
+	});
+
+	it("脏 args 不抛错：单项缺 content/status 或 status 非三态 → 剔除该项，activeForm 脏了丢字段不丢项", () => {
+		const events: SessionEvent[] = [];
+		runTodoWrite(createHost(createFakeSession(), (e) => events.push(e)), {
+			todos: [
+				{ content: "正常项", status: "pending" },
+				{ content: "状态非法", status: "doing" },
+				{ status: "pending" },
+				"纯字符串垃圾",
+				{ content: "activeForm 非法", status: "in_progress", activeForm: 42 },
+			],
+		});
+
+		expect(finishedCard(events)?.todos).toEqual([
+			{ content: "正常项", status: "pending" },
+			{ content: "activeForm 非法", status: "in_progress" },
+		]);
 	});
 });
 

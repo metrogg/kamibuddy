@@ -41,6 +41,7 @@ import {
 	type FileChange,
 } from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
+import { parseTodoArgs } from "./todo-parse.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -87,6 +88,10 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	questionnaire: "向用户提问",
 	// 子代理委派：运行中的阶段性进展（哪个 agent 在干什么）走 tool_progress 增量。
 	task: "子任务",
+	// 清单卡标题全程稳定为「任务列表」（与工具注册的 label 一致，完成态同词
+	// 见 TOOL_DONE_LABELS）：卡片本体就是清单渲染，进度由 todos 内容表达，
+	// 标题不随 执行中/已完成 跳变。
+	todo_write: "任务列表",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -104,6 +109,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	show_widget: "已生成",
 	questionnaire: "已回答",
 	task: "已完成",
+	todo_write: "任务列表",
 };
 
 /**
@@ -112,11 +118,20 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
  * 等于整段生成不可见；web_search/web_fetch：网络请求长耗时，生成期即上屏
  * 消除执行前的空白窗；show_widget：widget_code 在参数里逐步累积，
  * 生成期上屏才能边生成边渲染（loading 轮播 → 半成品渐进渲染）。
+ * todo_write：清单全在参数里、执行瞬时（无副作用），生命周期几乎全在
+ * 参数生成期 —— 与 show_widget 同理，生成期上屏消除空白窗。
  * read/ls/grep/find/read_me 不在列：本地快操作几乎瞬时完成，
  * 参数又小（一个路径/一个词/一个模块名），生成期上屏反而闪一下，卡片等执行态再上
  * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
  */
-const STREAM_CARD_TOOLS: readonly string[] = ["write", "edit", "web_search", "web_fetch", "show_widget"];
+const STREAM_CARD_TOOLS: readonly string[] = [
+	"write",
+	"edit",
+	"web_search",
+	"web_fetch",
+	"show_widget",
+	"todo_write",
+];
 
 /** 执行中标签。write/edit 不走这里（它们的执行期沿用生成期标签）。 */
 function runningLabel(toolName: string): string {
@@ -967,6 +982,12 @@ export class SessionHost {
 					this.pendingChanges.set(event.toolCallId, stash);
 				}
 
+				// todo_write：清单随执行态卡上屏 —— pi 的事件序列里 args 只在
+				// execution_start 完整出现（tool_execution_end 不携带 args，
+				// pi agent/src/types.ts 的 AgentEvent），终态卡从本卡继承。
+				// 模型手滑解析不出时键缺席：清单只是增强展示，卡片照常落成。
+				const todos = event.toolName === "todo_write" ? parseTodoArgs(event.args) : undefined;
+
 				const card: ToolCard = {
 					id: event.toolCallId,
 					role: "tool",
@@ -986,6 +1007,7 @@ export class SessionHost {
 					...(event.toolName === "show_widget"
 						? { streamArgs: JSON.stringify(event.args) }
 						: {}),
+					...(todos === undefined ? {} : { todos }),
 					at: existing?.at ?? Date.now(),
 				};
 				this.toolCards.set(event.toolCallId, card);
@@ -1028,6 +1050,9 @@ export class SessionHost {
 						detail: detail === "" ? undefined : detail,
 						// 失败的写入不产生变更（文件可能只写了一半，统计会误导）。
 						...(outcome === "ok" && stash?.change !== undefined ? { change: stash.change } : {}),
+						// todo_write 的清单从执行态卡继承（args 在 execution_start 解析，
+						// tool_execution_end 事件不携带 args，见该处注释）。
+						...(started?.todos === undefined ? {} : { todos: started.todos }),
 						at: started?.at ?? Date.now(),
 					},
 				});

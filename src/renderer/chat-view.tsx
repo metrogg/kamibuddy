@@ -5,7 +5,7 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
@@ -13,13 +13,14 @@ import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
 import type { RenderBlock } from "@shared/metafold.ts";
-import type { ConversationEntry, ModeDescriptor, RunId, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import type { ConversationEntry, ModeDescriptor, RunId, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
 	IconBack,
 	IconCheck,
 	IconChevronDown,
+	IconClipboard,
 	IconCode,
 	IconCopy,
 	IconDoc,
@@ -45,6 +46,7 @@ import { Markdown } from "./markdown.tsx";
 import { activePendingAlign, decideScrollAction, groupTurnBlocks } from "./send-anchor.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
+import { projectTodoList, windowTodos } from "./todo-projection.ts";
 import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
@@ -364,6 +366,98 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 			{/* 详情盒常驻 DOM、open 类切换：条件挂载下元素挂载即终态，
 			    CSS 过渡无从起跳，折叠展开动画必须有一个始终在树的元素。 */}
 			{expandable && <pre className={open ? "tool-detail-box open" : "tool-detail-box"}>{card.detail}</pre>}
+		</div>
+	);
+}
+
+/* ── 任务清单卡（todo_write） ────────────────────────────────────── */
+
+/**
+ * 清单行：状态 glyph + 文字（WorkBuddy cr-tool-plan-task__row 同构）。
+ * in_progress 显示 activeForm（进行态措辞）替代 content 且加粗；
+ * completed 删除线灰化；pending 空心圆环。
+ */
+function TodoRow({ todo }: { readonly todo: TodoItem }): React.JSX.Element {
+	if (todo.status === "completed") {
+		return (
+			<div className="todo-row">
+				<span className="todo-glyph">
+					<IconCheck size={14} className="todo-check" />
+				</span>
+				<span className="todo-text done">{todo.content}</span>
+			</div>
+		);
+	}
+	if (todo.status === "in_progress") {
+		return (
+			<div className="todo-row running">
+				<span className="todo-glyph">
+					<span className="todo-spinner" />
+				</span>
+				<span className="todo-text">{todo.activeForm ?? todo.content}</span>
+			</div>
+		);
+	}
+	return (
+		<div className="todo-row">
+			<span className="todo-glyph">
+				<span className="todo-ring" />
+			</span>
+			<span className="todo-text">{todo.content}</span>
+		</div>
+	);
+}
+
+/**
+ * todo_write 的任务清单卡（WorkBuddy cr-tool-plan-task 同构）。
+ *
+ * 与 ToolEntry 的定位差异：普通工具卡是「过程记录」，默认折叠成一行摘要；
+ * 清单卡是「活的状态面板」—— 投影（todo-projection.ts）保证它恒为最新
+ * 全量，所以它是消息流最新内容时默认展开、落在历史位置时默认折叠；
+ * 用户手动开合优先于默认规则（点过一次就不再跟随 defaultOpen）。
+ */
+function TodoListCard({
+	card,
+	defaultOpen,
+}: {
+	readonly card: ToolCard;
+	/** 该卡是消息流最后一条 entry 时默认展开（进度面板紧跟当前进展）。 */
+	readonly defaultOpen: boolean;
+}): React.JSX.Element {
+	const [override, setOverride] = useState<boolean | undefined>(undefined);
+	const open = override ?? defaultOpen;
+	// 接收中 = 参数还在流式输出、todos 尚未解析出（投影保留 generating 的
+	// 语义见 todo-projection.ts）：展开体只有一行占位，不解析半截 JSON。
+	const receiving = card.generating === true && card.todos === undefined;
+	const todos = card.todos;
+
+	return (
+		<div className="entry tool">
+			<button
+				type="button"
+				className="tool-head"
+				title={open ? "收起" : "展开"}
+				onClick={() => setOverride((v) => !(v ?? defaultOpen))}
+			>
+				<IconClipboard size={14} className="tool-icon" />
+				<span className={receiving ? "tool-label text-shimmer" : "tool-label"}>{card.label}</span>
+				<IconChevronDown size={12} className={open ? "tool-caret open" : "tool-caret"} />
+			</button>
+			{/* 展开盒复用 tool-detail-box 的开合机制（常驻 DOM + 类切换，理由见
+			    ToolEntry 注释）；todo-list-box 只覆盖排版与底色（清单是文本行，
+			    不是等宽输出）。 */}
+			<div className={open ? "tool-detail-box todo-list-box open" : "tool-detail-box todo-list-box"}>
+				{receiving ? (
+					<div className="todo-placeholder">接收中…</div>
+				) : todos === undefined || todos.length === 0 ? (
+					// 收尾清空（todos: []）也是有效全量：灰字一行交代，不留空盒。
+					<div className="todo-placeholder">清单已清空</div>
+				) : (
+					<div className="todo-list">
+						{windowTodos(todos).map((todo, index) => <TodoRow key={index} todo={todo} />)}
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -882,17 +976,24 @@ export function ChatView({
 	// 重算（见 buildRenderBlocks），状态必须留在组件层，否则随块重建丢失。
 	const [foldOpen, setFoldOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
 	// 渲染块流：MetaFold 折叠 + 回合头部/取消占位都在纯函数里定位（shared/metafold.ts）。
-	const blocks = buildRenderBlocks(conversation.entries, {
+	// 先过 todo_write 聚合投影（todo-projection.ts）：多次调用折叠成一张合成
+	// 清单卡（最新全量、钉在首次出现处）。渲染侧一切消费方（块流/刻度轨/
+	// 状态行/滚动跟随）统一看投影后的视图 —— 刻度轨只测量 user 消息，
+	// 投影从不动 user 条目（同引用同序），测量口径不受影响。
+	// 无 todo 卡时投影返回同一引用；useMemo 让无关重渲染（如折叠开合）
+	// 不产出新数组，滚动 effect 的依赖语义与直连 conversation.entries 等价。
+	const entries = useMemo(() => projectTodoList(conversation.entries), [conversation.entries]);
+	const blocks = buildRenderBlocks(entries, {
 		streaming,
 		cancelledTurns: conversation.cancelledTurns,
 	});
 	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
-	const lastUserEntry = conversation.entries.findLast((e) => e.role === "user");
+	const lastUserEntry = entries.findLast((e) => e.role === "user");
 	const lastUserId = lastUserEntry?.id;
 	const retryText = lastUserEntry?.text;
 	// 等待首响应阶段：与 pendingText 返回「等待模型响应…」同口径（末尾是 user 或流为空）。
 	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
-	const lastEntry = conversation.entries[conversation.entries.length - 1];
+	const lastEntry = entries[entries.length - 1];
 	const awaitingFirstResponse = streaming && (lastEntry === undefined || lastEntry.role === "user");
 
 	// 滚动跟随（对标 WorkBuddy）：在底部时新内容自动贴底；用户上滚离开底部
@@ -947,7 +1048,7 @@ export function ChatView({
 			return;
 		}
 		if (action.kind === "stick-bottom") node.scrollTop = node.scrollHeight;
-	}, [conversation.entries, pendingAlign, sessionId, lastUserId]);
+	}, [entries, pendingAlign, sessionId, lastUserId]);
 
 	/*
 		锚定空间交接：吸顶发出后，等 streaming 真正开始（或回合已终结）才清掉
@@ -1089,6 +1190,11 @@ export function ChatView({
 					if (entry.toolName === "show_widget") {
 						return <WidgetView key={entry.id} card={entry} />;
 					}
+					// todo_write 走清单卡：投影已把多次调用合成一张（todo-projection.ts），
+					// 是消息流最新内容时默认展开（活面板），历史位置默认折叠。
+					if (entry.toolName === "todo_write") {
+						return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
+					}
 					// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
 					return <ToolEntry key={entry.id} card={entry} />;
 				}
@@ -1170,7 +1276,7 @@ export function ChatView({
 					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
 				) : (
 					<div className="stream-pending">
-						<span className="text-shimmer">{pendingText(conversation.entries)}</span>
+						<span className="text-shimmer">{pendingText(entries)}</span>
 					</div>
 				))}
 			{/*
@@ -1318,7 +1424,7 @@ export function ChatView({
 				会让它变成后代包含块，刻度轨会短暂错位。scrollRef 与 entries
 				都是现成的，零新状态源。
 			*/}
-				<TurnRail entries={conversation.entries} scrollRef={scrollRef} />
+				<TurnRail entries={entries} scrollRef={scrollRef} />
 				{/*
 				底部渐隐（对标 WorkBuddy __bottom-mask）：渐变叠加层钉在
 				stream-wrap 视口底部，不随内容滚动。与「回到底部」共用同一可见

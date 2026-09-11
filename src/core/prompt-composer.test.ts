@@ -9,6 +9,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	composePrompt,
+	composePromptWithMeta,
+	composeSubagentPrompt,
 	formatRuntimeTime,
 	formatSkillsSection,
 	requireExpertPersona,
@@ -172,6 +174,92 @@ describe("expert 人格注入", () => {
 	});
 });
 
+describe("回复风格注入（F8）", () => {
+	const STYLE = { id: "socratic", body: "\n苏格拉底式提问，逐步引导。\n" };
+
+	it("风格段在交互段之后、技能段之前；正文剥首尾换行", () => {
+		const out = composePrompt({ ...BASE, skillsSection: "技能清单X", style: STYLE });
+		expect(out).toContain("## 回复风格\n\n苏格拉底式提问，逐步引导。");
+		expect(out.indexOf("创作模式行为段。")).toBeLessThan(out.indexOf("## 回复风格"));
+		expect(out.indexOf("## 回复风格")).toBeLessThan(out.indexOf("技能清单X"));
+	});
+
+	it("风格段带元规则：只影响 HOW，不改变 WHAT（组装层附加，不在风格文件里）", () => {
+		const out = composePrompt({ ...BASE, style: STYLE });
+		expect(out).toContain("风格只影响表达方式（HOW），不改变事实与内容（WHAT）。");
+		// 元规则在风格正文之后（收尾护栏，不是开场白）。
+		expect(out.indexOf("苏格拉底式提问")).toBeLessThan(out.indexOf("风格只影响表达方式"));
+	});
+
+	it("不提供 style：无风格段（偏好「关闭」态由调用方不传字段表达）", () => {
+		expect(composePrompt(BASE)).not.toContain("## 回复风格");
+		expect(composePrompt(BASE)).not.toContain("风格只影响表达方式");
+	});
+
+	it("风格正文里的残留槽位（{{乱写}}）也被拦下", () => {
+		expect(() =>
+			composePrompt({ ...BASE, style: { id: "socratic", body: "含有 {{乱写}} 的风格" } }),
+		).toThrow(/残留槽位/);
+	});
+
+	it("骨架没有 {{interaction}} 槽位时，风格段落在核心段末尾（expert 之前）", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			sceneBody: "只有骨架 {{cwd}}",
+			style: STYLE,
+			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		expect(segments.map((s) => s.text).join("")).toBe(text);
+		const sources = segments.map((s) => s.source);
+		expect(sources.indexOf("style:socratic")).toBeLessThan(sources.indexOf("expert"));
+		expect(text.indexOf("## 回复风格")).toBeLessThan(text.indexOf("## 当前专家"));
+	});
+
+	it("provenance：style:<id> 段紧跟 mode:<id> 段，拼接与 text 字节一致", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			modeId: "craft",
+			skillsSection: "技能清单X",
+			style: STYLE,
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		expect(segments.map((s) => s.text).join("")).toBe(text);
+		const sources = segments.map((s) => s.source);
+		expect(sources).toEqual(["skeleton", "mode:craft", "style:socratic", "skeleton", "skills", "skeleton", "time"]);
+		expect(segments[2]?.text).toBe(
+			"\n\n## 回复风格\n\n苏格拉底式提问，逐步引导。\n\n风格只影响表达方式（HOW），不改变事实与内容（WHAT）。",
+		);
+	});
+
+	it("风格与 expert 共存：interaction → style → … → expert 位序", () => {
+		const { segments } = composePromptWithMeta({
+			...BASE,
+			modeId: "expert",
+			style: STYLE,
+			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		const sources = segments.map((s) => s.source);
+		expect(sources.indexOf("mode:expert")).toBeLessThan(sources.indexOf("style:socratic"));
+		expect(sources.indexOf("style:socratic")).toBeLessThan(sources.indexOf("expert"));
+	});
+});
+
+describe("子代理提示词不注入风格", () => {
+	// 子代理身份由 agent 定义自声明，不套产品风格（spec: systematize-prompt-architecture）。
+	// ComposeSubagentPromptInput 类型上没有 style 字段（编译期钉死），这里钉运行期输出。
+	it("composeSubagentPrompt 输出不含风格段与元规则", () => {
+		const out = composeSubagentPrompt({
+			agentBody: "你是侦察员。",
+			cwd: "C:\\ws",
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		expect(out).not.toContain("## 回复风格");
+		expect(out).not.toContain("风格只影响表达方式");
+	});
+});
+
 describe("requireExpertPersona", () => {
 	const EXPERTS: readonly ExpertDefinition[] = [
 		{
@@ -215,5 +303,172 @@ describe("formatSkillsSection", () => {
 		expect(section).toContain("meeting-notes\\SKILL.md");
 		// 保守检查：不该出现我们自己旧格式的痕迹。
 		expect(section).not.toContain("可用技能：");
+	});
+});
+
+describe("片段 include 展开", () => {
+	// 用 map 造 resolver：比逐条写 if 更贴近 loader「目录 → 回调」的形态。
+	const frags =
+		(map: Record<string, string>) =>
+		(name: string): string | undefined =>
+			map[name];
+
+	it("基本展开：片段内容出现在指令位置", () => {
+		const out = composePrompt({
+			...BASE,
+			sceneBody: "头部\n{{> rules}}\n尾部 {{cwd}}",
+			resolveFragment: frags({ rules: "交付纪律三条" }),
+		});
+		expect(out).toContain("头部\n交付纪律三条\n尾部 C:\\ws");
+	});
+
+	it("嵌套展开：片段里再 include，且片段内可用槽位", () => {
+		const out = composePrompt({
+			...BASE,
+			sceneBody: "{{> a}}",
+			resolveFragment: frags({ a: "A-{{> b}}", b: "B 目录={{cwd}}" }),
+		});
+		expect(out).toContain("A-B 目录=C:\\ws");
+	});
+
+	it("片段缺失 → 抛错（不静默留洞上线）", () => {
+		expect(() =>
+			composePrompt({
+				...BASE,
+				sceneBody: "{{> ghost}}",
+				resolveFragment: () => undefined,
+			}),
+		).toThrow(/片段「ghost」缺失/);
+	});
+
+	it("骨架含 {{> }} 但未提供 resolveFragment → 抛错", () => {
+		expect(() => composePrompt({ ...BASE, sceneBody: "{{> rules}}" })).toThrow(
+			/resolveFragment/,
+		);
+	});
+
+	it("环检测：a → b → a 抛错并报出环路径", () => {
+		expect(() =>
+			composePrompt({
+				...BASE,
+				sceneBody: "{{> a}}",
+				resolveFragment: frags({ a: "{{> b}}", b: "{{> a}}" }),
+			}),
+		).toThrow(/成环：a → b → a/);
+	});
+
+	it("自引用环 a → a 同样被拦", () => {
+		expect(() =>
+			composePrompt({
+				...BASE,
+				sceneBody: "{{> a}}",
+				resolveFragment: frags({ a: "{{> a}}" }),
+			}),
+		).toThrow(/成环：a → a/);
+	});
+
+	it("不成环的嵌套超过 8 层 → 抛错", () => {
+		expect(() =>
+			composePrompt({
+				...BASE,
+				sceneBody: "{{> f1}}",
+				resolveFragment: (name) => `{{> f${Number(name.slice(1)) + 1}}}`,
+			}),
+		).toThrow(/嵌套超过 8 层/);
+	});
+
+	it("片段正文里的残留槽位（{{乱写}}）也被拦下", () => {
+		expect(() =>
+			composePrompt({
+				...BASE,
+				sceneBody: "{{> a}}",
+				resolveFragment: frags({ a: "含有 {{乱写}} 的片段" }),
+			}),
+		).toThrow(/残留槽位/);
+	});
+});
+
+describe("provenance 分段（composePromptWithMeta）", () => {
+	const NOW = new Date("2026-09-09T23:18:30+08:00");
+	const join = (segments: readonly { text: string }[]): string =>
+		segments.map((s) => s.text).join("");
+
+	it("composePrompt 是薄封装：与 meta 版 text 相同", () => {
+		const input = { ...BASE, skillsSection: "技能段", model: "GLM", now: NOW };
+		expect(composePrompt(input)).toBe(composePromptWithMeta(input).text);
+	});
+
+	it("segments 顺序拼接与 text 字节一致（含空 skills 压平场景）", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			sceneBody: "头\n\n{{skills}}\n\n尾 {{cwd}}",
+			skillsSection: "",
+			now: NOW,
+		});
+		expect(join(segments)).toBe(text);
+		expect(text).toContain("头\n\n尾 C:\\ws");
+		expect(text).not.toMatch(/\n{3,}/);
+		// 空技能段被丢弃：不存在 skills 来源的分段。
+		expect(segments.some((s) => s.source === "skills")).toBe(false);
+	});
+
+	it("来源标注：skeleton / mode:<id> / skills / time；cwd 行内并入 skeleton", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			modeId: "craft",
+			skillsSection: "技能清单X",
+			now: NOW,
+		});
+		expect(join(segments)).toBe(text);
+		expect(segments[0]).toEqual({ source: "skeleton", text: "你是 KamiBuddy。\n\n# 模式\n" });
+		expect(segments[1]).toEqual({ source: "mode:craft", text: "创作模式行为段。" });
+		expect(segments.find((s) => s.source === "skills")?.text).toBe("技能清单X");
+		// cwd 是行内标量：与「目录：」同在 skeleton 段里，不独立成段。
+		const tail = segments.find((s) => s.source === "skeleton" && s.text.includes("目录："));
+		expect(tail?.text).toBe("\n目录：C:\\ws");
+		expect(segments.at(-1)?.source).toBe("time");
+	});
+
+	it("modeId 缺省时标 mode:unknown（daemon 接线是后续任务）", () => {
+		const { segments } = composePromptWithMeta({ ...BASE, now: NOW });
+		expect(segments.some((s) => s.source === "mode:unknown")).toBe(true);
+	});
+
+	it("片段段标 fragment:<名>，骨架被片段与槽位切开的各段分别标注", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			modeId: "craft",
+			sceneBody: "开头\n{{> rules}}\n# 模式\n{{interaction}}",
+			resolveFragment: () => "纪律A\n纪律B",
+			now: NOW,
+		});
+		expect(join(segments)).toBe(text);
+		expect(segments.map((s) => s.source)).toEqual([
+			"skeleton",
+			"fragment:rules",
+			"skeleton",
+			"mode:craft",
+			"time",
+		]);
+		expect(segments[1]?.text).toBe("纪律A\n纪律B");
+	});
+
+	it("expert / pi-context / time 段齐全且顺序正确；钉住段在最末", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			expert: {
+				displayName: "工作周报",
+				profession: "职场汇报写作专家",
+				body: "人格正文",
+			},
+			piContext: { promptGuidelines: ["一条指引"] },
+			now: NOW,
+		});
+		expect(join(segments)).toBe(text);
+		const sources = segments.map((s) => s.source);
+		// 骨架核心段之后：人格（expert）→ pi-context → time → 钉住段（expert）。
+		expect(sources.slice(0, 3)).toEqual(["skeleton", "mode:unknown", "skeleton"]);
+		expect(sources.slice(3)).toEqual(["expert", "pi-context", "time", "expert"]);
+		expect(segments.at(-1)?.text).toBe("\n\n<current-expert>工作周报</current-expert>");
 	});
 });

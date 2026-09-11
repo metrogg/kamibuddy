@@ -44,6 +44,14 @@ export interface Preferences {
 	 * 两处不漂移）。既有会话以各自会话内选择为准，不被本键回溯修改。
 	 */
 	readonly thinkingLevel?: ThinkingLevel;
+	/**
+	 * 回复风格（resources/styles/ 里的风格 id）。未设置则 undefined ——
+	 * 调用方回 DEFAULT_STYLE_ID（professional，见 core/resources.ts）。
+	 * **空串是合法值，语义 = 关闭风格注入** —— 与其它键「空串归一化为
+	 * undefined」的口径不同：这里 undefined 与 "" 是三态中的两态
+	 * （未配置=默认风格 / 空串=关闭 / 某 id=指定风格），不能合并。
+	 */
+	readonly styleId?: string;
 }
 
 export interface WebSearchPrefs {
@@ -81,6 +89,7 @@ export function readPreferences(): Preferences {
 			permissions?: unknown;
 			defaultWorkspacePath?: unknown;
 			thinkingLevel?: unknown;
+			styleId?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
@@ -118,6 +127,13 @@ export function readPreferences(): Preferences {
 		const thinkingLevel = isThinkingLevel(record.thinkingLevel)
 			? record.thinkingLevel
 			: undefined;
+		/*
+		 * styleId 保留空串（"" = 用户显式关闭风格），不做非空归一化 ——
+		 * 三态语义见 Preferences.styleId 的注释。合法性（是否已知风格 id）
+		 * 由 daemon 的写入入口校验，读取层原样透传（同 defaultWorkspacePath
+		 * 的「读取不验、判定集中一处」口径）。
+		 */
+		const styleId = typeof record.styleId === "string" ? record.styleId : undefined;
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -126,6 +142,7 @@ export function readPreferences(): Preferences {
 			...(permissions !== undefined ? { permissions } : {}),
 			...(defaultWorkspacePath !== undefined ? { defaultWorkspacePath } : {}),
 			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+			...(styleId !== undefined ? { styleId } : {}),
 		};
 	} catch {
 		return EMPTY;

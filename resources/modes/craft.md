@@ -3,7 +3,7 @@ id: craft
 label: 创作
 description: 完整工具集，可读写与执行
 ready: true
-tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, task, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert]
+tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, todo_write, task, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert]
 ---
 当前为创作模式：你可以直接读写文件、整理与生成内容。
 

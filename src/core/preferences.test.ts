@@ -92,6 +92,33 @@ describe("preferences", () => {
 		writePreferences({ ...readPreferences(), activeModelKey: "smart/glm" });
 		expect(readPreferences().defaultWorkspacePath).toBe(wsRoot);
 	});
+
+	it("styleId 三态：未配置 = undefined（回落默认风格），空串 = 关闭不归一化", () => {
+		// 未配置：读取方（daemon）回落 DEFAULT_STYLE_ID，偏好文件保持「没写」。
+		expect(readPreferences().styleId).toBeUndefined();
+
+		writePreferences({ activeModelKey: undefined, styleId: "socratic" });
+		expect(readPreferences().styleId).toBe("socratic");
+
+		// 空串是合法值（用户显式关闭风格注入）——若被「空串归一化为
+		// undefined」的惯例吃掉，关闭会被静默还原成默认风格（spec: F8 可关闭）。
+		writePreferences({ ...readPreferences(), styleId: "" });
+		expect(readPreferences().styleId).toBe("");
+	});
+
+	it("styleId 读改写不丢其他键，改其他键也不丢 styleId", () => {
+		writePreferences({ activeModelKey: "smart/glm", styleId: "creative" });
+		writePreferences({ ...readPreferences(), styleId: "efficient" });
+		expect(readPreferences()).toEqual({ activeModelKey: "smart/glm", styleId: "efficient" });
+
+		writePreferences({ ...readPreferences(), activeModelKey: "deepseek/deepseek-v4" });
+		expect(readPreferences().styleId).toBe("efficient");
+	});
+
+	it("styleId 非法类型按未配置处理（偏好可再生，不阻塞启动）", () => {
+		writeFileSync(join(dir, "preferences.json"), JSON.stringify({ styleId: 42 }), "utf8");
+		expect(readPreferences().styleId).toBeUndefined();
+	});
 });
 
 describe("getEffectiveWorkspaceRoot 分层", () => {
