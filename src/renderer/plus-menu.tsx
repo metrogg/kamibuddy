@@ -2,16 +2,18 @@
  * 对话页 composer 的「+」菜单。
  *
  * 「+」原来直接弹系统图片选择框，功能单一；改成菜单后一处收纳
- * 添加文件 / 模式切换 / 专家 / 技能 / 连接器（后三项占位，走 onTodo）。
- * 模式子菜单与头部 ModeSwitch 同一份数据源（availableModes）、同一套
- * 交互语义（ready=false 的列出不切换，点击给 toast）——两处呈现不同
- * 是合理的，共享的只有数据，不会出现两处数据不一致（同 model-menu 约定）。
+ * 添加文件 / 模式切换 / 专家选择 / 技能 / 连接器（后两项占位，走 onTodo）。
+ * 模式与专家两个子菜单与头部 ModeSwitch 同一份数据源（availableModes /
+ * App 下发的 experts）、同一套交互语义（ready=false 的模式列出不切换，
+ * 点击给 toast）——两处呈现不同是合理的，共享的只有数据，不会出现两处
+ * 数据不一致（同 model-menu 约定）。
  *
  * 弹层向上展开、左对齐：与 composer 区 PermissionMenu/ModelMenu 同一约定，
  * 贴右放会溢出窗口右缘被裁掉。
  */
 
 import { useState } from "react";
+import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { IconAssistant, IconCheck, IconDoc, IconPlus, IconSkill, IconWeb, IconWorkspace } from "./icons.tsx";
 
@@ -19,19 +21,38 @@ interface PlusMenuProps {
 	readonly modes: readonly ModeDescriptor[];
 	readonly currentId: string;
 	readonly onInteractionChange: (id: string) => void;
+	/** 专家列表与当前专家（专家子菜单数据源；expertId 命中项打 ✓）。 */
+	readonly experts: readonly ExpertListItem[];
+	readonly expertId: string | undefined;
+	readonly onSelectExpert: (expertId: string) => void;
 	readonly onPickFiles: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
-export function PlusMenu({ modes, currentId, onInteractionChange, onPickFiles, onTodo }: PlusMenuProps): React.JSX.Element {
+export function PlusMenu({
+	modes,
+	currentId,
+	onInteractionChange,
+	experts,
+	expertId,
+	onSelectExpert,
+	onPickFiles,
+	onTodo,
+}: PlusMenuProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
-	// 「模式」子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover）。
+	// 两个子菜单的开合各自独立持有：hover 或点击都可达（触屏没有 hover）。
 	const [modesOpen, setModesOpen] = useState(false);
+	const [expertsOpen, setExpertsOpen] = useState(false);
 
 	const close = (): void => {
 		setOpen(false);
 		setModesOpen(false);
+		setExpertsOpen(false);
 	};
+
+	// expert 不裸列在模式子菜单里（无专家的 expert 模式不可达，spec: add-expert-mode）
+	// —— 三模式平铺，专家走下面的「专家 ▸」子菜单，选中具体专家即进 expert 模式。
+	const plainModes = modes.filter((m) => m.id !== "expert");
 
 	return (
 		<div className="menu-zone">
@@ -80,7 +101,7 @@ export function PlusMenu({ modes, currentId, onInteractionChange, onPickFiles, o
 							</button>
 							{modesOpen && (
 								<div className="plus-menu-sub">
-									{modes.map((mode) => (
+									{plainModes.map((mode) => (
 										<button
 											key={mode.id}
 											type="button"
@@ -104,17 +125,43 @@ export function PlusMenu({ modes, currentId, onInteractionChange, onPickFiles, o
 								</div>
 							)}
 						</div>
-						<button
-							type="button"
-							className="plus-menu-item"
-							onClick={() => {
-								close();
-								onTodo("专家");
-							}}
+						<div
+							className="plus-menu-sub-zone"
+							onMouseEnter={() => setExpertsOpen(true)}
+							onMouseLeave={() => setExpertsOpen(false)}
 						>
-							<IconAssistant size={15} />
-							<span>专家</span>
-						</button>
+							<button
+								type="button"
+								className="plus-menu-item"
+								aria-expanded={expertsOpen}
+								onClick={() => setExpertsOpen((v) => !v)}
+							>
+								<IconAssistant size={15} />
+								<span>专家</span>
+								<span className="plus-menu-caret" aria-hidden="true">
+									▸
+								</span>
+							</button>
+							{expertsOpen && (
+								<div className="plus-menu-sub">
+									{experts.map((expert) => (
+										<button
+											key={expert.name}
+											type="button"
+											className={`plus-menu-mode-item${expert.name === expertId ? " active" : ""}`}
+											onClick={() => {
+												close();
+												onSelectExpert(expert.name);
+											}}
+										>
+											<span className="plus-menu-mode-label">{expert.displayName}</span>
+											<span className="plus-menu-mode-desc">{expert.profession}</span>
+											{expert.name === expertId && <IconCheck size={14} className="plus-menu-mode-check" />}
+										</button>
+									))}
+								</div>
+							)}
+						</div>
 						<button
 							type="button"
 							className="plus-menu-item"

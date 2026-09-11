@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{doc_title}}</title>
+  <style>
+  /* --- CSS @page 页面模型（S-26060126E）：GB/T 9704 页脚页码 — 1 — --- */
+  @page {
+    @bottom-center { content: "— " counter(page) " —"; }
+  }
+
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 22pt);
+    --fs-h2: var(--typography-fontSize-h2, 16pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "仿宋", FangSong, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.5);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --color-primary: var(--color-primary, #333333);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 3.7cm);
+    --color-gov-red: var(--palette-govRed, #cc0000);
+    --fs-issuer: var(--typography-fontSize-h1, 26pt);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--ff-body);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    color: var(--color-text);
+    background: var(--color-bg);
+    padding: var(--margin-page);
+  }
+
+  /* Red header */
+  .gov-doc-header { margin-bottom: var(--spacing-section); }
+  .doc-redline { border: none; border-top: 3px solid var(--color-gov-red); margin: 0.8em 0; }
+  .doc-issuer {
+    text-align: center;
+    color: var(--color-gov-red);
+    font-size: var(--fs-issuer);
+    font-family: var(--ff-heading);
+    font-weight: var(--fw-bold);
+    margin: 0.3em 0;
+  }
+  .issuer-name { display: block; }
+  .issuer-type { display: block; font-size: calc(var(--fs-issuer) * 0.7); }
+  .doc-signatory-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--fs-small);
+    margin-top: 0.5em;
+  }
+
+  /* Title */
+  .gov-doc-title {
+    text-align: center;
+    font-size: var(--fs-h1);
+    font-family: var(--ff-heading);
+    font-weight: var(--fw-bold);
+    margin: var(--spacing-section) 0 var(--spacing-block);
+  }
+  .doc-recipient { margin-bottom: var(--spacing-paragraph); }
+
+  /* Body headings — all flush left */
+  .gov-doc-body h2 { font-size: var(--fs-h2); font-weight: var(--fw-bold); text-indent: 0; margin-top: var(--spacing-block); }
+  .gov-doc-body h3 { font-size: var(--fs-body); font-weight: var(--fw-bold); text-indent: 0; margin-top: var(--spacing-paragraph); }
+  .gov-doc-body h4 { font-size: var(--fs-body); font-weight: var(--fw-bold); text-indent: 0; }
+  .gov-doc-body p  { text-indent: 2em; margin-bottom: var(--spacing-paragraph); }
+
+  /* Footer */
+  .doc-footer-sign { text-align: right; margin-top: var(--spacing-section); }
+  .issuer-sign { margin-bottom: 0.3em; }
+  .doc-copy-info { margin-top: var(--spacing-section); font-size: var(--fs-small); border-top: 1px solid var(--color-border); padding-top: 0.5em; }
+  </style>
+</head>
+<body>
+  <header class="gov-doc-header">
+    <hr class="doc-redline">
+    <div class="doc-issuer">
+      <span class="issuer-name">{{org_name}}</span>
+      <span class="issuer-type">{{doc_type}}</span>
+    </div>
+    <hr class="doc-redline">
+    <div class="doc-signatory-row">
+      <span class="doc-number">{{org_code}}〔{{year}}〕{{serial_no}}号</span>
+      <span class="doc-signatory">签发人：{{signer_name}}</span>
+    </div>
+  </header>
+
+  <h1 class="gov-doc-title">{{doc_title}}</h1>
+  <p class="doc-recipient">{{recipient}}：</p>
+
+  <div class="gov-doc-body">{{body_content}}</div>
+
+  <footer class="doc-footer-sign">
+    <div class="issuer-sign">{{issuer_org}}</div>
+    <div class="doc-date">{{year}}年{{month}}月{{day}}日</div>
+  </footer>
+
+  <div class="doc-copy-info">抄送：{{copy_list}}</div>
+</body>
+</html>

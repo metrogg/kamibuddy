@@ -32,6 +32,7 @@ import {
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
 import { loadAgents } from "../core/agents.ts";
+import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
 import {
 	McpConfigError,
 	readMcpConfig,
@@ -50,6 +51,8 @@ import { PreviewServers } from "../core/preview-server.ts";
 import {
 	composePrompt,
 	formatSkillsSection,
+	requireExpertPersona,
+	type ExpertPersona,
 	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
@@ -84,6 +87,7 @@ import {
 	type PermissionSettings,
 } from "../shared/permissions.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
+import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
 import { createMcpClient, type McpClientHandle } from "../extensions/mcp-client.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
@@ -110,10 +114,12 @@ import {
 	INVOKE,
 	PUSH,
 	type AutomationSaveInput,
+	type DocxEnvStatus,
 	type McpConfigSnapshot,
 	type PermissionRequest,
 	type PermissionResponse,
 	type ArtifactContent,
+	type PathStat,
 	type PromptRequest,
 	type QuestionnaireRequest,
 	type QuestionnaireResponse,
@@ -122,6 +128,13 @@ import {
 } from "../shared/ipc.ts";
 import { nextRunAfter, validateSchedule } from "../shared/automation.ts";
 import type { AutomationTask } from "../shared/automation.ts";
+import {
+	createEnvContext,
+	defaultSpawn,
+	ensureDocxEnv,
+	inspectVenv,
+	type EnvContext,
+} from "../documents/docx-env.ts";
 import {
 	isWebSearchProviderId,
 	type WebSearchConfigInfo,
@@ -269,6 +282,18 @@ function listSkills(): SkillInfo[] {
 }
 
 /**
+ * 专家库（内置 resources/experts/ + 用户级 getConfigDir()/experts/ 同名覆盖）。
+ *
+ * 每次现载不缓存 —— 与 listSkills 同一口径：用户级新增/覆盖专家，
+ * 下一次选择与下一轮 compose 即生效，无需重启。加载从紧（坏文件 /
+ * 内置目录缺失直接抛错，见 core/experts.ts）；只有 expert 链路会调它，
+ * 三模式的 compose 不走这条读路径。
+ */
+function loadExpertsNow(): readonly ExpertDefinition[] {
+	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"));
+}
+
+/**
  * 联网搜索配置。用户会话与定时任务 run 会话共用这一份读取逻辑。
  * 偏好文件可能被手工编辑出非法值：按「未配置」处理，工具会引导用户去设置页 ——
  * 不静默用错服务商打 API。
@@ -291,6 +316,7 @@ async function composeSystemPrompt(
 	cwd: string,
 	sceneId: string,
 	interactionId: string,
+	expertId: string | undefined,
 	piContext: PromptContextOptions,
 ): Promise<{ prompt: string; systemTokens: number; skillsTokens: number }> {
 	const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
@@ -298,6 +324,10 @@ async function composeSystemPrompt(
 	if (scene === undefined || mode === undefined) {
 		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
 	}
+	// expert 模式才解析人格：expertId 缺失 / 专家不在库中都在这里响亮抛错
+	// （不可达防御的语义见 requireExpertPersona 注释）。三模式不碰专家库。
+	const expert: ExpertPersona | undefined =
+		interactionId === "expert" ? requireExpertPersona(loadExpertsNow(), expertId) : undefined;
 	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
 	const skills: SkillDescriptor[] = listSkills().map((s) => ({
 		name: s.name,
@@ -314,6 +344,7 @@ async function composeSystemPrompt(
 		modeBody: mode.body,
 		skillsSection,
 		cwd,
+		...(expert === undefined ? {} : { expert }),
 		piContext,
 	});
 	return {
@@ -345,6 +376,14 @@ function tempTasksDir(): string {
 }
 
 /**
+ * docx 引擎环境上下文（ensure / 预热 / 诊断探测共用同一个三元组）。
+ * 现算不缓存：KAMIBUDDY_RESOURCES_DIR 等 env 覆盖在测试与多环境下可换。
+ */
+function docxEnvContext(): EnvContext {
+	return createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform);
+}
+
+/**
  * 「该 cwd 归任务区（临时任务）」的判定。三种 true：
  *
  *   1. 临时任务共享目录（<生效根>/临时任务）—— 新模型的默认任务形态；
@@ -373,7 +412,12 @@ function isTempCwd(cwd: string): boolean {
  * daemon 每会话折叠一份（注册表桶持有），渲染进程重新挂载时按 sessionId
  * 经 snapshot 拉回对应会话的完整历史。
  */
-function freshConversation(cwd: string, sceneId: string, interactionId: string): ConversationView {
+function freshConversation(
+	cwd: string,
+	sceneId: string,
+	interactionId: string,
+	expertId?: string,
+): ConversationView {
 	return {
 		state: {
 			sessionId: "",
@@ -382,6 +426,8 @@ function freshConversation(cwd: string, sceneId: string, interactionId: string):
 			isTempTask: isTempCwd(cwd),
 			sceneId,
 			interactionId,
+			// 仅 expert 模式有值（沿用旧会话选择时带过来）；三模式缺省不占字段。
+			...(expertId === undefined ? {} : { expertId }),
 			modelId: activeModelKey,
 			isStreaming: false,
 		},
@@ -488,8 +534,10 @@ const automationScheduler = new AutomationScheduler({
 		getCatalog,
 		getModelKey: () => activeModelKey,
 		resources: RESOURCES,
+		// 定时任务 run 会话保持 work+craft 不起专家（spec: add-expert-mode ——
+		// 专家选择是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
 		compose: async (cwd, sceneId, interactionId, piContext) =>
-			(await composeSystemPrompt(cwd, sceneId, interactionId, piContext)).prompt,
+			(await composeSystemPrompt(cwd, sceneId, interactionId, undefined, piContext)).prompt,
 		getPermissions: () => activePermissions,
 		// 全局默认推理强度现读偏好不缓存：run 会话建宿主才走这条读路径，
 		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
@@ -606,6 +654,23 @@ function readArtifactContent(path: string): ArtifactContent {
 	const buf = readFileSync(abs);
 	if (buf.includes(0)) return { size, text: undefined }; // NUL = 二进制
 	return { size, text: buf.toString("utf8") };
+}
+
+/**
+ * 路径存在性探测（statPath 通道）：对话正文行内 code 路径徽章的高亮依据。
+ * 与 readArtifact 不同界 —— 它只报存在性与类型、不报内容，所以不套工作区
+ * 边界：徽章要服务工作区外的路径（如 Downloads 里的附件）；读内容仍由
+ * readArtifact / preview-server 的边界把守，工作区外文件点击后落外部打开。
+ * 相对路径按当前会话 cwd resolve（WorkBuddy resolveConversationFilePath 同口径）。
+ */
+function statArtifactPath(path: string): PathStat {
+	const abs = resolve(currentBucket.cwd, path);
+	try {
+		return { kind: statSync(abs).isDirectory() ? "directory" : "file" };
+	} catch {
+		// 探测的意义就是回答「在不在」——不存在/不可达都是 missing，不是错误。
+		return { kind: "missing" };
+	}
 }
 
 function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEvent): void {
@@ -1016,6 +1081,10 @@ async function createHost(
 		isTempTask: isTempCwd(cwd),
 		sceneId: bucket.conversation.state.sceneId,
 		interactionId: bucket.conversation.state.interactionId,
+		// expert 模式的绑定随两轴一起进宿主（resume/newTask 沿用口径与两轴相同）。
+		...(bucket.conversation.state.expertId === undefined
+			? {}
+			: { expertId: bucket.conversation.state.expertId }),
 		emit: (event) => emitSessionEvent(bucket, event),
 		resources: RESOURCES,
 		...(sessionManager === undefined ? {} : { sessionManager }),
@@ -1039,6 +1108,8 @@ async function createHost(
 					// 写 KamiBuddy 自身目录永远高风险询问（policy 判定链里先于工作区放行）。
 					// dev 是项目根，打包后是安装目录 —— 都以 daemon 进程的 cwd 为准。
 					appDir: process.cwd(),
+					// 内置资源只读放行（技能渐进加载全靠 read 这里）。
+					resourcesDir: getResourcesDir(),
 				},
 				cwd,
 				// getter 而非快照：用户改了预设，下一次工具调用即生效。
@@ -1093,14 +1164,15 @@ async function createHost(
 				},
 			}),
 			// 提示词切换：每轮按当前 场景×模式 组装 systemPrompt（见 extensions/prompt-switch.ts）。
-			// 两轴的权威状态读**所属桶**的折叠镜像；技能段取自宿主的 loader 发现结果。
+			// 两轴与 expert 绑定的权威状态读**所属桶**的折叠镜像；技能段取自宿主的 loader 发现结果。
 			createPromptSwitch({
 				getCurrent: () => ({
 					sceneId: bucket.conversation.state.sceneId,
 					interactionId: bucket.conversation.state.interactionId,
+					expertId: bucket.conversation.state.expertId,
 				}),
-				compose: async (sceneId, interactionId, piContext) => {
-					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, piContext);
+				compose: async (sceneId, interactionId, expertId, piContext) => {
+					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, expertId, piContext);
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
@@ -1135,6 +1207,17 @@ async function createHost(
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
+			/*
+			 * docx 生成：craft 白名单含 docx_convert，所有用户会话都装。
+			 * 转换是 daemon 进程内受控 spawn venv python（命令与参数写死在
+			 * documents/docx-convert.ts），不经 agent 的 powershell 自由 shell ——
+			 * 这是「转换调用受控」的落点（spec Requirement）。权限按「写工作区
+			 * 产物文件」档：写侧判定锚定 outputPath（permission-policy 的 MUTATING）。
+			 */
+			createDocxConvertTool({
+				engineDir: join(getResourcesDir(), "docx-engine"),
+				homeDir: homedir(),
+			}),
 			// 内联可视化（read_me + show_widget）：无副作用、无用户交互，
 			// 所有用户会话注册（run 会话的 widget 随历史可见）。
 			visualizerExtensionFactory(),
@@ -1426,12 +1509,15 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	}
 
 	// 两轴沿用当前会话的选择（与 newTask 同口径：恢复历史不改用户偏好）。
+	// expert 绑定同属这套沿用口径 —— resume 后专家身份不丢（state.expertId
+	// 随 freshConversation 进新桶，compose 时重新解析人格正文注入）。
 	const bucket = createBucket<SessionHost>({
 		cwd: nextCwd,
 		conversation: freshConversation(
 			nextCwd,
 			currentBucket.conversation.state.sceneId,
 			currentBucket.conversation.state.interactionId,
+			currentBucket.conversation.state.expertId,
 		),
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
@@ -1636,6 +1722,8 @@ async function newTask(): Promise<void> {
 			defaultWorkspaceDir,
 			currentBucket.conversation.state.sceneId,
 			currentBucket.conversation.state.interactionId,
+			// expert 绑定与两轴同口径沿用（开新活不是改偏好）。
+			currentBucket.conversation.state.expertId,
 		),
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
@@ -1755,6 +1843,11 @@ const handlers: Record<string, Handler> = {
 			contextUsage: currentBucket.conversation.state.contextUsage,
 			logDir: eventLog.dir,
 		}),
+
+	// docx venv 四态：只探测不安装（诊断页不该有环境副作用，
+	// 见 shared/ipc.ts 该通道注释）。
+	[INVOKE.docxEnvStatus]: async (): Promise<DocxEnvStatus> =>
+		inspectVenv(docxEnvContext(), defaultSpawn),
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 
@@ -1983,6 +2076,41 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.setInteraction]: async ([interactionId]) =>
 		applyInteraction(currentBucket, interactionId as string),
+
+	/**
+	 * 选择 / 清除专家（单入口的另一半，applyInteraction 的注释是状态转移语义）。
+	 * 目标 = 当前桶：专家选择是会话级 UI 状态，A 会话的专家不影响 B 会话。
+	 */
+	[INVOKE.setExpert]: async ([expertId]) => {
+		const id = expertId as string | undefined;
+		if (id === undefined) {
+			// 清除专家：本就在三模式时本就没有可清的（no-op）；在 expert 模式
+			// 则必须切走 —— 无专家的 expert 模式不可达。落点取 craft（新会话的默认模式）。
+			if (currentBucket.conversation.state.interactionId === "expert") {
+				await applyInteraction(currentBucket, "craft");
+			}
+			return;
+		}
+		// 选择前校验专家真实存在：renderer 的菜单项可能落后于用户删文件，
+		// 放过去会建成「没有人格」的专家会话（compose 时照样炸，但那时
+		// 用户已经把模式切过去了 —— 在选择的这一刻报错，UI 留在原模式）。
+		const expert = loadExpertsNow().find((e) => e.name === id);
+		if (expert === undefined) throw new Error(`未知的专家：${id}`);
+		await applyInteraction(currentBucket, "expert", id);
+	},
+
+	/**
+	 * 专家列表：renderer「专家 ▸」子菜单与对话头部的展示数据源。
+	 * 每次现载不缓存（与 setExpert 的校验同一条读路径，用户级覆盖即时生效）；
+	 * 只映射展示三字段，人格正文不下发 —— compose 时 daemon 自取。
+	 */
+	[INVOKE.listExperts]: async () =>
+		loadExpertsNow().map((e) => ({
+			name: e.name,
+			displayName: e.displayName,
+			profession: e.profession,
+			description: e.description,
+		})),
 
 	/**
 	 * 切换模型。不依赖会话 —— 设置界面在会话建立前就要能用。
@@ -2298,6 +2426,7 @@ const handlers: Record<string, Handler> = {
 
 	// 预览面板的文本读取。HTML 预览不走这里（走静态服务），这里管文本类。
 	[INVOKE.readArtifact]: async ([path]) => readArtifactContent(path as string),
+	[INVOKE.statPath]: async ([path]) => statArtifactPath(path as string),
 
 	/* ── 权限审批回程 ─────────────────────────────────────────────── */
 
@@ -2384,22 +2513,38 @@ function updateStateLocally(
 }
 
 /**
- * 交互模式切换的统一入口：setInteraction 通道与 /plan 内置命令都走这里。
+ * 交互模式切换的统一入口：setInteraction 通道、setExpert 通道与 /plan
+ * 内置命令都走这里。
+ *
+ * 选专家 = 切 expert 模式 + 绑定人格，是同一个状态转移（spec: add-expert-mode）：
+ * expertId 随切换一并落 state，不存在「expert 模式但没人格」的中间态
+ * （无专家的 expert 模式不可达 —— 模式菜单只列具体专家，不裸列「专家」）。
+ * 切到 craft/ask/plan 一律清空 expertId。
+ *
  * 任何切到非 plan 模式的切换都刷新**该会话**的记忆 —— 用户从切换器切走后
  * 再发 /plan，回到的必须是刚切走的那个模式，而不是一条过时记忆。
  * 记忆按桶存：A 会话的 /plan 不该切回 B 会话记下的模式。
+ * expert 不入 /plan 记忆：回程需要 expertId，而切走时它已清空，
+ * 记下「expert」会让 /plan 回程必然报错 —— 回到上一个三模式是安全回落。
  */
 async function applyInteraction(
 	bucket: SessionBucket<SessionHost>,
 	id: string,
+	expertId?: string,
 ): Promise<void> {
 	const readyId = requireReady(INTERACTIONS, id, "交互模式");
-	if (readyId !== "plan") bucket.lastNonPlanInteraction = readyId;
+	if (readyId === "expert" && expertId === undefined) {
+		throw new Error("选择具体专家后才会进入专家模式");
+	}
+	if (readyId !== "plan" && readyId !== "expert") bucket.lastNonPlanInteraction = readyId;
+	const nextExpertId = readyId === "expert" ? expertId : undefined;
 	if (bucket.hostPromise === undefined) {
-		updateStateLocally(bucket, { interactionId: readyId });
+		// 清除语义必须显式写 undefined：updateStateLocally 是浅合并，
+		// 不带 expertId 键会把旧值留在 state 里。
+		updateStateLocally(bucket, { interactionId: readyId, expertId: nextExpertId });
 		return;
 	}
-	(await bucket.hostPromise).setInteraction(readyId);
+	(await bucket.hostPromise).setInteraction(readyId, nextExpertId);
 }
 
 async function dispatch(request: DaemonRequest): Promise<void> {
@@ -2504,6 +2649,35 @@ function start(): void {
 		console.error(`预览服务启动失败：${message}`);
 		eventLog.append({ kind: "ipc_error", channel: "preview:ensure", message });
 	});
+
+	/*
+	 * docx 引擎 venv 后台预热（对标 WorkBuddy 的 SessionStart hook：
+	 * 会话开始就不阻塞地跑 setup-html-to-docx.sh，首次冷启动不卡会话）。
+	 * fire-and-forget：不阻塞 ready（首装要联网拉 Python，可能几分钟）；
+	 * 失败静默记事件日志 —— 转换前的幂等 ensure 才是兜底（docx_convert 工具层），
+	 * 预热只是省首次等待，它的失败不该惊动用户。
+	 */
+	void ensureDocxEnv(docxEnvContext(), defaultSpawn)
+		.then((result) => {
+			if (result.status === "ready") {
+				eventLog.append({ kind: "docx_env_warmup", outcome: "ready" });
+			} else {
+				eventLog.append({
+					kind: "docx_env_warmup",
+					outcome: "failed",
+					phase: result.phase,
+					error: result.error,
+				});
+			}
+		})
+		.catch((error: unknown) => {
+			// ensure 自身抛出（状态机 bug / spawn 异常逃逸）：同口径记日志，不放任成 unhandledRejection。
+			eventLog.append({
+				kind: "docx_env_warmup",
+				outcome: "error",
+				message: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，
 	// 而不是让 daemon 起不来、界面永久卡在「正在启动」。

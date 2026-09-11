@@ -325,6 +325,14 @@ export interface SessionState {
 	readonly sceneId: string;
 	/** 交互模式 id，对应 resources/modes/<id>.md。决定工具白名单与行为片段。 */
 	readonly interactionId: string;
+	/**
+	 * expert 模式绑定的专家 id（resources/experts/<name>.md 的 name）。
+	 *
+	 * 仅 interactionId === "expert" 时有值——选专家 = 切 expert 模式 + 绑定人格，
+	 * 是同一个状态转移（spec: add-expert-mode）；切到 craft/ask/plan 即清空。
+	 * 缺省而非空串：三模式下「无专家」是常态，不占字段。
+	 */
+	readonly expertId?: string;
 	readonly modelId: string | undefined;
 	readonly isStreaming: boolean;
 	/**

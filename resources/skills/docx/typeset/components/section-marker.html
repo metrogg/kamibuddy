@@ -1,0 +1,73 @@
+<!--
+  section-marker 装饰组件
+  Usage: <div data-component="section-marker" data-number="1" data-level="h2" data-variant="default">章节标题</div>
+  Levels: h2 (default) | h3 | h4
+  Variants: default | accent | minimal
+-->
+<style>
+[data-component="section-marker"] {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6em;
+  margin-top: var(--spacing-section, 2em);
+  margin-bottom: var(--spacing-paragraph, 0.8em);
+  font-family: var(--ff-heading, sans-serif);
+  font-weight: var(--fw-bold, 700);
+  page-break-after: avoid;
+}
+
+/* Number badge via ::before + data-number attribute */
+[data-component="section-marker"]::before {
+  content: attr(data-number);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8em;
+  height: 1.8em;
+  flex-shrink: 0;
+  background: var(--color-primary, #333333);
+  color: var(--color-bg, #ffffff);
+  border-radius: 3px;
+  font-size: var(--fs-body, 12pt);
+  font-weight: var(--fw-bold, 700);
+  line-height: 1;
+}
+
+/* Level sizes */
+[data-component="section-marker"][data-level="h2"],
+[data-component="section-marker"] {
+  font-size: var(--fs-h2, 18pt);
+}
+[data-component="section-marker"][data-level="h3"] {
+  font-size: var(--fs-h3, 14pt);
+}
+[data-component="section-marker"][data-level="h4"] {
+  font-size: var(--fs-body, 12pt);
+}
+
+/* Variant: accent — border-left highlight */
+[data-component="section-marker"][data-variant="accent"] {
+  border-left: 4px solid var(--color-primary, #333333);
+  padding-left: 0.6em;
+}
+
+/* Variant: minimal — transparent badge + circle border */
+[data-component="section-marker"][data-variant="minimal"]::before {
+  background: transparent;
+  color: var(--color-primary, #333333);
+  border: 2px solid var(--color-primary, #333333);
+  border-radius: 50%;
+}
+[data-component="section-marker"][data-variant="minimal"] {
+  border-bottom: 2px solid var(--color-border, #cccccc);
+  padding-bottom: 0.3em;
+}
+</style>
+
+<!-- Example instances (remove in production) -->
+<!--
+<div data-component="section-marker" data-number="1">第一章：总则</div>
+<div data-component="section-marker" data-number="2" data-level="h3" data-variant="accent">第二节：范围</div>
+<div data-component="section-marker" data-number="3" data-level="h4" data-variant="minimal">3. 定义</div>
+-->

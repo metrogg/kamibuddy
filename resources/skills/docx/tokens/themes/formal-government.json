@@ -1,0 +1,53 @@
+{
+  "$name": "formal-government",
+  "$description": "中国公文标准主题。庄重蓝色系，黑体标题，仿宋正文，严格遵循 GB/T 9704 版式规范。",
+  "typography": {
+    "fontFamily": {
+      "heading": { "$type": "fontFamily", "$value": "方正小标宋简体, 小标宋, SimSun" },
+      "subheading": { "$type": "fontFamily", "$value": "黑体, SimHei" },
+      "body": { "$type": "fontFamily", "$value": "仿宋, FangSong, FangSong_GB2312" },
+      "number": { "$type": "fontFamily", "$value": "Times New Roman, serif" }
+    },
+    "fontSize": {
+      "title": { "$type": "dimension", "$value": "22pt", "$description": "公文标题" },
+      "h1": { "$type": "dimension", "$value": "16pt", "$description": "一级标题" },
+      "h2": { "$type": "dimension", "$value": "14pt", "$description": "二级标题" },
+      "h3": { "$type": "dimension", "$value": "14pt", "$description": "三级标题" },
+      "body": { "$type": "dimension", "$value": "14pt", "$description": "正文字号（三号字）" },
+      "caption": { "$type": "dimension", "$value": "12pt", "$description": "注释/附件说明" }
+    },
+    "lineHeight": {
+      "title": { "$type": "number", "$value": 1.5 },
+      "body": { "$type": "number", "$value": 1.5, "$description": "28磅行距" },
+      "dense": { "$type": "number", "$value": 1.25 }
+    },
+    "fontWeight": {
+      "heading": { "$type": "fontWeight", "$value": "bold" },
+      "body": { "$type": "fontWeight", "$value": "normal" }
+    }
+  },
+  "color": {
+    "primary": { "$type": "color", "$value": "#003087", "$description": "公文主色：庄重深蓝" },
+    "secondary": { "$type": "color", "$value": "#c8102e", "$description": "印章/重点标注红" },
+    "text": { "$type": "color", "$value": "#000000", "$description": "正文文字" },
+    "heading": { "$type": "color", "$value": "#000000", "$description": "标题文字" },
+    "border": { "$type": "color", "$value": "#cc0000", "$description": "发文机关横线（红色）" },
+    "background": { "$type": "color", "$value": "#ffffff", "$description": "页面背景" }
+  },
+  "spacing": {
+    "paragraph": { "$type": "dimension", "$value": "0em", "$description": "段前距（公文不留空行）" },
+    "paragraphAfter": { "$type": "dimension", "$value": "0em" },
+    "indent": { "$type": "dimension", "$value": "2em", "$description": "首行缩进两字符" },
+    "sectionGap": { "$type": "dimension", "$value": "1em" },
+    "listItemGap": { "$type": "dimension", "$value": "0.25em" }
+  },
+  "layout": {
+    "marginTop": { "$type": "dimension", "$value": "3.7cm", "$description": "上边距 GB/T 9704 规定" },
+    "marginBottom": { "$type": "dimension", "$value": "3.5cm", "$description": "下边距" },
+    "marginLeft": { "$type": "dimension", "$value": "2.8cm", "$description": "左边距（装订侧）" },
+    "marginRight": { "$type": "dimension", "$value": "2.6cm", "$description": "右边距" },
+    "pageSize": { "$type": "string", "$value": "A4", "$description": "纸张规格" },
+    "headerHeight": { "$type": "dimension", "$value": "2.0cm" },
+    "footerHeight": { "$type": "dimension", "$value": "1.5cm" }
+  }
+}

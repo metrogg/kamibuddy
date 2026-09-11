@@ -9,6 +9,7 @@
 
 import { useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
+import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor, ThinkingLevel } from "@shared/session-events.ts";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
@@ -52,6 +53,10 @@ interface HomeViewProps {
 	readonly interactions: readonly ModeDescriptor[];
 	readonly interactionId: string;
 	readonly onInteractionChange: (interactionId: string) => void;
+	/** 专家列表与当前专家（「+」菜单的专家子菜单数据源），与对话页同源（App 层统一下发）。 */
+	readonly experts: readonly ExpertListItem[];
+	readonly expertId: string | undefined;
+	readonly onSelectExpert: (expertId: string) => void;
 	readonly onSceneChange: (sceneId: string) => void;
 	readonly onOpenSettings: () => void;
 	/** 主页就地操作（切模型等）失败时的提示出口。 */
@@ -108,6 +113,9 @@ export function HomeView({
 	interactions,
 	interactionId,
 	onInteractionChange,
+	experts,
+	expertId,
+	onSelectExpert,
 	onSceneChange,
 	onOpenSettings,
 	onError,
@@ -202,12 +210,15 @@ export function HomeView({
 							>
 								{/*
 							「+」菜单与对话页同一个 PlusMenu：添加文件（经 composerRef 触发
-							Composer 内部的附件选择框）+ 模式子菜单 + 专家/技能/连接器占位。
+							Composer 内部的附件选择框）+ 模式/专家子菜单 + 技能/连接器占位。
 						*/}
 								<PlusMenu
 									modes={interactions}
 									currentId={interactionId}
 									onInteractionChange={onInteractionChange}
+									experts={experts}
+									expertId={expertId}
+									onSelectExpert={onSelectExpert}
 									onPickFiles={() => void composerRef.current?.pickFiles()}
 									onTodo={onTodo}
 								/>

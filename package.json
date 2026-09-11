@@ -16,6 +16,7 @@
     "smoke:session": "tsx scripts/smoke-session.ts",
     "smoke:permission": "tsx scripts/smoke-permission-gate.ts",
     "smoke:mcp": "tsx scripts/smoke-mcp-connector.ts",
+    "smoke:docx": "tsx scripts/smoke-docx.ts",
     "check:deps": "tsx scripts/check-dependency-rules.ts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:deps",

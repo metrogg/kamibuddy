@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
 	DEFAULT_GLOBAL_SHORTCUT,
+	type DocxEnvStatus,
 	type GlobalShortcutStatus,
 } from "@shared/ipc.ts";
 import type {
@@ -212,6 +213,55 @@ function GlobalShortcutRow(): React.JSX.Element {
 	);
 }
 
+/* ── docx 生成环境状态行 ─────────────────────────────────────────── */
+
+/**
+ * docx 引擎 venv 的四态（daemon 侧 inspectVenv 只探测不安装）。
+ * 状态会被 daemon 预热与首次 docx_convert 改变，所以跟随「刷新」按钮重查
+ * （refreshTick），但不随会话事件空转 —— 每次查询是两次本地 spawn，
+ * 会话事件频率下不划算。
+ */
+function DocxEnvRow({ refreshTick }: { refreshTick: number }): React.JSX.Element {
+	const [status, setStatus] = useState<DocxEnvStatus | "error" | undefined>(undefined);
+
+	useEffect(() => {
+		let alive = true;
+		window.kami
+			.docxEnvStatus()
+			.then((s) => {
+				if (alive) setStatus(s);
+			})
+			.catch(() => {
+				if (alive) setStatus("error");
+			});
+		return () => {
+			alive = false;
+		};
+	}, [refreshTick]);
+
+	return (
+		<p>
+			docx 生成环境（~/.venv-html-to-docx）：
+			{status === undefined && <span className="stat-hint">查询中…</span>}
+			{status === "error" && <span className="stat-err">状态查询失败</span>}
+			{status !== undefined && status !== "error" && status.kind === "ready" && (
+				<span className="stat-ok">就绪</span>
+			)}
+			{status !== undefined && status !== "error" && status.kind === "missing" && (
+				<span className="stat-hint">未安装（首次生成 docx 时自动安装，需联网）</span>
+			)}
+			{status !== undefined && status !== "error" && status.kind === "wrong-version" && (
+				<span className="stat-err">
+					Python 版本不符（当前 {status.version}，需 3.12），下次生成时自动重建
+				</span>
+			)}
+			{status !== undefined && status !== "error" && status.kind === "deps-missing" && (
+				<span className="stat-err">依赖缺失（{status.module}），下次生成时自动补装</span>
+			)}
+		</p>
+	);
+}
+
 /* ── 主视图 ──────────────────────────────────────────────────────── */
 
 export function DiagnosticsView({
@@ -227,6 +277,8 @@ export function DiagnosticsView({
 	const [selectedRunId, setSelectedRunId] = useState<string | undefined>(
 		undefined,
 	);
+	/** docx 环境行的重查信号：只跟随手动「刷新」（不随会话事件，见 DocxEnvRow）。 */
+	const [envRefreshTick, setEnvRefreshTick] = useState(0);
 
 	const refresh = useCallback(() => {
 		window.kami
@@ -293,7 +345,10 @@ export function DiagnosticsView({
 					type="button"
 					className="mini-btn"
 					title="重新拉取统计"
-					onClick={refresh}
+					onClick={() => {
+						refresh();
+						setEnvRefreshTick((t) => t + 1);
+					}}
 				>
 					<IconRefresh size={13} />
 					刷新
@@ -308,6 +363,7 @@ export function DiagnosticsView({
 						<h2>应用状态</h2>
 					</header>
 					<GlobalShortcutRow />
+					<DocxEnvRow refreshTick={envRefreshTick} />
 				</section>
 
 				{snapshot === undefined ? (

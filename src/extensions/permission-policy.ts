@@ -97,6 +97,16 @@ export interface PolicyPaths {
 	 * 走通用区外读询问。可选：不传则这条规则不生效（向后兼容）；daemon 必传。
 	 */
 	readonly appDir?: string;
+	/**
+	 * 应用内置资源目录（resources/：技能/模板/tokens/docx 引擎）。
+	 * **只读工具一律放行**：渐进式披露的技能加载（docx 技能的编排文件、模板、
+	 * tokens、专家定义）全靠模型用 read 按路径自取 —— 这些是随应用分发的产品
+	 * 内容，不是用户文件，问「读取工作目录之外」是误伤（2026-09-11 用户实测：
+	 * 读自带 SKILL.md 被弹窗）。
+	 * 写侧不因此放开：resources/ 在 appDir 之下，MUTATING 仍走高风险询问。
+	 * 可选：不传则这条规则不生效；daemon 必传。
+	 */
+	readonly resourcesDir?: string;
 }
 
 /**
@@ -163,8 +173,18 @@ const READ_ONLY = new Set([
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
 const LOCAL_READ = new Set(["read", "read_document", "find", "grep", "ls"]);
 
-/** 会改文件的内置工具。 */
-const MUTATING = new Set(["write", "edit"]);
+/**
+ * 会改文件的内置工具。
+ *
+ * docx_convert 同属此档（「写工作区产物文件」，spec Requirement: 转换调用受控）：
+ * 它读 htmlPath、写 outputPath —— 判定锚定产物路径 outputPath
+ * （permission-gate 的 extractFacts 把它映射进 facts.path），语义与 write 一致：
+ * 工作区内放行、区外询问、read-only 拒、appDir 高风险。
+ * htmlPath 读侧不单判：它通常是模型刚在工作区写好的排版中间态。
+ * venv（~/.venv-html-to-docx）与引擎目录的写入是工具内部 spawn 的副作用，
+ * 不经工具入参 —— 与 AutomationStore 落 configDir 同例，不需要也不许为阶段 1 开口子。
+ */
+const MUTATING = new Set(["write", "edit", "docx_convert"]);
 
 /** 会执行任意命令的工具。powershell 在 craft 白名单里；bash 默认工具集没有，但扩展或设置可能启用。 */
 const SHELL = new Set(["bash", "powershell"]);
@@ -303,6 +323,10 @@ function decideUnderMode(
 		if (!LOCAL_READ.has(toolName)) return { kind: "allow" };
 		if (target === undefined) return { kind: "allow" };
 		if (isInside(paths.workspaceDir, target)) return { kind: "allow" };
+		// 应用内置资源（技能/模板/tokens/引擎）只读放行，见 PolicyPaths.resourcesDir。
+		if (paths.resourcesDir !== undefined && isInside(paths.resourcesDir, target)) {
+			return { kind: "allow" };
+		}
 		if (mode === "danger-full-access") return { kind: "allow" };
 		return {
 			kind: "ask",
@@ -375,7 +399,8 @@ function decideUnderMode(
 		return {
 			kind: "ask",
 			risk: "medium",
-			summary: toolName === "write" ? "写入工作目录之外的文件" : "修改工作目录之外的文件",
+			// docx_convert 与 write 同为「产出新文件」，edit 是改已有文件。
+			summary: toolName === "edit" ? "修改工作目录之外的文件" : "写入工作目录之外的文件",
 			details: target,
 		};
 	}

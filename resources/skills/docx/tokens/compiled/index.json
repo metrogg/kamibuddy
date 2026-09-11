@@ -1,0 +1,8 @@
+{
+  "government-doc": "../tokens/compiled/government-doc.json",
+  "academic-paper": "../tokens/compiled/academic-paper.json",
+  "business-report": "../tokens/compiled/business-report.json",
+  "marketing-doc": "../tokens/compiled/marketing-doc.json",
+  "general": "../tokens/compiled/general.json",
+  "_fallback": "general"
+}

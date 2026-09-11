@@ -1,0 +1,100 @@
+<!--
+  data-card 装饰组件
+  Usage: <div data-component="data-card" data-title="指标名称" data-color="primary">...</div>
+  Colors: primary (default) | success | warning | danger | info
+  Types: default (stat card) | kv (key-value list) | chart (full-width)
+-->
+<style>
+[data-component="data-card"] {
+  display: inline-flex;
+  flex-direction: column;
+  padding: var(--spacing-block, 1em);
+  background: var(--color-bg, #ffffff);
+  border-radius: var(--radius-card, 8px);
+  box-shadow: var(--shadow-card, 0 2px 8px rgba(0,0,0,0.08));
+  border-top: 3px solid var(--color-primary, #333333);
+  min-width: 140px;
+  gap: 0.3em;
+}
+
+/* Auto title via data-title attribute */
+[data-component="data-card"][data-title]::before {
+  content: attr(data-title);
+  font-size: var(--fs-small, 10pt);
+  color: var(--color-muted, #666666);
+  font-weight: var(--fw-normal, 400);
+  margin-bottom: 0.2em;
+}
+
+/* Card value */
+.card-value {
+  font-size: var(--fs-h2, 18pt);
+  font-weight: var(--fw-bold, 700);
+  line-height: 1.1;
+  color: var(--color-text, #000000);
+}
+.card-unit {
+  font-size: var(--fs-small, 10pt);
+  color: var(--color-muted, #666666);
+}
+.card-trend {
+  font-size: var(--fs-small, 10pt);
+  font-weight: var(--fw-bold, 700);
+}
+.card-trend--up   { color: var(--color-success, #2e7d32); }
+.card-trend--down { color: var(--color-danger, #c62828); }
+.card-label {
+  font-size: var(--fs-small, 10pt);
+  color: var(--color-muted, #666666);
+}
+
+/* Color variants — border-top + card-value color override */
+[data-component="data-card"][data-color="primary"] { border-top-color: var(--color-primary, #333333); }
+[data-component="data-card"][data-color="success"]  { border-top-color: var(--color-success, #2e7d32); }
+[data-component="data-card"][data-color="success"] .card-value { color: var(--color-success, #2e7d32); }
+[data-component="data-card"][data-color="warning"]  { border-top-color: var(--color-warning, #e65100); }
+[data-component="data-card"][data-color="warning"] .card-value { color: var(--color-warning, #e65100); }
+[data-component="data-card"][data-color="danger"]   { border-top-color: var(--color-danger, #c62828); }
+[data-component="data-card"][data-color="danger"] .card-value { color: var(--color-danger, #c62828); }
+[data-component="data-card"][data-color="info"]     { border-top-color: var(--color-info, #01579b); }
+[data-component="data-card"][data-color="info"] .card-value { color: var(--color-info, #01579b); }
+
+/* Type: kv — key-value grid */
+[data-component="data-card"][data-type="kv"] .card-kv-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2em 0.8em;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+[data-component="data-card"][data-type="kv"] .card-kv-list dt {
+  font-size: var(--fs-small, 10pt);
+  color: var(--color-muted, #666666);
+}
+[data-component="data-card"][data-type="kv"] .card-kv-list dd {
+  font-weight: var(--fw-bold, 700);
+}
+
+/* Type: chart — full width */
+[data-component="data-card"][data-type="chart"] {
+  width: 100%;
+  min-width: unset;
+}
+</style>
+
+<!-- Example instances (remove in production) -->
+<!--
+<div data-component="data-card" data-title="营业收入" data-color="primary">
+  <span class="card-value">123.4</span>
+  <span class="card-unit">亿元</span>
+  <span class="card-trend card-trend--up">↑ 12.5%</span>
+</div>
+
+<div data-component="data-card" data-title="项目状态" data-type="kv">
+  <dl class="card-kv-list">
+    <dt>进度</dt><dd>75%</dd>
+    <dt>截止</dt><dd>2026-06-30</dd>
+  </dl>
+</div>
+-->

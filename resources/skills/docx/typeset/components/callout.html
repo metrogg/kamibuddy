@@ -1,0 +1,66 @@
+<!--
+  callout 装饰组件
+  Usage: <div data-component="callout" data-variant="warning">内容</div>
+  Variants: info (default) | warning | danger | success
+-->
+<style>
+[data-component="callout"],
+.callout {
+  display: flex;
+  gap: 0.75em;
+  align-items: flex-start;
+  padding: var(--spacing-block, 1em);
+  margin: var(--spacing-paragraph, 0.8em) 0;
+  border-radius: 4px;
+  border-left: 4px solid;
+}
+
+/* Default / info */
+[data-component="callout"],
+.callout,
+[data-component="callout"][data-variant="info"],
+.callout-info {
+  background: rgba(1, 87, 155, 0.06);
+  border-left-color: var(--color-info, #01579b);
+  color: var(--color-text, #000000);
+}
+
+[data-component="callout"][data-variant="warning"],
+.callout-warning {
+  background: rgba(230, 81, 0, 0.06);
+  border-left-color: var(--color-warning, #e65100);
+}
+
+[data-component="callout"][data-variant="danger"],
+.callout-danger {
+  background: rgba(198, 40, 40, 0.06);
+  border-left-color: var(--color-danger, #c62828);
+}
+
+[data-component="callout"][data-variant="success"],
+.callout-success {
+  background: rgba(46, 125, 50, 0.06);
+  border-left-color: var(--color-success, #2e7d32);
+}
+
+/* Icon via ::before on the wrapper */
+[data-component="callout"]::before {
+  flex-shrink: 0;
+  font-style: normal;
+}
+[data-component="callout"]::before,
+[data-component="callout"][data-variant="info"]::before { content: "ℹ️"; }
+[data-component="callout"][data-variant="warning"]::before { content: "⚠️"; }
+[data-component="callout"][data-variant="danger"]::before  { content: "🚫"; }
+[data-component="callout"][data-variant="success"]::before { content: "✅"; }
+
+.callout-content > :last-child { margin-bottom: 0; }
+</style>
+
+<!-- Example instances (remove in production) -->
+<!--
+<div data-component="callout" data-variant="info">这是一条提示信息。</div>
+<div data-component="callout" data-variant="warning"><strong>注意：</strong>风险提示内容。</div>
+<div data-component="callout" data-variant="danger">禁止操作内容。</div>
+<div data-component="callout" data-variant="success">操作成功提示。</div>
+-->

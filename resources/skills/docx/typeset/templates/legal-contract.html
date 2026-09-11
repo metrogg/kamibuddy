@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{contract_title}}</title>
+  <style>
+  /* --- CSS @page 页面模型（S-26060126E）：正文页脚"第 X 页 / 共 Y 页" --- */
+  @page {
+    @bottom-center { content: "第 " counter(page) " 页 / 共 " counter(pages) " 页"; }
+  }
+
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 22pt);
+    --fs-h2: var(--typography-fontSize-h2, 16pt);
+    --fs-h3: var(--typography-fontSize-h3, 14pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.8);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --color-primary: var(--color-primary, #333333);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-highlight: var(--color-highlight, #f5f7fa);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 3cm);
+    --signature-block-gap: var(--spacing-section, 2em);
+    --seal-size: 120px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--ff-body);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    color: var(--color-text);
+    background: var(--color-bg);
+    padding: var(--margin-page);
+  }
+
+  .contract-title {
+    text-align: center;
+    font-size: var(--fs-h1);
+    font-family: var(--ff-heading);
+    font-weight: var(--fw-bold);
+    margin-bottom: var(--spacing-section);
+  }
+  .contract-number {
+    text-align: center;
+    color: var(--color-muted);
+    font-size: var(--fs-small);
+    margin-bottom: var(--spacing-section);
+  }
+
+  /* Party info table */
+  .party-info { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-section); }
+  .party-info th, .party-info td {
+    border: 1px solid var(--color-border);
+    padding: 0.5em 1em;
+  }
+  .party-info th { background: var(--color-highlight); font-weight: var(--fw-bold); }
+
+  /* Clause structure */
+  .chapter-heading {
+    font-size: var(--fs-h2);
+    font-family: var(--ff-heading);
+    font-weight: var(--fw-bold);
+    margin-top: var(--spacing-section);
+    margin-bottom: var(--spacing-paragraph);
+  }
+  .clause { margin-bottom: var(--spacing-paragraph); }
+  .clause-heading { font-weight: var(--fw-bold); }
+  .clause-list { padding-left: 2em; margin-top: 0.4em; }
+
+  /* Signature block */
+  .signature-block {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--signature-block-gap);
+    margin-top: calc(var(--spacing-section) * 2);
+  }
+  .signature-party {
+    flex: 1;
+    min-width: 0;
+  }
+  .signature-party p { margin-bottom: var(--spacing-paragraph); }
+  .seal-placeholder {
+    width: var(--seal-size);
+    height: var(--seal-size);
+    border-radius: 50%;
+    border: 2px dashed var(--color-border);
+    margin: var(--spacing-block) 0;
+  }
+  </style>
+</head>
+<body>
+  <h1 class="contract-title">{{contract_title}}</h1>
+  <p class="contract-number">合同编号：{{contract_number}}</p>
+
+  <table class="party-info">
+    <thead>
+      <tr><th>项目</th><th>甲方</th><th>乙方</th></tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row">名称</th><td>{{party_a_name}}</td><td>{{party_b_name}}</td></tr>
+      <tr><th scope="row">统一社会信用代码</th><td>{{party_a_code}}</td><td>{{party_b_code}}</td></tr>
+      <tr><th scope="row">法定代表人</th><td>{{party_a_rep}}</td><td>{{party_b_rep}}</td></tr>
+      <tr><th scope="row">地址</th><td>{{party_a_address}}</td><td>{{party_b_address}}</td></tr>
+      <tr><th scope="row">联系方式</th><td>{{party_a_contact}}</td><td>{{party_b_contact}}</td></tr>
+    </tbody>
+  </table>
+
+  <main class="contract-body">{{contract_clauses}}</main>
+
+  <footer>
+    <div class="signature-block">
+      <div class="signature-party">
+        <p><strong>甲方（盖章）：</strong></p>
+        <div class="seal-placeholder"></div>
+        <p>法定代表人（签字）：_______________</p>
+        <p>日期：_______________</p>
+      </div>
+      <div class="signature-party">
+        <p><strong>乙方（盖章）：</strong></p>
+        <div class="seal-placeholder"></div>
+        <p>法定代表人（签字）：_______________</p>
+        <p>日期：_______________</p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

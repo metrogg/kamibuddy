@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
 	AutomationEvent,
+	ExpertListItem,
 	PermissionRequest,
 	PromptRequest,
 	QuestionnaireRequest,
@@ -124,6 +125,14 @@ export function App(): React.JSX.Element {
 	/** 「空间」组的名称覆盖元数据（workspaces.json），组本身由会话派生。 */
 	const [groupMetas, setGroupMetas] = useState<readonly WorkspaceGroupMeta[]>([]);
 	/**
+	 * 专家列表（「专家 ▸」子菜单与对话头部的数据源）。App 激活时拉一次存 state：
+	 * 专家库变动低频（内置目录随版本、用户级文件靠手工放置），且 daemon 的
+	 * listExperts 每次现载 —— 用户级新增/覆盖在下次启动（或重新拉取）即生效，
+	 * 不为它建推送通道。拉取失败静默：菜单落回无专家可选，setExpert 时 daemon
+	 * 会响亮报错，不在这里提前打扰。
+	 */
+	const [experts, setExperts] = useState<readonly ExpertListItem[]>([]);
+	/**
 	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
 	 * 多任务并发后未读以 sessionId 为键（不再假设单会话）：run 结束的
@@ -176,6 +185,7 @@ export function App(): React.JSX.Element {
 				.catch(fail);
 			// 首屏初拉保留：推送通道只推变更，列表初值要自己拉一次。
 			window.kami.listSessions().then(setTaskList).catch(() => { });
+			window.kami.listExperts().then(setExperts).catch(() => { });
 			refreshGroups();
 			// previewBaseUrl 不在此初始化：快照落地后 state.cwd 就位，
 			// 按 cwd 取 baseUrl 的 effect 会自动触发（见 Task 3.4）。
@@ -520,6 +530,21 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
+	 * 选择专家（选中即进 expert 模式）。与 changeInteraction 同一数据流：
+	 * 不在本地回写，daemon 推 session_state（interactionId=expert + expertId）
+	 * 后菜单勾选与头部显示随之刷新。
+	 */
+	const selectExpert = useCallback(
+		(expertId: string) => {
+			if (link.kind !== "ready") return;
+			window.kami.setExpert(expertId).catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+		},
+		[link.kind],
+	);
+
+	/**
 	 * 应答审批并出队。
 	 *
 	 * 无论应答成功与否都出队：失败通常意味着 daemon 已经不在了（进程退出、
@@ -584,6 +609,16 @@ export function App(): React.JSX.Element {
 	const restoreFromBucket = useCallback((targetId: string): boolean => {
 		const bucket = viewCacheRef.current.get(targetId);
 		if (bucket === undefined || bucket.availableScenes.length === 0) return false;
+		/*
+		 * 空壳种子桶不能信：resume 未注册会话时，adoptHost 的 session_state 会
+		 * 抢先于 resumeTask 的 .then 到达 renderer —— 信封 id ≠ 可见会话，后台
+		 * 分支用它给目标会话种一个「只有 state、没有 entries」的桶；若按它上屏
+		 * 就是一片空白（2026-09-11 实踩：切历史任务显示空白「新任务」，而
+		 * daemon 的 resume 其实成功了、完整历史在权威快照里）。
+		 * entries 为空的桶一律走快照兜底：pristine 会话两条路径都是空视图，
+		 * 真正有流式现场的后台桶 entries 必然非空，无回归。
+		 */
+		if (bucket.entries.length === 0) return false;
 		stashVisibleView(targetId);
 		viewCacheRef.current.delete(targetId);
 		visibleSessionIdRef.current = targetId;
@@ -951,6 +986,9 @@ export function App(): React.JSX.Element {
 					interactions={conversation.availableModes}
 					interactionId={conversation.state.interactionId}
 					onInteractionChange={changeInteraction}
+					experts={experts}
+					expertId={conversation.state.expertId}
+					onSelectExpert={selectExpert}
 					onSceneChange={changeScene}
 					onOpenSettings={openSettings}
 					onError={showToast}
@@ -969,11 +1007,29 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
+					experts={experts}
+					onSelectExpert={selectExpert}
 					onPreviewArtifact={(path) => {
 						// URL 产物走外部打开（系统浏览器），不进预览面板 ——
 						// 面板只服务本地文件（静态服务根=工作区）。
 						if (/^https?:\/\//i.test(path)) openArtifact(path);
 						else openPreview({ kind: "file", path });
+					}}
+					onPathClick={(path, kind) => {
+						// 正文路径徽章（WorkBuddy openPath 同口径）：文件进右侧预览面板。
+						// 两类落外部打开 —— 目录（面板没有目录预览，shell.openPath 开
+						// 文件管理器）与工作区外文件（静态服务/readArtifact 都有边界，
+						// 预览必败）。
+						const cwd = conversation.state.cwd;
+						const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
+						const inWorkspace =
+							cwd !== undefined && norm(path).startsWith(`${norm(cwd)}/`);
+						if (kind === "directory" || !inWorkspace) {
+							openArtifact(path);
+							return;
+						}
+						setPanelOpen(true);
+						openPreview({ kind: "file", path });
 					}}
 					onOpenPanelGroup={(_group) => {
 						// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
@@ -1004,6 +1060,13 @@ export function App(): React.JSX.Element {
 					onClose={() => setView(returnView)}
 					onTodo={showTodo}
 					onToast={showToast}
+					experts={experts}
+					onSelectExpert={(name) => {
+						// 专家页签选专家 = setExpert + 回对话页（与模式菜单「专家 ▸」同一语义，
+						// 只是入口在管理页，选完要把用户带回能用专家的地方）。
+						selectExpert(name);
+						setView("chat");
+					}}
 				/>
 			)}
 			{view === "settings" && (

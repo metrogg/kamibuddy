@@ -75,6 +75,20 @@ export const INVOKE = {
 	setScene: "session:set-scene",
 	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
 	setInteraction: "session:set-interaction",
+	/**
+	 * 选择专家（绑定即进入 expert 模式）或清除专家（undefined）。
+	 *
+	 * 选专家 = 切 expert 模式 + 绑定人格，是同一个状态转移，所以单入口在这里
+	 * 而不是让 renderer 先 setInteraction("expert") 再补 expertId —— 那样会
+	 * 存在「expert 模式但没人格」的中间态（spec: add-expert-mode，
+	 * 无专家的 expert 模式不可达）。
+	 */
+	setExpert: "session:set-expert",
+	/**
+	 * 专家列表（模式菜单「专家 ▸」子菜单与对话头部的展示数据源）。
+	 * 只带展示三字段 —— 人格正文不经 IPC，compose 时 daemon 从专家库自取。
+	 */
+	listExperts: "session:list-experts",
 	/** 切换模型。 */
 	setModel: "session:set-model",
 	/**
@@ -164,6 +178,11 @@ export const INVOKE = {
 	 * 返回大小与文本（二进制/超大不给文本）。
 	 */
 	readArtifact: "artifact:read",
+	/**
+	 * 路径存在性探测（对话正文行内 code 的路径徽章用）。
+	 * 只报存在性与文件/目录类型，不报内容，故不受 readArtifact 的工作区边界限制。
+	 */
+	statPath: "artifact:stat",
 	/**
 	 * 查询指定 cwd 的产物预览服务 base URL（http://127.0.0.1:端口，根=该目录）。
 	 *
@@ -281,6 +300,12 @@ export const INVOKE = {
 	 * （与 daemonStatus 同一条透出路径的理由）。
 	 */
 	globalShortcutStatus: "app:global-shortcut-status",
+	/**
+	 * 查询 docx 引擎 venv 的四态状态（诊断页状态行）。
+	 * 只探测不安装 —— 诊断页不该有环境副作用；安装是 docx_convert 首次调用
+	 * 与 daemon 预热的事（documents/docx-env.ts 的 ensureDocxEnv）。
+	 */
+	docxEnvStatus: "diagnostics:docx-env-status",
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 
@@ -395,6 +420,21 @@ export type GlobalShortcutStatus =
 	| { readonly kind: "registered"; readonly accelerator: string }
 	| { readonly kind: "failed"; readonly accelerator: string };
 
+/**
+ * docx 引擎 venv（~/.venv-html-to-docx）的四态探测结果。
+ *
+ * 类型放 shared 是因为它是诊断页 IPC 的 payload（renderer 只许 import shared）；
+ * 探测机制与四态定义见 documents/docx-env.ts 的 inspectVenv（只读探测，绝不安装）。
+ */
+export type DocxEnvStatus =
+	/** venv 不存在或解释器起不来。 */
+	| { readonly kind: "missing" }
+	/** venv 在但不是 Python 3.12（下次 ensure 会 --clear 重建）。 */
+	| { readonly kind: "wrong-version"; readonly version: string }
+	/** 解释器正常但依赖冒烟缺模块（下次 ensure 会补装）。 */
+	| { readonly kind: "deps-missing"; readonly module: string }
+	| { readonly kind: "ready" };
+
 /** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
 export interface WorkspaceSnapshot {
 	/** 当前生效的工作空间目录。临时任务时为共享临时目录路径；undefined 仅出现在会话尚未建立的瞬态。 */
@@ -417,6 +457,11 @@ export interface ArtifactContent {
 	readonly text: string | undefined;
 }
 
+/** statPath 的返回：路径存在性与类型。missing 是探测结果不是错误（徽章据此保持普通 code 渲染）。 */
+export interface PathStat {
+	readonly kind: "file" | "directory" | "missing";
+}
+
 /** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
 export interface CommandItem {
 	/** 命令名（不含 /）。技能形如 `skill:docx`，模板形如 `weekly`。 */
@@ -432,6 +477,16 @@ export interface CompletionData {
 	readonly files: readonly string[];
 	/** `/` 可选命令。 */
 	readonly commands: readonly CommandItem[];
+}
+
+/** 一位专家的列表项（session:list-experts 的结果元素）：菜单与头部展示三字段。 */
+export interface ExpertListItem {
+	/** 专家 id（= 文件名，setExpert 的入参）。 */
+	readonly name: string;
+	readonly displayName: string;
+	readonly profession: string;
+	/** 一句话描述（专家卡片用；菜单只用 displayName/profession）。 */
+	readonly description: string;
 }
 
 /** 一条历史会话的列表项（session:list 的结果元素）。 */
@@ -536,6 +591,9 @@ export interface InvokeMap {
 	[INVOKE.pickInputFiles]: { args: []; result: PickedInputFiles | undefined };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
+	/** expertId 为 undefined 表示清除专家（回落三模式，由 daemon 决定落点）。 */
+	[INVOKE.setExpert]: { args: [expertId: string | undefined]; result: void };
+	[INVOKE.listExperts]: { args: []; result: readonly ExpertListItem[] };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
 	[INVOKE.setThinkingLevel]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.sessionList]: { args: []; result: SessionSummary[] };
@@ -558,6 +616,7 @@ export interface InvokeMap {
 	[INVOKE.openArtifact]: { args: [path: string]; result: void };
 	[INVOKE.saveArtifactAs]: { args: [SaveArtifactRequest]; result: string | undefined };
 	[INVOKE.readArtifact]: { args: [path: string]; result: ArtifactContent };
+	[INVOKE.statPath]: { args: [path: string]; result: PathStat };
 	[INVOKE.previewBaseUrl]: { args: [cwd: string]; result: string | undefined };
 
 	[INVOKE.settingsSnapshot]: { args: []; result: SettingsSnapshot };
@@ -593,6 +652,7 @@ export interface InvokeMap {
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
 	/** 尚未注册过（查询早于 whenReady 流程）时为 undefined。 */
 	[INVOKE.globalShortcutStatus]: { args: []; result: GlobalShortcutStatus | undefined };
+	[INVOKE.docxEnvStatus]: { args: []; result: DocxEnvStatus };
 
 	[INVOKE.automationList]: { args: []; result: AutomationTask[] };
 	[INVOKE.automationSave]: { args: [input: AutomationSaveInput]; result: AutomationTask };

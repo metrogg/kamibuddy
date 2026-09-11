@@ -1,0 +1,58 @@
+<!--
+  divider 装饰组件
+  Usage: <div data-component="divider" data-style="decorated"></div>
+  Styles: simple (default) | decorated | section-break
+-->
+<style>
+[data-component="divider"] {
+  margin: var(--spacing-section, 2em) 0;
+  border: none;
+  position: relative;
+}
+
+/* Default / simple */
+[data-component="divider"],
+[data-component="divider"][data-style="simple"] {
+  border-top: 1px solid var(--color-border, #cccccc);
+  margin: var(--spacing-paragraph, 0.8em) 0;
+}
+
+/* Decorated — line + center diamond */
+[data-component="divider"][data-style="decorated"] {
+  border-top: 1px solid var(--color-border, #cccccc);
+  margin: var(--spacing-section, 2em) 0;
+}
+[data-component="divider"][data-style="decorated"]::before {
+  content: "◆";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--color-bg, #ffffff);
+  padding: 0 0.5em;
+  color: var(--color-muted, #666666);
+  font-size: var(--fs-small, 10pt);
+}
+
+/* Section-break — gradient fade */
+[data-component="divider"][data-style="section-break"] {
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--color-primary, #333333) 15%,
+    var(--color-primary, #333333) 85%,
+    transparent 100%
+  );
+  opacity: 0.3;
+  margin: var(--spacing-section, 2em) 0;
+}
+</style>
+
+<!-- Example instances (remove in production) -->
+<!--
+<div data-component="divider"></div>
+<div data-component="divider" data-style="simple"></div>
+<div data-component="divider" data-style="decorated"></div>
+<div data-component="divider" data-style="section-break"></div>
+-->

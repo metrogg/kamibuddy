@@ -2136,6 +2136,38 @@ button {
 	font-size: 12px;
 }
 
+/* 行内 code 路径徽章（markdown.tsx InlineCode，对标 WorkBuddy cb-clickable-path
+   浅色主题：#1470B4 字 / #E9EEF2 底）。截断在文本层做，不靠 max-width ——
+   box-decoration-break: clone 保证折行时两段各自成徽章、不断裂。 */
+.markdown code.clickable-path {
+	padding: 1px 6px;
+	line-height: 1.5;
+	background: #e9eef2;
+	border-radius: 4px;
+	color: #1470b4;
+	cursor: pointer;
+	opacity: 0.85;
+	transition: opacity 0.2s ease, background-color 0.2s ease;
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+}
+
+.markdown code.clickable-path:hover {
+	opacity: 1;
+	background: #dde6ee;
+}
+
+.markdown code.clickable-path:active {
+	opacity: 0.7;
+}
+
+.markdown .clickable-path-icon {
+	display: inline-block;
+	vertical-align: -0.18em;
+	margin-right: 4px;
+	color: inherit;
+}
+
 /* 围栏代码块卡片（markdown.tsx CodeBlockCard）：卡片容器承担外边距与圆角，
    原 .markdown pre 的 margin/border-radius 在卡片内归零 —— 两条规则同权重，
    靠书写顺序覆盖，所以本区块必须排在 .markdown pre 之后。 */
@@ -4086,6 +4118,38 @@ button {
 	font-weight: 400;
 }
 
+/* 「专家」项的子菜单：与 .plus-menu-sub 同构但方向镜像 —— mode-menu 贴在
+   对话页头部右缘展开，子菜单向右飞会溢出窗口被裁掉，只能向左飞；
+   顶边与「专家」行对齐、向下生长（主菜单向下展开，与 plus-menu 的向上相反）。 */
+.mode-menu-sub-zone {
+	position: relative;
+}
+
+.mode-menu-sub {
+	right: calc(100% + 4px);
+	top: -4px;
+	z-index: 21;
+	min-width: 220px;
+	padding: 4px;
+}
+
+/* 子菜单项要给 ✓ 留位（主菜单项没有 ✓，版式不动）。 */
+.mode-menu-sub .mode-menu-item {
+	position: relative;
+	padding-right: 30px;
+}
+
+/* 对话页头部的当前专家回显：非交互，纯状态钉（交互入口在 ModeSwitch 里）。 */
+.chat-expert {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+	font-size: 12px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
 /* ── 诊断页 ───────────────────────────────────────────────────── */
 
 .stat-grid {
@@ -4528,7 +4592,8 @@ button {
 }
 
 .model-menu-check,
-.plus-menu-mode-check {
+.plus-menu-mode-check,
+.mode-menu-check {
 	position: absolute;
 	right: 8px;
 	top: 50%;
@@ -4651,7 +4716,8 @@ button {
 	background: var(--bg-hover);
 }
 
-.plus-menu-caret {
+.plus-menu-caret,
+.mode-menu-caret {
 	margin-left: auto;
 	color: var(--text-dim);
 }
@@ -4819,6 +4885,21 @@ button {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
+}
+
+/* 专家卡片是可点击的选择入口（技能卡片是纯展示）：
+   button 复位 + 左对齐文本 + hover 反馈。 */
+.expert-card {
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.expert-card:hover {
+	border-color: var(--text-dim);
+	background: var(--bg-hover);
 }
 
 .skill-card:hover {

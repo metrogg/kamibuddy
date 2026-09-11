@@ -278,6 +278,13 @@ export interface SessionHostOptions {
 	readonly sceneId: string;
 	readonly interactionId: string;
 	/**
+	 * expert 模式绑定的专家 id。仅 interactionId === "expert" 时必有值
+	 * （选专家 = 切 expert 模式 + 绑定人格，daemon 单入口保证，spec:
+	 * add-expert-mode）；三模式下缺省。只随 state 透传 —— 人格正文
+	 * 的解析与注入在 daemon 的 compose 链路（prompt-composer），宿主不读专家库。
+	 */
+	readonly expertId?: string;
+	/**
 	 * 是否临时任务会话（cwd 落在任务区：临时目录 / 生效根本身 / 旧 playground 占位）。
 	 * 判定规则的唯一来源在 daemon（isTempCwd）——生效根分层合成、旧占位目录
 	 * 归类都是 daemon 的知识，本文件只负责透传，不在此处回推，免得两处规则漂移。
@@ -381,6 +388,7 @@ export class SessionHost {
 		private readonly options: SessionHostOptions,
 		private sceneId: string,
 		private interactionId: string,
+		private expertId: string | undefined,
 		private readonly skills: readonly SkillDescriptor[],
 	) { }
 
@@ -440,6 +448,11 @@ export class SessionHost {
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
 		 */
 		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
+		// 不可达防御：expert 模式必须绑定专家（daemon 的 applyInteraction 单入口
+		// 已保证），host 建成「expert 模式但没人格」就是错误身份的会话。
+		if (options.interactionId === "expert" && options.expertId === undefined) {
+			throw new Error("expert 模式必须绑定专家（expertId 缺失）");
+		}
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
@@ -480,6 +493,7 @@ export class SessionHost {
 			options,
 			options.sceneId,
 			options.interactionId,
+			options.interactionId === "expert" ? options.expertId : undefined,
 			skills,
 		);
 		host.sessionCwd = cwd;
@@ -635,12 +649,21 @@ export class SessionHost {
 		this.emitState();
 	}
 
-	setInteraction(interactionId: string): void {
+	/**
+	 * 切换交互模式；expertId 仅在切到 expert 时必传（选专家 = 切 expert 模式 +
+	 * 绑定人格，是同一个状态转移），切到 craft/ask/plan 一律清空。
+	 */
+	setInteraction(interactionId: string, expertId?: string): void {
 		const mode = this.options.resources.modes.find(
 			(m) => m.id === interactionId,
 		);
 		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
+		// 不可达防御（同 create）：无专家的 expert 模式不可达。
+		if (interactionId === "expert" && expertId === undefined) {
+			throw new Error("expert 模式必须绑定专家（expertId 缺失）");
+		}
 		this.interactionId = interactionId;
+		this.expertId = interactionId === "expert" ? expertId : undefined;
 		this.session.setActiveToolsByName([...mode.tools]);
 		this.emitState();
 	}
@@ -660,6 +683,8 @@ export class SessionHost {
 			isTempTask: this.options.isTempTask,
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
+			// 三模式下缺省（不占字段），与 SessionState.expertId 的可选契约一致。
+			...(this.expertId === undefined ? {} : { expertId: this.expertId }),
 			modelId:
 				model === undefined ? undefined : toModelKey(model.provider, model.id),
 			// 不能透传 pi 的 session.isStreaming：pi 要到 finally 的 _emitAgentSettled

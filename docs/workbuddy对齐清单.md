@@ -9,7 +9,7 @@
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 192 条：**✅ 37 ／ 🟡 42 ／ ❌ 88 ／ ⛔ 25**（L23 拆为 a–d 四个子项）
+> 当前 193 条：**✅ 40 ／ 🟡 42 ／ ❌ 86 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
 
 ## 怎么用这份清单
 
@@ -51,7 +51,7 @@
 | B3 | 流式事件 | delta / tool_calls / reasoning_content 三类累积，多路复用给 TUI / ACP / stream-json | pi 事件流 → `shared/session-events.ts` → renderer | ✅ |
 | B4 | 中断与插队 | `SteerInputBuffer` + abortController + SDK interruption；排队消息可 ↑ 拉回编辑 | 有 abort（含 Esc 二次确认）；无排队消息编辑 | 🟡 |
 | B5 | fallback 模型 | `FallbackModelErrorInterceptor`：overloaded 先重试主模型再切 fallback，quota 耗尽立即切；仅 headless 生效 | 无 | ❌ |
-| B6 | 推理强度 | `reasoning_content` + `EFFORT_LEVELS` + `reasoningEffort` 设置 + `alwaysThinkingEnabled` | pi 透传，界面无开关 | 🟡 |
+| B6 | 推理强度 | `reasoning_content` + `EFFORT_LEVELS` + `reasoningEffort` 设置 + `alwaysThinkingEnabled` | pi `setThinkingLevel`（逐会话持久化、resume 还原、按模型 thinkingLevelMap 裁剪）；模型菜单 pill+子菜单快捷切换 + 设置页全局默认；自定义模型 thinkingLevelMap 透传；spec：`.trae/specs/add-thinking-level/` | ✅ v1：无 per-model 档位与 alwaysThinkingEnabled |
 | B7 | 场景模型变体 | `relatedModels.{lite,reasoning}` 两档；解析链 env(`SMALL_FAST`/`BIG_SLOW`) > 项目 > 用户 > 主模型 relatedModels > 内置 > 主模型；lite 用于 Explore 子代理、压缩、goal 评估 | 无 | ❌ 省钱关键项 |
 | B8 | 模型目录 | 内置 `product.json`（云下发）+ 用户/项目 `models.json`（热重载 1s 防抖）+ 内嵌第三方目录；`availableModels` 白名单 | `core/model-catalog.ts`：pi 内置 40 家 1354 模型 + 自建服务商 + 未配凭据的模型显式禁用 | ✅ |
 | B9 | 结构化输出 | `StructuredOutput` 工具，按 JSON Schema 返回 | 无 | ❌ |
@@ -103,7 +103,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 
 | 编号 | 能力 | WorkBuddy 机制（内部实现） | 我们 | 状态 |
 |---|---|---|---|---|
-| D1 | 本地 docx 生成 | `tencent-docx`：根 SKILL 编排器守门 + 3 agents（doc-writer/formatter/converter）+ 8 skills（brief-compose、design-token、doc-typeset、format-extract、generate-fillable-contract-html、html-review、html-to-docx、tdoc-orchestrator）+ 9 个文体专家（论文/商务/公文/合同/诗歌/研报/博客/工作报告）+ core/engines（critic-generator、deep-research）+ SessionStart 预热 venv + 20 多个模块的 Python html→docx 转换器 | 零。`src/documents/`、`resources/genres/`、`resources/tokens/` 均不存在 | ❌ 最大缺口 |
+| D1 | 本地 docx 生成 | `tencent-docx`：根 SKILL 编排器守门 + 3 agents（doc-writer/formatter/converter）+ 8 skills + 9 个文体专家 + core/engines + SessionStart 预热 venv + 20 多个模块的 Python html→docx 转换器 | **搬用打通**（2026-09-10 用户决策内部阶段直接搬用）：引擎 29 模块在 `resources/docx-engine/`（真机转换验证过）、技能体系 97 文件在 `resources/skills/docx/`（编排已裁剪腾讯生态）、`docx_convert` 受控工具 + 托管 venv 状态机 + daemon 预热在 `src/documents/`、`smoke:docx` 3/3 | 🟡 编辑链走就地处理（无 tencent-docs-routing）；format-extract/合同填空/多体裁调优未做 |
 | D2 | 表格智能体 | `sheetagent`：内嵌 MCP（stdio，defer_loading），自然语言建/查/改 xlsx；SubagentStop hook 自动保存脏文件；10 篇 sheet-references | 无生成（xlsx 仅预览） | ❌ |
 | D3 | 幻灯片 | `tencent-pptx` 插件 | 无生成（pptx 仅预览） | ❌ |
 | D4 | 腾讯文档集成 | `tencent-docs-plugin`：按身份路由 C 端/SaaS；doc/sheet/slide/smartcanvas 的 create/edit + references（auth/空间/图表/OCR/aipage）+ Python 与 JS 脚本 | 无 | ⛔ 依赖腾讯生态 |
@@ -118,7 +118,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | E2 | 内置技能包 | 19 个：ardot 设计 6 个、wb-finance（46 篇 references + 16 脚本）、library（云盘总线）、sites、expert-manager、skill-creator、路由类 3 个等 | 1 个 | ❌ |
 | E3 | 技能自维护 | 提示词强制循环：积累（8+ 工具调用必沉淀）→ 反思（用过必评估改进）→ 纠错（发现错别字当场修，「NEVER ask, NEVER defer」） | 无 | ❌ |
 | E4 | 技能安装 | `marketplace-skill-installer` + `skill-creator`（init/package/validate 三个脚本） | `core/skill-install.ts` 本地目录导入（同名拒绝不覆盖） | 🟡 无市场、无脚手架 |
-| E5 | 专家体系 | expert 模式 + `expert-manager`（创建/打包/注册/校验，含 agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | 只有 `resources/agents/*.md` 定义，无管理模式、无 UI | ❌ |
+| E5 | 专家体系 | expert 模式 + `expert-manager`（创建/打包/注册/校验，含 agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | expert 模式+人格注入+预设 6 员已落地（spec add-expert-mode：`resources/experts/`、模式菜单「专家 ▸」、`setExpert` IPC、`<current-expert>` 钉住）；专家团/CRUD 管理未做 | 🟡 |
 | E6 | 推荐引擎 | `recommend-connectors` / `recommend-experts` + `search_plugins` + `suggest_plugin_install`（每次响应至多一次，1–3 张候选卡） | 「专家/技能/连接器」在加号菜单里是占位 | ❌ |
 | E7 | 插件框架 | plugin.json + marketplace.json 两级；注册表 33 条（welcomeMode 3 + interaction 4 + template 1 + skill 19 + mcp-app 1 + builtin-plugin 5）；安装即复制 + 版本化缓存 + 路径遍历封禁；hooks 三条信任通道 | 无插件加载器（用 pi packages + Skills 替代） | ⛔ 见优先级 |
 | E8 | 技能安全扫描 | `SkillSecurityScan` 特性开关 + 安装前审计分级（P0 强烈警告劝退 / P1 警告需确认 / P2 放行），且声明「只审安装、不审使用」控制成本 | 无 | ❌ |
@@ -250,7 +250,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L15 | 记忆面板 | `/memory` | 无 | ❌ |
 | L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 诊断页（工具时间线）；无成本 | 🟡 |
 | L17 | 诊断自检 | `doctor` 子命令 + self-check 报告 | `diagnostics-view.tsx`（用量 / 缓存命中率 / 工具时间线） | 🟡 |
-| L18 | 问卷弹层 | 多选分页 | 平铺单选 + 其他 + 跳过 | ✅ |
+| L18 | 问卷弹层 | 多选分页，绑定会话替换输入区 | 单选分页（v3 内联浮层）+ 其他 + 跳过，按 sessionId 绑定会话 | ✅ |
 | L19 | 消息刻度轨 | 无对应 | `turn-rail.tsx` | ✅ 我方领先 |
 | L20 | 追问建议 | `ChatFollowup`：回答后给出可点的后续问题 | 无 | ❌ |
 | L21 | 首页运营位 | `Inspiration`（灵感入口）/ `HomePlaybooks`（剧本）/ `HomePracticeCases`（练习案例）/ `discover`；`DisableInspirationEntry`、`DisableHomePlaybookShuffle`、`DisableHomeQuickEntries` 可分别关 | 有案例卡；无灵感/剧本/发现入口 | 🟡 |
@@ -260,6 +260,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L23c | 运营位开关 | `DisableSlotSystem`：服务端运营平台下发 HTML 模板进 5 个 Shadow DOM 槽位（home/home_growth/avatar_top/menu_signin/menu_growth），桌面默认开 | 无运营平台后端 | ⛔ 无此前提；借鉴点（门控在 provider 层、缺 key=启用）已记录 spec |
 | L23d | 排队横幅 | `QueueBanner`：云端模型容量排队（6020-6022 错误码 + queueGetStatus 轮询 + 取消/切 Auto 重发/升级），banner 优先级 queue>error>credit>quota | 无云端容量协议；pi 自动重试已覆盖常见 429/overload | ⛔ 无此前提；五态状态机已留档 spec 备将来复刻 |
 | L24 | 反馈与统计 | 消息点赞点踩（`vote_like_dislike`）、`ReportAfterCancel`（取消后上报）、`DisableResponseStatistics`；对话埋点事件族（`chat_message_send` / `chat_tool_action` / `agent_task_created` 等） | 无 | ❌ |
+| L25 | 正文路径徽章 | 行内 code 经 path-detector 形态判定（盘符/相对/文件名/`#L` 行号）+ 会话资源比对存在性，两步过才渲染 `cb-clickable-path`（图标 + 截断文件名，浅色 `#1470B4`/`#E9EEF2`）；点击 `openPath` → 右侧 DetailPanel，目录转文件树视图 | `markdown-path.ts` 形态判定 + `artifact:stat` 存在性探测（不限工作区、只报类型）；`markdown.tsx` InlineCode 徽章（模块级探测缓存防流式闪烁）；点击进右侧面板，目录/工作区外文件落外部打开 | ✅ v1：无 `#L` 行定位、无右键菜单 |
 
 ## M. 渠道与远程
 

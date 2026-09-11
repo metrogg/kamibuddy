@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <meta name="docx-margin-top" content="2.07">
+  <meta name="docx-margin-bottom" content="2.55">
+  <meta name="docx-margin-left" content="3.15">
+  <meta name="docx-margin-right" content="2.25">
+  <title>{{company_full_name}}{{report_year}}年年度报告</title>
+  <style>
+  /* --- CSS @page 页面模型（S-26060126E）：封面无家具 / 正文页脚页码 --- */
+  @page {
+    @bottom-center { content: counter(page); }
+  }
+  @page cover {
+    @bottom-center { content: none; }
+  }
+  section[role="cover"] { page: cover; }
+
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 14pt);
+    --fs-h2: var(--typography-fontSize-h2, 12pt);
+    --fs-h3: var(--typography-fontSize-h3, 12pt);
+    --fs-body: var(--typography-fontSize-body, 10.5pt);
+    --fs-small: var(--typography-fontSize-small, 9pt);
+    --fs-cover-title: var(--typography-fontSize-coverTitle, 22pt);
+    --fs-cover-meta: var(--typography-fontSize-coverMeta, 12pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.5);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --fw-normal: var(--typography-fontWeight-normal, 400);
+    --color-primary: var(--color-primary, #000000);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #000000);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-title: var(--color-title, #FF0000);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page-top: var(--layout-marginTop, 2.07cm);
+    --margin-page-bottom: var(--layout-marginBottom, 2.55cm);
+    --margin-page-left: var(--layout-marginLeft, 3.15cm);
+    --margin-page-right: var(--layout-marginRight, 2.25cm);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--ff-body);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    color: var(--color-text);
+    background: var(--color-bg);
+    padding: var(--margin-page-top) var(--margin-page-right) var(--margin-page-bottom) var(--margin-page-left);
+  }
+
+  /* Cover */
+  .cover-body { text-align: center; }
+  .cover-code, .cover-abbr { font-size: var(--fs-cover-meta); text-align: left; margin-bottom: 0.3em; }
+  .cover-title { font-size: var(--fs-cover-title); font-weight: var(--fw-bold); color: var(--color-title); text-align: center; }
+
+  /* TOC */
+  .doc-toc { margin-bottom: var(--spacing-section); }
+  .toc-title { font-weight: var(--fw-bold); text-align: center; font-size: var(--fs-h1); margin-bottom: var(--spacing-block); }
+  .toc-list, .toc-list ol, .toc-list ul { list-style: none; list-style-type: none; padding-left: 2em; }
+  .toc-list li { margin-bottom: 0.3em; text-indent: 0; }
+  .toc-list a { color: var(--color-primary); text-decoration: none; }
+
+  /* Section headings (5 levels) */
+  .annual-report-body h1 {
+    font-size: var(--fs-h1);
+    font-family: var(--ff-heading);
+    font-weight: var(--fw-bold);
+    margin-top: var(--spacing-section);
+    margin-bottom: var(--spacing-block);
+    text-indent: 0;
+  }
+  .annual-report-body h2 {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-bold);
+    margin-top: var(--spacing-block);
+    margin-bottom: var(--spacing-paragraph);
+    text-indent: 0;
+  }
+  .annual-report-body h3 {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-bold);
+    margin-top: var(--spacing-paragraph);
+    margin-bottom: var(--spacing-paragraph);
+    text-indent: 0;
+  }
+  .annual-report-body h4 {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-bold);
+    margin-bottom: var(--spacing-paragraph);
+    text-indent: 0;
+  }
+  .annual-report-body h5 {
+    font-size: var(--fs-body);
+    font-weight: var(--fw-bold);
+    margin-bottom: var(--spacing-paragraph);
+    text-indent: 0;
+  }
+  .annual-report-body p {
+    margin-bottom: var(--spacing-paragraph);
+    text-indent: 2em;
+  }
+
+  /* Tables (full border for annual report) */
+  .annual-table { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-block); font-size: var(--fs-small); }
+  .annual-table td, .annual-table th { border: 1px solid var(--color-border); padding: 0.3em 0.5em; }
+  .annual-table th { font-weight: var(--fw-bold); background: var(--color-bg); text-align: center; }
+  .annual-table td { text-align: left; }
+  .num-cell { text-align: right; font-family: Arial, sans-serif; }
+
+  /* Important notice */
+  .important-notice { margin-bottom: var(--spacing-section); }
+  .important-notice h2 { font-size: var(--fs-h1); font-weight: var(--fw-bold); margin-bottom: var(--spacing-block); }
+  .important-notice p { margin-bottom: var(--spacing-paragraph); text-indent: 2em; }
+  </style>
+</head>
+<body>
+  <!-- 封面（极简风格）：语义 section（role=cover 绑定 @page cover，无页眉页脚） -->
+  <section role="cover">
+    <div class="cover-body">
+      <p class="cover-code">公司代码：{{stock_code}}</p>
+      <p class="cover-abbr">公司简称：{{company_abbr}}</p>
+      <h1 class="cover-title">{{company_full_name}}{{report_year}}年年度报告</h1>
+    </div>
+  </section>
+
+  <!-- 正文（标准 8 节结构）：纵向正文节，页码从 1 重起 -->
+  <section role="body" class="annual-report-body" data-page-restart="1">
+    <!-- 重要提示 -->
+    <div class="important-notice">
+      <h2>重要提示</h2>
+      {{notice_content}}
+    </div>
+
+    <!-- 目录 -->
+    <nav class="doc-toc" aria-label="目录">
+      <p class="toc-title">目录</p>
+      <ol class="toc-list">{{toc_items}}</ol>
+    </nav>
+
+    <h1>第一节　释义</h1>
+    {{section1_content}}
+
+    <h1>第二节　公司简介和主要财务指标</h1>
+    {{section2_content}}
+
+    <h1>第三节　管理层讨论与分析</h1>
+    {{section3_content}}
+
+    <h1>第四节　公司治理、环境和社会</h1>
+    {{section4_content}}
+
+    <h1>第五节　重要事项</h1>
+    {{section5_content}}
+
+    <h1>第六节　股份变动及股东情况</h1>
+    {{section6_content}}
+
+    <h1>第七节　债券相关情况</h1>
+    {{section7_content}}
+  </section>
+
+  <!-- 横向页面（合并财务报表）：语义 section（landscape，自动分节符 + 横向） -->
+  <section role="financials" class="annual-report-body" data-orientation="landscape">
+    <h1>第八节　财务报告</h1>
+    {{section8_content}}
+  </section>
+
+  <!-- 回到纵向：财务报表附注 -->
+  <section role="body" class="annual-report-body" data-orientation="portrait">
+    {{section8_notes_content}}
+  </section>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>每周工作周报（样例）</title>
+<style>
+:root {
+  --brand-color: #1f4e79;
+  --accent-color: #2e75b6;
+  --text-color: #333333;
+  --muted-bg: #eaf2f8;
+}
+body {
+  font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+  color: var(--text-color);
+  line-height: 1.6;
+}
+.cover {
+  text-align: center;
+  padding: 24px 0;
+}
+.cover .title {
+  font-size: 28px;
+  font-weight: bold;
+  color: var(--brand-color);
+}
+.cover .subtitle {
+  font-size: 14px;
+  color: var(--accent-color);
+}
+h1 {
+  font-size: 20px;
+  color: var(--brand-color);
+  border-bottom: 2px solid var(--brand-color);
+  padding-bottom: 4px;
+}
+h2 {
+  font-size: 16px;
+  color: var(--accent-color);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th, td {
+  border: 1px solid #999999;
+  padding: 6px 10px;
+  text-align: left;
+}
+th {
+  background-color: var(--brand-color);
+  color: #ffffff;
+}
+.highlight {
+  background-color: var(--muted-bg);
+  padding: 8px 12px;
+}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="title">产研团队每周工作周报</div>
+  <div class="subtitle">2026 年第 37 周（09-07 至 09-11） · 张三</div>
+</div>
+
+<h1>一、本周工作进展</h1>
+
+<h2>1.1 文档生成能力</h2>
+<p>本周完成了 docx 生成引擎的搬用与端到端验证。引擎整体来自 WorkBuddy 5.5.4 的
+tencent-docx 插件，底层基于 html-for-docx 与 python-docx，叠加了 CSS 变量展开、
+CJK 字体处理、表格样式后处理等补丁层。</p>
+
+<p class="highlight">关键结论：直接搬用引擎的内部使用方案已确认，正式上线前由专人
+完成风险置换。本段带有段落底纹，用于验证 background-color 的转换效果。</p>
+
+<h2>1.2 本周事项清单</h2>
+<ul>
+  <li>复制 html_to_docx 引擎包至 resources/docx-engine/</li>
+  <li>搭建托管 Python 环境（uv + Python 3.12 + venv）</li>
+  <li>完成首次真实转换并读回校验</li>
+</ul>
+
+<h1>二、数据一览</h1>
+
+<table>
+  <tr>
+    <th>指标</th>
+    <th>本周</th>
+    <th>环比</th>
+  </tr>
+  <tr>
+    <td>转换成功率</td>
+    <td>98.5%</td>
+    <td>+1.2%</td>
+  </tr>
+  <tr>
+    <td>平均耗时（秒）</td>
+    <td>2.4</td>
+    <td>-0.3</td>
+  </tr>
+  <tr>
+    <td>支持体裁数</td>
+    <td>9</td>
+    <td>+2</td>
+  </tr>
+</table>
+
+<h1>三、下周计划</h1>
+<p>下周将完成托管环境状态机与 docx_convert 工具的落地，并把技能体系适配到 pi 的
+Agent Skills 规范。</p>
+
+</body>
+</html>

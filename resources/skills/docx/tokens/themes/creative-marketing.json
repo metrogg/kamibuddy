@@ -1,0 +1,67 @@
+{
+  "$name": "creative-marketing",
+  "$description": "创意营销主题。活泼配色，大标题冲击感，灵活间距，适合活动方案、推广文案、品牌营销文档。",
+  "typography": {
+    "fontFamily": {
+      "heading": { "$type": "fontFamily", "$value": "阿里巴巴普惠体, PingFang SC, 微软雅黑, sans-serif" },
+      "display": { "$type": "fontFamily", "$value": "阿里巴巴普惠体 Heavy, PingFang SC Semibold, 微软雅黑 Bold, sans-serif" },
+      "body": { "$type": "fontFamily", "$value": "PingFang SC, 微软雅黑, sans-serif" },
+      "bodyLatin": { "$type": "fontFamily", "$value": "Poppins, Nunito, Helvetica Neue, sans-serif" },
+      "accent": { "$type": "fontFamily", "$value": "Poppins, sans-serif", "$description": "英文强调/数字" }
+    },
+    "fontSize": {
+      "display": { "$type": "dimension", "$value": "48pt", "$description": "大标题/封面标题" },
+      "title": { "$type": "dimension", "$value": "32pt" },
+      "h1": { "$type": "dimension", "$value": "24pt" },
+      "h2": { "$type": "dimension", "$value": "18pt" },
+      "h3": { "$type": "dimension", "$value": "14pt" },
+      "body": { "$type": "dimension", "$value": "12pt" },
+      "tagline": { "$type": "dimension", "$value": "14pt", "$description": "口号/副标题" },
+      "caption": { "$type": "dimension", "$value": "10pt" }
+    },
+    "lineHeight": {
+      "display": { "$type": "number", "$value": 1.1 },
+      "heading": { "$type": "number", "$value": 1.25 },
+      "body": { "$type": "number", "$value": 1.75 }
+    },
+    "fontWeight": {
+      "display": { "$type": "fontWeight", "$value": "800" },
+      "heading": { "$type": "fontWeight", "$value": "700" },
+      "body": { "$type": "fontWeight", "$value": "400" },
+      "tagline": { "$type": "fontWeight", "$value": "600" }
+    }
+  },
+  "color": {
+    "primary": { "$type": "color", "$value": "#FF6B35", "$description": "活力橙" },
+    "secondary": { "$type": "color", "$value": "#FF3CAC", "$description": "霓虹粉" },
+    "tertiary": { "$type": "color", "$value": "#784BA0", "$description": "神秘紫" },
+    "quaternary": { "$type": "color", "$value": "#2B86C5", "$description": "活力蓝" },
+    "accent": { "$type": "color", "$value": "#F9D649", "$description": "亮黄强调" },
+    "text": { "$type": "color", "$value": "#1A1A2E" },
+    "textLight": { "$type": "color", "$value": "#F8F8F8" },
+    "background": { "$type": "color", "$value": "#FFFFFF" },
+    "gradient": {
+      "hero": { "$type": "string", "$value": "linear-gradient(135deg, #FF6B35 0%, #FF3CAC 50%, #784BA0 100%)" },
+      "subtle": { "$type": "string", "$value": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }
+    }
+  },
+  "spacing": {
+    "paragraph": { "$type": "dimension", "$value": "1em" },
+    "paragraphAfter": { "$type": "dimension", "$value": "1em" },
+    "indent": { "$type": "dimension", "$value": "0em" },
+    "sectionGap": { "$type": "dimension", "$value": "3em" },
+    "blockPadding": { "$type": "dimension", "$value": "2em" }
+  },
+  "layout": {
+    "marginTop": { "$type": "dimension", "$value": "2.0cm" },
+    "marginBottom": { "$type": "dimension", "$value": "2.0cm" },
+    "marginLeft": { "$type": "dimension", "$value": "2.0cm" },
+    "marginRight": { "$type": "dimension", "$value": "2.0cm" },
+    "pageSize": { "$type": "string", "$value": "A4" }
+  },
+  "decoration": {
+    "useGradient": { "$type": "boolean", "$value": true },
+    "headingUnderline": { "$type": "boolean", "$value": true },
+    "calloutStyle": { "$type": "string", "$value": "colorful-card" }
+  }
+}

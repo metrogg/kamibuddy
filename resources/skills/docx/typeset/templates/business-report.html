@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{report_title}}</title>
+  <style>
+  /* --- CSS @page 页面模型（S-26060126E）：正文页脚居中页码 --- */
+  @page {
+    @bottom-center { content: counter(page); }
+  }
+  @page cover {
+    @bottom-center { content: none; }
+  }
+  section[role="cover"] { page: cover; }
+
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 28pt);
+    --fs-h2: var(--typography-fontSize-h2, 18pt);
+    --fs-h3: var(--typography-fontSize-h3, 14pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.6);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --color-primary: var(--color-primary, #1a73e8);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-highlight: var(--color-highlight, #f5f7fa);
+    --color-accent: var(--color-primary, #1a73e8);
+    --color-summary-bg: var(--color-highlight, #f5f7fa);
+    --color-summary-border: var(--color-primary, #1a73e8);
+    --summary-border-width: 4px;
+    --radius-card: var(--spacing-block, 8px);
+    --shadow-card: 0 2px 8px rgba(0,0,0,0.08);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 2.5cm);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--ff-body); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--color-text); background: var(--color-bg); }
+
+  /* Cover */
+  .report-cover {
+    display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+    min-height: 60vh; padding: var(--margin-page);
+    background: var(--color-highlight);
+  }
+  .cover-logo-placeholder { width: 80px; height: 40px; background: var(--color-border); margin-bottom: var(--spacing-section); }
+  .cover-category { font-size: var(--typography-fontSize-coverCategory, 14pt); font-family: var(--ff-heading); font-weight: var(--fw-bold); color: var(--color-primary); letter-spacing: 0.08em; margin-bottom: 0.8em; text-align: left; }
+  .cover-title { font-size: var(--fs-h1); font-family: var(--ff-heading); font-weight: var(--fw-bold); color: var(--color-primary); margin-bottom: 0.5em; }
+  .cover-subtitle { font-size: var(--fs-h2); color: var(--color-muted); margin-bottom: var(--spacing-section); }
+  .cover-meta { font-size: var(--fs-small); color: var(--color-muted); }
+
+  /* TOC */
+  .doc-toc { padding: var(--spacing-block) var(--margin-page); background: var(--color-bg); border-bottom: 1px solid var(--color-border); }
+  .toc-title { font-weight: var(--fw-bold); margin-bottom: 0.5em; }
+  .toc-list, .toc-list ol, .toc-list ul { list-style: none; list-style-type: none; padding-left: 1.5em; }
+  .toc-list li { margin-bottom: 0.3em; text-indent: 0; }
+  .toc-list a { color: var(--color-primary); text-decoration: none; }
+
+  /* Executive summary */
+  .executive-summary {
+    margin: var(--spacing-section) var(--margin-page);
+    padding: var(--spacing-section);
+    border-left: var(--summary-border-width) solid var(--color-summary-border);
+    background: var(--color-summary-bg);
+    border-radius: 0 var(--radius-card) var(--radius-card) 0;
+  }
+  .summary-header { display: flex; align-items: center; gap: 1em; margin-bottom: var(--spacing-block); }
+  .summary-header h2 { font-size: var(--fs-h2); font-family: var(--ff-heading); }
+  .summary-badge { font-size: var(--fs-small); color: var(--color-muted); font-style: italic; }
+  .summary-highlights { display: flex; gap: var(--spacing-block); flex-wrap: wrap; margin-bottom: var(--spacing-block); }
+
+  /* Progress table */
+  .progress-table { width: 100%; border-collapse: collapse; margin-bottom: var(--spacing-block); }
+  .progress-table th, .progress-table td { padding: 0.5em 0.8em; border: 1px solid var(--color-border); }
+  .progress-table th { background: var(--color-highlight); }
+  .progress-bar { background: var(--color-border); border-radius: 4px; height: 12px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--color-primary); border-radius: 4px; }
+  .status-badge { display: inline-block; padding: 0.2em 0.6em; border-radius: 4px; font-size: var(--fs-small); }
+  .status-done { background: rgba(46, 125, 50, 0.08); color: var(--color-rating-buy, #2e7d32); }
+  .status-in-progress { background: rgba(230, 81, 0, 0.08); color: var(--color-rating-hold, #e65100); }
+  .status-pending { background: var(--color-highlight); color: var(--color-muted); }
+
+  /* Main body */
+  .report-body { padding: var(--spacing-section) var(--margin-page); }
+  .report-body h2 { font-size: var(--fs-h2); font-family: var(--ff-heading); font-weight: var(--fw-bold); margin-top: var(--spacing-section); margin-bottom: var(--spacing-paragraph); }
+  .report-body h3 { font-size: var(--fs-h3); font-family: var(--ff-heading); font-weight: var(--fw-bold); margin-top: var(--spacing-block); margin-bottom: var(--spacing-paragraph); }
+  .report-body p { margin-bottom: var(--spacing-paragraph); }
+
+  /* Appendix */
+  .appendix { padding: var(--spacing-section) var(--margin-page); border-top: 1px solid var(--color-border); }
+  </style>
+</head>
+<body>
+  <!-- 封面与正文是相邻顶层 section，正文会自动另起一页。 -->
+  <section role="cover" class="report-cover">
+    <div class="cover-logo-placeholder"></div>
+    <p class="cover-category">{{report_category}}</p>
+    <h1 class="cover-title">{{report_title}}</h1>
+    <p class="cover-subtitle">{{report_subtitle}}</p>
+    <div class="cover-meta">
+      <p>{{org_name}} | {{report_date}} | {{report_version}}</p>
+    </div>
+  </section>
+
+  <section role="body" class="report-body" data-page-restart="1">
+    <nav class="doc-toc" aria-label="文档目录">
+      <p class="toc-title">目录</p>
+      <ol class="toc-list">{{toc_items}}</ol>
+    </nav>
+
+    <div class="executive-summary">
+      <div class="summary-header">
+        <h2>执行摘要</h2>
+        <span class="summary-badge">Executive Summary</span>
+      </div>
+      <div class="summary-highlights">{{summary_data_cards}}</div>
+      <div class="summary-body">{{summary_text}}</div>
+    </div>
+
+    <main>{{report_content}}</main>
+
+    <div class="appendix">{{appendix_content}}</div>
+  </section>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{paper_title}}</title>
+  <style>
+  /* --- CSS @page 页面模型（S-26060126E）：封面无家具 / 正文页脚页码 --- */
+  @page {
+    @bottom-center { content: counter(page); }
+  }
+  @page cover {
+    @bottom-center { content: none; }
+  }
+  section[role="cover"] { page: cover; }
+
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 16pt);
+    --fs-h2: var(--typography-fontSize-h2, 14pt);
+    --fs-h3: var(--typography-fontSize-h3, 12pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --fs-cover-title: var(--typography-fontSize-coverTitle, 22pt);
+    --fs-cover-meta: var(--typography-fontSize-coverMeta, 14pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.5);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --fw-normal: var(--typography-fontWeight-normal, 400);
+    --color-primary: var(--color-primary, #333333);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-info: var(--color-info, #01579b);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 2.5cm);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--ff-body);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    color: var(--color-text);
+    background: var(--color-bg);
+    padding: var(--margin-page);
+  }
+
+  h1, h2, h3 { font-family: var(--ff-heading); font-weight: var(--fw-bold); }
+  h1 { font-size: var(--fs-h1); margin-bottom: var(--spacing-block); }
+  h2 { font-size: var(--fs-h2); margin-top: var(--spacing-section); margin-bottom: var(--spacing-paragraph); }
+  h3 { font-size: var(--fs-h3); margin-top: var(--spacing-block); margin-bottom: var(--spacing-paragraph); }
+  p { margin-bottom: var(--spacing-paragraph); text-indent: 2em; }
+
+  /* Cover */
+  /* NOTE: html4docx 不做 CSS 继承 → 每个块自己声明 text-align，不能靠 .cover-body 下发。 */
+  .cover-body { text-align: center; }
+  .cover-title { text-align: center; font-size: var(--fs-cover-title); font-weight: var(--fw-bold); margin-top: var(--spacing-section); margin-bottom: var(--spacing-section); }
+  .cover-meta { text-align: center; margin-top: var(--spacing-section); }
+  .cover-info-list { border-collapse: collapse; margin: 0 auto; }
+  .cover-info-list td { padding: 0.3em 0.8em; font-size: var(--fs-body); vertical-align: top; border: none; }
+  .cover-info-list td:first-child { text-align: right; font-weight: var(--fw-normal); white-space: nowrap; }
+  .cover-info-list td:last-child { text-align: left; }
+
+  /* Abstract */
+  .abstract { margin-bottom: var(--spacing-section); padding: var(--spacing-block); border-left: 3px solid var(--color-info); }
+  .abstract-heading { font-weight: var(--fw-bold); margin-bottom: 0.5em; text-indent: 0; }
+  .abstract-text { text-indent: 0; }
+  .keywords { margin-top: 0.5em; text-indent: 0; }
+
+  /* TOC */
+  .doc-toc { margin-bottom: var(--spacing-section); }
+  .toc-list, .toc-list ol, .toc-list ul { list-style: none; list-style-type: none; padding-left: 1.5em; }
+  .toc-list li { margin-bottom: 0.3em; text-indent: 0; }
+  .toc-list a { color: var(--color-primary); text-decoration: none; }
+
+  /* Three-line table */
+  .three-line-table { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-block); }
+  .three-line-table caption { font-size: var(--fs-small); margin-bottom: 0.4em; text-align: center; }
+  .three-line-table thead tr:first-child { border-top: 2px solid var(--color-text); }
+  .three-line-table thead tr:last-child { border-bottom: 1px solid var(--color-text); }
+  .three-line-table tbody tr:last-child { border-bottom: 2px solid var(--color-text); }
+  .three-line-table td, .three-line-table th { border-left: none; border-right: none; padding: 0.4em 0.8em; text-align: left; }
+  .three-line-table th { font-weight: var(--fw-bold); background: transparent; }
+
+  /* Figure */
+  figure { margin: var(--spacing-block) 0; text-align: center; }
+  figcaption { font-size: var(--fs-small); color: var(--color-muted); margin-top: 0.4em; }
+
+  /* Footnotes & References */
+  .references { margin-top: var(--spacing-section); }
+  .reference-list { padding-left: 2em; }
+  .reference-item { margin-bottom: 0.5em; font-size: var(--fs-small); }
+  </style>
+</head>
+<body>
+  <!-- 封面页：语义 section（role=cover 绑定 @page cover，无页眉页脚） -->
+  <section role="cover">
+    <div class="cover-body">
+      <h1 class="cover-title">{{paper_title}}</h1>
+    </div>
+    <div class="cover-meta">
+      <table class="cover-info-list">
+        <tr><td>指导教师</td><td>{{advisor}}</td></tr>
+        <tr><td>学生姓名</td><td>{{student_name}}</td></tr>
+        <tr><td>学　　号</td><td>{{student_id}}</td></tr>
+        <tr><td>院　　系</td><td>{{department}}</td></tr>
+        <tr><td>专　　业</td><td>{{major}}</td></tr>
+        <tr><td>年　　级</td><td>{{grade}}</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- 正文页：语义 section（role=body，页码从 1 重起，默认 @page 页脚页码） -->
+  <section role="body" data-page-restart="1">
+    <!-- 目录 -->
+    <nav class="doc-toc" aria-label="目录">
+      <p style="font-weight: var(--fw-bold); text-align: center; font-size: var(--fs-h2);">目录</p>
+      <ol class="toc-list">{{toc_items}}</ol>
+    </nav>
+
+    <!-- 摘要 -->
+    <div class="abstract" aria-label="摘要">
+      <p class="abstract-heading">摘要</p>
+      <p class="abstract-text">{{abstract_content}}</p>
+      <p class="keywords"><strong>关键词：</strong>{{keywords}}</p>
+    </div>
+
+    <!-- 正文 -->
+    <main class="paper-body">
+      <div id="section-introduction"><h2>引言</h2>{{introduction_content}}</div>
+      <div id="section-methods"><h2>研究方法</h2>{{methods_content}}</div>
+      <div id="section-results"><h2>研究结果</h2>{{results_content}}</div>
+      <div id="section-discussion"><h2>讨论</h2>{{discussion_content}}</div>
+      <div id="section-conclusion"><h2>结论</h2>{{conclusion_content}}</div>
+    </main>
+
+    <!-- 参考文献 -->
+    <div class="references" aria-label="参考文献">
+      <h2>参考文献</h2>
+      <ol class="reference-list">
+        {{reference_items}}
+      </ol>
+    </div>
+  </section>
+</body>
+</html>

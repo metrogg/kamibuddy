@@ -15,6 +15,7 @@ import {
 	formatSkillsForPrompt,
 	type BuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
+import type { ExpertDefinition } from "./experts.ts";
 
 /** 从 pi 的结构化选项里取出上下文组装还需要的那几块。 */
 export type PromptContextOptions = Pick<
@@ -29,6 +30,17 @@ export interface SkillDescriptor {
 	readonly filePath: string;
 }
 
+/**
+ * expert 模式绑定的人格（resources/experts/<name>.md 的展示字段 + 正文全文）。
+ * 与 ExpertDefinition 分开定义：compose 只需要注入所需的三块，
+ * 不关心 name/description 这些加载层字段。
+ */
+export interface ExpertPersona {
+	readonly displayName: string;
+	readonly profession: string;
+	readonly body: string;
+}
+
 export interface ComposePromptInput {
 	/** 场景骨架正文（含槽位）。 */
 	readonly sceneBody: string;
@@ -39,6 +51,12 @@ export interface ComposePromptInput {
 	readonly cwd: string;
 	/** 模型显示名。骨架未使用 {{model}} 时可省。 */
 	readonly model?: string;
+	/**
+	 * expert 模式绑定的人格。提供时注入「当前专家」人格段 +
+	 * 末尾 <current-expert> 钉住段（见 composePrompt 内的注释）。
+	 * 非 expert 模式缺省；expert 模式下由 requireExpertPersona 保证必有值。
+	 */
+	readonly expert?: ExpertPersona;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
 	readonly piContext?: PromptContextOptions;
 	/**
@@ -80,9 +98,55 @@ export function composePrompt(input: ComposePromptInput): string {
 
 	// 空槽位（如无技能）会留下连续空行，压平；trim 掉首尾。
 	const composed = filled.replace(/\n{3,}/g, "\n\n").trim();
+	/*
+	 * expert 人格段：接在骨架之后（WorkBuddy PluginAgentPrompt 槽的等价物 ——
+	 * 主提示是通用 OS，专家 = OS + 人格 APP）。场景骨架照常使用：
+	 * 专家与场景轴的联动 v1 不做（spec: add-expert-mode 声明），骨架即通用骨架。
+	 */
+	const withPersona =
+		input.expert === undefined ? composed : `${composed}\n\n${formatExpertPersona(input.expert)}`;
 	// 环境块放整个提示词的**末尾**：系统提示词前缀稳定利于 provider 前缀缓存
 	// （前面各段同分钟内字节一致，变化的只有最后一小段）。
-	return `${appendPiContext(composed, input)}\n\n${formatRuntimeTime(input.now ?? new Date())}`;
+	const base = `${appendPiContext(withPersona, input)}\n\n${formatRuntimeTime(input.now ?? new Date())}`;
+	/*
+	 * <current-expert> 钉住段放最末（WorkBuddy CurrentExpertReminderSection 的
+	 * 同款防漂移：多轮对话后模型会忘记自己的专家身份，它每轮 user-context 钉一次）。
+	 * v1 没有用户消息级注入机制（WorkBuddy 的 composeUserPrompt），钉住段随每轮
+	 * 重组的系统提示词落在离对话历史最近的位置 —— 同一会话内它是稳定文本，
+	 * 不破坏上面的前缀缓存口径。
+	 */
+	return input.expert === undefined
+		? base
+		: `${base}\n\n<current-expert>${input.expert.displayName}</current-expert>`;
+}
+
+/** 「当前专家」人格段：身份一行 + 正文全文（人格本体）。 */
+function formatExpertPersona(expert: ExpertPersona): string {
+	return `## 当前专家\n\n你当前的专家身份：${expert.displayName}（${expert.profession}）。\n\n${expert.body.trim()}`;
+}
+
+/**
+ * expert 模式的人格解析：按 expertId 从专家库取出注入所需的人格段。
+ *
+ * 两个抛错都是「不可达防御」：
+ *   - expertId 缺失 —— 模式切换单入口（daemon 的 applyInteraction）已保证
+ *     进 expert 模式必带专家，这里炸说明出现了绕过单入口的调用路径；
+ *   - 专家不在库中 —— 选择时（setExpert）已校验过存在，但用户级专家文件
+ *     可能被手删，恢复会话后 state 与专家库漂移只能在这一刻发现。
+ * 没有人格的 expert 提示词是「自称专家却没有人格」的错误身份 —— 响亮失败好过静默上线。
+ */
+export function requireExpertPersona(
+	experts: readonly ExpertDefinition[],
+	expertId: string | undefined,
+): ExpertPersona {
+	if (expertId === undefined) {
+		throw new Error("expert 模式必须绑定专家（expertId 缺失）");
+	}
+	const found = experts.find((e) => e.name === expertId);
+	if (found === undefined) {
+		throw new Error(`专家「${expertId}」不在专家库中（可能已被删除或改名）`);
+	}
+	return { displayName: found.displayName, profession: found.profession, body: found.body };
 }
 
 /**

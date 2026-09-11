@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{meeting_name}} 会议纪要</title>
+  <style>
+  :root {
+    --fs-h1: var(--typography-fontSize-h1, 20pt);
+    --fs-h2: var(--typography-fontSize-h2, 14pt);
+    --fs-h3: var(--typography-fontSize-h3, 12pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --lh-body: var(--typography-lineHeight-body, 1.6);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --color-primary: var(--color-primary, #333333);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-highlight: var(--color-highlight, #f5f7fa);
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 2.5cm);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--ff-body); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--color-text); background: var(--color-bg); padding: var(--margin-page); }
+
+  h1 { font-size: var(--fs-h1); font-family: var(--ff-heading); font-weight: var(--fw-bold); text-align: center; margin-bottom: var(--spacing-section); }
+  h2 { font-size: var(--fs-h2); font-family: var(--ff-heading); font-weight: var(--fw-bold); margin-top: var(--spacing-section); margin-bottom: var(--spacing-block); }
+  h3 { font-size: var(--fs-h3); font-weight: var(--fw-bold); margin-top: var(--spacing-block); margin-bottom: var(--spacing-paragraph); }
+  p { margin-bottom: var(--spacing-paragraph); }
+
+  /* Meeting meta table */
+  .meeting-meta { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-section); }
+  .meeting-meta th, .meeting-meta td { border: 1px solid var(--color-border); padding: 0.5em 1em; }
+  .meeting-meta th { background: var(--color-highlight); font-weight: var(--fw-bold); width: 20%; }
+
+  /* Attendee table */
+  .attendee-table { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-block); }
+  .attendee-table th, .attendee-table td { border: 1px solid var(--color-border); padding: 0.4em 0.8em; }
+  .attendee-table th { background: var(--color-highlight); font-weight: var(--fw-bold); }
+
+  /* Agenda */
+  .agenda-list { list-style: none; padding: 0; }
+  .agenda-item { margin-bottom: var(--spacing-section); }
+  .agenda-title { font-size: var(--fs-h3); font-weight: var(--fw-bold); margin-bottom: var(--spacing-paragraph); }
+  .agenda-content { padding-left: var(--spacing-block); }
+
+  /* Resolutions & actions */
+  .resolution-list, .action-list { list-style: none; padding: 0; }
+  .resolution-item, .action-item { display: flex; gap: var(--spacing-block); align-items: flex-start; padding: 0.5em 0; border-bottom: 1px solid var(--color-border); }
+  .resolution-status, .action-status { flex-shrink: 0; font-size: var(--fs-h3); }
+  .resolution-owner, .action-owner { font-size: var(--fs-small); color: var(--color-muted); margin-left: auto; flex-shrink: 0; }
+
+  /* Sign */
+  .sign-info { margin-top: var(--spacing-section); display: flex; gap: calc(var(--spacing-section) * 2); }
+  .sign-info p { margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>{{meeting_name}}<br>会议纪要</h1>
+
+  <section class="meeting-info">
+    <h2>会议基本信息</h2>
+    <table class="meeting-meta">
+      <tbody>
+        <tr><th scope="row">会议名称</th><td>{{meeting_name}}</td></tr>
+        <tr><th scope="row">会议时间</th><td>{{meeting_date}} {{meeting_time}}</td></tr>
+        <tr><th scope="row">会议地点</th><td>{{meeting_location}}</td></tr>
+        <tr><th scope="row">主持人</th><td>{{host}}</td></tr>
+        <tr><th scope="row">记录人</th><td>{{recorder}}</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="attendees">
+    <h2>出席人员</h2>
+    <table class="attendee-table">
+      <thead>
+        <tr><th>姓名</th><th>部门</th><th>职务</th><th>参会方式</th></tr>
+      </thead>
+      <tbody>{{attendee_rows}}</tbody>
+    </table>
+  </section>
+
+  <section class="agenda">
+    <h2>议题讨论</h2>
+    <ol class="agenda-list">{{agenda_items}}</ol>
+  </section>
+
+  <section class="resolutions">
+    <h2>决议事项</h2>
+    <ul class="resolution-list">{{resolution_items}}</ul>
+  </section>
+
+  <section class="action-items">
+    <h2>待办事项</h2>
+    <ul class="action-list">{{action_items}}</ul>
+  </section>
+
+  <footer class="sign-info">
+    <p>记录人：_______________</p>
+    <p>审核人：_______________</p>
+    <p>批准人：_______________</p>
+    <p>日期：_______________</p>
+  </footer>
+</body>
+</html>

@@ -10,12 +10,15 @@ import type {
 	AutomationEvent,
 	AutomationSaveInput,
 	DaemonStatus,
+	DocxEnvStatus,
 	GlobalShortcutStatus,
 	ArtifactContent,
 	CompletionData,
+	ExpertListItem,
 	McpConfigSnapshot,
 	PermissionRequest,
 	PermissionResponse,
+	PathStat,
 	PickedInputFiles,
 	PromptRequest,
 	QuestionnaireRequest,
@@ -72,6 +75,13 @@ export interface KamiBridge {
 	readonly setScene: (sceneId: string) => Promise<void>;
 	/** 切换交互模式（ask / craft / plan / expert）。 */
 	readonly setInteraction: (interactionId: string) => Promise<void>;
+	/**
+	 * 选择专家（选中即进入 expert 模式并绑定人格）；传 undefined 清除专家。
+	 * 专家不存在时 daemon reject 原因。
+	 */
+	readonly setExpert: (expertId: string | undefined) => Promise<void>;
+	/** 专家列表（「专家 ▸」子菜单与对话头部显示的数据源）。 */
+	readonly listExperts: () => Promise<readonly ExpertListItem[]>;
 	readonly setModel: (modelId: string) => Promise<void>;
 	/**
 	 * 切换当前会话的推理强度。pi 恒 clamp 不抛错；
@@ -119,6 +129,8 @@ export interface KamiBridge {
 	readonly openArtifact: (path: string) => Promise<void>;
 	/** 读产物文件内容（预览面板用）。 */
 	readonly readArtifact: (path: string) => Promise<ArtifactContent>;
+	/** 路径存在性探测（对话正文路径徽章的高亮依据；相对路径按当前会话 cwd resolve）。 */
+	readonly statPath: (path: string) => Promise<PathStat>;
 	readonly saveArtifactAs: (
 		request: SaveArtifactRequest,
 	) => Promise<string | undefined>;
@@ -200,6 +212,11 @@ export interface KamiBridge {
 	 * 状态静态（启动时注册一次），诊断页打开时查一次即可。
 	 */
 	readonly globalShortcutStatus: () => Promise<GlobalShortcutStatus | undefined>;
+	/**
+	 * docx 引擎 venv 的四态（诊断页状态行）。只探测不安装；
+	 * 预热/首次转换可能改变它，跟随诊断页「刷新」重查。
+	 */
+	readonly docxEnvStatus: () => Promise<DocxEnvStatus>;
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 

@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { composePrompt, formatRuntimeTime, formatSkillsSection } from "./prompt-composer.ts";
+import {
+	composePrompt,
+	formatRuntimeTime,
+	formatSkillsSection,
+	requireExpertPersona,
+} from "./prompt-composer.ts";
+import type { ExpertDefinition } from "./experts.ts";
 
 const BASE = {
 	sceneBody: "你是 KamiBuddy。\n\n# 模式\n{{interaction}}\n{{skills}}\n目录：{{cwd}}",
@@ -130,6 +136,67 @@ describe("运行时环境块", () => {
 	it("formatRuntimeTime 直出与 composePrompt 内嵌文本一致", () => {
 		const now = new Date("2026-09-09T23:18:30+08:00");
 		expect(composePrompt({ ...BASE, now })).toContain(formatRuntimeTime(now));
+	});
+});
+
+describe("expert 人格注入", () => {
+	const EXPERT = {
+		displayName: "工作周报",
+		profession: "职场汇报写作专家",
+		body: "# 工作汇报写作专家\n\n## 角色定义\n\n你是一位高管教练。",
+	};
+
+	it("注入人格段：displayName / profession / 正文全文都在输出里", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT });
+		expect(out).toContain("## 当前专家");
+		expect(out).toContain("工作周报（职场汇报写作专家）");
+		expect(out).toContain("你是一位高管教练。");
+	});
+
+	it("钉住段 <current-expert> 存在且在整个提示词最末（环境块之后）", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT, now: new Date("2026-09-09T23:18:30+08:00") });
+		expect(out.trimEnd().endsWith("<current-expert>工作周报</current-expert>")).toBe(true);
+		// 钉住段只出现一次（人格段不含该标签）。
+		expect(out.match(/<current-expert>/g)).toHaveLength(1);
+	});
+
+	it("人格段在骨架模式段之后（OS + 人格 APP 的顺序）", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT });
+		expect(out.indexOf("创作模式行为段。")).toBeLessThan(out.indexOf("## 当前专家"));
+	});
+
+	it("未提供 expert：无人格段、无钉住段（三模式现状兼容）", () => {
+		const out = composePrompt(BASE);
+		expect(out).not.toContain("## 当前专家");
+		expect(out).not.toContain("<current-expert>");
+	});
+});
+
+describe("requireExpertPersona", () => {
+	const EXPERTS: readonly ExpertDefinition[] = [
+		{
+			name: "work-report",
+			description: "周报月报等汇报材料",
+			displayName: "工作周报",
+			profession: "职场汇报写作专家",
+			body: "人格正文",
+		},
+	];
+
+	it("按 name 取出人格三件套", () => {
+		expect(requireExpertPersona(EXPERTS, "work-report")).toEqual({
+			displayName: "工作周报",
+			profession: "职场汇报写作专家",
+			body: "人格正文",
+		});
+	});
+
+	it("expertId 缺失 → 响亮抛错（expert 模式必须绑定专家）", () => {
+		expect(() => requireExpertPersona(EXPERTS, undefined)).toThrow(/必须绑定专家/);
+	});
+
+	it("专家不在库中 → 响亮抛错（文件可能被手删，state 与专家库漂移）", () => {
+		expect(() => requireExpertPersona(EXPERTS, "ghost")).toThrow(/不在专家库中/);
 	});
 });
 

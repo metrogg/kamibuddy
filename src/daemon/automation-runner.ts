@@ -23,14 +23,17 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { getConfigDir } from "../core/config-paths.ts";
+import { getConfigDir, getResourcesDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
 import { SessionHost } from "../core/session-host.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
+import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
@@ -169,6 +172,8 @@ function buildRunExtensions(
 				protectedDirs: deps.protectedDirs,
 				// 写 KamiBuddy 自身目录永远高风险 —— unattended 下即「永远自动拒绝」。
 				appDir: process.cwd(),
+				// 内置资源只读放行（技能渐进加载全靠 read 这里）。
+				resourcesDir: getResourcesDir(),
 			},
 			cwd,
 			getSettings: deps.getPermissions,
@@ -188,9 +193,9 @@ function buildRunExtensions(
 			},
 		}),
 		createPromptSwitch({
-			// 两轴固定 work + craft（spec）—— run 会话没有切换器。
+			// 两轴固定 work + craft（spec）—— run 会话没有切换器，也不起专家。
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
-			compose: (sceneId, interactionId, piContext) =>
+			compose: (sceneId, interactionId, _expertId, piContext) =>
 				deps.compose(cwd, sceneId, interactionId, piContext),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
@@ -215,11 +220,21 @@ function buildRunExtensions(
 		powershellExtensionFactory({ unattended: true }),
 		createDocReadTool(),
 		/*
-		 * 内联可视化：craft 白名单含 read_me / show_widget，run 会话注册同名
-		 * 真实工具（否则模型对着白名单调一个不存在的能力）。无需 unattended
-		 * 变体 —— 它不像问卷需要人答：无副作用、无用户交互，run 产出的
-		 * widget 随会话历史可见（spec: add-inline-widgets）。
+		 * docx 生成：craft 白名单含 docx_convert，run 会话注册同名真实工具
+		 * （否则模型对着白名单调一个不存在的能力）。无需 unattended 变体 ——
+		 * 它不像 shell 需要人批：写侧判定锚定产物路径，工作区内 outputPath
+		 * 在权限门直接放行，无人值守下语义自洽（定时产出周报 docx 是正当场景）。
 		 */
+		createDocxConvertTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
+		/*
+			 * 内联可视化：craft 白名单含 read_me / show_widget，run 会话注册同名
+			 * 真实工具（否则模型对着白名单调一个不存在的能力）。无需 unattended
+			 * 变体 —— 它不像问卷需要人答：无副作用、无用户交互，run 产出的
+			 * widget 随会话历史可见（spec: add-inline-widgets）。
+			 */
 		visualizerExtensionFactory(),
 	];
 }

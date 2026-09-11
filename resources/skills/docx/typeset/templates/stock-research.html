@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="docx-page-size" content="A4">
+    <title>{{company_name}} 研究报告</title>
+    <style>
+        /* 在页脚的底部居中展示页码 */
+        
+        @page {
+            @bottom-center {
+                content: counter(page);
+            }
+        }
+        
+        @page cover {
+            @bottom-center {
+                content: none;
+            }
+        }
+        
+        section[role="cover"] {
+            page: cover;
+        }
+        
+         :root {
+            --fs-cover-title: var(--typography-fontSize-coverTitle, 22pt);
+            --fs-cover-category: var(--typography-fontSize-coverCategory, 14pt);
+            --fs-section-header: var(--typography-fontSize-sectionHeader, 13pt);
+            --fs-h2: var(--typography-fontSize-h2, 11pt);
+            --fs-h3: var(--typography-fontSize-h3, 10pt);
+            --fs-body: var(--typography-fontSize-body, 9pt);
+            --fs-small: var(--typography-fontSize-small, 8pt);
+            --fs-tiny: var(--typography-fontSize-tiny, 7pt);
+            --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+            --ff-body: var(--typography-fontFamily-body, "微软雅黑", "Microsoft YaHei", sans-serif);
+            --ff-mono: var(--typography-fontFamily-mono, "Calibri", Arial, sans-serif);
+            --lh-body: var(--typography-lineHeight-body, 1.5);
+            --fw-bold: var(--typography-fontWeight-bold, 700);
+            --color-primary: #1a237e;
+            --color-text: #1a1a1a;
+            --color-muted: #808080;
+            --color-border: #cccccc;
+            --color-bg: #ffffff;
+            --color-bg-dark: #1a237e;
+            --color-card-bg: #eef2f9;
+            --color-accent: #9C8B6A;
+            --color-rating-buy: #2e7d32;
+            --color-rating-hold: #e65100;
+            --color-rating-sell: #c62828;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: var(--ff-body);
+            font-size: var(--fs-body);
+            line-height: var(--lh-body);
+            color: var(--color-text);
+            background: var(--color-bg);
+            width: 21cm;
+            margin: 0 auto;
+            padding: 0;
+        }
+        /* ============================================================
+     封面（券商研报惯例：克制留白、标题为焦点、深蓝+灰配色）
+     自上而下：品牌区 → 核心区 → 数据区 → 元信息区
+     ============================================================ */
+        
+        .cover-brand {
+            padding: 1.6cm 2cm 0.4cm;
+            border-bottom: 2px solid var(--color-primary);
+            margin-bottom: 1.6em;
+        }
+        
+        .cover-org {
+            font-size: var(--fs-cover-category);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            color: var(--color-primary);
+            letter-spacing: 0.05em;
+        }
+        
+        .cover-core {
+            padding: 1.2cm 2cm 0;
+        }
+        
+        .cover-category {
+            font-size: var(--fs-cover-category);
+            color: var(--color-muted);
+            font-family: var(--ff-heading);
+            letter-spacing: 0.08em;
+            margin-bottom: 0.6em;
+        }
+        
+        .cover-stock {
+            font-size: var(--fs-cover-category);
+            color: var(--color-text);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            margin-bottom: 0.5em;
+        }
+        
+        .cover-rating {
+            font-size: var(--fs-section-header);
+            color: var(--color-accent);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            margin-bottom: 1.4em;
+        }
+        
+        .cover-title {
+            font-size: var(--fs-cover-title);
+            font-weight: var(--fw-bold);
+            font-family: var(--ff-heading);
+            color: var(--color-primary);
+            line-height: 1.3;
+            margin-bottom: 1.6em;
+        }
+        
+        .cover-data {
+            padding: 0 2cm;
+            margin-bottom: 1.4em;
+        }
+        
+        .metrics-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: var(--fs-small);
+            border-top: 1px solid var(--color-border);
+            border-bottom: 1px solid var(--color-border);
+        }
+        
+        .metrics-table td {
+            padding: 0.5em 0.6em;
+        }
+        
+        .metrics-table .m-label {
+            color: var(--color-muted);
+            width: 12%;
+        }
+        
+        .metrics-table .m-value {
+            font-weight: var(--fw-bold);
+            font-family: var(--ff-mono);
+            color: var(--color-text);
+            width: 13%;
+        }
+        
+        .performance-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: var(--fs-small);
+            margin-bottom: 1.4em;
+        }
+        
+        .performance-table th,
+        .performance-table td {
+            padding: 0.35em 0.6em;
+            text-align: right;
+        }
+        
+        .performance-table th {
+            font-weight: var(--fw-bold);
+            font-size: var(--fs-tiny);
+            color: var(--color-muted);
+        }
+        
+        .performance-table thead {
+            border-bottom: 1px solid var(--color-border);
+        }
+        
+        .cover-meta {
+            padding: 0.6cm 2cm;
+            font-size: var(--fs-small);
+            border-top: 1px solid var(--color-border);
+        }
+        
+        .cover-author {
+            font-weight: var(--fw-bold);
+            color: var(--color-text);
+            margin-bottom: 0.3em;
+        }
+        
+        .cover-cert,
+        .cover-contact,
+        .cover-date {
+            color: var(--color-muted);
+            margin-bottom: 0.2em;
+        }
+        /* ============================================================
+     标题四级层级（字号 + 字重 + 颜色/底色 三重区分）
+     章节 深底白字13pt > 小节 主色+左边框11pt > 子小节 主色加粗10pt > 正文9pt
+     段距纯段后距、em 单位随各级字号缩放
+     ============================================================ */
+        
+        .section-header {
+            background: var(--color-bg-dark);
+            color: var(--color-bg);
+            font-size: var(--fs-section-header);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            padding: 0.4em 2cm;
+            margin-bottom: 0.9em;
+        }
+        
+        .research-body {
+            padding: 0 2cm;
+        }
+        
+        .research-body h2 {
+            font-size: var(--fs-h2);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            color: var(--color-primary);
+            border-left: 4px solid var(--color-primary);
+            padding-left: 0.8em;
+            line-height: 1.5;
+            margin-top: 0.8em;
+            margin-bottom: 0.7em;
+        }
+        
+        .research-body h3 {
+            font-size: var(--fs-h3);
+            font-family: var(--ff-heading);
+            font-weight: var(--fw-bold);
+            color: var(--color-primary);
+            margin-bottom: 0.6em;
+        }
+        
+        .research-body p {
+            font-size: var(--fs-body);
+            margin-bottom: 0.8em;
+        }
+        
+        .research-body ul {
+            padding-left: 1.5em;
+            margin-bottom: 0.8em;
+        }
+        
+        .research-body li {
+            font-size: var(--fs-body);
+            margin-bottom: 0.4em;
+        }
+        /* ============================================================
+     多段落底纹卡片（核心观点/关键发现/风险提示）
+     裸单列 table 承载整块底纹 + 富文本多段落
+     ============================================================ */
+        
+        .abstract-card {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 1.2em;
+        }
+        
+        .abstract-card td {
+            background-color: var(--color-card-bg);
+            border-left: 3px solid var(--color-primary);
+            padding: 0.8em 1em;
+            font-size: var(--fs-body);
+        }
+        
+        .abstract-card .card-title {
+            font-size: var(--fs-h3);
+            font-weight: var(--fw-bold);
+            color: var(--color-primary);
+            font-family: var(--ff-heading);
+            margin-bottom: 0.5em;
+        }
+        
+        .abstract-card p {
+            margin-bottom: 0.5em;
+        }
+        /* Three-line table（财务数据三线表） */
+        
+        .three-line-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 0.9em;
+            font-size: var(--fs-small);
+        }
+        
+        .three-line-table thead tr:first-child {
+            border-top: 2px solid var(--color-text);
+        }
+        
+        .three-line-table thead tr:last-child {
+            border-bottom: 1px solid var(--color-text);
+        }
+        
+        .three-line-table tbody tr:last-child {
+            border-bottom: 2px solid var(--color-text);
+        }
+        
+        .three-line-table td,
+        .three-line-table th {
+            border-left: none;
+            border-right: none;
+            padding: 0.3em 0.6em;
+        }
+        
+        .three-line-table th {
+            font-weight: var(--fw-bold);
+            background: transparent;
+            font-size: var(--fs-tiny);
+        }
+        
+        .num-cell {
+            text-align: right;
+            font-family: var(--ff-mono);
+        }
+        /* Disclaimer（免责声明） */
+        
+        .disclaimer {
+            padding: 1.4em 2cm;
+            border-top: 1px solid var(--color-border);
+            font-size: var(--fs-body);
+            color: var(--color-muted);
+        }
+        
+        .disclaimer-title {
+            font-size: var(--fs-section-header);
+            font-weight: var(--fw-bold);
+            color: var(--color-text);
+            margin-bottom: 0.5em;
+        }
+        
+        .disclaimer p {
+            font-size: var(--fs-body);
+            margin-bottom: 0.4em;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 封面 -->
+    <section role="cover">
+        <div class="cover-brand">
+            <span class="cover-org">{{broker_name}}</span>
+        </div>
+
+        <div class="cover-core">
+            <p class="cover-category">{{category}} | {{report_type}}</p>
+            <p class="cover-stock">{{company_name}} {{stock_code}}</p>
+            <p class="cover-rating">{{rating_text}}（{{rating_change}}）</p>
+            <h1 class="cover-title">{{report_title}}</h1>
+        </div>
+
+        <div class="cover-data">
+            <table class="metrics-table">
+                <tr>
+                    <td class="m-label">股价</td>
+                    <td class="m-value">{{current_price}}</td>
+                    <td class="m-label">目标价格</td>
+                    <td class="m-value">{{target_price}}</td>
+                    <td class="m-label">52周最高</td>
+                    <td class="m-value">{{high_52w}}</td>
+                    <td class="m-label">52周最低</td>
+                    <td class="m-value">{{low_52w}}</td>
+                </tr>
+                <tr>
+                    <td class="m-label">总股本</td>
+                    <td class="m-value">{{total_shares}}</td>
+                    <td class="m-label">流通A股</td>
+                    <td class="m-value">{{float_shares}}</td>
+                    <td class="m-label">EPS(TTM)</td>
+                    <td class="m-value">{{eps_ttm}}</td>
+                    <td class="m-label">PE(TTM)</td>
+                    <td class="m-value">{{pe_ttm}}</td>
+                </tr>
+            </table>
+        </div>
+        <table class="performance-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>1周</th>
+                    <th>1月</th>
+                    <th>3月</th>
+                    <th>12月</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>绝对表现%</td>{{perf_abs_cells}}
+                </tr>
+                <tr>
+                    <td>相对表现%</td>{{perf_rel_cells}}
+                </tr>
+                <tr>
+                    <td>沪深300%</td>{{perf_idx_cells}}
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="cover-meta">
+            <p class="cover-author">分析师：{{analyst}}</p>
+            <p class="cover-cert">执业证书编号：{{cert_no}}</p>
+            <p class="cover-contact">{{email}} | {{phone}}</p>
+            <p class="cover-date">{{pub_date}}</p>
+        </div>
+    </section>
+
+    <!-- 正文 -->
+    <section role="body" data-page-restart="1">
+        <!-- 盈利预测与投资建议 -->
+        <div class="section-header">盈利预测与投资建议</div>
+        <div class="research-body">
+            <ul>{{forecast_bullets}}</ul>
+            {{forecast_content}}
+        </div>
+
+        <!-- 风险提示 -->
+        <table class="abstract-card">
+            <tr>
+                <td>
+                    <p class="card-title">风险提示</p>
+                    {{risk_content}}
+                </td>
+            </tr>
+        </table>
+
+        <!-- 公司主要财务信息 -->
+        <div class="section-header">公司主要财务信息</div>
+        <div class="research-body">
+            <table class="three-line-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>{{year_1}}A</th>
+                        <th>{{year_2}}A</th>
+                        <th>{{year_3}}E</th>
+                        <th>{{year_4}}E</th>
+                        <th>{{year_5}}E</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>营业收入(百万元)</td>{{revenue_cells}}
+                    </tr>
+                    <tr>
+                        <td>同比增长(%)</td>{{revenue_growth_cells}}
+                    </tr>
+                    <tr>
+                        <td>营业利润(百万元)</td>{{op_profit_cells}}
+                    </tr>
+                    <tr>
+                        <td>同比增长(%)</td>{{op_profit_growth_cells}}
+                    </tr>
+                    <tr>
+                        <td>归母净利润(百万元)</td>{{net_profit_cells}}
+                    </tr>
+                    <tr>
+                        <td>同比增长(%)</td>{{net_profit_growth_cells}}
+                    </tr>
+                    <tr>
+                        <td>每股收益(元)</td>{{eps_cells}}
+                    </tr>
+                    <tr>
+                        <td>毛利率(%)</td>{{gross_margin_cells}}
+                    </tr>
+                    <tr>
+                        <td>净利率(%)</td>{{net_margin_cells}}
+                    </tr>
+                    <tr>
+                        <td>ROE(%)</td>{{roe_cells}}
+                    </tr>
+                    <tr>
+                        <td>PE(倍)</td>{{pe_cells}}
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- 正文分析 -->
+            {{research_content}}
+        </div>
+
+        <!-- 免责声明：正文内普通块，避免额外分页 -->
+        <div class="disclaimer">
+            <p class="disclaimer-title">免责声明</p>
+            <p>{{disclaimer_text}}</p>
+        </div>
+    </section>
+</body>
+
+</html>

@@ -16,12 +16,22 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 
 export interface PromptSwitchOptions {
-	/** 当前两轴。权威状态在宿主（SessionHost / daemon 的 conversation 折叠），经此读取。 */
-	readonly getCurrent: () => { readonly sceneId: string; readonly interactionId: string };
+	/**
+	 * 当前两轴 + expert 绑定。权威状态在宿主（SessionHost / daemon 的
+	 * conversation 折叠），经此读取。expertId 仅 expert 模式有值
+	 * （选专家 = 切 expert 模式 + 绑定人格，spec: add-expert-mode）；
+	 * 子代理 / run 会话不起专家，省略即可。
+	 */
+	readonly getCurrent: () => {
+		readonly sceneId: string;
+		readonly interactionId: string;
+		readonly expertId?: string;
+	};
 	/** 组装最终提示词。抛错会沿 pi 的事件链向上传播，让这次 run 响亮失败。 */
 	readonly compose: (
 		sceneId: string,
 		interactionId: string,
+		expertId: string | undefined,
 		piContext: PromptContextOptions,
 	) => Promise<string>;
 }
@@ -29,7 +39,7 @@ export interface PromptSwitchOptions {
 export function createPromptSwitch(options: PromptSwitchOptions) {
 	return (pi: ExtensionAPI): void => {
 		pi.on("before_agent_start", async (event) => {
-			const { sceneId, interactionId } = options.getCurrent();
+			const { sceneId, interactionId, expertId } = options.getCurrent();
 			// pi 在事件里已经给好它加载到的上下文文件与工具提示，这里透传，
 			// 不再让宿主重复发现资源（BeforeAgentStartEvent.systemPromptOptions）。
 			const piContext: PromptContextOptions = {
@@ -38,7 +48,7 @@ export function createPromptSwitch(options: PromptSwitchOptions) {
 				promptGuidelines: event.systemPromptOptions.promptGuidelines,
 			};
 			return {
-				systemPrompt: await options.compose(sceneId, interactionId, piContext),
+				systemPrompt: await options.compose(sceneId, interactionId, expertId, piContext),
 			};
 		});
 	};

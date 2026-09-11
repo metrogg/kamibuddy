@@ -4,8 +4,9 @@
  *
  * 与它的差异（如实呈现，不画死按钮）：
  * - 没有市场/SkillHub —— 我们没有分发后端，本页只管理「已安装」。
- *   后接市场时（ROADMAP T2 之后）再补「精选技能」区。
- * - 专家页签还没做，点击给「待做」反馈。
+ *   后接市场时再补「精选技能」区。
+ * - 专家页签展示内置+用户级专家库（选择即切专家模式，与模式菜单「专家 ▸」同源）；
+ *   专家团/市场/CRUD 未做（spec add-expert-mode 声明）。
  * - 导入支持「含 SKILL.md 的文件夹」与「单个 .md」；zip 解包后排期。
  *
  * 导入成功后提示词在**下一轮对话**即生效（daemon 每轮现读技能清单），
@@ -14,6 +15,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { SkillsSnapshot, SkillInfo } from "@shared/settings.ts";
+import type { ExpertListItem } from "@shared/ipc.ts";
 import { ConnectorsView } from "./connectors-view.tsx";
 import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
 
@@ -22,18 +24,22 @@ interface SkillsViewProps {
 	readonly onTodo: (feature: string) => void;
 	/** 导入成功 / 失败都走这个轻提示。 */
 	readonly onToast: (text: string) => void;
+	/** 专家库（App 启动时经 listExperts 拉取，与模式菜单「专家 ▸」同一份）。 */
+	readonly experts: readonly ExpertListItem[];
+	/** 选中专家：切 expert 模式并回到对话（App 层组合 setExpert + 路由）。 */
+	readonly onSelectExpert: (name: string) => void;
 }
 
-/** 顶部页签。专家未实现，仍列出（对齐 WorkBuddy 的信息架构）。 */
+/** 顶部页签。 */
 const TABS = [
-	{ id: "expert", label: "专家", ready: false },
+	{ id: "expert", label: "专家", ready: true },
 	{ id: "skills", label: "技能", ready: true },
 	{ id: "connectors", label: "连接器", ready: true },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function SkillsView({ onClose, onTodo, onToast }: SkillsViewProps): React.JSX.Element {
+export function SkillsView({ onClose, onTodo, onToast, experts, onSelectExpert }: SkillsViewProps): React.JSX.Element {
 	const [tab, setTab] = useState<TabId>("skills");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
@@ -130,6 +136,23 @@ export function SkillsView({ onClose, onTodo, onToast }: SkillsViewProps): React
 			<div className="skills-body">
 				{tab === "connectors" ? (
 					<ConnectorsView onToast={onToast} />
+				) : tab === "expert" ? (
+					<div className="skill-grid">
+						{experts.map((expert) => (
+							<button
+								key={expert.name}
+								type="button"
+								className="skill-card expert-card"
+								onClick={() => onSelectExpert(expert.name)}
+							>
+								<div className="skill-card-head">
+									<span className="skill-card-name">{expert.displayName}</span>
+									<span className="provider-tag">{expert.profession}</span>
+								</div>
+								<p className="skill-card-desc">{expert.description}</p>
+							</button>
+						))}
+					</div>
 				) : (
 					<>
 						{error !== undefined && <div className="settings-error">{error}</div>}

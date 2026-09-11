@@ -27,6 +27,7 @@ const PATHS: PolicyPaths = {
 	configDir: join(HOME, ".kamibuddy"),
 	protectedDirs: defaultProtectedDirs(HOME),
 	appDir: APP_DIR,
+	resourcesDir: join(APP_DIR, "resources"),
 };
 const CWD = PATHS.workspaceDir;
 
@@ -275,6 +276,43 @@ describe("工作目录之外的写入", () => {
 		const sibling = `${PATHS.workspaceDir}-backup`;
 		const result = decide(facts({ path: join(sibling, "x.md") }), PATHS, CWD);
 		expect(result.kind).toBe("ask");
+	});
+});
+
+describe("docx_convert（写工作区产物文件档，与 write 同语义）", () => {
+	/*
+	 * 判定锚定产物路径 outputPath（permission-gate 的 extractFacts 已把它
+	 * 映射进 facts.path，这里喂的就是映射后的形态）。
+	 */
+	it("产物在工作区内 → 放行", () => {
+		const target = join(PATHS.workspaceDir, "周报.docx");
+		expect(decide(facts({ toolName: "docx_convert", path: target }), PATHS, CWD)).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("产物出工作区 → 中风险询问，文案按「写入」（产出新文件）", () => {
+		const target = join(HOME, "Desktop", "周报.docx");
+		expect(decide(facts({ toolName: "docx_convert", path: target }), PATHS, CWD)).toEqual({
+			kind: "ask",
+			risk: "medium",
+			summary: "写入工作目录之外的文件",
+			details: target,
+		});
+	});
+
+	it("read-only 档 → 拒（它写产物文件，这是模式的全部含义）", () => {
+		const target = join(PATHS.workspaceDir, "周报.docx");
+		const result = decide(facts({ toolName: "docx_convert", path: target }), PATHS, CWD, READONLY);
+		expect(result.kind).toBe("deny");
+	});
+
+	it("产物落在应用目录内 → 高风险询问（先于工作区放行判定）", () => {
+		const target = join(APP_DIR, "out.docx");
+		expect(decide(facts({ toolName: "docx_convert", path: target }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "high",
+		});
 	});
 });
 
@@ -611,5 +649,39 @@ describe("向后兼容", () => {
 		const minimal: PolicyPaths = { workspaceDir: PATHS.workspaceDir, configDir: PATHS.configDir };
 		const result = decide(facts({ path: join(APP_DIR, "src", "app.ts") }), minimal, CWD);
 		expect(result).toMatchObject({ kind: "ask", risk: "medium" });
+	});
+});
+
+describe("内置资源目录（resourcesDir）只读放行", () => {
+	const skillFile = join(APP_DIR, "resources", "skills", "docx", "SKILL.md");
+
+	it("read / grep / find / ls / read_document 读 resources/ 一律放行（不问）", () => {
+		for (const toolName of ["read", "grep", "find", "ls", "read_document"]) {
+			expect(decide(facts({ toolName, path: skillFile }), PATHS, CWD).kind).toBe("allow");
+		}
+	});
+
+	it("read-only 档下读 resources/ 同样放行（与工作区读同语义）", () => {
+		expect(decide(facts({ toolName: "read", path: skillFile }), PATHS, CWD, READONLY).kind).toBe("allow");
+	});
+
+	it("写 resources/ 不因此放开 —— 仍在 appDir 之下，走高风险询问", () => {
+		const result = decide(facts({ path: skillFile }), PATHS, CWD);
+		expect(result).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("resources 之外的区外路径仍按原规则询问（不被误放行）", () => {
+		expect(decide(facts({ toolName: "read", path: join(HOME, "elsewhere", "x.txt") }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "low",
+		});
+	});
+
+	it("不传 resourcesDir 时规则不生效 —— 内置技能文件落回区外读询问", () => {
+		const minimal: PolicyPaths = { workspaceDir: PATHS.workspaceDir, configDir: PATHS.configDir };
+		expect(decide(facts({ toolName: "read", path: skillFile }), minimal, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "low",
+		});
 	});
 });

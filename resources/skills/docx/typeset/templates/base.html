@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="docx-page-size" content="A4">
+  <title>{{document_title}}</title>
+  <style>
+  :root {
+    /* Page layout */
+    --page-content-width: var(--layout-contentWidth, 15.6cm);
+    /* Typography */
+    --fs-h1: var(--typography-fontSize-h1, 22pt);
+    --fs-h2: var(--typography-fontSize-h2, 18pt);
+    --fs-h3: var(--typography-fontSize-h3, 14pt);
+    --fs-h4: var(--typography-fontSize-h4, 12pt);
+    --fs-body: var(--typography-fontSize-body, 12pt);
+    --fs-small: var(--typography-fontSize-small, 10pt);
+    --ff-heading: var(--typography-fontFamily-heading, "黑体", SimHei, sans-serif);
+    --ff-body: var(--typography-fontFamily-body, "宋体", SimSun, serif);
+    --ff-mono: var(--typography-fontFamily-mono, monospace);
+    --lh-body: var(--typography-lineHeight-body, 1.5);
+    --lh-heading: var(--typography-lineHeight-heading, 1.2);
+    --fw-bold: var(--typography-fontWeight-bold, 700);
+    --fw-normal: var(--typography-fontWeight-normal, 400);
+    /* Color */
+    --color-primary: var(--color-primary, #333333);
+    --color-text: var(--color-text, #000000);
+    --color-muted: var(--color-muted, #666666);
+    --color-border: var(--color-border, #cccccc);
+    --color-bg: var(--color-bg, #ffffff);
+    --color-highlight: var(--color-highlight, #f5f7fa);
+    /* Spacing */
+    --spacing-paragraph: var(--spacing-paragraph, 0.8em);
+    --spacing-section: var(--spacing-section, 2em);
+    --spacing-block: var(--spacing-block, 1em);
+    --margin-page: var(--layout-margin, 2.5cm);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--ff-body);
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
+    color: var(--color-text);
+    background: var(--color-bg);
+    max-width: var(--page-content-width);
+    margin-left: auto;
+    margin-right: auto;
+    padding: var(--margin-page) 0;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--ff-heading);
+    line-height: var(--lh-heading);
+    font-weight: var(--fw-bold);
+    margin-top: var(--spacing-section);
+    margin-bottom: var(--spacing-paragraph);
+  }
+  h1 { font-size: var(--fs-h1); }
+  h2 { font-size: var(--fs-h2); }
+  h3 { font-size: var(--fs-h3); }
+  h4 { font-size: var(--fs-h4); }
+
+  p { margin-bottom: var(--spacing-paragraph); }
+
+  ul, ol { padding-left: 2em; margin-bottom: var(--spacing-paragraph); }
+  li { margin-bottom: 0.3em; }
+
+  table { border-collapse: collapse; width: 100%; margin-bottom: var(--spacing-block); }
+  th, td { padding: 0.5em 0.8em; border: 1px solid var(--color-border); }
+  th { font-weight: var(--fw-bold); background: var(--color-highlight); }
+  caption { font-size: var(--fs-small); margin-bottom: 0.4em; text-align: left; }
+
+  figure { margin: var(--spacing-block) 0; }
+  figcaption { font-size: var(--fs-small); color: var(--color-muted); margin-top: 0.4em; }
+
+  /* TOC */
+  .doc-toc { margin-bottom: var(--spacing-section); padding: var(--spacing-block); background: var(--color-highlight); }
+  .toc-title { font-weight: var(--fw-bold); margin-bottom: 0.5em; }
+  .toc-list, .toc-list ol, .toc-list ul { list-style: none; list-style-type: none; padding-left: 1.5em; }
+  .toc-list li { margin-bottom: 0.3em; text-indent: 0; }
+  .toc-list a { color: var(--color-primary); text-decoration: none; }
+  .toc-list a:hover { text-decoration: underline; }
+
+  /* Layout */
+  .doc-header { margin-bottom: var(--spacing-section); }
+  .doc-main { }
+  .doc-footer { margin-top: var(--spacing-section); color: var(--color-muted); font-size: var(--fs-small); }
+  </style>
+</head>
+<body>
+  <header class="doc-header">{{header_content}}</header>
+  <!-- TOC auto-generated when ≥3 h2 sections exist -->
+  <!-- <nav class="doc-toc" aria-label="文档目录">
+    <p class="toc-title">目录</p>
+    <ol class="toc-list">
+      <li><a href="#section-1">章节标题</a></li>
+    </ol>
+  </nav> -->
+  <main class="doc-main">{{main_content}}</main>
+  <footer class="doc-footer">{{footer_content}}</footer>
+</body>
+</html>

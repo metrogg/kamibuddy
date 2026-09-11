@@ -311,6 +311,23 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 明确不抽象：LLM provider（`pi-ai` 已是）、插件加载器（pi 有 packages + Skills）、
 会话存储（`SessionManager` 已给 JSONL / 内存两种）、多租户、事件 schema 版本号。
 
+### 4.8 专家 = 第四交互模式 + 人格注入（2026-09-11，spec add-expert-mode）
+
+WorkBuddy 实证：expert 不是独立 agent 运行时，是**交互轴第四模式**——选专家 =
+切 expert 模式 + 专家正文人格段注入系统提示（主提示 OS + 人格 APP）。
+我们同构落地：`resources/experts/*.md`（frontmatter name/description/displayName/
+profession，无 tools——工具面由模式统一分配）+ `applyInteraction` 单入口第三参
+expertId + compose 的 expert 分支 + `<current-expert>` 钉住段。
+
+关键子决策：
+- **钉住段放系统提示词最末**而非 WorkBuddy 的 user-context 每轮注入——v1 没有
+  user-context 机制，而系统提示每轮重组，末段离对话最近且文本稳定不炸前缀缓存。
+- **expert 不入 /plan 记忆**——切走时 expertId 已清空，记住「expert」回程必炸，
+  安全回落上一个三模式。
+- **专家正文照搬 WorkBuddy 内置专家**（tencent-docx/experts，用户授权的临时方案），
+  头注标注待定制替换；用户级 `~/.kamibuddy/experts/` 同名覆盖。
+- 专家团（主理人/Teams/SendMessage）、市场、CRUD 技能明确不做（后续 spec）。
+
 ## 5. pi 能力边界（D1 验证结论）
 
 | 项                     | 结论                                                                                                          |

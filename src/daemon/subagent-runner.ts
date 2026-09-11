@@ -19,9 +19,11 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "../core/agents.ts";
-import { getConfigDir } from "../core/config-paths.ts";
+import { getConfigDir, getResourcesDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import { composeSubagentPrompt } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -29,6 +31,7 @@ import { SessionHost } from "../core/session-host.ts";
 import { sanitizeSubagentOutput } from "../core/subagent-sanitize.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
+import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
@@ -270,7 +273,9 @@ function buildSubagentExtensions(
 				workspaceDir: cwd,
 				configDir: getConfigDir(),
 				protectedDirs: deps.protectedDirs,
-				appDir: process.cwd(),
+			appDir: process.cwd(),
+			// 内置资源只读放行（技能渐进加载全靠 read 这里）。
+			resourcesDir: getResourcesDir(),
 			},
 			cwd,
 			getSettings: deps.getPermissions,
@@ -285,7 +290,7 @@ function buildSubagentExtensions(
 		}),
 		createPromptSwitch({
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
-			compose: (_sceneId, _interactionId, piContext) =>
+			compose: (_sceneId, _interactionId, _expertId, piContext) =>
 				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
@@ -293,6 +298,16 @@ function buildSubagentExtensions(
 		// （worker 的 frontmatter 含 powershell，必须注册同名工具）。
 		powershellExtensionFactory(),
 		createDocReadTool(),
+		/*
+		 * docx 生成：预先挂进子代理工具面 —— 文档流水线的 doc-converter 子代理
+		 * （spec Task 3）的 frontmatter 白名单会含 docx_convert，装配层必须
+		 * 有同名工具，否则模型对着白名单调一个不存在的能力。
+		 * 现有内置 agent 的白名单都不含它，pi 对未注册名静默忽略，此处注册无副作用。
+		 */
+		createDocxConvertTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
 		// 不注册 visualizer（read_me / show_widget）：子代理的输出只以文本回传
 		// 主代理，widget 没有渲染通道 —— 注册了只会白占上下文
 		// （spec: add-inline-widgets）。

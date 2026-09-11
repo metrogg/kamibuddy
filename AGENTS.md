@@ -122,6 +122,13 @@ resources/
 **不许在业务代码里直接** **`readFileSync('settings.json')`。**
 云端配置是将来少发版的命根子，现在不做，但入口必须现在就统一。
 
+## 六、WorkBuddy 资产使用（2026-09-10 用户决策）
+
+**内部使用阶段允许直接搬用 WorkBuddy 资产**（Python 引擎、HTML 模板、design tokens、
+专家/编排文案），正式上线前由专人做风险置换——风险兜底不是开发者的任务。
+已搬用的资产在目录 README 注明来源（如 `resources/docx-engine/README.md`）。
+机制类情报（架构、流程、阈值）仍然优先照学；能搬就不重写，别为原创而原创。
+
 ## 七、代码风格
 
 - TypeScript strict，ESM，禁 `any`（确实需要时写 `unknown` 加窄化）。

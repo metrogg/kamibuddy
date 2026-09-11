@@ -186,6 +186,33 @@ describe("入参别名", () => {
 		expect(asked).toHaveLength(0);
 	});
 
+	it("docx_convert 判定锚定 outputPath（产物在工作区内放行、不拿 htmlPath 判）", async () => {
+		const { call, asked } = mount({});
+		// htmlPath 故意给区外路径：产物才是写侧风险，锚错参数会误弹窗。
+		const result = await call({
+			toolName: "docx_convert",
+			input: {
+				htmlPath: join(HOME, "别处", "a.html"),
+				outputPath: join(WORKSPACE, "a.docx"),
+			},
+		});
+
+		expect(result).toBeUndefined();
+		expect(asked).toHaveLength(0);
+	});
+
+	it("docx_convert 产物出工作区 → 询问", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+		const result = await call({
+			toolName: "docx_convert",
+			input: { htmlPath: join(WORKSPACE, "a.html"), outputPath: join(HOME, "a.docx") },
+		});
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({ toolName: "docx_convert", risk: "medium" });
+		expect(result).toBeUndefined();
+	});
+
 	it("路径缺失时拒绝，而不是放行", async () => {
 		const { call } = mount({});
 		const result = await call({ toolName: "write", input: {} });

@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
-import type { QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
+import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
 import type { RenderBlock } from "@shared/metafold.ts";
@@ -64,8 +64,13 @@ interface ChatViewProps {
 	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
+	/** 专家列表（头部 ModeSwitch 的「专家 ▸」子菜单与当前专家显示的数据源，App 层统一下发）。 */
+	readonly experts: readonly ExpertListItem[];
+	readonly onSelectExpert: (expertId: string) => void;
 	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
 	readonly onPreviewArtifact: (path: string) => void;
+	/** 点击正文行内 code 的路径徽章：App 决定面板预览还是外部打开。 */
+	readonly onPathClick: (path: string, kind: "file" | "directory") => void;
 	/** 产物/变更聚合入口：打开预览面板并展开概览菜单对应分组。 */
 	readonly onOpenPanelGroup: (group: "artifacts" | "changes") => void;
 	/** 打开设置页（权限弹层的「打开设置…」入口，与 home-view 同语义）。 */
@@ -624,23 +629,48 @@ interface ModeSwitchProps {
 	readonly interactions: readonly ModeDescriptor[];
 	readonly currentId: string;
 	readonly onChange: (id: string) => void;
+	/** 专家列表与当前专家（「专家 ▸」子菜单数据源），与 PlusMenu 同源（App 层统一下发）。 */
+	readonly experts: readonly ExpertListItem[];
+	readonly expertId: string | undefined;
+	readonly onSelectExpert: (expertId: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
 /** 交互轴切换（ask / craft / plan / expert），对标 WorkBuddy 的 interactionmode。 */
-function ModeSwitch({ interactions, currentId, onChange, onTodo }: ModeSwitchProps): React.JSX.Element {
+function ModeSwitch({
+	interactions,
+	currentId,
+	onChange,
+	experts,
+	expertId,
+	onSelectExpert,
+	onTodo,
+}: ModeSwitchProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
+	// 「专家」子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover，同 PlusMenu 约定）。
+	const [expertsOpen, setExpertsOpen] = useState(false);
 	const current = interactions.find((m) => m.id === currentId);
+	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
+
+	const toggle = (): void => {
+		setOpen((v) => !v);
+		// 主菜单开合都复位子菜单：下次重开从「专家」行开始，而不是残留展开态（同 ModelMenu 约定）。
+		setExpertsOpen(false);
+	};
+
+	// expert 不裸列（无专家的 expert 模式不可达，spec: add-expert-mode）——
+	// 三模式平铺，「专家 ▸」行挂子菜单列具体专家，选中即进 expert 模式。
+	const plainModes = interactions.filter((m) => m.id !== "expert");
 
 	return (
 		<div className="menu-zone">
-			<button type="button" className="bar-btn bar-btn-text" onClick={() => setOpen((v) => !v)}>
+			<button type="button" className="bar-btn bar-btn-text" onClick={toggle}>
 				{current?.label ?? currentId}
 				<IconChevronDown size={13} />
 			</button>
 			{open && (
 				<div className="pop-menu mode-menu">
-					{interactions.map((mode) => (
+					{plainModes.map((mode) => (
 						<button
 							key={mode.id}
 							type="button"
@@ -660,6 +690,50 @@ function ModeSwitch({ interactions, currentId, onChange, onTodo }: ModeSwitchPro
 							<span className="mode-menu-desc">{mode.description}</span>
 						</button>
 					))}
+					<div
+						className="mode-menu-sub-zone"
+						onMouseEnter={() => setExpertsOpen(true)}
+						onMouseLeave={() => setExpertsOpen(false)}
+					>
+						<button
+							type="button"
+							className={`mode-menu-item${currentId === "expert" ? " active" : ""}`}
+							aria-expanded={expertsOpen}
+							onClick={() => setExpertsOpen((v) => !v)}
+						>
+							<span className="mode-menu-label">
+								专家
+								<span className="mode-menu-caret" aria-hidden="true">
+									▸
+								</span>
+							</span>
+							{/* 当前专家名钉在行上（WorkBuddy 档同行右侧回显的同款语义）；
+							    未进专家模式时退为引导文案。 */}
+							<span className="mode-menu-desc">
+								{currentExpert?.displayName ?? "选定专家后以它的身份与方法工作"}
+							</span>
+						</button>
+						{expertsOpen && (
+							<div className="pop-menu mode-menu-sub">
+								{experts.map((expert) => (
+									<button
+										key={expert.name}
+										type="button"
+										className={`mode-menu-item${expert.name === expertId ? " active" : ""}`}
+										onClick={() => {
+											setOpen(false);
+											setExpertsOpen(false);
+											onSelectExpert(expert.name);
+										}}
+									>
+										<span className="mode-menu-label">{expert.displayName}</span>
+										<span className="mode-menu-desc">{expert.profession}</span>
+										{expert.name === expertId && <IconCheck size={14} className="mode-menu-check" />}
+									</button>
+								))}
+							</div>
+						)}
+					</div>
 				</div>
 			)}
 		</div>
@@ -775,7 +849,10 @@ export function ChatView({
 	onSubmit,
 	onAbort,
 	onInteractionChange,
+	experts,
+	onSelectExpert,
 	onPreviewArtifact,
+	onPathClick,
 	onOpenPanelGroup,
 	onOpenSettings,
 	onError,
@@ -794,6 +871,11 @@ export function ChatView({
 	const composerRef = useRef<ComposerHandle>(null);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
+	// 当前专家（仅 expert 模式有值）：头部显示与子菜单勾选共用这份查找。
+	// 列表尚未拉回时退显原始 name —— expertId 是 session_state 的权威值，
+	// 列表只是展示映射，缺映射不该把「有专家」这个事实藏起来。
+	const expertId = conversation.state.expertId;
+	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
 	// MetaFold 折叠单元的展开状态：按单元 id 记忆。块流每次渲染由纯函数
@@ -1033,7 +1115,11 @@ export function ChatView({
 							/>
 						)}
 						{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-						<Markdown text={entry.text} />
+						<Markdown
+							text={entry.text}
+							cwd={conversation.state.cwd}
+							onPathClick={onPathClick}
+						/>
 						{/*
 							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
@@ -1180,8 +1266,22 @@ export function ChatView({
 					interactions={conversation.availableModes}
 					currentId={conversation.state.interactionId}
 					onChange={onInteractionChange}
+					experts={experts}
+					expertId={expertId}
+					onSelectExpert={onSelectExpert}
 					onTodo={onTodo}
 				/>
+				{/*
+				当前专家钉在头部（WorkBuddy 专家会话头部同款位置）：expert 模式下
+				模式切换器只显示「专家」这个模式名，具体是哪位专家必须有常驻回显，
+				否则对话进行到一半用户无从确认人格是否还是当初选的那位。
+			*/}
+				{expertId !== undefined && (
+					<span className="chat-expert" title={`当前专家：${currentExpert?.displayName ?? expertId}`}>
+						<IconAssistant size={13} />
+						专家：{currentExpert?.displayName ?? expertId}
+					</span>
+				)}
 			</header>
 
 			{/*
@@ -1274,14 +1374,17 @@ export function ChatView({
 					>
 						{/*
 					「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
-					触发 Composer 内部的附件选择框）+ 模式子菜单（与头部 ModeSwitch
-					同一数据源）+ 专家/技能/连接器占位。
+					触发 Composer 内部的附件选择框）+ 模式/专家子菜单（与头部 ModeSwitch
+					同一数据源）+ 技能/连接器占位。
 					弹层向上、左对齐，与下方 PermissionMenu 同一约定。
 				*/}
 						<PlusMenu
 							modes={conversation.availableModes}
 							currentId={conversation.state.interactionId}
 							onInteractionChange={onInteractionChange}
+							experts={experts}
+							expertId={expertId}
+							onSelectExpert={onSelectExpert}
 							onPickFiles={() => void composerRef.current?.pickFiles()}
 							onTodo={onTodo}
 						/>

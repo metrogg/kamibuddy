@@ -22,10 +22,11 @@ type Handler = (event: {
 const EMPTY_EVENT = { systemPromptOptions: {} } as Parameters<Handler>[0];
 
 function mount(options: {
-	readonly axes: { sceneId: string; interactionId: string };
+	readonly axes: { sceneId: string; interactionId: string; expertId?: string };
 	readonly compose: (
 		sceneId: string,
 		interactionId: string,
+		expertId: string | undefined,
 		piContext: PromptContextOptions,
 	) => Promise<string>;
 }): Handler {
@@ -72,6 +73,30 @@ describe("before_agent_start 接缝", () => {
 
 		expect(seen).toEqual(["work/craft", "work/ask"]);
 		expect(second?.systemPrompt).toBe("work/ask");
+	});
+
+	it("expertId 随两轴一起透传给 compose（专家切换后下一轮生效）", async () => {
+		const axes: { sceneId: string; interactionId: string; expertId?: string } = {
+			sceneId: "work",
+			interactionId: "expert",
+			expertId: "work-report",
+		};
+		const seen: Array<string | undefined> = [];
+		const handler = mount({
+			axes,
+			compose: async (_sceneId, _interactionId, expertId) => {
+				seen.push(expertId);
+				return "ok";
+			},
+		});
+
+		await handler(EMPTY_EVENT);
+		// 切走三模式：expertId 清空（state 权威在宿主，这里只验证透传不缓存）。
+		axes.interactionId = "craft";
+		axes.expertId = undefined;
+		await handler(EMPTY_EVENT);
+
+		expect(seen).toEqual(["work-report", undefined]);
 	});
 
 	it("compose 抛错时向上传播，不静默回落到 pi 默认提示词", async () => {

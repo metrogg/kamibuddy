@@ -34,6 +34,8 @@ const bridge: KamiBridge = {
 	setScene: (sceneId) => ipcRenderer.invoke(INVOKE.setScene, sceneId),
 	setInteraction: (interactionId) =>
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
+	setExpert: (expertId) => ipcRenderer.invoke(INVOKE.setExpert, expertId),
+	listExperts: () => ipcRenderer.invoke(INVOKE.listExperts),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
 	setThinkingLevel: (level) =>
 		ipcRenderer.invoke(INVOKE.setThinkingLevel, level),
@@ -65,6 +67,7 @@ const bridge: KamiBridge = {
 
 	openArtifact: (path) => ipcRenderer.invoke(INVOKE.openArtifact, path),
 	readArtifact: (path) => ipcRenderer.invoke(INVOKE.readArtifact, path),
+	statPath: (path) => ipcRenderer.invoke(INVOKE.statPath, path),
 	saveArtifactAs: (request) =>
 		ipcRenderer.invoke(INVOKE.saveArtifactAs, request),
 	previewBaseUrl: (cwd) => ipcRenderer.invoke(INVOKE.previewBaseUrl, cwd),
@@ -112,6 +115,7 @@ const bridge: KamiBridge = {
 
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
 	globalShortcutStatus: () => ipcRenderer.invoke(INVOKE.globalShortcutStatus),
+	docxEnvStatus: () => ipcRenderer.invoke(INVOKE.docxEnvStatus),
 
 	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
 	saveAutomation: (input) => ipcRenderer.invoke(INVOKE.automationSave, input),
