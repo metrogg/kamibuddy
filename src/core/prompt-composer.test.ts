@@ -246,6 +246,55 @@ describe("回复风格注入（F8）", () => {
 	});
 });
 
+describe("记忆段注入（spec: add-memory-system）", () => {
+	const MEMORY_SYSTEM = "\n三层记忆的结构与写入纪律。\n";
+	const MEMORY_CONTENT = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+
+	it("memorySystemBody 固定注入为「## 记忆系统」段，正文剥首尾换行", () => {
+		const out = composePrompt({ ...BASE, memorySystemBody: MEMORY_SYSTEM });
+		expect(out).toContain("## 记忆系统\n\n三层记忆的结构与写入纪律。");
+	});
+
+	it("memoryContent 有内容时注入内容段；两者都在骨架之后、expert 人格段之前", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			memorySystemBody: MEMORY_SYSTEM,
+			memoryContent: MEMORY_CONTENT,
+			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		expect(text).toContain(MEMORY_CONTENT);
+		expect(segments.map((s) => s.text).join("")).toBe(text);
+		const sources = segments.map((s) => s.source);
+		expect(sources.indexOf("memory-system")).toBeLessThan(sources.indexOf("memory"));
+		expect(sources.indexOf("memory")).toBeLessThan(sources.indexOf("expert"));
+		expect(text.indexOf("创作模式行为段。")).toBeLessThan(text.indexOf("## 记忆系统"));
+	});
+
+	it("memoryContent 缺省（三层全空）→ 无内容段、零 token", () => {
+		const out = composePrompt({ ...BASE, memorySystemBody: MEMORY_SYSTEM });
+		expect(out).toContain("## 记忆系统");
+		expect(out).not.toContain("## 长期记忆");
+		const sources = composePromptWithMeta({ ...BASE, memorySystemBody: MEMORY_SYSTEM }).segments.map(
+			(s) => s.source,
+		);
+		expect(sources).not.toContain("memory");
+	});
+
+	it("两者都缺省 → 无任何记忆段（向后兼容：既有调用点零改动）", () => {
+		const out = composePrompt(BASE);
+		expect(out).not.toContain("## 记忆系统");
+		expect(out).not.toContain("## 长期记忆");
+	});
+
+	it("记忆内容里的 {{...}} 不触发残留检查（用户数据不是模板笔误）", () => {
+		// 用户往 MEMORY.md 里写了「{{示例}}」不该让会话组装抛错 ——
+		// 记忆段推在残留检查之后，管笔误的检查不管用户数据。
+		const out = composePrompt({ ...BASE, memoryContent: "笔记：模板写作 {{示例}} 的用法" });
+		expect(out).toContain("{{示例}}");
+	});
+});
+
 describe("子代理提示词不注入风格", () => {
 	// 子代理身份由 agent 定义自声明，不套产品风格（spec: systematize-prompt-architecture）。
 	// ComposeSubagentPromptInput 类型上没有 style 字段（编译期钉死），这里钉运行期输出。

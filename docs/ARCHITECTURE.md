@@ -328,6 +328,26 @@ expertId + compose 的 expert 分支 + `<current-expert>` 钉住段。
   头注标注待定制替换；用户级 `~/.kamibuddy/experts/` 同名覆盖。
 - 专家团（主理人/Teams/SendMessage）、市场、CRUD 技能明确不做（后续 spec）。
 
+### 4.9 记忆三层 + 画像本地蒸馏（2026-09-11，spec add-memory-system）
+
+WorkBuddy 记忆实证：三层（云端画像 / 用户级 MEMORY.md / 工作区日志+笔记），
+更新靠**提示词纪律**（模型完成实质工作后自己追加日志、30 天蒸馏是模型家务），
+不是后台代码。云端部分换本地等价：**画像蒸馏用自家 automation 调度器**
+（内置任务「记忆整理」daily 03:00 无人值守跑，builtin 静默不 toast/不可删），
+conversation_search 换本地 grep 会话 JSONL。
+
+关键子决策：
+- **记忆文件白名单是权限门「应用目录禁写」的唯一开口**：MEMORY.md/PROFILE.md/
+  工作区 memory/ 是纯数据（非可执行配置），模型维护记忆是功能本体；
+  防自毁针对 preferences/auth/models。白名单只限文件工具，shell 不借道。
+- **蒸馏输出走 run 会话直接写 PROFILE.md**（白名单放行），不需要 daemon 特殊通道。
+- **画像设置页**：toggle（memoryEnabled 控制内置任务）+ 查看/编辑/重置/导入；
+  importProfile 由 main 本地应答（daemon 不 import electron 弹不了对话框，
+  业务写仍走 daemon——main「不解释 payload」边界不破）。
+- 注入控 token：日志只注近 3 天文件名清单（模型按需 read），其余三层全注，
+  全空零 token。
+- 身份层（SOUL/BOOTSTRAP）明确不做——与专家人格有交互，单独 spec。
+
 ## 5. pi 能力边界（D1 验证结论）
 
 | 项                     | 结论                                                                                                          |

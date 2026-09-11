@@ -15,12 +15,14 @@
  *     streaming 吸底跟随（useStreamingStick 的 align-end）收敛到同一个
  *     scrollTop —— 吸顶后跟随接管不打架、不二次跳动。
  *
- * 本模块是纯函数层（三态决策 + 回合分组），chat-view 只做 DOM 执行
+ * 本模块是纯函数层（三态决策），chat-view 只做 DOM 执行
  * （scrollIntoView / scrollTop）与状态持有 —— 决策脱离 React 单测，
  * 与 thinking-fold / turn-rail 同一拆法。
+ *
+ * 这里原本还有回合分组（groupTurnBlocks，消费 metafold v1 的 RenderBlock
+ * 块流）：轮折叠落地后块流退役，切轮由 turn-fold.ts 的 buildTurnViews
+ * 一并完成（startsWithUser 语义原样保留），分组函数随之删除。
  */
-
-import type { RenderBlock } from "@shared/metafold.ts";
 
 /**
  * 「本会话内新发送」的待吸顶记录：发送动作时建立，新 user 消息回显上屏、
@@ -93,43 +95,4 @@ export function decideScrollAction(input: ScrollDecisionInput): ScrollAction {
 		return { kind: "none" };
 	}
 	return input.isFollowing ? { kind: "stick-bottom" } : { kind: "none" };
-}
-
-/* ── 回合分组（anchor-space 的结构前提） ───────────────────────── */
-
-export interface TurnGroup {
-	/** 稳定 key：开启本组的 user 消息 id；首个 user 之前的前缀组用固定串。 */
-	readonly key: string;
-	readonly blocks: readonly RenderBlock[];
-	/**
-	 * 本组是否由 user 消息开启。anchor-space（min-height）只挂在
-	 * 「由 user 开启的最后一组」上 —— 前缀组里没有新发送的消息，挂了
-	 * 也只是凭空多一段滚动空间。
-	 */
-	readonly startsWithUser: boolean;
-}
-
-/**
- * 渲染块流 → 回合分组（WorkBuddy groupedMessages 同构）：每个 user 块开启
- * 一组，同回合的回合头/工具/折叠/错误块跟随其后；首个 user 之前的块归入
- * 前缀组。
- *
- * 组边界稳定：老回合的组永不重排，新回合只追加新组 —— 分组包装不会引发
- * 跨父级重挂载（卡片展开态、思考块开合偏好都得以保留）。
- */
-export function groupTurnBlocks(blocks: readonly RenderBlock[]): readonly TurnGroup[] {
-	const groups: { key: string; startsWithUser: boolean; blocks: RenderBlock[] }[] = [];
-	for (const block of blocks) {
-		if (block.kind === "entry" && block.entry.role === "user") {
-			groups.push({ key: `turn-${block.entry.id}`, startsWithUser: true, blocks: [block] });
-			continue;
-		}
-		const last = groups[groups.length - 1];
-		if (last === undefined) {
-			groups.push({ key: "turn-prefix", startsWithUser: false, blocks: [block] });
-		} else {
-			last.blocks.push(block);
-		}
-	}
-	return groups;
 }

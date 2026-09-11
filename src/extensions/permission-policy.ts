@@ -16,6 +16,8 @@
  *                  提示注入可能骗用户点「允许」，所以不给这个选项）
  *
  * 判定链的顺序（借鉴 WorkBuddy 的 9 阶求值链，简化但同样**有序**）：
+ *   0. 记忆文件白名单（MEMORY.md / PROFILE.md / cwd 的 .kamibuddy/memory/**）
+ *      —— 纯数据，文件工具一律放行，任何档位不拦
  *   1. 受保护凭据路径（读或写都拒）—— 任何模式都不能越过
  *   2. 只读工具：无本地路径的一律放行；有路径的在工作区内放行，
  *      区外低风险询问（danger-full-access 不受限）
@@ -149,6 +151,16 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
  * read_me 返回 resources/visualizer/ 下随应用分发的设计指南文本（读的是
  * 应用自带数据，不是用户文件）；show_widget 把 SVG/HTML 片段交给 UI 内联
  * 渲染，不触文件系统、不改任何状态 —— 与 questionnaire 同口径放行。
+ * conversation_search 同理（spec: add-memory-system）：读的是 KamiBuddy 自己的
+ * 会话库（sessions/*.jsonl，daemon 内部读盘不经工具入参），与 automation_list
+ * 同档 —— 不涉及用户文件系统，也没有路径参数可判。
+ * todo_write 同理（任务清单，spec: add-todo-task-list-panel）：只更新会话内
+ * 待办清单的展示状态，不触文件系统、不改应用数据 —— 与 questionnaire 同口径。
+ * task 同理（子代理委派）：它本身只做编排，真正的敏感操作发生在子代理内部，
+ * 由 subagent-runner 自带的权限门（同一套 PermissionSettings，含 read-only
+ * 档拒绝写）逐次判定 —— 主会话对「发起委派」再弹一次窗是纯打扰
+ * （2026-09-11 用户实测：todo_write 未登记落 fail-safe 被弹窗，
+ * WorkBuddy 对这类无本地副作用的工具不询问）。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
  * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
@@ -168,6 +180,9 @@ const READ_ONLY = new Set([
 	"questionnaire",
 	"read_me",
 	"show_widget",
+	"conversation_search",
+	"todo_write",
+	"task",
 ]);
 
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
@@ -224,6 +239,32 @@ function isInside(base: string, target: string): boolean {
 }
 
 /**
+ * 记忆文件白名单（spec: add-memory-system）：三层记忆路径 ——
+ *   配置目录下的 MEMORY.md / PROFILE.md（精确文件名），
+ *   会话 cwd 下的 .kamibuddy/memory/ 目录及其下所有文件。
+ *
+ * 为什么放行：这三个路径是**纯数据**（Markdown 笔记），不含可执行配置。
+ * 配置目录禁写防的是「自毁」—— preferences/auth/models 被改等于应用行为
+ * 被劫持；而记忆文件恰恰是模型用 edit 自己维护的，维护记忆就是记忆系统
+ * 的功能本体，拦它等于功能自残（写 MEMORY.md 每轮撞墙，记忆永远建不起来）。
+ *
+ * 为什么连 read-only 档也放行（先于阶段 3）：写入纪律是系统提示词的固定
+ * 注入段，要求完成实质工作即记当日日志；只读档拦写会让模型每轮会话都
+ * 撞墙报错。read-only 的语义是「不动用户的文件」，记忆文件是 KamiBuddy
+ * 自己的数据，与 automation_* 落 configDir 同类 —— 只是它经工具路径入参，
+ * 所以必须在门这里显式开口子。
+ *
+ * 用 isInside 做判定：文件 base 时等价于精确相等（rel === ""），且 Windows
+ * 上 path.relative 大小写不敏感 —— memory.md 与 MEMORY.md 是同一个文件，
+ * 不留给「换个大小写就判定漂移」的缝。
+ */
+function isMemoryPath(target: string, configDir: string, cwd: string): boolean {
+	if (isInside(join(configDir, "MEMORY.md"), target)) return true;
+	if (isInside(join(configDir, "PROFILE.md"), target)) return true;
+	return isInside(join(cwd, ".kamibuddy", "memory"), target);
+}
+
+/**
  * 判定一次工具调用。
  *
  * `settings` 省略时用 DEFAULT_PERMISSIONS（= workspace-write + ask），
@@ -271,6 +312,20 @@ function decideUnderMode(
 				: resolve(cwd, rawPath);
 
 	/*
+	 * 阶段 0：记忆文件白名单 —— 文件工具（读 / 写）对三层记忆路径一律放行，
+	 * 先于阶段 1 的配置目录禁写与阶段 3 的只读拒绝（理由见 isMemoryPath 注释）。
+	 * 只限文件工具：shell 的 path 入参没有语义（命令才是本体），
+	 * 不能拿「路径恰好在记忆目录」给一条命令放行。
+	 */
+	if (
+		target !== undefined &&
+		(READ_ONLY.has(toolName) || MUTATING.has(toolName)) &&
+		isMemoryPath(target, paths.configDir, cwd)
+	) {
+		return { kind: "allow" };
+	}
+
+	/*
 	 * 阶段 1：受保护的凭据路径 —— **读与写都拒，任何模式都不能越过**。
 	 *
 	 * 借鉴 WorkBuddy 把配置写保护做成独立一层（即使 bypassPermissions 也拦）。
@@ -294,6 +349,20 @@ function decideUnderMode(
 			 * 不经工具层，所以这里不需要为写开任何口子。
 			 */
 			if (READ_ONLY.has(toolName) && isInside(join(paths.configDir, "skills"), target)) {
+				return { kind: "allow" };
+			}
+			/*
+			 * 会话库（sessions/）对只读工具例外：内置「记忆整理」蒸馏任务的
+			 * run 会话 cwd 就是配置目录，它要用 read/grep/ls 翻近 3 天的会话
+			 * JSONL 来蒸馏画像 —— 读自己的会话库与 automation_list 同属
+			 * 「读 KamiBuddy 自己的数据」，不该撞配置目录的禁读墙
+			 * （spec: add-memory-system；conversation_search 的 daemon 侧实现
+			 * 不经工具层，不依赖这条口子）。
+			 *
+			 * 只放开读：写仍拒。会话文件的唯一写者是 SessionManager，
+			 * 工具层写等于篡改历史记录 —— 与 skills/ 的「只放开读」同一取向。
+			 */
+			if (READ_ONLY.has(toolName) && isInside(join(paths.configDir, "sessions"), target)) {
 				return { kind: "allow" };
 			}
 			return { kind: "deny", reason: "禁止读写 KamiBuddy 的配置与凭据文件" };

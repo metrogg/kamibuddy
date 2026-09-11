@@ -1577,8 +1577,13 @@ button {
 }
 
 .stream>* {
-	/* WorkBuddy 内容宽口径 832px，比此前的 760 更舒展。 */
-	max-width: 832px;
+	/* WorkBuddy 内容宽口径：动态分段函数（chat-content-width.ts，容器 ≤1200 固定
+	   832，之上按比例），由 chat-view 经 --chat-content-width 注入；未注入兜底 832。
+	   margin-inline:auto 让列在宽屏下居中（WorkBuddy 全屏同款：
+	   列两侧等宽留白）；此前只限宽不居中，窗口最大化后整列贴左、
+	   右侧空出一大块 —— 「全屏没有适应」的根因。 */
+	max-width: var(--chat-content-width, 832px);
+	margin-inline: auto;
 }
 
 /*
@@ -1657,6 +1662,35 @@ button {
 .turn-duration {
 	font-size: 12px;
 	color: var(--text-dim);
+	/* chevron 挂在时长行尾（轮折叠开关）：图标与文字基线对齐靠 inline-flex。 */
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* 可点击的回合头部（完成/取消轮的折叠开关）：宽度随内容收拢（通栏按钮
+   会让右侧空白也变成热区，且和真正的内容卡抢视觉层级）；hover 时长
+   文案变主色提示可点 —— metafold-row 同款语言。 */
+.turn-header.clickable {
+	width: fit-content;
+	text-align: left;
+}
+
+.turn-header.clickable:hover .turn-duration {
+	color: var(--primary);
+}
+
+/* 轮折叠 chevron：收起朝右（-90°），展开旋回朝下。常显不藏 —— 轮折叠
+   的入口若靠 hover 才浮现，用户永远发现不了（metafold 行可以藏是因为
+   它整行都是热区，头部的主体是身份与计时，不是开关）。 */
+.turn-caret {
+	flex: 0 0 auto;
+	transform: rotate(-90deg);
+	transition: transform 0.15s ease;
+}
+
+.turn-caret.open {
+	transform: rotate(0deg);
 }
 
 /* 「用户已取消」指示行：中断在消息流里留下的唯一痕迹（机制对标 WorkBuddy
@@ -2514,6 +2548,7 @@ button {
 	}
 
 	.tool-detail-box,
+	.tool-source-list,
 	.metafold-body {
 		transition: none;
 	}
@@ -2740,6 +2775,194 @@ button {
 }
 
 .artifacts-more:hover {
+	color: var(--text);
+}
+
+/* ── 引用来源（操作行来源按钮 + 右侧来源面板） ───────────────────── */
+
+/* 来源按钮：与 artifacts-more 同行的三级灰文字按钮，前置 favicon 头像组。 */
+.sources-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-dim);
+	font-size: 12px;
+	padding: 0;
+}
+
+.sources-btn:hover {
+	color: var(--text);
+}
+
+/* 头像组：负 margin 叠放（WorkBuddy -5px 同参数），后一个压住前一个的右缘。 */
+.sources-avatars {
+	display: inline-flex;
+	align-items: center;
+}
+
+.sources-avatars .source-favicon+.source-favicon {
+	margin-left: -5px;
+}
+
+/*
+ * 16px 圆形 favicon：1.5px 底色描边让叠放的圆各自独立（WorkBuddy 同款）。
+ * img 与回退 span 共用同一个盒：border-radius 对 img 直接裁切位图。
+ */
+.source-favicon {
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	border: 1.5px solid var(--bg);
+	background: var(--bg-raised);
+	object-fit: cover;
+	flex: none;
+	box-sizing: border-box;
+}
+
+/* 加载失败的 Globe 回退：同盒内居中图标（img 的 object-fit 对 svg 无意义）。 */
+.source-favicon-fallback {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-dim);
+}
+
+/* 来源面板：骨架复用 preview-panel/preview-head/preview-view，这里只补
+   标题与列表项。标题 flex:1 把关闭按钮推到行尾（与 preview-head 的右区一致）。 */
+.sources-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.sources-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+/* 列表项 = meta 行 + 标题 + 摘要，整项可点（外部打开）。 */
+.source-item {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 100%;
+	padding: 10px 12px;
+	border-radius: var(--radius-lg);
+	text-align: left;
+}
+
+.source-item:hover {
+	background: var(--bg-hover);
+}
+
+.source-item-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.source-item-site {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.source-item-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.source-item-snippet {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+/* ── web_search 工具卡来源列表（spec: add-source-favicons） ─────────── */
+
+/* 卡头来源区：summary 后的 favicon 头像组 + 「N 个来源」计数（三级灰）。 */
+.tool-sources {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+/* 开合机制镜像 .tool-detail-box（常驻 DOM + 类切换，理由见该处注释）：
+   收起态垂直方向全部归零，max-height 过渡才不会留下空壳。 */
+.tool-source-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+	max-height: 0;
+	/* 收起时必须 hidden：auto 会在 0 高区冒出滚动条。 */
+	overflow: hidden;
+	opacity: 0;
+	visibility: hidden;
+	transform: translateY(-6px);
+	transition:
+		max-height 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		margin-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		margin-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.tool-source-list.open {
+	margin: 4px 0 8px;
+	/* 来源可能很多（一次搜索十几条），限高与详情盒同口径。 */
+	max-height: 300px;
+	overflow: auto;
+	opacity: 1;
+	visibility: visible;
+	transform: translateY(0);
+}
+
+/* 来源行 = favicon + 标题，整行可点（外部打开，WorkBuddy
+   cr-tool-web-search__item 同构）。 */
+.tool-source-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 8px;
+	border-radius: var(--radius-lg);
+	text-align: left;
+}
+
+.tool-source-item:hover {
+	background: var(--bg-hover);
+}
+
+/* 行内 favicon：16px 圆角 3px（WorkBuddy 同款尺寸）——覆盖头像组的
+   圆形描边盒（行内无叠放，描边只是头像组的分隔手段）。 */
+.tool-source-item .source-favicon {
+	border-radius: 3px;
+	border: none;
+}
+
+.tool-source-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
 	color: var(--text);
 }
 
@@ -3390,6 +3613,12 @@ button {
 	padding: 12px 24px 16px;
 }
 
+/* 输入区与消息流同一内容宽口径（动态列宽居中）：宽屏下输入框不甩开消息列。 */
+.chat-composer>* {
+	max-width: var(--chat-content-width, 832px);
+	margin-inline: auto;
+}
+
 /* ── 工作空间选择器 ─────────────────────────────────────────────── */
 
 .ws-picker {
@@ -3700,6 +3929,42 @@ button {
 	font-size: 12px;
 	/* 配置目录路径较长，允许在任意位置断行。 */
 	overflow-wrap: anywhere;
+}
+
+/* ── 设置页「记忆」分区（spec: add-memory-system）──────────────── */
+
+/* 画像编辑块与上面的开关行拉开距离（它有自己的标题行，不再套 provider-row）。 */
+.profile-block {
+	margin-top: 18px;
+}
+
+.profile-block-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+
+/* 输入档位与 .field 家族同源（同一份 padding/border/字号），只是块级撑满
+   且更高 —— 画像是两节 Markdown 长文，不是几行参数。 */
+.profile-textarea {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 160px;
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.6;
+	resize: vertical;
+}
+
+.profile-textarea:disabled {
+	background: var(--bg-raised);
+	color: var(--text-dim);
 }
 
 /* ── 通用小按钮 ───────────────────────────────────────────────── */

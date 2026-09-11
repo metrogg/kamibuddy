@@ -1,31 +1,17 @@
 /**
- * MetaFold 过程折叠的行为测试。
+ * MetaFold 摘要词汇表的行为测试。
  *
- * 钉住五类行为：
- *   1. 回合分组边界（无 user、连续 user、工具开头）
- *   2. 连续段拆分（assistant 打断连续性：工具-文本-工具 = 两段）
- *   3. 进行中的回合不折叠（历史回合照常折叠）
- *   4. 摘要文案（归类计数 / 带主题 / 单位区分 / 未知工具 / 兜底）
- *   5. 主导工具 leadIcon（次数最多者 / 平局稳定 / 命令类不合并）
+ * 钉住两类行为：
+ *   1. 摘要文案（归类计数 / 带主题 / 单位区分 / 未知工具 / 兜底）
+ *   2. 主导工具 leadToolName（次数最多者 / 平局稳定 / 命令类不合并）
+ *
+ * v1 渲染块流（buildRenderBlocks）已随轮折叠落地退役（见 metafold.ts 头注），
+ * 其切轮/分段行为由 renderer/fold-view.test.ts 与 renderer/turn-fold.test.ts 接管。
  */
 
 import { describe, expect, it } from "vitest";
-import type {
-	AssistantMessage,
-	ConversationEntry,
-	ErrorEntry,
-	ToolCard,
-	UserMessage,
-} from "./session-events.ts";
-import { buildRenderBlocks, leadToolName, summarizeToolRun, type RenderBlock } from "./metafold.ts";
-
-function user(id: string): UserMessage {
-	return { id, role: "user", text: `消息 ${id}`, at: 1 };
-}
-
-function assistant(id: string): AssistantMessage {
-	return { id, role: "assistant", text: `回答 ${id}`, at: 1 };
-}
+import type { ToolCard } from "./session-events.ts";
+import { leadToolName, summarizeToolRun } from "./metafold.ts";
 
 function tool(id: string, toolName = "read", summary = `src/${id}.ts`): ToolCard {
 	return {
@@ -39,202 +25,6 @@ function tool(id: string, toolName = "read", summary = `src/${id}.ts`): ToolCard
 		at: 1,
 	};
 }
-
-function error(id: string, runId = `r-${id}`): ErrorEntry {
-	return { id, role: "error", message: `错误 ${id}`, runId, at: 1 };
-}
-
-/** 块流压成 kind 序列，断言结构时一眼看清。 */
-function kinds(blocks: readonly RenderBlock[]): string[] {
-	return blocks.map((b) => b.kind);
-}
-
-function folds(blocks: readonly RenderBlock[]): Extract<RenderBlock, { kind: "fold" }>[] {
-	return blocks.filter((b): b is Extract<RenderBlock, { kind: "fold" }> => b.kind === "fold");
-}
-
-describe("回合分组边界", () => {
-	it("无 user 消息：整段作为前缀回合，非流式下照常折叠", () => {
-		const blocks = buildRenderBlocks([tool("t1"), tool("t2")], { streaming: false });
-		expect(kinds(blocks)).toEqual(["fold"]);
-		expect(folds(blocks)[0]?.cards).toHaveLength(2);
-	});
-
-	it("无 user 消息且流式中：没有回合锚点，不豁免折叠（字面口径）", () => {
-		const blocks = buildRenderBlocks([tool("t1")], { streaming: true });
-		expect(kinds(blocks)).toEqual(["fold"]);
-	});
-
-	it("连续 user：空回合不产生折叠单元，各自的回合头部各自跟随", () => {
-		const blocks = buildRenderBlocks([user("u1"), user("u2"), tool("t1")], { streaming: false });
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "entry", "turn-header", "fold"]);
-	});
-
-	it("工具开头（首个 user 之前）：前缀段独立折叠，不并入后续回合", () => {
-		const blocks = buildRenderBlocks([tool("t0"), user("u1"), tool("t1")], { streaming: false });
-		expect(kinds(blocks)).toEqual(["fold", "entry", "turn-header", "fold"]);
-		expect(folds(blocks)[0]?.cards[0]?.id).toBe("t0");
-	});
-
-	it("空回合（user 是最后一条）：头部落在流尾，无折叠块", () => {
-		const blocks = buildRenderBlocks([user("u1")], { streaming: true });
-		expect(kinds(blocks)).toEqual(["entry", "turn-header"]);
-	});
-});
-
-describe("连续段拆分", () => {
-	it("assistant 消息打断连续性：工具-文本-工具 = 两个折叠单元", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), tool("t2"), assistant("a1"), tool("t3")],
-			{ streaming: false },
-		);
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "entry", "fold"]);
-		const units = folds(blocks);
-		expect(units[0]?.cards.map((c) => c.id)).toEqual(["t1", "t2"]);
-		expect(units[1]?.cards.map((c) => c.id)).toEqual(["t3"]);
-	});
-
-	it("跨回合的工具段各自折叠，互不合并", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), user("u2"), tool("t2")],
-			{ streaming: false },
-		);
-		const units = folds(blocks);
-		expect(units).toHaveLength(2);
-		expect(units[0]?.cards[0]?.id).toBe("t1");
-		expect(units[1]?.cards[0]?.id).toBe("t2");
-	});
-
-	it("show_widget 不进折叠：打断工具连续性并单独成块（图表折进去就消失了）", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), tool("w1", "show_widget", ""), tool("t2")],
-			{ streaming: false },
-		);
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "entry", "fold"]);
-		const units = folds(blocks);
-		expect(units[0]?.cards.map((c) => c.id)).toEqual(["t1"]);
-		expect(units[1]?.cards.map((c) => c.id)).toEqual(["t2"]);
-		// 单独成块的就是那张 show_widget 卡（entry 块携原卡片 id）。
-		const entryIds = blocks.filter((b) => b.kind === "entry").map((b) => b.entry.id);
-		expect(entryIds).toContain("w1");
-	});
-
-	it("todo_write 不进折叠：清单卡是活面板，折进墓碑单元就从消息流消失", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), tool("d1", "todo_write", ""), tool("t2")],
-			{ streaming: false },
-		);
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "entry", "fold"]);
-		const units = folds(blocks);
-		expect(units[0]?.cards.map((c) => c.id)).toEqual(["t1"]);
-		expect(units[1]?.cards.map((c) => c.id)).toEqual(["t2"]);
-		const entryIds = blocks.filter((b) => b.kind === "entry").map((b) => b.entry.id);
-		expect(entryIds).toContain("d1");
-	});
-});
-
-describe("进行中的回合不折叠", () => {
-	it("流式中：最后 user 所在回合的工具原样平铺，历史回合照常折叠", () => {
-		const entries: ConversationEntry[] = [
-			user("u1"),
-			tool("t1"),
-			assistant("a1"),
-			user("u2"),
-			tool("t2"),
-			tool("t3"),
-		];
-		const blocks = buildRenderBlocks(entries, { streaming: true });
-		expect(kinds(blocks)).toEqual([
-			"entry",
-			"turn-header",
-			"fold",
-			"entry",
-			"entry",
-			"turn-header",
-			"entry",
-			"entry",
-		]);
-		expect(folds(blocks)).toHaveLength(1);
-	});
-
-	it("同一份 entries 流式结束后折叠生效", () => {
-		const entries: ConversationEntry[] = [user("u1"), tool("t1"), tool("t2")];
-		expect(kinds(buildRenderBlocks(entries, { streaming: true }))).toEqual([
-			"entry",
-			"turn-header",
-			"entry",
-			"entry",
-		]);
-		expect(kinds(buildRenderBlocks(entries, { streaming: false }))).toEqual([
-			"entry",
-			"turn-header",
-			"fold",
-		]);
-	});
-});
-
-describe("回合头部与取消占位", () => {
-	it("被取消回合的末尾补 cancelled 块，新回合开始后仍留在历史回合末尾", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), user("u2"), assistant("a1")],
-			{ streaming: false, cancelledTurns: ["u1"] },
-		);
-		expect(kinds(blocks)).toEqual([
-			"entry",
-			"turn-header",
-			"fold",
-			"cancelled",
-			"entry",
-			"turn-header",
-			"entry",
-		]);
-		expect(blocks[3]).toEqual({ kind: "cancelled", userId: "u1" });
-	});
-
-	it("cancelled 块在折叠单元之后（先 flush 工具，再落取消标记）", () => {
-		const blocks = buildRenderBlocks([user("u1"), tool("t1")], {
-			streaming: false,
-			cancelledTurns: ["u1"],
-		});
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "cancelled"]);
-	});
-});
-
-describe("错误块", () => {
-	it("错误条目落成 error 块，并打断前面的工具连续段", () => {
-		const blocks = buildRenderBlocks([user("u1"), tool("t1"), tool("t2"), error("e1")], {
-			streaming: false,
-		});
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "error"]);
-		const err = blocks[3];
-		expect(err).toMatchObject({ kind: "error", entry: { id: "e1", runId: "r-e1" } });
-	});
-
-	it("新回合开始后错误卡留在历史回合原位", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), error("e1"), user("u2"), assistant("a1")],
-			{ streaming: false },
-		);
-		expect(kinds(blocks)).toEqual([
-			"entry",
-			"turn-header",
-			"error",
-			"entry",
-			"turn-header",
-			"entry",
-		]);
-	});
-
-	it("错误前后的工具段各自成折叠单元，互不合并", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1"), error("e1"), tool("t2")],
-			{ streaming: false },
-		);
-		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "error", "fold"]);
-		expect(folds(blocks)[0]?.cards[0]?.id).toBe("t1");
-		expect(folds(blocks)[1]?.cards[0]?.id).toBe("t2");
-	});
-});
 
 describe("摘要文案", () => {
 	it("归类计数：多类型按首次出现序拼接", () => {
@@ -297,16 +87,8 @@ describe("摘要文案", () => {
 	});
 });
 
-describe("主导工具（leadIcon）", () => {
-	it("fold 块带 leadIcon：段内调用次数最多的工具名", () => {
-		const blocks = buildRenderBlocks(
-			[user("u1"), tool("t1", "read"), tool("t2", "write"), tool("t3", "read")],
-			{ streaming: false },
-		);
-		expect(folds(blocks)[0]?.leadIcon).toBe("read");
-	});
-
-	it("leadToolName 取次数最多者，与摘要的主题位规则无关", () => {
+describe("主导工具（leadToolName）", () => {
+	it("取次数最多者，与摘要的主题位规则无关", () => {
 		expect(leadToolName([tool("t1", "bash", "a"), tool("t2", "read"), tool("t3", "read")])).toBe(
 			"read",
 		);
@@ -328,7 +110,7 @@ describe("主导工具（leadIcon）", () => {
 		).toBe("read");
 	});
 
-	it("全是未知工具时 leadIcon 是首个未知工具名（图标兜底在渲染侧）", () => {
+	it("全是未知工具时是首个未知工具名（图标兜底在渲染侧）", () => {
 		expect(leadToolName([tool("t1", "mcp__a"), tool("t2", "mcp__b")])).toBe("mcp__a");
 	});
 });

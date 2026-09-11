@@ -47,6 +47,7 @@ const MAIN_HANDLED: readonly string[] = [
 	INVOKE.pickWorkspaceDirectory,
 	INVOKE.pickSkillDirectory,
 	INVOKE.pickInputFiles,
+	INVOKE.importProfile,
 	INVOKE.workspaceReveal,
 ];
 
@@ -145,13 +146,17 @@ function callDaemon(channel: string, args: readonly unknown[]): Promise<unknown>
 function installCsp(isDev: boolean): void {
 	// connect-src 放行 127.0.0.1:*：PDF 预览的 pdf.js 用 fetch 从 preview-server
 	// 拉文件（img/frame 只是嵌资源，fetch 受 connect-src 管）。
+	// img-src 放行 https:（spec: add-source-favicons）：来源 favicon 与 markdown
+	// 外部图片依赖它——此前不含 https: 是 favicon 全部回退 Globe 的根因。
+	// 权衡：img-src 只放行图片加载（不可执行），风险是追踪像素/IP 暴露，
+	// 对桌面 agent 是可接受口径（WorkBuddy 同）；script-src/connect-src 不受影响。
 	const policy = isDev
 		? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' data: blob: http://127.0.0.1:*; " +
+		"img-src 'self' data: blob: https: http://127.0.0.1:*; " +
 		"connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*; " +
 		"frame-src http://127.0.0.1:*"
 		: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
+		"img-src 'self' data: blob: https: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
 		"frame-src http://127.0.0.1:*";
 
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -318,6 +323,27 @@ function registerIpc(): void {
 			properties: ["openDirectory"],
 		});
 		return canceled || filePaths.length === 0 ? undefined : filePaths[0];
+	});
+
+	/*
+	 * 画像导入的选文件 + 读内容（spec: add-memory-system）。
+	 * 只「选 + 读」不写：PROFILE.md 的唯一写点是 daemon 的 setProfile
+	 * （业务写一律在 daemon，main 不解释 payload 的边界不破），
+	 * renderer 拿到内容后自行调 setProfile 完成导入。
+	 */
+	ipcMain.handle(INVOKE.importProfile, async () => {
+		if (window === undefined) return undefined;
+		const { canceled, filePaths } = await dialog.showOpenDialog(window, {
+			title: "选择画像文件（Markdown）",
+			properties: ["openFile"],
+			filters: [{ name: "Markdown", extensions: ["md"] }],
+		});
+		if (canceled || filePaths.length === 0) return undefined;
+		// noUncheckedIndexedAccess：length 守门后下标仍是 string | undefined，再窄化一次。
+		const path = filePaths[0];
+		if (path === undefined) return undefined;
+		const content = await readFile(path, "utf8");
+		return { content };
 	});
 
 	/*

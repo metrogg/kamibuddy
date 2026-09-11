@@ -3,7 +3,7 @@ id: plan
 label: 计划
 description: 只读调研，先出计划再动手
 ready: true
-tools: [read, read_document, find, grep, ls, web_search, web_fetch, questionnaire]
+tools: [read, read_document, find, grep, ls, web_search, web_fetch, questionnaire, conversation_search]
 # 不加 read_me / show_widget：plan 只读调研、产出是计划文本，不产出可视化交付；
 # 出图属于执行阶段（craft / ask）的能力（spec: add-inline-widgets）。
 ---

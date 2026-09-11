@@ -104,6 +104,14 @@ const bridge: KamiBridge = {
 	getStyle: () => ipcRenderer.invoke(INVOKE.getStyle),
 	setStyle: (styleId) => ipcRenderer.invoke(INVOKE.setStyle, styleId),
 
+	getMemoryEnabled: () => ipcRenderer.invoke(INVOKE.getMemoryEnabled),
+	setMemoryEnabled: (enabled) =>
+		ipcRenderer.invoke(INVOKE.setMemoryEnabled, enabled),
+	getProfile: () => ipcRenderer.invoke(INVOKE.getProfile),
+	setProfile: (content) => ipcRenderer.invoke(INVOKE.setProfile, content),
+	resetProfile: () => ipcRenderer.invoke(INVOKE.resetProfile),
+	importProfile: () => ipcRenderer.invoke(INVOKE.importProfile),
+
 	promptPreview: (request) => ipcRenderer.invoke(INVOKE.promptPreview, request),
 
 	getPermissions: () => ipcRenderer.invoke(INVOKE.getPermissions),

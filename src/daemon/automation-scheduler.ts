@@ -258,6 +258,10 @@ export class AutomationScheduler {
 			taskName: withRun.name,
 			sessionId: outcome.sessionId,
 			success: outcome.success,
+			// 内置任务带上标记：renderer 据此抑制 toast 与未读（静默后台家务，
+			// spec: add-memory-system）。非内置不带键 —— 旧 renderer 按 undefined
+			// 处理即原行为，事件契约向后兼容。
+			...(task.builtin === true ? { builtin: true } : {}),
 		});
 		// 运行记录本身就是任务数据变更（管理页列表要刷新最近运行）。
 		this.options.push({ kind: "changed" });

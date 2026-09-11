@@ -192,6 +192,24 @@ export interface KamiBridge {
 	/** 写回复风格；传空串 = 关闭风格注入。只影响之后的新 run。 */
 	readonly setStyle: (styleId: string) => Promise<void>;
 
+	/* ── 记忆（spec: add-memory-system） ─────────────────────────── */
+
+	/** 读记忆系统开关（未配置时 daemon 回 true —— 缺省开启）。 */
+	readonly getMemoryEnabled: () => Promise<{ enabled: boolean }>;
+	/** 写记忆系统开关；daemon 同步内置「记忆整理」任务的启停。 */
+	readonly setMemoryEnabled: (enabled: boolean) => Promise<void>;
+	/** 读用户画像全文（PROFILE.md；文件不存在回空串）。 */
+	readonly getProfile: () => Promise<{ content: string }>;
+	/** 覆盖写用户画像全文；下一轮对话生效。 */
+	readonly setProfile: (content: string) => Promise<void>;
+	/** 清空用户画像（内置任务下一轮蒸馏会重新生成）。 */
+	readonly resetProfile: () => Promise<void>;
+	/**
+	 * 弹出系统文件框选 .md 并读出内容（main 本地应答；不写 PROFILE.md，
+	 * 写入走 setProfile）。取消返回 undefined。
+	 */
+	readonly importProfile: () => Promise<{ content: string } | undefined>;
+
 	/* ── 提示词预览 ─────────────────────────────────────────────── */
 
 	/**

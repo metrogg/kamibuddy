@@ -72,7 +72,10 @@ export function createWebTools(options: WebToolsOptions) {
 				});
 				return {
 					content: [{ type: "text", text: formatResults(params.query, results) }],
-					details: { count: results.length },
+					// results 与文本 content 同源（一次搜索两种形态）：文本给模型读，
+					// 结构化数组给 UI 的「引用来源」用（session-host 从 details 提取进
+					// 工具卡 sources），随工具结果落盘，恢复会话时零成本重建。
+					details: { count: results.length, results },
 				};
 			},
 		});

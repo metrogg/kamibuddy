@@ -34,6 +34,7 @@ import type { PresentedFile } from "../shared/artifacts.ts";
 import type { TokenUsage } from "../shared/observability.ts";
 import type { ImagePart } from "../shared/image.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
+import { parseSources } from "./source-parse.ts";
 
 /* pi 的具体消息类型不从包名直接 import（pi-ai 是 pi-coding-agent 的嵌套依赖，
  * 顶层 node_modules 不可达），而是从 SessionMessageEntry 结构推导 ——
@@ -191,6 +192,14 @@ export function buildConversationEntries(
 				// core/todo-parse.ts），恢复出的清单卡与实时产出同形态；
 				// 脏 args → 键缺席，卡片照常落成。
 				const todos = block.name === "todo_write" ? parseTodoArgs(block.arguments) : undefined;
+				// web_search：来源从落盘 details 重建（pi 的 toolResult 落盘带 details 字段，
+				// session-format.md ToolResultMessage.details；与 live 路径同一个解析函数
+				// core/source-parse.ts）。孤儿 toolCall（结果从未落盘）没有 details 可取，
+				// 旧会话的 web_search 没有 details —— 均为 undefined，sources 键缺席。
+				const sources =
+					block.name === "web_search" && result !== undefined
+						? parseSources(result.details)
+						: undefined;
 				const card: ToolCard = {
 					id: block.id,
 					role: "tool",
@@ -200,6 +209,7 @@ export function buildConversationEntries(
 					outcome,
 					detail: result === undefined ? undefined : detailOf(result, block.name),
 					...(todos === undefined ? {} : { todos }),
+					...(sources === undefined ? {} : { sources }),
 					at,
 				};
 				out.push(card);

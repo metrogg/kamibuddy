@@ -99,10 +99,21 @@ export class AutomationStore {
 		this.persist();
 	}
 
-	/** 删除任务。id 不存在幂等返回（与 removeDisplayName 一致）。 */
+	/**
+	 * 删除任务。id 不存在幂等返回（与 removeDisplayName 一致）。
+	 * 内置任务（builtin）拒删：它是功能的承载体（记忆蒸馏靠它跑），删掉后
+	 * 设置页的开关就成了一具空壳 —— 想停用它请走 memoryEnabled 开关。
+	 * 守卫收在这一层而不是 IPC 层：对话内 automation_delete 工具也走这里，
+	 * 两条删除路径同一道闸。
+	 */
 	remove(id: string): void {
 		this.load();
-		if (!this.tasks.delete(id)) return;
+		const task = this.tasks.get(id);
+		if (task === undefined) return;
+		if (task.builtin === true) {
+			throw new Error(`「${task.name}」是内置任务，不可删除（可在设置里停用）`);
+		}
+		this.tasks.delete(id);
 		this.persist();
 	}
 

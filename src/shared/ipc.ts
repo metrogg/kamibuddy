@@ -250,6 +250,27 @@ export const INVOKE = {
 	/** 写回复风格。传空串 = 关闭风格注入；只影响之后的新 run，不回溯既有会话。 */
 	setStyle: "settings:set-style",
 
+	/* ── 记忆（spec: add-memory-system） ─────────────────────────── */
+
+	/** 读记忆系统开关。未配置时 daemon 回 true（缺省开启）。 */
+	getMemoryEnabled: "settings:get-memory-enabled",
+	/** 写记忆系统开关；daemon 同时把内置「记忆整理」任务的启停对齐过来。 */
+	setMemoryEnabled: "settings:set-memory-enabled",
+	/** 读用户画像全文（PROFILE.md）。文件不存在回空串 —— 新用户本来就没有画像，不是错误。 */
+	getProfile: "settings:get-profile",
+	/** 覆盖写用户画像全文。下一轮对话生效（画像在 compose 时现读）。 */
+	setProfile: "settings:set-profile",
+	/** 清空用户画像（文件内容置空）。内置「记忆整理」任务下一轮蒸馏会重新生成。 */
+	resetProfile: "settings:reset-profile",
+	/**
+	 * 画像导入的「选文件 + 读内容」：弹系统文件框选 .md，返回其内容；
+	 * 取消返回 undefined。由 main 本地应答 —— 系统对话框与任意路径的文件字节
+	 * 只在 main 可得（同 pickInputFiles 的理由），daemon 不 import electron。
+	 * 注意不写 PROFILE.md：画像文件的唯一写点是 daemon 的 setProfile，
+	 * renderer 拿到内容后再调 setProfile 完成导入（两段组合，见设置页）。
+	 */
+	importProfile: "settings:import-profile",
+
 	/* ── 提示词预览 ─────────────────────────────────────────────── */
 
 	/**
@@ -595,6 +616,11 @@ export type AutomationEvent =
 		/** 运行会话 id（管理页点击运行记录 / toast 跳转定位用）。装配失败时为空串（无会话可跳）。 */
 		readonly sessionId: string;
 		readonly success: boolean;
+		/**
+		 * 内置任务标记（spec: add-memory-system）：renderer 据此抑制 toast 与未读
+		 * （内置任务是静默后台家务）。可选 —— daemon 只在内置任务时带上 true。
+		 */
+		readonly builtin?: boolean;
 	};
 
 /**
@@ -686,6 +712,12 @@ export interface InvokeMap {
 	[INVOKE.setThinkingLevelDefault]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.getStyle]: { args: []; result: StyleConfigInfo };
 	[INVOKE.setStyle]: { args: [styleId: string]; result: void };
+	[INVOKE.getMemoryEnabled]: { args: []; result: { enabled: boolean } };
+	[INVOKE.setMemoryEnabled]: { args: [enabled: boolean]; result: void };
+	[INVOKE.getProfile]: { args: []; result: { content: string } };
+	[INVOKE.setProfile]: { args: [content: string]; result: void };
+	[INVOKE.resetProfile]: { args: []; result: void };
+	[INVOKE.importProfile]: { args: []; result: { content: string } | undefined };
 	[INVOKE.promptPreview]: { args: [PromptPreviewRequest]; result: PromptPreviewResult };
 	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };

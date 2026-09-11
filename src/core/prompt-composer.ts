@@ -83,6 +83,18 @@ export interface ComposePromptInput {
 	 */
 	readonly style?: { readonly id: string; readonly body: string };
 	/**
+	 * 记忆系统行为纪律段（resources/prompts/memory-system.md 正文，
+	 * spec: add-memory-system）。**固定注入**：它定义三层记忆与写入纪律，
+	 * 是行为约定不是数据。读取失败时调用方不传本字段（记忆是增强不是
+	 * 门槛，compose 注入路径不能炸——见 core/memory.ts 文件头）。
+	 */
+	readonly memorySystemBody?: string;
+	/**
+	 * 三层记忆内容段（core/memory.ts buildMemorySection(cwd) 的产物）。
+	 * undefined = 三层全空，零 token 不注入。
+	 */
+	readonly memoryContent?: string;
+	/**
 	 * 片段解析回调：name → 片段内容；返回 undefined 表示片段缺失（组装抛错）。
 	 * composer 保持纯函数不读盘，resources/prompts/fragments/ → 本回调的映射
 	 * 是 loader 层的事。骨架含 {{> }} 而未提供本回调 → 抛错（不静默留洞）。
@@ -115,7 +127,9 @@ const MAX_FRAGMENT_DEPTH = 8;
 /**
  * 分段来源（provenance）。skeleton = 骨架的非片段部分；fragment:<名> = 片段内容；
  * mode:<id> = 交互模式行为段；skills / pi-context / time / expert 同名段落；
- * style:<id> = 回复风格段（注入点在交互段之后，见 composePromptWithMeta）。
+ * style:<id> = 回复风格段（注入点在交互段之后，见 composePromptWithMeta）；
+ * memory-system = 记忆行为纪律段，memory = 三层记忆内容段（注入点见
+ * composePromptWithMeta 内注释）。
  */
 export type PromptSegmentSource =
 	| "skeleton"
@@ -123,6 +137,8 @@ export type PromptSegmentSource =
 	| "pi-context"
 	| "time"
 	| "expert"
+	| "memory-system"
+	| "memory"
 	| `fragment:${string}`
 	| `mode:${string}`
 	| `style:${string}`;
@@ -190,6 +206,23 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	const core = finalizeCore(filled);
 
 	const all: DraftSegment[] = [...core];
+	/*
+	 * 记忆段：通用骨架之后、专家人格段之前（WorkBuddy 的 USER.md / 画像注入
+	 * 槽同款位序 —— 先「通用 OS + 记忆背景」，再叠人格 APP）。两段都推在
+	 * 残留检查**之后**：记忆内容是用户数据，用户往 MEMORY.md 里写了
+	 * 「{{示例}}」不该让会话组装抛错（残留检查管的是骨架/模式/片段的笔误，
+	 * 不管用户数据）。段文本只经 trim 不再压平：按段压平服务于 finalizeCore
+	 * 的等价性论证，这里的段自带 \n\n 前缀、join 后接缝天然是两个换行。
+	 */
+	if (input.memorySystemBody !== undefined && input.memorySystemBody.trim() !== "") {
+		all.push({
+			source: "memory-system",
+			text: `\n\n## 记忆系统\n\n${input.memorySystemBody.trim()}`,
+		});
+	}
+	if (input.memoryContent !== undefined && input.memoryContent.trim() !== "") {
+		all.push({ source: "memory", text: `\n\n${input.memoryContent.trim()}` });
+	}
 	/*
 	 * expert 人格段：接在骨架之后（WorkBuddy PluginAgentPrompt 槽的等价物 ——
 	 * 主提示是通用 OS，专家 = OS + 人格 APP）。场景骨架照常使用：

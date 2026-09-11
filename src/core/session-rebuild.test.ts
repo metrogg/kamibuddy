@@ -81,6 +81,7 @@ function toolResultEntry(
 	toolCallId: string,
 	text: string,
 	isError = false,
+	details?: unknown,
 ): SessionEntry {
 	return {
 		type: "message",
@@ -92,6 +93,7 @@ function toolResultEntry(
 			toolCallId,
 			toolName: "read",
 			content: [{ type: "text", text }],
+			...(details === undefined ? {} : { details }),
 			isError,
 			timestamp: AT,
 		},
@@ -370,6 +372,53 @@ describe("buildConversationEntries · 工具卡配对", () => {
 			{ content: "整理数据", status: "completed" },
 			{ content: "写报告", activeForm: "正在写报告", status: "in_progress" },
 		]);
+	});
+
+	it("web_search 卡从落盘 toolResult details 重建 sources（与 live 路径同一解析函数）", () => {
+		const out = buildConversationEntries(
+			[
+				assistantEntry("a1", [call("c1", "web_search", { query: "股价" })]),
+				toolResultEntry("r1", "c1", "「股价」的搜索结果：…", false, {
+					count: 3,
+					results: [
+						{ title: "标题一", url: "https://www.a.com/p", description: "摘要一", publishedAt: "2026-09-01" },
+						{ title: "标题二", url: "https://b.com", description: "摘要二" },
+						// 落盘数据可能脏（旧版/手滑）：内网 URL 剔除，卡片照常重建。
+						{ title: "内网", url: "http://10.0.0.8/" },
+					],
+				}),
+			],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.label).toBe("已搜索");
+		expect(card.sources).toEqual([
+			{ title: "标题一", url: "https://www.a.com/p", snippet: "摘要一", site: "a.com" },
+			{ title: "标题二", url: "https://b.com", snippet: "摘要二", site: "b.com" },
+		]);
+	});
+
+	it("web_search 的 toolResult 无 details（旧会话落盘）→ sources 键缺席，卡片照常重建", () => {
+		const out = buildConversationEntries(
+			[
+				assistantEntry("a1", [call("c1", "web_search", { query: "股价" })]),
+				toolResultEntry("r1", "c1", "「股价」的搜索结果：…"),
+			],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.outcome).toBe("ok");
+		expect("sources" in card).toBe(false);
+	});
+
+	it("孤儿 web_search toolCall（结果从未落盘）→ aborted 且 sources 键缺席", () => {
+		const out = buildConversationEntries(
+			[assistantEntry("a1", [call("c1", "web_search", { query: "股价" })])],
+			restoredToolLabel,
+		);
+		const card = asTool(out[1]!);
+		expect(card.outcome).toBe("aborted");
+		expect("sources" in card).toBe(false);
 	});
 });
 

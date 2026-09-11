@@ -35,6 +35,13 @@ export interface PromptPreviewEnvironment {
 	readonly skills: readonly SkillDescriptor[];
 	/** 偏好里的 styleId（undefined = 未配置）；request.styleId 缺省时跟随它。 */
 	readonly preferredStyleId: string | undefined;
+	/**
+	 * 记忆段（daemon 现读的 loadMemorySystemPrompt / buildMemorySection 结果）。
+	 * 与真实组装同源：预览少这两段就会与「此刻发消息看到的提示词」静默漂移。
+	 * undefined = 读取降级 / 三层全空，对应段不出现（与真实组装同一行为）。
+	 */
+	readonly memorySystemBody?: string;
+	readonly memoryContent?: string;
 }
 
 export function buildPromptPreview(
@@ -70,6 +77,8 @@ export function buildPromptPreview(
 		modeId: mode.id,
 		resolveFragment: (name) => resources.fragments.get(name),
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
+		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
+		...(env.memoryContent === undefined ? {} : { memoryContent: env.memoryContent }),
 		// expert 人格段与 piContext 的差异点见文件头注释（差异 1 / 2）。
 	});
 

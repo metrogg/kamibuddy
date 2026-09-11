@@ -470,6 +470,97 @@ describe("todo_write 清单卡", () => {
 	});
 });
 
+describe("web_search 来源卡", () => {
+	type ToolFinishedEvent = Extract<SessionEvent, { type: "tool_finished" }>;
+
+	/** 驱动一次 web_search 的 execution_start → execution_end（result 带 details）。 */
+	function runWebSearch(host: SessionHost, result: unknown, toolName = "web_search"): void {
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName,
+			args: { query: "股价" },
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName,
+			isError: false,
+			result,
+		} as unknown as AgentSessionEvent);
+	}
+
+	function finishedCard(events: readonly SessionEvent[]): ToolFinishedEvent["card"] | undefined {
+		return events.find((e): e is ToolFinishedEvent => e.type === "tool_finished")?.card;
+	}
+
+	it("result.details.results → 卡带 sources（snippet 映射、site 推导、内网项剔除）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runWebSearch(host, {
+			content: [{ type: "text", text: "「股价」的搜索结果：…" }],
+			details: {
+				count: 3,
+				results: [
+					{ title: "标题一", url: "https://www.a.com/p", description: "摘要一", publishedAt: "2026-09-01" },
+					{ title: "标题二", url: "https://b.com", description: "摘要二" },
+					// 脏项（内网 URL）：剔除，不拖垮整卡。
+					{ title: "内网", url: "http://192.168.1.1/" },
+				],
+			},
+		});
+
+		const card = finishedCard(events);
+		expect(card?.label).toBe("已搜索");
+		expect(card?.sources).toEqual([
+			{ title: "标题一", url: "https://www.a.com/p", snippet: "摘要一", site: "a.com" },
+			{ title: "标题二", url: "https://b.com", snippet: "摘要二", site: "b.com" },
+		]);
+	});
+
+	it("result.details 缺席（旧结果形状）→ sources 键缺席，卡片照常落成", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runWebSearch(host, { content: [{ type: "text", text: "「股价」的搜索结果：…" }] });
+
+		const card = finishedCard(events);
+		expect(card).toBeDefined();
+		expect(card !== undefined && "sources" in card).toBe(false);
+	});
+
+	it("空 results → sources 落成 []（搜索无来源），不是键缺席", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runWebSearch(host, {
+			content: [{ type: "text", text: "「x」没有找到相关结果" }],
+			details: { count: 0, results: [] },
+		});
+
+		expect(finishedCard(events)?.sources).toEqual([]);
+	});
+
+	it("非 web_search 工具的 details 不填 sources（web_fetch 不计入来源）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runWebSearch(
+			host,
+			{
+				content: [{ type: "text", text: "正文" }],
+				details: { url: "https://a.com", title: "t" },
+			},
+			"web_fetch",
+		);
+
+		const card = finishedCard(events);
+		expect(card?.toolName).toBe("web_fetch");
+		expect(card !== undefined && "sources" in card).toBe(false);
+	});
+});
+
 describe("show_widget 流式通道", () => {
 	type StreamProgressEvent = Extract<SessionEvent, { type: "tool_stream_progress" }>;
 

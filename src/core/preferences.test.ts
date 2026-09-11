@@ -119,6 +119,20 @@ describe("preferences", () => {
 		writeFileSync(join(dir, "preferences.json"), JSON.stringify({ styleId: 42 }), "utf8");
 		expect(readPreferences().styleId).toBeUndefined();
 	});
+
+	it("memoryEnabled 读写往返；非法类型按未配置处理", () => {
+		expect(readPreferences().memoryEnabled).toBeUndefined();
+
+		writePreferences({ activeModelKey: undefined, memoryEnabled: false });
+		expect(readPreferences().memoryEnabled).toBe(false);
+
+		writeFileSync(
+			join(dir, "preferences.json"),
+			JSON.stringify({ memoryEnabled: "yes" }),
+			"utf8",
+		);
+		expect(readPreferences().memoryEnabled).toBeUndefined();
+	});
 });
 
 describe("getEffectiveWorkspaceRoot 分层", () => {

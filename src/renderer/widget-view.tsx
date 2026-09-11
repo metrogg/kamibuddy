@@ -289,19 +289,36 @@ const WIDGET_BOOTSTRAP = [
 	"		if (!root) return;",
 	"		root.innerHTML = html;",
 	"		if (runScripts) {",
-	'			var scripts = root.querySelectorAll("script");',
-	"			for (var i = 0; i < scripts.length; i++) {",
-	"				var old = scripts[i];",
-	'				var s = document.createElement("script");',
-	"				for (var j = 0; j < old.attributes.length; j++) {",
-	"					var attr = old.attributes[j];",
-	"					s.setAttribute(attr.name, attr.value);",
-	"				}",
-	"				s.textContent = old.textContent;",
-	"				old.parentNode.replaceChild(s, old);",
-	"			}",
+	"			activateScripts(root.querySelectorAll(\"script\"), 0);",
 	"		}",
 	"		reportHeight();",
+	"	}",
+	/*
+	 * 脚本激活必须保持文档顺序：innerHTML 注入的脚本不执行，克隆重建来激活 ——
+	 * 但动态插入的脚本默认 async，若一次性全部替换，内联脚本会抢在外链
+	 * 脚本加载完成前执行（2026-09-11 实测：Chart.js CDN 未加载完，依赖它的
+	 * 内联脚本已经跑 → Chart is not defined → 图表空白）。
+	 * 所以外链/模块脚本串行激活：load/error 后才处理下一个；
+	 * 内联经典脚本 replaceChild 即同步执行，天然有序。
+	 */
+	"	function activateScripts(scripts, i) {",
+	"		if (i >= scripts.length) { reportHeight(); return; }",
+	"		var old = scripts[i];",
+	'		var s = document.createElement("script");',
+	"		for (var j = 0; j < old.attributes.length; j++) {",
+	"			var attr = old.attributes[j];",
+	"			s.setAttribute(attr.name, attr.value);",
+	"		}",
+	"		s.textContent = old.textContent;",
+	'		var isModule = s.type === "module";',
+	"		if (s.src || isModule) {",
+	"			s.onload = function () { activateScripts(scripts, i + 1); };",
+	"			s.onerror = function () { activateScripts(scripts, i + 1); };",
+	"			old.parentNode.replaceChild(s, old);",
+	"		} else {",
+	"			old.parentNode.replaceChild(s, old);",
+	"			activateScripts(scripts, i + 1);",
+	"		}",
 	"	}",
 	'	window.addEventListener("message", function (event) {',
 	"		var data = event.data;",

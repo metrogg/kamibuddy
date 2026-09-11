@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { AutomationStore } from "../core/automation-store.ts";
+import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
 import {
 	getConfigDir,
 	getResourcesDir,
@@ -31,6 +32,7 @@ import {
 	getWorkspaceDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
+import { buildMemorySection, loadMemorySystemPrompt, profilePath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
 import {
@@ -72,6 +74,7 @@ import {
 import { indexFiles } from "../core/file-index.ts";
 import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { automationExtensionFactory } from "../extensions/automation-tools.ts";
+import { conversationSearchExtensionFactory } from "../extensions/conversation-search-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { defaultProtectedDirs, isPathInside } from "../extensions/permission-policy.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
@@ -154,6 +157,7 @@ import {
 } from "../shared/session-events.ts";
 import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
+import { deriveSessionTitle, searchSessionFiles } from "./conversation-search.ts";
 import { createAutomationRunExecutor } from "./automation-runner.ts";
 import { AutomationScheduler } from "./automation-scheduler.ts";
 import { createSubagentRunner } from "./subagent-runner.ts";
@@ -356,6 +360,10 @@ async function composeSystemPrompt(
 			fallback: style?.id ?? DEFAULT_STYLE_ID,
 		});
 	}
+	// 记忆段每轮现读（同技能清单口径：模型用 edit 改了 MEMORY.md，下一轮即生效）。
+	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
+	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
+	const memoryContent = buildMemorySection(cwd);
 	const prompt = composePrompt({
 		sceneBody: scene.body,
 		modeBody: mode.body,
@@ -365,6 +373,8 @@ async function composeSystemPrompt(
 		// 片段库查表：找不到返回 undefined → composer 抛错（不静默留洞上线）。
 		resolveFragment: (name) => RESOURCES.fragments.get(name),
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
+		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
+		...(memoryContent === undefined ? {} : { memoryContent }),
 		...(expert === undefined ? {} : { expert }),
 		piContext,
 	});
@@ -1221,6 +1231,21 @@ async function createHost(
 					});
 				},
 			}),
+			/*
+			 * 历史会话检索（四模式白名单都含 conversation_search）：只读工具，
+			 * 权限门登记放行（读的是 KamiBuddy 自己的会话库，与 automation_list 同档）。
+			 * 只挂用户会话 —— 定时任务 run 会话（automation-runner）不注册：
+			 * 无人值守下没有「用户回忆上次讨论」的场景（v1 从简）。
+			 * excludeSessionId 读桶的当前 id：闭包在工具**调用时**才求值，
+			 * pristine 桶 adopt 后拿到的就是真值。
+			 */
+			conversationSearchExtensionFactory({
+				searchSessions: (query, limit) =>
+					searchSessionFiles(query, limit, {
+						sessionsDir: getSessionsDir(),
+						...(bucket.sessionId === "" ? {} : { excludeSessionId: bucket.sessionId }),
+					}),
+			}),
 			// shell 能力：craft 白名单含 powershell。命令先过工具层危险命令检查器，
 			// 权限门另管「要不要问人」（balanced 高风险询问、read-only 拒，
 			// 见 permission-policy 的 SHELL 分支）——门与检查器是两道独立防线。
@@ -1317,22 +1342,6 @@ async function applyWorkspace(dir: string): Promise<string> {
 
 /* ── 历史会话管理（list / resume / rename / delete） ────────────── */
 
-/**
- * 列表标题的截断上限。renderer 的 taskTitle 另有 24 字符的展示截断，
- * 这里截的是数据上限：firstMessage 原文可能整段上千字，不能原样进列表契约。
- */
-const SESSION_TITLE_MAX = 40;
-
-/** 列表标题：命名优先，否则首条消息压单行截断。空会话给占位，不留空白行。 */
-function sessionTitle(name: string | undefined, firstMessage: string): string {
-	if (name !== undefined && name !== "") return name;
-	const oneLine = firstMessage.replace(/\s+/g, " ").trim();
-	if (oneLine === "") return "（空会话）";
-	return oneLine.length > SESSION_TITLE_MAX
-		? `${oneLine.slice(0, SESSION_TITLE_MAX)}…`
-		: oneLine;
-}
-
 /** 只容忍「目录不存在」：首次使用还没有 sessions 目录是正常情况，列表为空。 */
 function isEnoent(error: unknown): boolean {
 	return (
@@ -1366,7 +1375,7 @@ async function listSessions(): Promise<SessionSummary[]> {
 			return {
 				id: info.id,
 				path: info.path,
-				title: sessionTitle(info.name, info.firstMessage),
+				title: deriveSessionTitle(info.name, info.firstMessage),
 				name: info.name,
 				cwd: info.cwd,
 				// 任务区判定收在 isTempCwd 一处（临时目录 / 生效根本身 / 旧 playground 占位）。
@@ -2328,6 +2337,46 @@ const handlers: Record<string, Handler> = {
 		writePreferences({ ...readPreferences(), styleId });
 	},
 
+	/* ── 记忆开关（spec: add-memory-system） ──────────────────────── */
+
+	// 未配置回 true（缺省开启）：偏好文件保持「没写就是没写」，
+	// 缺省语义收在这一个出口（读偏好处不填默认值，见 preferences.ts）。
+	[INVOKE.getMemoryEnabled]: async () => ({
+		enabled: readPreferences().memoryEnabled ?? true,
+	}),
+
+	[INVOKE.setMemoryEnabled]: async ([enabled]) => {
+		const value = enabled === true;
+		// 读改写：偏好文件里还有模型选择、权限设置等其他键，整存覆盖会清掉它们。
+		writePreferences({ ...readPreferences(), memoryEnabled: value });
+		// toggle 是内置任务启停的权威：立刻对齐，不等下次启动的 ensure。
+		// ensure 返回是否真有变更 —— 重复设置同值时不推 changed，免得
+		// 管理页为一个没发生的变更重拉列表。
+		if (ensureBuiltinMemoryTask(automationStore, value)) {
+			pushAutomationChanged();
+		}
+	},
+
+	/* ── 用户画像（spec: add-memory-system） ────────────────────── */
+
+	// 文件不存在回空串：设置页 textarea 从空白开始。「还没生成过画像」是新用户
+	// 的常态，不是错误（同 memory.ts 的降级口径：用户数据缺席不该响亮失败）。
+	[INVOKE.getProfile]: async () => ({
+		content: existsSync(profilePath()) ? readFileSync(profilePath(), "utf8") : "",
+	}),
+
+	// 覆盖写全文。画像在 compose 时现读现拼（buildMemorySection），
+	// 所以写完下一轮对话即生效，无需通知任何运行中的会话。
+	[INVOKE.setProfile]: async ([content]) => {
+		writeFileSync(profilePath(), content as string, "utf8");
+	},
+
+	// 清空内容但保留文件本身：蒸馏任务每晚照常往里写，删文件反而多一条
+	// 「不存在 → 重建」的分支要维护。
+	[INVOKE.resetProfile]: async () => {
+		writeFileSync(profilePath(), "", "utf8");
+	},
+
 	/* ── 提示词预览（设置页，spec: systematize-prompt-architecture Task 5） ── */
 
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
@@ -2342,6 +2391,9 @@ const handlers: Record<string, Handler> = {
 				filePath: s.filePath,
 			})),
 			preferredStyleId: readPreferences().styleId,
+			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
+			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
+			memoryContent: buildMemorySection(currentBucket.cwd),
 		}),
 
 	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
@@ -2748,6 +2800,15 @@ function start(): void {
 	// 定时任务：库损坏在启动时暴露（store 契约：响亮报错不静默吞）；
 	// 调度器 start 做启动恢复（过期 once 标 missed、周期任务重算下一次）并开 tick。
 	automationStore.load();
+	/*
+	 * 内置「记忆整理」蒸馏任务（spec: add-memory-system）：确保存在并把启停
+	 * 对齐 memoryEnabled（toggle 是权威）。必须赶在 scheduler.start 之前 ——
+	 * 启动恢复会把对齐后的 active 任务一并重算 nextRunAt，顺序反了则刚启用
+	 * 的内置任务要再等一个 tick 周期才被恢复逻辑看到（它只跑一次）。
+	 */
+	if (ensureBuiltinMemoryTask(automationStore, readPreferences().memoryEnabled ?? true)) {
+		pushAutomationChanged();
+	}
 	automationScheduler.start();
 
 	post({ kind: "ready" });

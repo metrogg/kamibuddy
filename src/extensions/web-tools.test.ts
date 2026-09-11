@@ -76,16 +76,24 @@ describe("web_search", () => {
 		expect(text).toContain("摘要一");
 		expect(text).toContain("发布时间：2026-09-01");
 		expect(text).toContain("2. 标题二（https://b.com）");
-		expect(result.details).toEqual({ count: 2 });
+		// details 带结构化结果数组（与文本同源）：给 UI 的「引用来源」用。
+		expect(result.details).toEqual({
+			count: 2,
+			results: [
+				{ title: "标题一", url: "https://a.com", description: "摘要一", publishedAt: "2026-09-01" },
+				{ title: "标题二", url: "https://b.com", description: "摘要二" },
+			],
+		});
 	});
 
-	it("零结果返回换关键词提示", async () => {
+	it("零结果返回换关键词提示，details.results 为空数组", async () => {
 		const { tools } = mount({
 			getSearchConfig: () => ({ providerId: "tavily", apiKey: "k" }),
 			search: async () => [],
 		});
 		const result = await tools.get("web_search")?.execute!("t1", { query: "x" });
 		expect(result?.content[0]?.text).toContain("换关键词");
+		expect(result?.details).toEqual({ count: 0, results: [] });
 	});
 
 	it("搜索层抛错原样上抛（成为 isError）", async () => {

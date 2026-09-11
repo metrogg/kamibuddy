@@ -5,15 +5,15 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
-import { buildRenderBlocks } from "@shared/metafold.ts";
-import type { RenderBlock } from "@shared/metafold.ts";
-import type { ConversationEntry, ModeDescriptor, RunId, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import { leadToolName } from "@shared/metafold.ts";
+import type { ConversationEntry, ModeDescriptor, RunId, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
@@ -32,10 +32,13 @@ import {
 	IconAssistant,
 	IconWeb,
 } from "./icons.tsx";
+import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
+import { groupToolBatches } from "./fold-view.ts";
+import type { FoldPlanItem } from "./fold-view.ts";
 import { imageDataUrl } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 import { ModelMenu } from "./model-menu.tsx";
@@ -43,10 +46,20 @@ import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
 import { Markdown } from "./markdown.tsx";
-import { activePendingAlign, decideScrollAction, groupTurnBlocks } from "./send-anchor.ts";
+import { activePendingAlign, decideScrollAction } from "./send-anchor.ts";
+import { computeChatContentWidth } from "./chat-content-width.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
+import { SourceFavicon } from "./sources-panel.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import { projectTodoList, windowTodos } from "./todo-projection.ts";
+import {
+	EMPTY_TURN_FOLDS,
+	buildTurnViews,
+	collapseAllTurnFolds,
+	toggleTurnFold,
+	turnFoldExpanded,
+} from "./turn-fold.ts";
+import type { TurnFoldMap, TurnView } from "./turn-fold.ts";
 import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
@@ -75,6 +88,8 @@ interface ChatViewProps {
 	readonly onPathClick: (path: string, kind: "file" | "directory") => void;
 	/** 产物/变更聚合入口：打开预览面板并展开概览菜单对应分组。 */
 	readonly onOpenPanelGroup: (group: "artifacts" | "changes") => void;
+	/** 「来源」入口：在右侧面板位打开引用来源面板（与产物面板同位互斥，App 层切换）。 */
+	readonly onOpenSources: () => void;
 	/** 打开设置页（权限弹层的「打开设置…」入口，与 home-view 同语义）。 */
 	readonly onOpenSettings: () => void;
 	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
@@ -94,6 +109,12 @@ interface ChatViewProps {
 	readonly pendingQuestionnaire?: QuestionnaireRequest;
 	readonly onQuestionnaireSubmit?: (answers: readonly QuestionnaireAnswer[]) => void;
 	readonly onQuestionnaireSkip?: () => void;
+	/**
+	 * 轮折叠开合的多桶缓存（Map<sessionId, TurnFoldMap>）：App 持有（ChatView
+	 * 往返首页会卸载，状态不能死在组件里），本组件挂载/切会话按桶存取。
+	 * 会话视图态，不落盘（spec: add-turn-fold-and-anchor）。
+	 */
+	readonly turnFoldCache: { readonly current: Map<string, TurnFoldMap> };
 }
 
 /* ── 思考块 ────────────────────────────────────────────────────── */
@@ -240,6 +261,62 @@ function AssistantActions({
 	);
 }
 
+/* ── 「来源」按钮 ──────────────────────────────────────────────── */
+
+/**
+ * favicon 头像组的取数口径（WorkBuddy 同款）：按站点去重取前 3。
+ * 来源按钮与 web_search 工具卡卡头共用，两处不会出现口径漂移。
+ * URL 构造失败的项不进头像组（脏 URL 不上屏，与 collect-sources 同口径）。
+ */
+function pickSiteFavicons(sources: readonly SourceRef[]): { readonly key: string; readonly favicon: string }[] {
+	const seen = new Set<string>();
+	const picked: { readonly key: string; readonly favicon: string }[] = [];
+	for (const source of sources) {
+		const meta = sourceUrlMeta(source.url);
+		if (meta === undefined) continue;
+		const site = source.site ?? meta.host;
+		if (seen.has(site)) continue;
+		seen.add(site);
+		picked.push({ key: site, favicon: meta.favicon });
+		if (picked.length === 3) break;
+	}
+	return picked;
+}
+
+/**
+ * 操作行「来源」入口（WorkBuddy 同款，spec: add-search-sources-panel）：
+ * favicon 头像组（按站点去重取前 3、负 margin 叠放，加载失败回退 Globe）
+ * + 「来源」文案。头像组只是入口暗示与计数提示，全量清单在 SourcesPanel。
+ * 无来源时父级不渲染本按钮。
+ */
+function SourcesButton({
+	sources,
+	onClick,
+}: {
+	readonly sources: readonly SourceRef[];
+	readonly onClick: () => void;
+}): React.JSX.Element {
+	const avatars = useMemo(() => pickSiteFavicons(sources), [sources]);
+
+	return (
+		<button
+			type="button"
+			className="sources-btn"
+			title={`引用来源（${sources.length}）`}
+			aria-label={`引用来源（${sources.length}）`}
+			onClick={onClick}
+		>
+			{/* 头像组是纯装饰：计数与语义都在 aria-label 上。 */}
+			<span className="sources-avatars" aria-hidden="true">
+				{avatars.map((avatar) => (
+					<SourceFavicon key={avatar.key} url={avatar.favicon} />
+				))}
+			</span>
+			来源
+		</button>
+	);
+}
+
 /* ── 错误卡 ────────────────────────────────────────────────────── */
 
 /**
@@ -327,7 +404,17 @@ function outcomeClass(outcome: ToolCard["outcome"]): string {
  */
 function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
-	const expandable = card.detail !== undefined && card.detail !== "";
+	// web_search 特化（spec: add-source-favicons）：卡带 sources 时卡头加
+	// favicon 头像组 + 计数，展开区在 detail 前渲染逐条来源行（WorkBuddy
+	// cr-tool-web-search__item 同构）。其他工具卡不受影响。
+	const webSources =
+		card.toolName === "web_search" && card.sources !== undefined && card.sources.length > 0
+			? card.sources
+			: undefined;
+	const avatars = useMemo(() => (webSources === undefined ? [] : pickSiteFavicons(webSources)), [webSources]);
+	const hasDetail = card.detail !== undefined && card.detail !== "";
+	// sources 也是可展开内容：detail 缺席（旧会话/提取失败）时来源行列表仍要够得着。
+	const expandable = hasDetail || webSources !== undefined;
 	// 执行中（outcome 未落定）或生成中（write 参数还在流式输出）→ 状态字扫光；
 	// 完成后摘类回归静态 —— 扫光是全局唯一「进行中」语言（对标 WorkBuddy）。
 	const running = card.outcome === undefined || card.generating === true;
@@ -353,6 +440,18 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				    WorkBuddy 词汇表给出，UI 不做映射（契约见 session-events.ts）。 */}
 				<span className={running ? "tool-label text-shimmer" : "tool-label"}>{card.label}</span>
 				<span className="tool-summary">{card.summary}</span>
+				{/* web_search 卡头来源区：头像组是纯装饰（语义在计数文本上）；
+				    计数取 sources 总数 —— 它是不去重的结果数，与 SourcesPanel 标题同口径。 */}
+				{webSources !== undefined && (
+					<span className="tool-sources">
+						<span className="sources-avatars" aria-hidden="true">
+							{avatars.map((avatar) => (
+								<SourceFavicon key={avatar.key} url={avatar.favicon} />
+							))}
+						</span>
+						{webSources.length} 个来源
+					</span>
+				)}
 				{/* write/edit 的增删行徽章（对标 WorkBuddy 的「+276 -0」）。
 				    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。 */}
 				{card.change !== undefined && (
@@ -363,9 +462,33 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 				)}
 				{expandable && <IconChevronDown size={12} className={open ? "tool-caret open" : "tool-caret"} />}
 			</button>
-			{/* 详情盒常驻 DOM、open 类切换：条件挂载下元素挂载即终态，
+			{/* 来源行列表与详情盒均常驻 DOM、open 类切换：条件挂载下元素挂载即终态，
 			    CSS 过渡无从起跳，折叠展开动画必须有一个始终在树的元素。 */}
-			{expandable && <pre className={open ? "tool-detail-box open" : "tool-detail-box"}>{card.detail}</pre>}
+			{webSources !== undefined && (
+				<div className={open ? "tool-source-list open" : "tool-source-list"}>
+					{webSources.map((source, index) => {
+						const meta = sourceUrlMeta(source.url);
+						// 空/非法 URL 项不渲染（daemon 侧已过安全校验，这里是渲染层兜底）。
+						if (meta === undefined) return null;
+						return (
+							<button
+								// 卡内 sources 是未去重的原始结果清单，同 URL 可出现多次，
+								// 键带序号（面板侧用纯 url 是因为已按 URL 去重）。
+								key={`${source.url}#${index}`}
+								type="button"
+								className="tool-source-item"
+								title={`${source.title}\n${source.url}（外部打开）`}
+								onClick={() => window.open(source.url)}
+							>
+								<SourceFavicon url={meta.favicon} />
+								{/* 无标题显 host：标题是可选载荷，host 恒可推导。 */}
+								<span className="tool-source-title">{source.title !== "" ? source.title : meta.host}</span>
+							</button>
+						);
+					})}
+				</div>
+			)}
+			{hasDetail && <pre className={open ? "tool-detail-box open" : "tool-detail-box"}>{card.detail}</pre>}
 		</div>
 	);
 }
@@ -462,13 +585,14 @@ function TodoListCard({
 	);
 }
 
-/* ── MetaFold 过程折叠 ───────────────────────────────────────────── */
+/* ── 段折叠（工具批 / 过程消息） ───────────────────────────────── */
 
 /**
- * 折叠行行首主导图标的工具名 → 图标映射。fold.leadIcon 在 shared 层
- * （metafold.ts）只是工具名 —— 图标是渲染资产，不能逆流进 shared（§1）。
- * bash/powershell 在此汇合为同一终端图标（metafold 侧二者拆开计数，
- * 视觉仍一致）。未知工具（如 MCP 工具）兜底 IconSkill。
+ * 折叠行行首主导图标的工具名 → 图标映射。fold plan 给出的 leadName 在
+ * shared/renderer 纯函数层只是工具名 —— 图标是渲染资产，不能逆流进
+ * 纯函数层（§1）。bash/powershell 在此汇合为同一终端图标（metafold 侧
+ * 二者拆开计数，视觉仍一致）。未知工具（如 MCP 工具）与无工具段兜底
+ * IconSkill。
  */
 const FOLD_LEAD_ICONS: Readonly<Record<string, typeof IconDoc>> = {
 	read: IconDoc,
@@ -485,27 +609,32 @@ const FOLD_LEAD_ICONS: Readonly<Record<string, typeof IconDoc>> = {
 };
 
 /**
- * 一个折叠单元：回合结束后连续工具卡折成的一行摘要（机制对标 WorkBuddy）。
+ * 段折叠条（机制对标 WorkBuddy）：一行摘要（主导图标 + 文案 + chevron），
+ * 点击展开段内内容原位展示。两个用途共用同一外壳（别造两套折叠 UI）：
+ *   - 工具批摘要条：fold-view groupToolBatches 的 ≥2 连续工具批，
+ *     文案是 metafold 词汇表的归类摘要（「读取 2 个文件、写入 1 个文件」）；
+ *     批内夹着的思考块随批展开。
+ *   - 「过程消息」折叠条：锚点之间（或末锚点之后）的过程段，文案恒定
+ *     「过程消息」，图标取段内主导工具（无工具段用兜底图标）。
  *
- * 长任务一次调十几次工具，平铺会把助手的最终回答顶出视野；折成一行后
- * 回答紧邻摘要可见。展开状态由父组件按折叠单元 id 记住（Map）——
- * 块流每次渲染由纯函数重算，组件若自持状态会随块重建丢失。
- * 展开后内容就是原 ToolEntry 列表，卡片自身的展开/详情行为不变。
+ * 展开状态由父组件按段 id 记住（Map）—— 折叠计划每次渲染由纯函数重算，
+ * 组件若自持状态会随计划重建丢失。
  */
-function MetaFoldBlock({
-	leadIcon,
-	summary,
-	cards,
+function SegmentFold({
+	leadName,
+	label,
 	open,
 	onToggle,
+	children,
 }: {
-	readonly leadIcon: string;
-	readonly summary: string;
-	readonly cards: readonly ToolCard[];
+	/** 段内主导工具名；无工具的过程段传 undefined（兜底图标）。 */
+	readonly leadName: string | undefined;
+	readonly label: string;
 	readonly open: boolean;
 	readonly onToggle: () => void;
+	readonly children: React.ReactNode;
 }): React.JSX.Element {
-	const LeadIcon = FOLD_LEAD_ICONS[leadIcon] ?? IconSkill;
+	const LeadIcon = (leadName !== undefined ? FOLD_LEAD_ICONS[leadName] : undefined) ?? IconSkill;
 	return (
 		<div className="metafold">
 			<button
@@ -515,16 +644,14 @@ function MetaFoldBlock({
 				onClick={onToggle}
 			>
 				<LeadIcon size={16} className="metafold-lead" />
-				<span className="metafold-summary">{summary}</span>
+				<span className="metafold-summary">{label}</span>
 				<IconChevronDown size={12} className="metafold-caret" />
 			</button>
 			{/* 折叠体常驻 DOM（理由同 ToolEntry 详情盒）。高度动画走
 			    grid-template-rows 0fr↔1fr：卡片数不定、内层工具详情还会
 			    再展开，max-height 的固定上限方案在这里必然裁内容。 */}
 			<div className={open ? "metafold-body open" : "metafold-body"}>
-				<div className="metafold-body-inner">
-					{cards.map((card) => <ToolEntry key={card.id} card={card} />)}
-				</div>
+				<div className="metafold-body-inner">{children}</div>
 			</div>
 		</div>
 	);
@@ -682,13 +809,25 @@ function formatDuration(ms: number): string {
  * turn 只传给当前回合的头部（历史回合没有计时数据）：被取消的当前回合
  * 定格「已取消 Ns」（endedAt - startedAt），与正常结束的「已完成」区分 ——
  * 中断是用户主动动作，UI 上必须看得出（机制对标 WorkBuddy 的取消终态）。
+ *
+ * 轮折叠开关（spec: add-turn-fold-and-anchor）：fold plan 判定本轮有折叠区
+ * （hasTurnFold）时整头可点，时长行尾带 chevron，点击切换过程区显隐；
+ * 无折叠内容的轮不给假交互（不可点、无 chevron）；进行中的轮
+ * （hasTurnFold 恒 false）行为与原来完全一致。
  */
 function TurnHeader({
 	active,
 	turn,
+	collapsible,
+	expanded,
+	onToggle,
 }: {
 	readonly active: boolean;
 	readonly turn: TurnTiming | undefined;
+	/** 本轮是否存在「已完成 Xs」轮折叠区（fold plan 的 hasTurnFold）。 */
+	readonly collapsible: boolean;
+	readonly expanded: boolean;
+	readonly onToggle: () => void;
 }): React.JSX.Element {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -704,16 +843,36 @@ function TurnHeader({
 		duration = `已取消 ${formatDuration(turn.endedAt - turn.startedAt)}`;
 	}
 
-	return (
-		<div className="turn-header">
-			<div className="turn-avatar" aria-hidden="true">
+	// 容器用 span 不用 div：可点击时它们要落在 <button> 里，
+	// button 只允许 phrasing content（display 已由 CSS 接管，语义不变）。
+	const body = (
+		<>
+			<span className="turn-avatar" aria-hidden="true">
 				<IconAssistant size={16} />
-			</div>
-			<div className="turn-meta">
+			</span>
+			<span className="turn-meta">
 				<span className="turn-agent">嘉立创Work</span>
-				<span className="turn-duration">{duration}</span>
-			</div>
-		</div>
+				<span className="turn-duration">
+					{duration}
+					{collapsible && (
+						<IconChevronDown size={12} className={expanded ? "turn-caret open" : "turn-caret"} />
+					)}
+				</span>
+			</span>
+		</>
+	);
+
+	if (!collapsible) return <div className="turn-header">{body}</div>;
+	return (
+		<button
+			type="button"
+			className="turn-header clickable"
+			aria-expanded={expanded}
+			title={expanded ? "收起过程" : "展开过程"}
+			onClick={onToggle}
+		>
+			{body}
+		</button>
 	);
 }
 
@@ -948,6 +1107,7 @@ export function ChatView({
 	onPreviewArtifact,
 	onPathClick,
 	onOpenPanelGroup,
+	onOpenSources,
 	onOpenSettings,
 	onError,
 	onSaveToWorkspace,
@@ -955,6 +1115,7 @@ export function ChatView({
 	pendingQuestionnaire,
 	onQuestionnaireSubmit,
 	onQuestionnaireSkip,
+	turnFoldCache,
 }: ChatViewProps): React.JSX.Element {
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
@@ -963,6 +1124,28 @@ export function ChatView({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）。
 	const composerRef = useRef<ComposerHandle>(null);
+	/*
+	 * 内容列宽随容器动态计算（WorkBuddy use-dynamic-chat-content-width 同款）：
+	 * 固定 832 在宽屏两侧留白过多。ResizeObserver 挂一次（空依赖），
+	 * 列宽经 CSS 变量传给 .stream / .chat-composer 的 max-width。
+	 */
+	const chatRef = useRef<HTMLElement>(null);
+	const [contentWidth, setContentWidth] = useState(832);
+	useEffect(() => {
+		const el = chatRef.current;
+		if (el === null) return;
+		const update = (width: number): void => {
+			const next = Math.round(computeChatContentWidth(width));
+			setContentWidth((cur) => (cur === next ? cur : next));
+		};
+		update(el.getBoundingClientRect().width);
+		const observer = new ResizeObserver((entries) => {
+			const width = entries[0]?.contentRect.width;
+			if (typeof width === "number") update(width);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, []);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
 	// 当前专家（仅 expert 模式有值）：头部显示与子菜单勾选共用这份查找。
@@ -972,25 +1155,66 @@ export function ChatView({
 	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
-	// MetaFold 折叠单元的展开状态：按单元 id 记忆。块流每次渲染由纯函数
-	// 重算（见 buildRenderBlocks），状态必须留在组件层，否则随块重建丢失。
+	// 段折叠条（工具批 /「过程消息」段）的展开状态：按段 id 记忆。折叠计划
+	// 每次渲染由纯函数重算（fold-view.ts），状态必须留在组件层，否则随计划
+	// 重建丢失。段 id 由条目 id 派生（全局唯一），跨会话残留只是死键，无害。
 	const [foldOpen, setFoldOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
-	// 渲染块流：MetaFold 折叠 + 回合头部/取消占位都在纯函数里定位（shared/metafold.ts）。
-	// 先过 todo_write 聚合投影（todo-projection.ts）：多次调用折叠成一张合成
-	// 清单卡（最新全量、钉在首次出现处）。渲染侧一切消费方（块流/刻度轨/
-	// 状态行/滚动跟随）统一看投影后的视图 —— 刻度轨只测量 user 消息，
-	// 投影从不动 user 条目（同引用同序），测量口径不受影响。
+	// 渲染轮视图：先过 todo_write 聚合投影（todo-projection.ts）：多次调用
+	// 折叠成一张合成清单卡（最新全量、钉在首次出现处）。渲染侧一切消费方
+	// （轮视图/刻度轨/状态行/滚动跟随）统一看投影后的视图 —— 刻度轨只测量
+	// user 消息，投影从不动 user 条目（同引用同序），测量口径不受影响。
 	// 无 todo 卡时投影返回同一引用；useMemo 让无关重渲染（如折叠开合）
 	// 不产出新数组，滚动 effect 的依赖语义与直连 conversation.entries 等价。
 	const entries = useMemo(() => projectTodoList(conversation.entries), [conversation.entries]);
-	const blocks = buildRenderBlocks(entries, {
-		streaming,
-		cancelledTurns: conversation.cancelledTurns,
-	});
+	// 引用来源聚合（collect-sources.ts 纯函数）：「来源」按钮的数据源。
+	// 与消息流同看投影后的 entries —— todo 投影从不动 web_search 卡，
+	// 聚合口径与 App 侧 SourcesPanel（直连 conversation.entries）一致。
+	const sources = useMemo(() => collectSources(entries), [entries]);
+	// 变更数：操作行出现条件「产物/变更/来源任一非空」的变更一臂
+	// （与面板共用 shared/artifacts.ts 的 collectChanges，不各写一份口径）。
+	const changeCount = useMemo(() => collectChanges(entries).length, [entries]);
+	// 轮视图 = 切轮 + 轮终态推导 + 逐轮 fold plan（turn-fold.ts / fold-view.ts
+	// 纯函数，线性轻量）；useMemo 让折叠开合等无关重渲染不重算计划。
+	const turnViews = useMemo(
+		() => buildTurnViews(entries, { streaming, cancelledTurns: conversation.cancelledTurns }),
+		[entries, streaming, conversation.cancelledTurns],
+	);
 	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
 	const lastUserEntry = entries.findLast((e) => e.role === "user");
 	const lastUserId = lastUserEntry?.id;
 	const retryText = lastUserEntry?.text;
+
+	/*
+		轮折叠开合状态：Map<turnId, expanded>，**缺省 = 折叠** —— run 结束
+		（含错误/取消）与历史轮一律默认折叠，不需要任何「折叠写入」；Map 里
+		只可能存在手点记录。写路径只有两条（状态机见 turn-fold.ts）：
+		手点 toggleTurn；新 run 开始时 collapseAllTurnFolds 全部收回（sticky：
+		收回后没有任何自动展开路径，状态抖动不会闪回展开）。
+		状态按会话隔离：App 持有的多桶缓存按 sessionId 存取（viewCacheRef
+		同款机制），不落盘。
+	*/
+	const [turnFolds, setTurnFolds] = useState<TurnFoldMap>(
+		() => turnFoldCache.current.get(sessionId) ?? EMPTY_TURN_FOLDS,
+	);
+	const writeTurnFolds = (next: TurnFoldMap): void => {
+		turnFoldCache.current.set(sessionId, next);
+		setTurnFolds(next);
+	};
+	/*
+		渲染期状态迁移（React「随 props 调整状态」官方模式：同帧重渲染、
+		提交前完成，无闪烁，也不需要 effect + ref 镜像）：
+		- 切会话 → 换上目标会话的桶（不做折叠迁移，历史轮靠缺省折叠）；
+		- 同会话出现新 user 消息（新 run / steer 追问）→ 上一轮连同所有
+		  手点展开立即折回。
+	*/
+	const [foldMigrationKey, setFoldMigrationKey] = useState({ sessionId, lastUserId });
+	if (foldMigrationKey.sessionId !== sessionId) {
+		setFoldMigrationKey({ sessionId, lastUserId });
+		setTurnFolds(turnFoldCache.current.get(sessionId) ?? EMPTY_TURN_FOLDS);
+	} else if (lastUserId !== undefined && foldMigrationKey.lastUserId !== lastUserId) {
+		setFoldMigrationKey({ sessionId, lastUserId });
+		writeTurnFolds(collapseAllTurnFolds(turnFolds));
+	}
 	// 等待首响应阶段：与 pendingText 返回「等待模型响应…」同口径（末尾是 user 或流为空）。
 	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
 	const lastEntry = entries[entries.length - 1];
@@ -1137,123 +1361,151 @@ export function ChatView({
 	};
 
 	/*
-		渲染块流按回合分组（groupTurnBlocks，WorkBuddy groupedMessages 同构）：
+		渲染按轮视图（buildTurnViews，WorkBuddy groupedMessages 同构）：
 		「本会话新发送的待吸顶」或 streaming 期间，由 user 开启的最后一组挂
 		anchor-space 的 min-height —— 内容不足一屏时用户消息才够得到视口顶，
 		且吸顶位置与吸底跟随收敛到同一 scrollTop（机制与出处见
 		send-anchor.ts 头注）。组边界稳定：老回合的组永不重排，新回合只
 		追加新组，卡片展开态等组件内部状态不随分组重建丢失。
 	*/
-	const turnGroups = groupTurnBlocks(blocks);
 	const anchorSpace = streaming || activePendingAlign(pendingAlign, sessionId) !== undefined;
 
+	const toggleTurn = (turnId: string): void => {
+		writeTurnFolds(toggleTurnFold(turnFolds, turnId));
+	};
+
 	/*
-		渲染块流来自 buildRenderBlocks（shared/metafold.ts）：已完成回合的
-		连续工具卡折成 fold 块；回合头部（turn-header）与「用户已取消」
-		（cancelled）占位块的定位规则与折叠分组共享同一遍扫描，视觉位置
-		与原实现一致（header 紧跟 user 之后，cancelled 在回合末尾）。
-		只有最后一个 user 消息所在的回合是「当前回合」—— 它的头部走表，
-		历史回合恒为已完成（computeTurnActive 同口径）。
+		单条目渲染：fold plan 的 visible / exempt / anchor 项与折叠段展开体
+		共用一个出口（锚点正文与普通正文的渲染毫无区别，差别只在折叠计划
+		里的归属）。错误卡/产物卡/内联产物/清单卡只会从豁免路径走到这里
+		（fold plan 保证它们不进折叠段），渲染顺序与条目序一致。
 	*/
-	const renderBlock = (block: RenderBlock): React.JSX.Element | null => {
-		switch (block.kind) {
-			case "turn-header":
-				return (
-					<TurnHeader
-						key={`turn-${block.userId}`}
-						active={streaming && block.userId === lastUserId}
-						turn={block.userId === lastUserId ? conversation.turn : undefined}
-					/>
-				);
-			case "cancelled":
-				return (
-					<div key={`cancelled-${block.userId}`} className="user-cancelled">
-						用户已取消
-					</div>
-				);
-			case "fold":
-				return (
-					<MetaFoldBlock
-						key={block.id}
-						leadIcon={block.leadIcon}
-						summary={block.summary}
-						cards={block.cards}
-						open={foldOpen.get(block.id) ?? false}
-						onToggle={() => toggleFold(block.id)}
-					/>
-				);
-			case "entry": {
-				const { entry } = block;
-				if (entry.role === "tool") {
-					// show_widget 不走通用工具卡：渲染为内联可视化块
-					// （sandbox iframe，见 widget-view.tsx）。其余卡片不变。
-					if (entry.toolName === "show_widget") {
-						return <WidgetView key={entry.id} card={entry} />;
-					}
-					// todo_write 走清单卡：投影已把多次调用合成一张（todo-projection.ts），
-					// 是消息流最新内容时默认展开（活面板），历史位置默认折叠。
-					if (entry.toolName === "todo_write") {
-						return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
-					}
-					// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
-					return <ToolEntry key={entry.id} card={entry} />;
-				}
-				// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
-				if (entry.role === "user") {
-					return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
-				}
-				// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
-				// conversation.artifacts，产物卡在消息流底部统一展示）。
-				if (entry.role === "artifacts_presented") {
-					return null;
-				}
-				return (
-					<div key={entry.id} data-entry-id={entry.id} className={`entry ${entry.role}`}>
-						{/*
-							thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
-							assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
-							isStreaming 翻 false，扫光与自动展开同时停止。
-						*/}
-						{entry.thinking !== undefined && (
-							<ThinkingBlock
-								text={entry.thinking}
-								streaming={streaming && entry.id === lastEntry?.id}
-							/>
-						)}
-						{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-						<Markdown
-							text={entry.text}
-							cwd={conversation.state.cwd}
-							onPathClick={onPathClick}
-						/>
-						{/*
-							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
-							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
-						*/}
-						<AssistantActions
-							text={entry.text}
-							showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
-							onExecutePlan={executePlan}
-						/>
-					</div>
-				);
+	const renderEntry = (entry: ConversationEntry): React.JSX.Element | null => {
+		if (entry.role === "tool") {
+			// show_widget 不走通用工具卡：渲染为内联可视化块
+			// （sandbox iframe，见 widget-view.tsx）。其余卡片不变。
+			if (entry.toolName === "show_widget") {
+				return <WidgetView key={entry.id} card={entry} />;
 			}
-			case "error": {
-				const { entry } = block;
-				return (
-					<ErrorCard
-						key={entry.id}
-						message={entry.message}
-						runId={entry.runId}
-						at={entry.at}
-						modelId={conversation.state.modelId}
-						retryText={retryText}
-						onRetry={() => {
-							if (retryText === undefined) return;
-							// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
-							retrySubmit(retryText);
-						}}
+			// todo_write 走清单卡：投影已把多次调用合成一张（todo-projection.ts），
+			// 是消息流最新内容时默认展开（活面板），历史位置默认折叠。
+			if (entry.toolName === "todo_write") {
+				return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
+			}
+			return <ToolEntry key={entry.id} card={entry} />;
+		}
+		// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
+		if (entry.role === "user") {
+			return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+		}
+		// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
+		// conversation.artifacts，产物卡在消息流底部统一展示）。
+		if (entry.role === "artifacts_presented") {
+			return null;
+		}
+		if (entry.role === "error") {
+			return (
+				<ErrorCard
+					key={entry.id}
+					message={entry.message}
+					runId={entry.runId}
+					at={entry.at}
+					modelId={conversation.state.modelId}
+					retryText={retryText}
+					onRetry={() => {
+						if (retryText === undefined) return;
+						// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
+						retrySubmit(retryText);
+					}}
+				/>
+			);
+		}
+		return (
+			<div key={entry.id} data-entry-id={entry.id} className={`entry ${entry.role}`}>
+				{/*
+					thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
+					assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
+					isStreaming 翻 false，扫光与自动展开同时停止。
+				*/}
+				{entry.thinking !== undefined && (
+					<ThinkingBlock
+						text={entry.thinking}
+						streaming={streaming && entry.id === lastEntry?.id}
 					/>
+				)}
+				{/* 走到这里的只剩助手消息（user/tool/error 在上面已分流），走 Markdown 渲染。 */}
+				<Markdown
+					text={entry.text}
+					cwd={conversation.state.cwd}
+					onPathClick={onPathClick}
+				/>
+				{/*
+					「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
+					流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
+				*/}
+				<AssistantActions
+					text={entry.text}
+					showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
+					onExecutePlan={executePlan}
+				/>
+			</div>
+		);
+	};
+
+	/*
+		折叠段的展开体：段内再过一遍 groupToolBatches —— 连续 ≥2 的工具批收
+		成摘要条（夹在批内的思考块随批展开），孤立单卡与过程文本原位平铺。
+		批条的开合状态按段 id 记在 foldOpen（折叠计划是纯函数重算，状态不能
+		挂在会重建的组件上）。
+	*/
+	const renderSegmentEntries = (segmentEntries: readonly ConversationEntry[]): (React.JSX.Element | null)[] =>
+		groupToolBatches(segmentEntries).map((item) =>
+			item.kind === "batch" ? (
+				<SegmentFold
+					key={item.id}
+					leadName={item.leadName}
+					label={item.summary}
+					open={foldOpen.get(item.id) ?? false}
+					onToggle={() => toggleFold(item.id)}
+				>
+					{item.entries.map(renderEntry)}
+				</SegmentFold>
+			) : (
+				renderEntry(item.entry)
+			),
+		);
+
+	/*
+		fold plan 单项渲染：
+		- anchor / visible / exempt → renderEntry 原位（锚点常显；豁免的产物/
+		  错误/内联卡位置不动）；
+		- turn-folded → 「已完成 Xs」轮折叠区：头部展开时才渲染（前缀轮没有
+		  头部可点，内容直接铺开，段内工具批仍是摘要条）；
+		- process-fold → 锚点之间/之后的过程段，恒渲染为「过程消息」折叠条。
+	*/
+	const renderPlanItem = (view: TurnView, item: FoldPlanItem): React.JSX.Element | null => {
+		switch (item.kind) {
+			case "visible":
+			case "exempt":
+			case "anchor":
+				return renderEntry(item.entry);
+			case "turn-folded": {
+				const open = view.turnId === undefined ? true : turnFoldExpanded(turnFolds, view.turnId);
+				if (!open) return null;
+				return <Fragment key={item.id}>{renderSegmentEntries(item.entries)}</Fragment>;
+			}
+			case "process-fold": {
+				const cards = item.entries.filter((e): e is ToolCard => e.role === "tool");
+				return (
+					<SegmentFold
+						key={item.id}
+						leadName={cards.length > 0 ? leadToolName(cards) : undefined}
+						label="过程消息"
+						open={foldOpen.get(item.id) ?? false}
+						onToggle={() => toggleFold(item.id)}
+					>
+						{renderSegmentEntries(item.entries)}
+					</SegmentFold>
 				);
 			}
 		}
@@ -1280,52 +1532,65 @@ export function ChatView({
 					</div>
 				))}
 			{/*
-				产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
-				WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
-				交付一般发生在收尾，且流式中面板已被自动打开。
-			*/}
-			{!streaming && artifacts.length > 0 && (
+			产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
+			WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
+			交付一般发生在收尾，且流式中面板已被自动打开。
+			底部操作行的出现条件是「产物/变更/来源任一非空」
+			（spec: add-search-sources-panel）：调研类任务常只有来源、
+			没有任何交付文件，行不能随产物缺席而整体消失。
+		*/}
+			{!streaming && (artifacts.length > 0 || changeCount > 0 || sources.length > 0) && (
 				<section className="artifacts">
-					<header className="artifacts-header">产物（{artifacts.length}）</header>
-					<div className="artifacts-grid">
-						{artifacts.map((a) => {
-							const isUrl = /^https?:\/\//i.test(a.path);
-							const isHtml = /\.html?$/i.test(a.path);
-							return (
-								<button
-									key={a.path}
-									type="button"
-									className="artifact-card"
-									title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
-									onClick={() => onPreviewArtifact(a.path)}
-								>
-									<IconDoc size={16} />
-									<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-									{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
-									{isHtml && !isUrl && (
-										<span
-											className="artifact-preview-btn"
-											role="button"
-											title="在预览面板打开"
-											onClick={(event) => {
-												event.stopPropagation();
-												onPreviewArtifact(a.path);
-											}}
+					{artifacts.length > 0 && (
+						<>
+							<header className="artifacts-header">产物（{artifacts.length}）</header>
+							<div className="artifacts-grid">
+								{artifacts.map((a) => {
+									const isUrl = /^https?:\/\//i.test(a.path);
+									const isHtml = /\.html?$/i.test(a.path);
+									return (
+										<button
+											key={a.path}
+											type="button"
+											className="artifact-card"
+											title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+											onClick={() => onPreviewArtifact(a.path)}
 										>
-											🌐
-										</span>
-									)}
-								</button>
-							);
-						})}
-					</div>
+											<IconDoc size={16} />
+											<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+											{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+											{isHtml && !isUrl && (
+												<span
+													className="artifact-preview-btn"
+													role="button"
+													title="在预览面板打开"
+													onClick={(event) => {
+														event.stopPropagation();
+														onPreviewArtifact(a.path);
+													}}
+												>
+													🌐
+												</span>
+											)}
+										</button>
+									);
+								})}
+							</div>
+						</>
+					)}
+					{/* 各按钮以各自数据非空为显隐口径（计数不为 0 才给入口）。 */}
 					<div className="artifacts-footer">
-						<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
-							查看所有产物 ({artifacts.length}) ›
-						</button>
-						<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
-							查看所有变更 ›
-						</button>
+						{artifacts.length > 0 && (
+							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
+								查看所有产物 ({artifacts.length}) ›
+							</button>
+						)}
+						{changeCount > 0 && (
+							<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
+								查看所有变更 ›
+							</button>
+						)}
+						{sources.length > 0 && <SourcesButton sources={sources} onClick={onOpenSources} />}
 					</div>
 				</section>
 			)}
@@ -1344,7 +1609,11 @@ export function ChatView({
 	);
 
 	return (
-		<main className="chat">
+		<main
+			className="chat"
+			ref={chatRef}
+			style={{ "--chat-content-width": `${contentWidth}px` } as React.CSSProperties}
+		>
 			<header className="chat-header">
 				<button type="button" className="bar-btn" aria-label="返回首页" onClick={onBack}>
 					<IconBack size={17} />
@@ -1399,23 +1668,50 @@ export function ChatView({
 			<div className="stream-wrap">
 				<div className="stream" ref={scrollRef} onScroll={handleStreamScroll}>
 					{/*
-						回合分组渲染：每组一个 .turn-group 容器；「由 user 开启的最后一组」
-						在 anchorSpace 期间加 anchor-space（min-height）—— 发送吸顶的
-						滚动空间由它提供（WorkBuddy group min-height 同款，出处见
-						send-anchor.ts 头注）。尾部（状态行/产物/错误卡）随最后一组走，
-						没有组（全新会话还没有消息）时平铺，与历史行为一致。
+						轮视图渲染：每轮一个 .turn-group 容器，依次是 user 气泡、
+						回合头部（可点的轮折叠开关）、fold plan 各项、取消指示行；
+						「由 user 开启的最后一组」在 anchorSpace 期间加 anchor-space
+						（min-height）—— 发送吸顶的滚动空间由它提供（WorkBuddy
+						group min-height 同款，出处见 send-anchor.ts 头注）。尾部
+						（状态行/产物/错误卡）随最后一组走，没有组（全新会话还没有
+						消息）时平铺，与历史行为一致。
 					*/}
-					{turnGroups.map((group, index) => {
-						const isLast = index === turnGroups.length - 1;
-						const anchored = isLast && anchorSpace && group.startsWithUser;
+					{turnViews.map((view, index) => {
+						const isLast = index === turnViews.length - 1;
+						const anchored = isLast && anchorSpace && view.startsWithUser;
+						const turnId = view.turnId;
+						const userEntry = view.userEntry;
 						return (
-							<div key={group.key} className={anchored ? "turn-group anchor-space" : "turn-group"}>
-								{group.blocks.map(renderBlock)}
+							<div key={view.key} className={anchored ? "turn-group anchor-space" : "turn-group"}>
+								{userEntry !== undefined && (
+									<UserBubble
+										entryId={userEntry.id}
+										text={userEntry.text}
+										at={userEntry.at}
+										images={userEntry.images}
+									/>
+								)}
+								{/*
+									回合头部紧跟 user 气泡之后（与原块流同位）；进行中的轮
+									hasTurnFold 恒 false，头部不可点、无 chevron，行为不变。
+								*/}
+								{turnId !== undefined && (
+									<TurnHeader
+										active={streaming && turnId === lastUserId}
+										turn={turnId === lastUserId ? conversation.turn : undefined}
+										collapsible={view.plan.hasTurnFold}
+										expanded={turnFoldExpanded(turnFolds, turnId)}
+										onToggle={() => toggleTurn(turnId)}
+									/>
+								)}
+								{view.plan.items.map((item) => renderPlanItem(view, item))}
+								{/* 取消指示行在轮末、折叠区外（中断痕迹必须常显）。 */}
+								{view.cancelled && <div className="user-cancelled">用户已取消</div>}
 								{isLast && streamTail}
 							</div>
 						);
 					})}
-					{turnGroups.length === 0 && streamTail}
+					{turnViews.length === 0 && streamTail}
 				</div>
 				{/*
 				消息导航刻度轨：钉在 stream-wrap 视口左缘（与 stream-fade /

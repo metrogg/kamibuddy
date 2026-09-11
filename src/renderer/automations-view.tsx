@@ -379,6 +379,11 @@ function AutomationRow({
 						<span className="auto-row-name" title={task.prompt}>
 							{task.name}
 						</span>
+						{task.builtin === true && (
+							<span className="auto-badge" title="系统内置任务，由设置页的记忆开关管辖">
+								内置
+							</span>
+						)}
 						{task.status === "paused" && <span className="auto-badge">已暂停</span>}
 						{task.status === "missed" && (
 							<span className="auto-badge auto-badge-missed">已错过</span>
@@ -405,13 +410,20 @@ function AutomationRow({
 					>
 						{running ? "运行中…" : "立即运行"}
 					</button>
-					<button type="button" className="mini-btn" disabled={busy} onClick={onEdit}>
+					<button
+						type="button"
+						className="mini-btn"
+						disabled={busy || task.builtin === true}
+						title={task.builtin === true ? "内置任务由系统维护，不可编辑" : undefined}
+						onClick={onEdit}
+					>
 						编辑
 					</button>
 					<button
 						type="button"
 						className="mini-btn danger"
-						disabled={busy}
+						disabled={busy || task.builtin === true}
+						title={task.builtin === true ? "内置任务不可删除，可在设置里停用" : undefined}
 						onClick={onDelete}
 					>
 						删除

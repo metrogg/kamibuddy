@@ -42,6 +42,7 @@ import {
 } from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
+import { parseSources } from "./source-parse.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -80,6 +81,7 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	powershell: "执行中",
 	web_search: "搜索中",
 	web_fetch: "抓取中",
+	conversation_search: "检索中",
 	present_files: "交付中",
 	// show_widget 的执行是毫秒级纯校验，生命周期几乎全在参数生成期 ——
 	// 与 write 同词汇（WorkBuddy tool.writeFile 的「生成中」）。
@@ -105,6 +107,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	powershell: "已执行",
 	web_search: "已搜索",
 	web_fetch: "已抓取",
+	conversation_search: "已检索",
 	present_files: "已交付",
 	show_widget: "已生成",
 	questionnaire: "已回答",
@@ -278,6 +281,17 @@ function toolResultText(result: unknown): string {
 	if (typeof result !== "object" || result === null) return "";
 	const content = (result as { content?: unknown }).content;
 	return textOf(content);
+}
+
+/**
+ * 工具结果的结构化 details（扩展工具挂在结果上的自定义元数据，pi AgentToolResult
+ * 的 details 字段；内置工具/异常结果没有则为 undefined）。
+ * web_search 的引用来源从这里取 —— 文本 content 与 details.results 同源，
+ * 卡片正文照旧走 toolResultText，两者互不替代。
+ */
+function toolResultDetails(result: unknown): unknown {
+	if (typeof result !== "object" || result === null) return undefined;
+	return (result as { details?: unknown }).details;
 }
 
 export interface SessionHostOptions {
@@ -1029,6 +1043,13 @@ export class SessionHost {
 				this.pendingChanges.delete(event.toolCallId);
 				const outcome: ToolOutcome = event.isError ? "error" : "ok";
 				const detail = toolResultText(event.result);
+				// web_search 的引用来源：从 result.details 提取并过 URL 安全校验
+				// （core/source-parse.ts）。与 todo_write 的 todos 不同源 —— todos 来自
+				// args（execution_end 不携带 args，靠执行态卡继承），sources 来自
+				// result（execution_end 才拿到执行结果），所以在这里解析而不是 start。
+				// details 缺席 → 键缺席，卡片照常落成。
+				const sources =
+					event.toolName === "web_search" ? parseSources(toolResultDetails(event.result)) : undefined;
 
 				emit({
 					type: "tool_finished",
@@ -1053,6 +1074,7 @@ export class SessionHost {
 						// todo_write 的清单从执行态卡继承（args 在 execution_start 解析，
 						// tool_execution_end 事件不携带 args，见该处注释）。
 						...(started?.todos === undefined ? {} : { todos: started.todos }),
+						...(sources === undefined ? {} : { sources }),
 						at: started?.at ?? Date.now(),
 					},
 				});

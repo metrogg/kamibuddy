@@ -9,7 +9,7 @@
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 193 条：**✅ 41 ／ 🟡 42 ／ ❌ 85 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
+> 当前 194 条：**✅ 42 ／ 🟡 42 ／ ❌ 85 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
 
 ## 怎么用这份清单
 
@@ -79,7 +79,7 @@ automation_create / automation_list / automation_delete / task。
 | C11 | 多代理团队 | TeamCreate/TeamDelete/SendMessage + TeammateRunner + mailbox + delegate 模式 | 无 | ❌ |
 | C12 | 技能工具 | Skill / SkillManage / SlashCommand | 技能经 pi 原生 `/skill:name` 加载；无管理工具 | 🟡 |
 | C13 | 定时任务 | CronCreate/List/Delete（会话级、3 天过期、每会话 50、退出失效） | `automation-tools.ts` + 调度器 + 落盘库 + 管理页（once/interval/daily/weekly），比 WorkBuddy 更持久 | ✅ 我方领先 |
-| C14 | 跨会话检索 | conversation_search（自包含 query 契约，对当前会话零访问权） | 无 | ❌ |
+| C14 | 跨会话检索 | conversation_search（自包含 query 契约，对当前会话零访问权） | conversation_search 本地版已落地（spec add-memory-system：AND 分词、排除当前会话、片段提取） | 🟡 无服务端排序 |
 | C15 | MCP 资源 | ListMcpResources / ReadMcpResource / WaitForMcpServers(≤5s) | `mcp-client.ts` 连 server 并注册 `mcp__server__tool`；无资源枚举 | 🟡 |
 | C16 | 工具延迟加载 | ToolSearch + DeferExecuteTool：工具不进初始上下文，先搜后用；`Defer(X)`/`NoDefer()` 会话级修饰符 | 无（工具 <20 个，暂不需要） | ❌ MCP 变多后再议 |
 | C17 | 多模态生成 | ImageGen / ImageEdit / VideoGen（混元图像系列，模型 ID 单独配置） | 无（图片只做输入） | ⛔ |
@@ -136,12 +136,12 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | F6 | 三层 reminder | 系统提示常驻条款 → 模式切换 reminder（含「This supersedes any other instructions」覆盖声明）→ 工具结果夹带 `<system-reminder>` 即时纠偏 | 无 | ❌ |
 | F7 | 身份系统 | SOUL.md / IDENTITY.md / USER.md / BOOTSTRAP.md（onboarding 自举后即焚）；人格可演进但须报备 | 无 | ❌ |
 | F8 | 风格系统 | 7 种 style-*.md（专业/亲和/高效/创意/毒舌/苏格拉底/直白），同构四小节全文注入 + 「style affects HOW, not WHAT」元规则隔离事实层 | `resources/styles/` 7 个原样搬用 + preferences.styleId（默认专业/可关闭/漂移降级记日志）+ 设置页选择器 + composer 注入（交互段后带元规则）；子代理不注入 | ✅ |
-| F9 | 记忆提示 | 四层注入槽 + 写策略说明（云端只读 / 用户级显式 / 工作区 append-only + 30 天蒸馏） | 无 | ❌ |
+| F9 | 记忆提示 | 四层注入槽 + 写策略说明（云端只读 / 用户级显式 / 工作区 append-only + 30 天蒸馏） | memory-system.md 提示片段（三层说明+写入纪律+检索策略）+ compose 注入（L2/画像/L3 笔记+近 3 天日志清单，空则零 token） | ✅ 三层本地化 |
 | F10 | 内容合规 | `<content_policy>`：提示保密（连结构存在性都禁暗示）+ 合规底线 + 反绕过（role-play、研究、假设场景都不行） | 无 | ❌ |
 | F11 | 个人文件安全 | `<personal_files_safety>` 是全提示最长章节：Trigger→Rules 结构，8 条规则（禁区目录、只读扫描、模糊先问、警告+列清单+确认、先备份、用回收站不用 rm、单批≤10、Windows 禁写非 ASCII 路径脚本） | 权限门做了机制层拦截，提示层无此章节 | 🟡 |
 | F12 | Windows 命令安全 | 禁多余 shell 包装、破坏命令路径必须绝对且校验、失败后禁止换命令重试 | command-guard 拦危险模式；无「失败禁止重试」提示条款 | 🟡 |
 | F13 | 地域约定 | `<regional_conventions>`：A 股红涨绿跌、¥ 符号 —— 显式声明「默认用户是中国人」 | 无 | ❌ 便宜 |
-| F14 | UI 感知输出 | `<final_answer_instructions>`：告知模型中间过程在 UI 被折叠，最终回复必须自足、上限 50–70 行 | 场景提示词有「最终回复必须自足」，无行数约束 | 🟡 |
+| F14 | UI 感知输出 | `<final_answer_instructions>`：告知模型中间过程在 UI 被折叠，最终回复必须自足、上限 50–70 行 | delivery-rules 片段含自足 + 复述清单 + 50-70 行约束（WB 搬用适配）；**前台配套已落地**：轮折叠 + 段折叠 + 锚点终答（`renderer/fold-view.ts` + `turn-fold.ts`，对标 MetaFold） | ✅ |
 | F15 | 特性开关进模板 | `productFeatures.*` / `IsWindows` / `LocalSkillsMemoryEnabled` 条件裁剪 | 无 | ❌ |
 | F16 | 提示级 i18n | `'中文' in ResponseLanguage` 检测，连 UI 指路文案和文档站域名都切换 | 无（只有中文） | ⛔ |
 | F17 | 模板云端热更 | 118 个 nunjucks 模板全在 product.json，云端下发；三级合并（内置 → 本地 overlay → 云控）+ 两级缓存 + last-good 门 | 本地文件；`config.get` 单一入口已预留云端 | 🟡 接口预留 |
@@ -208,12 +208,12 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 
 | 编号 | 能力 | WorkBuddy 机制（内部实现） | 我们 | 状态 |
 |---|---|---|---|---|
-| J1 | 云端画像 | `<memory>` 包裹的云端用户画像，本地写会被覆盖（只读语义） | 无 | ❌ |
-| J2 | 用户级记忆 | `MEMORY.md`，4000 字符上限；UserMemoryCollector 注入 | 无 | ❌ |
-| J3 | 工作区日志 | append-only + 30 天蒸馏维护；WorkingMemoryReminder 每轮提醒沉淀 | 无 | ❌ |
-| J4 | Auto Memory | `/memory` 面板管理，MEMORY.md 索引 | 无 | ❌ |
+| J1 | 云端画像 | `<memory>` 包裹的云端用户画像，本地写会被覆盖（只读语义） | 本地等价：~/.kamibuddy/PROFILE.md（工作/个人背景两节），内置任务「记忆整理」每晚 automation 蒸馏（spec add-memory-system）；设置页查看/编辑/重置/导入 | ✅ 本地等价 |
+| J2 | 用户级记忆 | `MEMORY.md`，4000 字符上限；UserMemoryCollector 注入 | ~/.kamibuddy/MEMORY.md，模型 Edit 维护（明说「记住」才写）；compose 注入；无写入配额（提示词纪律） | ✅ |
+| J3 | 工作区日志 | append-only + 30 天蒸馏维护；WorkingMemoryReminder 每轮提醒沉淀 | <cwd>/.kamibuddy/memory/YYYY-MM-DD.md + MEMORY.md；写入纪律进提示词（memory-system.md）；30 天蒸馏是提示词家务未代码化 | ✅ 提示词纪律 |
+| J4 | Auto Memory | `/memory` 面板管理，MEMORY.md 索引 | 设置页「记忆」分区（toggle + 画像管理）；无独立 /memory 面板 | 🟡 面板形式不同 |
 | J5 | 子代理记忆 | agent-memory 目录，spawn 时注入并截断 200 行 / 25KB | 无 | ❌ |
-| J6 | 跨会话检索 | conversation_search + memorySelector 内部 agent | 无 | ❌ |
+| J6 | 跨会话检索 | conversation_search + memorySelector 内部 agent | conversation_search 本地版（grep 会话 JSONL、AND 分词、片段提取、mtime 倒序、扫最近 200 个）；无 memorySelector agent | 🟡 无内部 agent 排序 |
 
 ## K. 会话与存储
 
@@ -234,7 +234,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | 编号 | 能力 | WorkBuddy 机制（内部实现） | 我们 | 状态 |
 |---|---|---|---|---|
 | L1 | 首页 | 场景页签 + 能力入口 + 输入卡 + 案例卡 + 吉祥物 | `home-view.tsx` 同构（hero / 页签 / 能力 chip / 案例卡） | ✅ |
-| L2 | 对话页 | 流式、思考折叠、工具卡、中断、扫光、复制、代码块、输入历史、字数闸、IME 守卫 | `chat-view.tsx` 全套（已对齐两批） | ✅ |
+| L2 | 对话页 | 流式、思考折叠、工具卡、中断、扫光、复制、代码块、输入历史、字数闸、IME 守卫 | `chat-view.tsx` 全套 + **轮折叠/段折叠/终答锚点**（fold-view + turn-fold，已完成轮过程折进「已完成 Xs」头、≥2 连续工具批摘要条、锚点=最长∪最后正文） | ✅ |
 | L3 | 右侧预览面板 | tab + 概览下拉 + pin + 外部打开；HTML 活预览（webview + 本地静态服务） | `artifact-panel.tsx`：多 tab + 概览 + 多格式渲染（HTML / Office / PDF / 代码），iframe + 127.0.0.1 静态服务 | ✅ |
 | L4 | 变更跟踪 UI | 工具行带绝对路径 + `+N −M` 徽章 + 「查看所有变更」 | 已对齐（真实 diff + 状态标签） | ✅ |
 | L5 | 产物卡片 | 文件名 + 大小 + 预览/打开图标 | 产物卡已对齐 | ✅ |
@@ -261,6 +261,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L23d | 排队横幅 | `QueueBanner`：云端模型容量排队（6020-6022 错误码 + queueGetStatus 轮询 + 取消/切 Auto 重发/升级），banner 优先级 queue>error>credit>quota | 无云端容量协议；pi 自动重试已覆盖常见 429/overload | ⛔ 无此前提；五态状态机已留档 spec 备将来复刻 |
 | L24 | 反馈与统计 | 消息点赞点踩（`vote_like_dislike`）、`ReportAfterCancel`（取消后上报）、`DisableResponseStatistics`；对话埋点事件族（`chat_message_send` / `chat_tool_action` / `agent_task_created` 等） | 无 | ❌ |
 | L25 | 正文路径徽章 | 行内 code 经 path-detector 形态判定（盘符/相对/文件名/`#L` 行号）+ 会话资源比对存在性，两步过才渲染 `cb-clickable-path`（图标 + 截断文件名，浅色 `#1470B4`/`#E9EEF2`）；点击 `openPath` → 右侧 DetailPanel，目录转文件树视图 | `markdown-path.ts` 形态判定 + `artifact:stat` 存在性探测（不限工作区、只报类型）；`markdown.tsx` InlineCode 徽章（模块级探测缓存防流式闪烁）；点击进右侧面板，目录/工作区外文件落外部打开 | ✅ v1：无 `#L` 行定位、无右键菜单 |
+| L26 | 引用来源面板 | 从 web_search 工具结果提取（结构化优先、Markdown 降级，web_fetch 不计入），按 URL 去重；footer「来源」按钮（favicon 头像组 ≤3 按站点去重）；面板复用右侧 DetailPanel 容器互斥渲染（favicon+站点+标题1行+摘要2行，点击外部打开）；零持久化、切会话清空 | `web-tools.ts` details 带结构化 results + `source-parse.ts` 安全校验（公网 http(s)，禁凭据/localhost/内网）+ ToolCard.sources 两路径填充（live/恢复）+ `collect-sources.ts` 聚合 + 来源按钮 + `sources-panel.tsx`（与 ArtifactPanel 同位互斥）；spec：`.trae/specs/add-search-sources-panel/`。favicon 曾全部被 CSP 拦截回退（img-src 无 https:），`add-source-favicons` 已放行并补搜索卡来源列表（卡头头像组 + 展开行列表，WorkBuddy cr-tool-web-search 同款） | ✅ v1：按会话聚合一行（WorkBuddy 按 requestId 每轮一个 footer）；favicon 用 origin/favicon.ico 回退（无服务端下发） |
 
 ## M. 渠道与远程
 

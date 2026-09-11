@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RenderBlock } from "@shared/metafold.ts";
-import { activePendingAlign, decideScrollAction, groupTurnBlocks } from "./send-anchor.ts";
+import { activePendingAlign, decideScrollAction } from "./send-anchor.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
 
 /** 快捷构造一条待吸顶记录。 */
@@ -146,51 +145,5 @@ describe("activePendingAlign —— 按会话过滤待吸顶记录", () => {
 
 	it("没有记录 → undefined", () => {
 		expect(activePendingAlign(undefined, "s1")).toBeUndefined();
-	});
-});
-
-/* ── 回合分组 ─────────────────────────────────────────────────── */
-
-function userBlock(id: string): RenderBlock {
-	return { kind: "entry", entry: { id, role: "user", text: `消息 ${id}`, at: 0 } };
-}
-
-describe("groupTurnBlocks —— WorkBuddy groupedMessages 同构", () => {
-	it("空块流 → 空分组", () => {
-		expect(groupTurnBlocks([])).toEqual([]);
-	});
-
-	it("每个 user 块开启一组，同回合的回合头/折叠/取消块跟随其后", () => {
-		const groups = groupTurnBlocks([
-			userBlock("u1"),
-			{ kind: "turn-header", userId: "u1" },
-			{ kind: "fold", id: "fold-t1", summary: "读取 1 个文件", leadIcon: "read", cards: [] },
-			{ kind: "cancelled", userId: "u1" },
-			userBlock("u2"),
-			{ kind: "turn-header", userId: "u2" },
-		]);
-		expect(groups.map((g) => g.key)).toEqual(["turn-u1", "turn-u2"]);
-		expect(groups.every((g) => g.startsWithUser)).toBe(true);
-		expect(groups[0]?.blocks.map((b) => b.kind)).toEqual(["entry", "turn-header", "fold", "cancelled"]);
-		expect(groups[1]?.blocks.map((b) => b.kind)).toEqual(["entry", "turn-header"]);
-	});
-
-	it("首个 user 之前的块归入前缀组（startsWithUser=false，不挂锚定空间）", () => {
-		const groups = groupTurnBlocks([
-			{ kind: "fold", id: "fold-t0", summary: "读取 2 个文件", leadIcon: "read", cards: [] },
-			userBlock("u1"),
-		]);
-		expect(groups.map((g) => [g.key, g.startsWithUser])).toEqual([
-			["turn-prefix", false],
-			["turn-u1", true],
-		]);
-	});
-
-	it("组边界稳定：追加新回合不改变老回合的分组", () => {
-		const base = [userBlock("u1"), { kind: "turn-header", userId: "u1" } as RenderBlock];
-		const before = groupTurnBlocks(base);
-		const after = groupTurnBlocks([...base, userBlock("u2")]);
-		expect(after[0]?.blocks).toEqual(before[0]?.blocks);
-		expect(after.map((g) => g.key)).toEqual(["turn-u1", "turn-u2"]);
 	});
 });

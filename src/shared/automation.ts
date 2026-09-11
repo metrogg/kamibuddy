@@ -49,6 +49,12 @@ export interface AutomationTask {
 	runs: readonly AutomationRun[];
 	createdAt: number;
 	updatedAt: number;
+	/**
+	 * 内置任务标记（目前只有「记忆整理」蒸馏任务，spec: add-memory-system）。
+	 * 可选字段：旧 automations.json 里没有它，读出 undefined 即非内置。
+	 * 内置任务不可删除（store.remove 拒），启停由 preferences.memoryEnabled 管辖。
+	 */
+	builtin?: boolean;
 }
 
 const MINUTE_MS = 60_000;

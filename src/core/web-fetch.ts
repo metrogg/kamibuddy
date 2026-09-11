@@ -46,8 +46,12 @@ const DEFAULT_MAX_CHARS = 24_000;
 const DEFAULT_MAX_RAW_BYTES = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/** 字面 IP 是否为内网/回环/链路本地地址（第一版拦截范围，见文件头注释）。 */
-function isPrivateIpLiteral(hostname: string): boolean {
+/**
+ * 字面 IP 是否为内网/回环/链路本地地址（第一版拦截范围，见文件头注释）。
+ * 导出给 source-parse.ts 复用 —— 来源 URL 与抓取 URL 的内网口径必须一致，
+ * 各写一份必然漂移（AGENTS.md §4）。
+ */
+export function isPrivateIpLiteral(hostname: string): boolean {
 	const normalized = hostname.replace(/^\[|\]$/g, "");
 	if (normalized === "") return false;
 

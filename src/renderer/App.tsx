@@ -32,6 +32,8 @@ import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
+import { SourcesPanel } from "./sources-panel.tsx";
+import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
@@ -90,6 +92,14 @@ export function App(): React.JSX.Element {
 	 * 现场完整且不依赖整体重拉。
 	 */
 	const viewCacheRef = useRef<Map<string, ConversationView>>(new Map());
+	/**
+	 * 轮折叠开合的多桶缓存（spec: add-turn-fold-and-anchor）：桶 = 每个会话
+	 * 一份 Map<turnId, expanded>。放 App 层是因为 ChatView 往返首页会卸载，
+	 * 而「按 turn id 记忆开合」跨视图切换要活着；会话视图态，不落盘。
+	 * ChatView 持有当前桶的 state 副本驱动渲染，写路径单一（写即回桶），
+	 * 挂载/切会话按 sessionId 取桶。
+	 */
+	const turnFoldCacheRef = useRef<Map<string, ReadonlyMap<string, boolean>>>(new Map());
 	/**
 	 * 当前可见会话 id（本 UI 查看即 resume，可见会话与 daemon 当前会话始终一致）。
 	 * 指针只允许在与「视图替换」同一处代码里切换——先切指针再换视图会把
@@ -298,6 +308,12 @@ export function App(): React.JSX.Element {
 		const offAutomation = window.kami.onAutomationEvent(
 			(event: AutomationEvent) => {
 				if (disposed || event.kind !== "runFinished") return;
+				/*
+				 * 内置任务（记忆整理）是静默后台家务：不 toast、不标未读
+				 * （spec: add-memory-system）。列表刷新不受影响 —— 侧栏由
+				 * taskListChanged 覆盖，管理页自己的订阅会重拉任务列表。
+				 */
+				if (event.builtin === true) return;
 				showToast(
 					event.success
 						? `任务「${event.taskName}」已完成`
@@ -466,6 +482,12 @@ export function App(): React.JSX.Element {
 	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。默认关闭——用户进入对话后手动展开。 */
 	const [panelOpen, setPanelOpen] = useState(false);
 	/**
+	 * 引用来源面板开合：与 ArtifactPanel 同位互斥（true 时右侧面板位渲染
+	 * SourcesPanel）。会话内内存态（WorkBuddy 同口径：不持久化），
+	 * 切会话随 closePreviewPanel 一并关闭。
+	 */
+	const [sourcesOpen, setSourcesOpen] = useState(false);
+	/**
 	 * 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。
 	 * 默认展开：侧栏是全局导航锚（任务历史 / 空间 / 设置入口），首页与
 	 * 对话页都常驻（WorkBuddy 同款）—— 收起后唯一的展开入口是窗口
@@ -516,6 +538,8 @@ export function App(): React.JSX.Element {
 		setPreviewTabs([]);
 		setPreviewActive(undefined);
 		setPanelFullscreen(false);
+		// 来源面板同属「随会话走的面板态」：切会话关闭，回到 ArtifactPanel 位。
+		setSourcesOpen(false);
 	}, []);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
@@ -1007,13 +1031,18 @@ export function App(): React.JSX.Element {
 					onSubmit={submit}
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
+					turnFoldCache={turnFoldCacheRef}
 					experts={experts}
 					onSelectExpert={selectExpert}
 					onPreviewArtifact={(path) => {
 						// URL 产物走外部打开（系统浏览器），不进预览面板 ——
 						// 面板只服务本地文件（静态服务根=工作区）。
 						if (/^https?:\/\//i.test(path)) openArtifact(path);
-						else openPreview({ kind: "file", path });
+						else {
+							// 来源面板开着时先翻回产物面板（同位互斥），否则预览不可见。
+							setSourcesOpen(false);
+							openPreview({ kind: "file", path });
+						}
 					}}
 					onPathClick={(path, kind) => {
 						// 正文路径徽章（WorkBuddy openPath 同口径）：文件进右侧预览面板。
@@ -1029,13 +1058,21 @@ export function App(): React.JSX.Element {
 							return;
 						}
 						setPanelOpen(true);
+						setSourcesOpen(false);
 						openPreview({ kind: "file", path });
 					}}
 					onOpenPanelGroup={(_group) => {
 						// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
 						// 面板概览视图里常驻展示，无需额外展开动作。
+						// 来源面板开着时先翻回产物面板（同位互斥）。
+						setSourcesOpen(false);
 						const first = conversation.artifacts[0];
 						if (first !== undefined) openPreview({ kind: "file", path: first.path });
+					}}
+					onOpenSources={() => {
+						// 与产物面板同位互斥：面板未展开时先展开，再翻到来源面板。
+						setPanelOpen(true);
+						setSourcesOpen(true);
 					}}
 					onOpenSettings={openSettings}
 					onError={showToast}
@@ -1084,8 +1121,16 @@ export function App(): React.JSX.Element {
 				/>
 			)}
 			{/* 产物预览面板：只在对话任务里出现（WorkBuddy：预览属于任务上下文），
-		   首页是引导页，右侧没有面板。panelOpen 即渲染（无激活文件时显示空态）。 */}
-			{view === "chat" && panelOpen && (
+		   首页是引导页，右侧没有面板。panelOpen 即渲染（无激活文件时显示空态）。
+		   引用来源面板与产物面板同位互斥（spec: add-search-sources-panel）：
+		   sourcesOpen 时渲染 SourcesPanel，关闭即回到产物面板（panelOpen 不动）。 */}
+			{view === "chat" && panelOpen && (sourcesOpen ? (
+				<SourcesPanel
+					sources={collectSources(conversation.entries)}
+					width={panelWidth}
+					onClose={() => setSourcesOpen(false)}
+				/>
+			) : (
 				<ArtifactPanel
 					artifacts={conversation.artifacts}
 					changes={collectChanges(conversation.entries)}
@@ -1103,7 +1148,7 @@ export function App(): React.JSX.Element {
 					onOpenExternal={openArtifact}
 					onError={showToast}
 				/>
-			)}
+			))}
 			{/*
 			左栏开关：App 层常驻、absolute 钉在窗口左上角（WorkBuddy 同款，
 			独立于侧栏开合）。不能放进 Sidebar 组件内部 —— 侧栏收起时组件

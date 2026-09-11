@@ -121,6 +121,22 @@ export interface TodoItem {
 	readonly status: "pending" | "in_progress" | "completed";
 }
 
+/**
+ * 一条引用来源（web_search 工具卡的结构化载荷）。
+ *
+ * 与 core/web-search.ts 的 WebSearchResult 同构、各自定义：那份是搜索服务商的
+ * 返回契约（core 层），这份是 UI 渲染契约 —— renderer 只许 import shared
+ * （AGENTS.md §1.3），两处无法共用一个 import 源。snippet 由 description 映射而来，
+ * publishedAt 不下发（UI 不展示，daemon 侧提取时已丢弃）。
+ */
+export interface SourceRef {
+	readonly title: string;
+	readonly url: string;
+	readonly snippet?: string;
+	/** 站点名（URL host 去 www. 前缀）。daemon 侧推导，UI 不自建推导逻辑。 */
+	readonly site?: string;
+}
+
 export interface ToolCard {
 	readonly id: ToolCallId;
 	readonly role: "tool";
@@ -167,6 +183,15 @@ export interface ToolCard {
 	 * 缺席不阻碍卡片照常落成。
 	 */
 	readonly todos?: readonly TodoItem[];
+	/**
+	 * web_search 的引用来源清单（结构化载荷）。仅 web_search 卡填充：
+	 * 来自工具 result.details 的结构化结果（daemon 侧已过 URL 安全校验，
+	 * core/source-parse.ts），恢复历史会话时由回放从落盘 details 重建
+	 * （core/session-rebuild.ts），零新增持久化。
+	 * result.details 缺席（旧会话/非搜索工具）时键缺席 —— 来源只是卡片的
+	 * 增强展示，缺席不阻碍卡片照常落成。
+	 */
+	readonly sources?: readonly SourceRef[];
 	readonly at: number;
 }
 
@@ -430,4 +455,21 @@ export interface ModeDescriptor {
 	readonly description: string;
 	/** 该项是否已实现。未实现的仍然显示（对齐 WorkBuddy 的能力面），点击给明确反馈。 */
 	readonly ready: boolean;
+}
+
+/**
+ * conversation_search 工具的一条命中（spec: add-memory-system）。
+ *
+ * daemon 的检索实现与 extensions 的工具本体共用的契约：工具不认识会话文件
+ * （pi 类型止步于 core/extensions 的规则同样不许 JSONL 解析进扩展），
+ * 检索结果由 daemon 装配时以 searchSessions 回调注入。
+ */
+export interface ConversationSearchHit {
+	readonly sessionId: string;
+	/** 会话标题（命名优先，否则首条用户消息截断，与任务列表同口径）。 */
+	readonly title: string;
+	/** 会话最后活动时间（epoch ms），用于展示日期与新旧排序。 */
+	readonly modifiedAt: number;
+	/** 命中处的上下文片段（命中关键词前后各约 200 字符）。 */
+	readonly snippet: string;
 }

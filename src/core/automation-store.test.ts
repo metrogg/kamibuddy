@@ -126,6 +126,36 @@ describe("CRUD", () => {
 	});
 });
 
+describe("builtin 内置任务（spec: add-memory-system）", () => {
+	it("builtin 字段序列化往返不丢", () => {
+		const store = new AutomationStore(file);
+		store.upsert(makeTask("a", { builtin: true }));
+
+		const reread = new AutomationStore(file);
+		expect(reread.get("a")?.builtin).toBe(true);
+	});
+
+	it("旧格式兼容：文件里没有 builtin 字段读出为 undefined，删除不受拒", () => {
+		// 手写一份没有 builtin 键的旧格式文件（不经过 upsert，upsert 会把
+		// 内存里的字段落进去，模拟不了「旧版本应用写出的文件」）。
+		writeFileSync(file, `${JSON.stringify([makeTask("a")], null, 2)}\n`, "utf8");
+
+		const store = new AutomationStore(file);
+		expect(store.get("a")?.builtin).toBeUndefined();
+		store.remove("a");
+		expect(store.list()).toEqual([]);
+	});
+
+	it("builtin 任务拒绝删除（响亮报错，库内容不变）", () => {
+		const store = new AutomationStore(file);
+		store.upsert(makeTask("a", { name: "记忆整理", builtin: true }));
+		expect(() => store.remove("a")).toThrow(/内置任务，不可删除/);
+
+		const reread = new AutomationStore(file);
+		expect(reread.get("a")?.builtin).toBe(true);
+	});
+});
+
 describe("appendRun", () => {
 	it("追加记录并跨实例读回", () => {
 		const store = new AutomationStore(file);

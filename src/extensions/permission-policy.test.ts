@@ -242,8 +242,8 @@ describe("配置目录内的技能子目录：只读工具例外", () => {
 		expect(decide(facts({ toolName: "edit", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
 	});
 
-	it("技能目录之外的配置目录仍然禁读（auth.json / sessions / preferences）", () => {
-		for (const p of ["auth.json", join("sessions", "x.jsonl"), "preferences.json"]) {
+	it("技能目录之外的配置目录仍然禁读（auth.json / preferences）", () => {
+		for (const p of ["auth.json", "preferences.json"]) {
 			expect(decide(facts({ toolName: "read", path: join(PATHS.configDir, p) }), PATHS, CWD).kind).toBe("deny");
 		}
 	});
@@ -255,6 +255,110 @@ describe("配置目录内的技能子目录：只读工具例外", () => {
 
 	it("只读模式下读技能同样放行（read-only 拒的是改动，不是读）", () => {
 		expect(decide(facts({ toolName: "read", path: SKILL_MD }), PATHS, CWD, READONLY)).toEqual({ kind: "allow" });
+	});
+});
+
+describe("配置目录内的会话库：只读工具例外（spec: add-memory-system）", () => {
+	/*
+	 * 内置「记忆整理」蒸馏任务的 run 会话 cwd 就是配置目录，它靠 read/grep/ls
+	 * 翻近 3 天的会话 JSONL 蒸馏画像。读自己的会话库不该撞配置目录禁读墙；
+	 * 写仍拒 —— 会话文件的唯一写者是 SessionManager，工具层写等于篡改历史。
+	 */
+	const SESSIONS_DIR = join(PATHS.configDir, "sessions");
+	const SESSION_FILE = join(SESSIONS_DIR, "2026-09-11-x.jsonl");
+
+	it("read 会话文件 → 放行（蒸馏任务读原料的路径）", () => {
+		expect(decide(facts({ toolName: "read", path: SESSION_FILE }), PATHS, CWD)).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("find / grep / ls 会话库目录 → 放行", () => {
+		for (const toolName of ["find", "grep", "ls"]) {
+			expect(decide(facts({ toolName, path: SESSIONS_DIR }), PATHS, CWD)).toEqual({
+				kind: "allow",
+			});
+		}
+	});
+
+	it("写会话库仍然拒绝 —— 会话文件的唯一写者是 SessionManager", () => {
+		expect(decide(facts({ toolName: "write", path: SESSION_FILE }), PATHS, CWD).kind).toBe("deny");
+		expect(decide(facts({ toolName: "edit", path: SESSION_FILE }), PATHS, CWD).kind).toBe("deny");
+	});
+
+	it("同名前缀的兄弟目录不放行（sessions-evil 不是 sessions）", () => {
+		const target = join(PATHS.configDir, "sessions-evil", "x.jsonl");
+		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD).kind).toBe("deny");
+	});
+});
+
+describe("记忆文件白名单（spec: add-memory-system）", () => {
+	/*
+	 * 三层记忆是纯数据（Markdown 笔记），模型用 write/edit 自己维护 ——
+	 * 维护记忆就是功能本体。配置目录禁写防的是 preferences/auth/models
+	 * 这类可执行配置被改（自毁），两组路径必须分开判。
+	 */
+	const MEMORY_MD = join(PATHS.configDir, "MEMORY.md");
+	const PROFILE_MD = join(PATHS.configDir, "PROFILE.md");
+
+	it("写配置目录下的 MEMORY.md / PROFILE.md → 放行（精确文件名）", () => {
+		for (const toolName of ["write", "edit"]) {
+			expect(decide(facts({ toolName, path: MEMORY_MD }), PATHS, CWD)).toEqual({ kind: "allow" });
+			expect(decide(facts({ toolName, path: PROFILE_MD }), PATHS, CWD)).toEqual({ kind: "allow" });
+		}
+	});
+
+	it("写 cwd 的 .kamibuddy/memory/ 下文件 → 放行（cwd 不在工作区时也放，钉住白名单本身）", () => {
+		// 刻意让 cwd 与 paths.workspaceDir 不同：若落进「区外写询问」说明
+		// 白名单没生效、是被工作区规则顺带覆盖的。
+		const projectCwd = join(HOME, "projects", "demo");
+		const logFile = join(projectCwd, ".kamibuddy", "memory", "2026-09-11.md");
+		expect(decide(facts({ path: logFile }), PATHS, projectCwd)).toEqual({ kind: "allow" });
+	});
+
+	it("read-only 档下写三个记忆路径同样放行（先于阶段 3 的只读拒绝）", () => {
+		// 写入纪律是系统提示词固定注入段，只读档拦写会让模型每轮撞墙。
+		const projectCwd = join(HOME, "projects", "demo");
+		for (const target of [
+			MEMORY_MD,
+			PROFILE_MD,
+			join(CWD, ".kamibuddy", "memory", "2026-09-11.md"),
+			join(projectCwd, ".kamibuddy", "memory", "MEMORY.md"),
+		]) {
+			const cwd = target.startsWith(projectCwd) ? projectCwd : CWD;
+			expect(decide(facts({ path: target }), PATHS, cwd, READONLY)).toEqual({ kind: "allow" });
+		}
+	});
+
+	it("cwd 就在配置目录下时，工作区记忆目录仍可写（两层规则覆盖的场景）", () => {
+		const target = join(PATHS.configDir, ".kamibuddy", "memory", "2026-09-11.md");
+		expect(decide(facts({ path: target }), PATHS, PATHS.configDir)).toEqual({ kind: "allow" });
+	});
+
+	it("配置目录其余文件维持禁写：preferences.json / auth.json / models.json", () => {
+		for (const p of ["preferences.json", "auth.json", "models.json"]) {
+			expect(decide(facts({ path: join(PATHS.configDir, p) }), PATHS, CWD).kind).toBe("deny");
+		}
+		// 精确文件名不等于前缀放行：MEMORY.md.bak 不是记忆文件。
+		expect(decide(facts({ path: join(PATHS.configDir, "MEMORY.md.bak") }), PATHS, CWD).kind).toBe("deny");
+	});
+
+	it("读记忆文件同样放行（模型改 MEMORY.md 前要先 read 现状）", () => {
+		expect(decide(facts({ toolName: "read", path: MEMORY_MD }), PATHS, CWD, READONLY)).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("shell 不借记忆路径放行：命令没有路径语义，白名单只限文件工具", () => {
+		// powershell 带一个恰好指向 MEMORY.md 的 path 入参，也不能经白名单 allow ——
+		// 阶段 0 只认文件工具。实际落进阶段 1 的配置目录拒绝（比询问更严），
+		// 这里只钉「不放行」这个安全语义，不钉具体落哪条规则。
+		const result = decide(
+			facts({ toolName: "powershell", command: "Set-Content x y", path: MEMORY_MD }),
+			PATHS,
+			CWD,
+		);
+		expect(result.kind).not.toBe("allow");
 	});
 });
 
@@ -363,12 +467,39 @@ describe("questionnaire（结构化提问）", () => {
 	});
 });
 
+describe("conversation_search（本地会话检索）", () => {
+	it("三档都放行 —— 读 KamiBuddy 自己的会话库，与 automation_list 同档", () => {
+		// 读盘发生在 daemon 内部（不经工具路径入参），没有路径可判；
+		// 不落 fail-safe 弹窗（spec: add-memory-system）。
+		for (const settings of [undefined, READONLY, FULL]) {
+			expect(decide(facts({ toolName: "conversation_search" }), PATHS, CWD, settings)).toEqual({
+				kind: "allow",
+			});
+		}
+	});
+});
+
 describe("read_me / show_widget（内联可视化）", () => {
 	it("三档都放行 —— 不触文件系统、无用户交互，与 questionnaire 同口径", () => {
 		// read_me 读的是随应用分发的设计指南（resources/visualizer/），
 		// show_widget 把片段交给 UI 渲染；两者都无本地路径概念，
 		// READ_ONLY 分支先于阶段 3 的只读拒绝生效（spec: add-inline-widgets）。
 		for (const toolName of ["read_me", "show_widget"]) {
+			for (const settings of [undefined, READONLY, FULL]) {
+				expect(decide(facts({ toolName }), PATHS, CWD, settings)).toEqual({
+					kind: "allow",
+				});
+			}
+		}
+	});
+});
+
+describe("todo_write / task（编排类，无本地副作用）", () => {
+	it("三档都放行 —— 不落 fail-safe 弹窗（2026-09-11 用户实测回归）", () => {
+		// todo_write 只更新会话内待办清单展示状态；task 只做委派编排，
+		// 子代理内部的敏感操作由 subagent-runner 自己的权限门逐次判定
+		// （同一套 PermissionSettings，read-only 档内部写操作照样被拒）。
+		for (const toolName of ["todo_write", "task"]) {
 			for (const settings of [undefined, READONLY, FULL]) {
 				expect(decide(facts({ toolName }), PATHS, CWD, settings)).toEqual({
 					kind: "allow",

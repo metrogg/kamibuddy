@@ -244,6 +244,21 @@ describe("到期执行", () => {
 		expect(task?.lastRunAt).toBe(NOW);
 	});
 
+	it("内置任务的 runFinished 带 builtin 标记（renderer 据此抑制 toast/未读）", async () => {
+		store.upsert(makeTask("a", { builtin: true, nextRunAt: NOW - 1 }));
+		makeScheduler(async () => OK("sess-a")).tick();
+		await whenIdleAll();
+
+		expect(pushes).toContainEqual({
+			kind: "runFinished",
+			taskId: "a",
+			taskName: "任务 a",
+			sessionId: "sess-a",
+			success: true,
+			builtin: true,
+		});
+	});
+
 	it("慢任务跨过下一个 tick 不叠加，队列串行 FIFO", async () => {
 		const gate = deferred<AutomationRunOutcome>();
 		const calls: string[] = [];

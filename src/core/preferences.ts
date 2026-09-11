@@ -52,6 +52,13 @@ export interface Preferences {
 	 * （未配置=默认风格 / 空串=关闭 / 某 id=指定风格），不能合并。
 	 */
 	readonly styleId?: string;
+	/**
+	 * 记忆系统开关（spec: add-memory-system）：控制内置「记忆整理」蒸馏任务的
+	 * 启停。未设置则 undefined，调用方按 true 处理 —— 与 permissions 的
+	 * 「不在这里填默认值」同口径，缺省语义收在调用方一处（daemon 的
+	 * getMemoryEnabled / 启动 ensure）。
+	 */
+	readonly memoryEnabled?: boolean;
 }
 
 export interface WebSearchPrefs {
@@ -90,6 +97,7 @@ export function readPreferences(): Preferences {
 			defaultWorkspacePath?: unknown;
 			thinkingLevel?: unknown;
 			styleId?: unknown;
+			memoryEnabled?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
@@ -134,6 +142,9 @@ export function readPreferences(): Preferences {
 		 * 的「读取不验、判定集中一处」口径）。
 		 */
 		const styleId = typeof record.styleId === "string" ? record.styleId : undefined;
+		// 非法值（手改文件）按「未配置」处理，同 thinkingLevel 的口径。
+		const memoryEnabled =
+			typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined;
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -143,6 +154,7 @@ export function readPreferences(): Preferences {
 			...(defaultWorkspacePath !== undefined ? { defaultWorkspacePath } : {}),
 			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 			...(styleId !== undefined ? { styleId } : {}),
+			...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
 		};
 	} catch {
 		return EMPTY;
