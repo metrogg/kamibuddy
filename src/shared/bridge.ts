@@ -10,6 +10,7 @@ import type {
 	AutomationEvent,
 	AutomationSaveInput,
 	DaemonStatus,
+	GlobalShortcutStatus,
 	ArtifactContent,
 	CompletionData,
 	McpConfigSnapshot,
@@ -194,6 +195,11 @@ export interface KamiBridge {
 
 	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
 	readonly statsSnapshot: () => Promise<ObservabilitySnapshot>;
+	/**
+	 * 全局唤起热键的注册状态（main 本地应答；failed = 大概率被别的程序占用）。
+	 * 状态静态（启动时注册一次），诊断页打开时查一次即可。
+	 */
+	readonly globalShortcutStatus: () => Promise<GlobalShortcutStatus | undefined>;
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 

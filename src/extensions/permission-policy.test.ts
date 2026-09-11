@@ -325,14 +325,17 @@ describe("questionnaire（结构化提问）", () => {
 	});
 });
 
-describe("task（子代理委派）", () => {
-	it("三档都放行 —— 不直接碰文件系统，子代理内部工具各自过门", () => {
-		// read-only 档也放行（与 questionnaire 同语义）：子代理会话里装着同一道门，
-		// 它的写操作会被子会话那道门的阶段 3 拒掉 —— 真正的判定在子会话内发生。
-		for (const settings of [undefined, READONLY, FULL]) {
-			expect(decide(facts({ toolName: "task" }), PATHS, CWD, settings)).toEqual({
-				kind: "allow",
-			});
+describe("read_me / show_widget（内联可视化）", () => {
+	it("三档都放行 —— 不触文件系统、无用户交互，与 questionnaire 同口径", () => {
+		// read_me 读的是随应用分发的设计指南（resources/visualizer/），
+		// show_widget 把片段交给 UI 渲染；两者都无本地路径概念，
+		// READ_ONLY 分支先于阶段 3 的只读拒绝生效（spec: add-inline-widgets）。
+		for (const toolName of ["read_me", "show_widget"]) {
+			for (const settings of [undefined, READONLY, FULL]) {
+				expect(decide(facts({ toolName }), PATHS, CWD, settings)).toEqual({
+					kind: "allow",
+				});
+			}
 		}
 	});
 });

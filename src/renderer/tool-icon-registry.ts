@@ -60,7 +60,7 @@ function normalizeName(name: string): string {
 const TOOL_ICON_ENTRIES: readonly ToolIconEntry[] = [
 	{
 		icon: IconEye,
-		toolNames: ["read", "read_file", "read_document", "preview_url", "present_files", "NotebookRead"],
+		toolNames: ["read", "read_file", "read_document", "read_me", "preview_url", "present_files", "NotebookRead"],
 	},
 	{
 		icon: IconEdit,

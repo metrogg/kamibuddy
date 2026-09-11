@@ -74,6 +74,7 @@ import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
+import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
 	DEFAULT_PERMISSIONS,
 	isApprovalPolicy,
@@ -1107,6 +1108,9 @@ async function createHost(
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
+			// 内联可视化（read_me + show_widget）：无副作用、无用户交互，
+			// 所有用户会话注册（run 会话的 widget 随历史可见）。
+			visualizerExtensionFactory(),
 			// MCP 连接器（handle 按桶登记，见上方 mcpClient 的注释）。
 			mcpClient.extension,
 			// 对话内 automation 工具（craft 白名单）：模型在对话里建/查/删定时任务。

@@ -11,6 +11,7 @@ import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
+import type { RenderBlock } from "@shared/metafold.ts";
 import type { ConversationEntry, ModeDescriptor, RunId, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
 import {
@@ -39,10 +40,13 @@ import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { Markdown } from "./markdown.tsx";
+import { activePendingAlign, decideScrollAction, groupTurnBlocks } from "./send-anchor.ts";
+import type { PendingSentAlign } from "./send-anchor.ts";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
+import { WidgetView } from "./widget-view.tsx";
 
 interface ChatViewProps {
 	readonly conversation: ConversationView;
@@ -800,6 +804,10 @@ export function ChatView({
 	// 跟随状态走 ref（scroll/effect 里同步读），按钮可见性走 state（要触发渲染）。
 	const followRef = useRef(true);
 	const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+	// 「本会话内新发送」的待吸顶记录（WorkBuddy useFirstMessageAlign 的
+	// firstUserMessageAlignPendingRef 同款，机制与出处见 send-anchor.ts 头注）。
+	// 走 state 不走 ref：anchor-space 的 min-height 要靠它参与渲染。
+	const [pendingAlign, setPendingAlign] = useState<PendingSentAlign | undefined>(undefined);
 
 	/*
 		跟随判定只看「测量到的位置」（距底 < 阈值），不看事件来源（wheel/touch/程序）。
@@ -816,11 +824,54 @@ export function ChatView({
 		setShowJumpToBottom(!atBottom);
 	};
 
-	// 新内容到达时若跟随中则贴底。用 scrollHeight 而非 scrollIntoView，避免流式增量时抖动。
+	/*
+		每次 entries 变化的滚动动作由 decideScrollAction 纯函数决定（决策表见
+		send-anchor.ts）：本会话新发送的回显上屏 → 吸顶；否则跟随中贴底 /
+		上翻中不动（既有语义）。贴底用 scrollHeight 而非 scrollIntoView，
+		避免流式增量时抖动；吸顶用 scrollIntoView block:"start"（与 TurnRail
+		跳转同口径）。anchor-space 的 min-height 让吸顶位置与贴底位置在内容
+		不足一屏时收敛 —— 吸顶后跟随接管不会二次跳动（WorkBuddy 同款数学，
+		见 send-anchor.ts 头注）。
+	*/
 	useEffect(() => {
 		const node = scrollRef.current;
-		if (node !== null && followRef.current) node.scrollTop = node.scrollHeight;
-	}, [conversation.entries]);
+		if (node === null) return;
+		const action = decideScrollAction({
+			pending: pendingAlign,
+			sessionId,
+			lastUserEntryId: lastUserId,
+			isFollowing: followRef.current,
+		});
+		if (action.kind === "align-top") {
+			const el = node.querySelector(`[data-entry-id="${CSS.escape(action.entryId)}"]`);
+			el?.scrollIntoView({ block: "start" });
+			// 吸顶只发一次（WorkBuddy：scrollToIndex 发出后清 pending 标记）。
+			// 记录本身保留到 streaming 接管锚定空间（见下方交接 effect）。
+			setPendingAlign((current) => (current === undefined ? current : { ...current, aligned: true }));
+			return;
+		}
+		if (action.kind === "stick-bottom") node.scrollTop = node.scrollHeight;
+	}, [conversation.entries, pendingAlign, sessionId, lastUserId]);
+
+	/*
+		锚定空间交接：吸顶发出后，等 streaming 真正开始（或回合已终结）才清掉
+		待吸顶记录。记录一清，anchor-space 的 min-height 就只剩 streaming 撑着；
+		在「回显已到、run_started 未到」的间隙提前清掉，min-height 掉落会让
+		浏览器 clamp 把刚吸顶的位置拉回底部。turn.endedAt 兜住「回合太快、
+		streaming:true 没被渲染出来就过去了」的边角。
+	*/
+	useEffect(() => {
+		if (pendingAlign?.aligned !== true) return;
+		if (streaming || conversation.turn?.endedAt !== undefined) setPendingAlign(undefined);
+	}, [pendingAlign, streaming, conversation.turn]);
+
+	// 切会话后旧的待吸顶作废（decideScrollAction 内部也按 sessionId 忽略它，
+	// 这里把状态清掉，anchor-space 不致残留到别的会话）。
+	useEffect(() => {
+		if (pendingAlign !== undefined && pendingAlign.sessionId !== sessionId) {
+			setPendingAlign(undefined);
+		}
+	}, [pendingAlign, sessionId]);
 
 	// 点「回到底部」：立即恢复跟随 + 平滑滚到底。跟随必须先于滚动恢复 ——
 	// 否则平滑动画没走完时新内容到达，底部被推远，动画终点已不在底部。
@@ -833,19 +884,32 @@ export function ChatView({
 	};
 
 	/**
-	 * Composer 的提交出口：发新消息强制贴底（WorkBuddy 同行为）——
-	 * 回显经 daemon 确认后才进 entries，这里先把跟随打开，entries
-	 * 变化的 effect 落地时自然贴底。retrySubmit / executePlan 不经过这里。
+	 * 会话内新发送的统一入口（Composer 提交 / 错误卡重试 / 执行计划共用）：
+	 * 恢复跟随 + 登记待吸顶 —— 新 user 消息回显上屏后由滚动 effect 吸顶，
+	 * 回复 streaming 开始后自然转入既有吸底跟随。
+	 * 提交被 daemon 拒绝（未选模型等，消息不会上屏）时撤销登记：锚定空间
+	 * 不能为一条不存在的消息留着。catch 用对象同一性比对，不清掉后一次
+	 * 发送的新登记。
 	 */
-	const handleComposerSubmit = (text: string, images?: readonly ImagePart[]): Promise<void> => {
+	const submitWithAnchor = (submit: () => Promise<void>): Promise<void> => {
 		followRef.current = true;
 		setShowJumpToBottom(false);
-		return onSubmit(text, images);
+		const mine: PendingSentAlign = { sessionId, baselineUserId: lastUserId, aligned: false };
+		setPendingAlign(mine);
+		const result = submit();
+		result.catch(() => {
+			setPendingAlign((current) => (current === mine ? undefined : current));
+		});
+		return result;
+	};
+
+	const handleComposerSubmit = (text: string, images?: readonly ImagePart[]): Promise<void> => {
+		return submitWithAnchor(() => onSubmit(text, images));
 	};
 
 	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
 	const retrySubmit = (text: string): void => {
-		onSubmit(text).catch(() => { });
+		submitWithAnchor(() => onSubmit(text)).catch(() => { });
 	};
 
 	/**
@@ -861,7 +925,7 @@ export function ChatView({
 		void window.kami.setInteraction("craft").then(
 			() => {
 				// 提交失败的原因 App 会落进错误卡（lastError），与手动发送同口径，不重复提示。
-				onSubmit("计划没问题，就按上面的计划开始执行吧。").catch(() => { });
+				submitWithAnchor(() => onSubmit("计划没问题，就按上面的计划开始执行吧。")).catch(() => { });
 			},
 			(error: unknown) => onError(error instanceof Error ? error.message : String(error)),
 		);
@@ -874,6 +938,204 @@ export function ChatView({
 			return next;
 		});
 	};
+
+	/*
+		渲染块流按回合分组（groupTurnBlocks，WorkBuddy groupedMessages 同构）：
+		「本会话新发送的待吸顶」或 streaming 期间，由 user 开启的最后一组挂
+		anchor-space 的 min-height —— 内容不足一屏时用户消息才够得到视口顶，
+		且吸顶位置与吸底跟随收敛到同一 scrollTop（机制与出处见
+		send-anchor.ts 头注）。组边界稳定：老回合的组永不重排，新回合只
+		追加新组，卡片展开态等组件内部状态不随分组重建丢失。
+	*/
+	const turnGroups = groupTurnBlocks(blocks);
+	const anchorSpace = streaming || activePendingAlign(pendingAlign, sessionId) !== undefined;
+
+	/*
+		渲染块流来自 buildRenderBlocks（shared/metafold.ts）：已完成回合的
+		连续工具卡折成 fold 块；回合头部（turn-header）与「用户已取消」
+		（cancelled）占位块的定位规则与折叠分组共享同一遍扫描，视觉位置
+		与原实现一致（header 紧跟 user 之后，cancelled 在回合末尾）。
+		只有最后一个 user 消息所在的回合是「当前回合」—— 它的头部走表，
+		历史回合恒为已完成（computeTurnActive 同口径）。
+	*/
+	const renderBlock = (block: RenderBlock): React.JSX.Element | null => {
+		switch (block.kind) {
+			case "turn-header":
+				return (
+					<TurnHeader
+						key={`turn-${block.userId}`}
+						active={streaming && block.userId === lastUserId}
+						turn={block.userId === lastUserId ? conversation.turn : undefined}
+					/>
+				);
+			case "cancelled":
+				return (
+					<div key={`cancelled-${block.userId}`} className="user-cancelled">
+						用户已取消
+					</div>
+				);
+			case "fold":
+				return (
+					<MetaFoldBlock
+						key={block.id}
+						leadIcon={block.leadIcon}
+						summary={block.summary}
+						cards={block.cards}
+						open={foldOpen.get(block.id) ?? false}
+						onToggle={() => toggleFold(block.id)}
+					/>
+				);
+			case "entry": {
+				const { entry } = block;
+				if (entry.role === "tool") {
+					// show_widget 不走通用工具卡：渲染为内联可视化块
+					// （sandbox iframe，见 widget-view.tsx）。其余卡片不变。
+					if (entry.toolName === "show_widget") {
+						return <WidgetView key={entry.id} card={entry} />;
+					}
+					// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
+					return <ToolEntry key={entry.id} card={entry} />;
+				}
+				// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
+				if (entry.role === "user") {
+					return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+				}
+				// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
+				// conversation.artifacts，产物卡在消息流底部统一展示）。
+				if (entry.role === "artifacts_presented") {
+					return null;
+				}
+				return (
+					<div key={entry.id} data-entry-id={entry.id} className={`entry ${entry.role}`}>
+						{/*
+							thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
+							assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
+							isStreaming 翻 false，扫光与自动展开同时停止。
+						*/}
+						{entry.thinking !== undefined && (
+							<ThinkingBlock
+								text={entry.thinking}
+								streaming={streaming && entry.id === lastEntry?.id}
+							/>
+						)}
+						{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
+						<Markdown text={entry.text} />
+						{/*
+							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
+							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
+						*/}
+						<AssistantActions
+							text={entry.text}
+							showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
+							onExecutePlan={executePlan}
+						/>
+					</div>
+				);
+			}
+			case "error": {
+				const { entry } = block;
+				return (
+					<ErrorCard
+						key={entry.id}
+						message={entry.message}
+						runId={entry.runId}
+						at={entry.at}
+						modelId={conversation.state.modelId}
+						retryText={retryText}
+						onRetry={() => {
+							if (retryText === undefined) return;
+							// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
+							retrySubmit(retryText);
+						}}
+					/>
+				);
+			}
+		}
+	};
+
+	/*
+		消息流尾部（流式状态行 / 产物区 / 提交错误卡）：渲染在最后一组之内 ——
+		与 WorkBuddy 的组内 footer 同位。锚定空间生效期间，回显的用户消息与
+		等待状态行在同一组里，吸顶后「等待模型响应…」就出现在消息下方视野内。
+	*/
+	const streamTail = (
+		<>
+			{/*
+				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
+				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
+				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
+			*/}
+			{streaming &&
+				(awaitingFirstResponse ? (
+					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
+				) : (
+					<div className="stream-pending">
+						<span className="text-shimmer">{pendingText(conversation.entries)}</span>
+					</div>
+				))}
+			{/*
+				产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
+				WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
+				交付一般发生在收尾，且流式中面板已被自动打开。
+			*/}
+			{!streaming && artifacts.length > 0 && (
+				<section className="artifacts">
+					<header className="artifacts-header">产物（{artifacts.length}）</header>
+					<div className="artifacts-grid">
+						{artifacts.map((a) => {
+							const isUrl = /^https?:\/\//i.test(a.path);
+							const isHtml = /\.html?$/i.test(a.path);
+							return (
+								<button
+									key={a.path}
+									type="button"
+									className="artifact-card"
+									title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+									onClick={() => onPreviewArtifact(a.path)}
+								>
+									<IconDoc size={16} />
+									<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+									{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+									{isHtml && !isUrl && (
+										<span
+											className="artifact-preview-btn"
+											role="button"
+											title="在预览面板打开"
+											onClick={(event) => {
+												event.stopPropagation();
+												onPreviewArtifact(a.path);
+											}}
+										>
+											🌐
+										</span>
+									)}
+								</button>
+							);
+						})}
+					</div>
+					<div className="artifacts-footer">
+						<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
+							查看所有产物 ({artifacts.length}) ›
+						</button>
+						<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
+							查看所有变更 ›
+						</button>
+					</div>
+				</section>
+			)}
+			{lastError !== undefined && (
+				<ErrorCard
+					message={lastError}
+					modelId={conversation.state.modelId}
+					retryText={retryText}
+					onRetry={() => {
+						if (retryText === undefined) return;
+						retrySubmit(retryText);
+					}}
+				/>
+			)}
+		</>
+	);
 
 	return (
 		<main className="chat">
@@ -917,176 +1179,23 @@ export function ChatView({
 			<div className="stream-wrap">
 				<div className="stream" ref={scrollRef} onScroll={handleStreamScroll}>
 					{/*
-			渲染块流来自 buildRenderBlocks（shared/metafold.ts）：已完成回合的
-			连续工具卡折成 fold 块；回合头部（turn-header）与「用户已取消」
-			（cancelled）占位块的定位规则与折叠分组共享同一遍扫描，视觉位置
-			与原实现一致（header 紧跟 user 之后，cancelled 在回合末尾）。
-			只有最后一个 user 消息所在的回合是「当前回合」—— 它的头部走表，
-			历史回合恒为已完成（computeTurnActive 同口径）。
-		*/}
-					{blocks.map((block) => {
-						switch (block.kind) {
-							case "turn-header":
-								return (
-									<TurnHeader
-										key={`turn-${block.userId}`}
-										active={streaming && block.userId === lastUserId}
-										turn={block.userId === lastUserId ? conversation.turn : undefined}
-									/>
-								);
-							case "cancelled":
-								return (
-									<div key={`cancelled-${block.userId}`} className="user-cancelled">
-										用户已取消
-									</div>
-								);
-							case "fold":
-								return (
-									<MetaFoldBlock
-										key={block.id}
-										leadIcon={block.leadIcon}
-										summary={block.summary}
-										cards={block.cards}
-										open={foldOpen.get(block.id) ?? false}
-										onToggle={() => toggleFold(block.id)}
-									/>
-								);
-							case "entry": {
-								const { entry } = block;
-								if (entry.role === "tool") {
-									// 进行中回合的工具卡不折叠，原样平铺（过程必须可见）。
-									return <ToolEntry key={entry.id} card={entry} />;
-								}
-								// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
-								if (entry.role === "user") {
-									return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
-								}
-								// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
-								// conversation.artifacts，产物卡在消息流底部统一展示）。
-								if (entry.role === "artifacts_presented") {
-									return null;
-								}
-								return (
-									<div key={entry.id} data-entry-id={entry.id} className={`entry ${entry.role}`}>
-										{/*
-									thinking 的流式判定：该条是 entries 末尾的助手消息且会话在流式。
-									assistant_done 后它不再是末尾（后续工具卡/新消息接上来）或
-									isStreaming 翻 false，扫光与自动展开同时停止。
-								*/}
-										{entry.thinking !== undefined && (
-											<ThinkingBlock
-												text={entry.thinking}
-												streaming={streaming && entry.id === lastEntry?.id}
-											/>
-										)}
-										{/* 走到这里的只剩助手消息（user/tool 在上面已分流），走 Markdown 渲染。 */}
-										<Markdown text={entry.text} />
-										{/*
-							「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
-							流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
-						*/}
-										<AssistantActions
-											text={entry.text}
-											showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
-											onExecutePlan={executePlan}
-										/>
-									</div>
-								);
-							}
-							case "error": {
-								const { entry } = block;
-								return (
-									<ErrorCard
-										key={entry.id}
-										message={entry.message}
-										runId={entry.runId}
-										at={entry.at}
-										modelId={conversation.state.modelId}
-										retryText={retryText}
-										onRetry={() => {
-											if (retryText === undefined) return;
-											// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
-											retrySubmit(retryText);
-										}}
-									/>
-								);
-							}
-						}
+						回合分组渲染：每组一个 .turn-group 容器；「由 user 开启的最后一组」
+						在 anchorSpace 期间加 anchor-space（min-height）—— 发送吸顶的
+						滚动空间由它提供（WorkBuddy group min-height 同款，出处见
+						send-anchor.ts 头注）。尾部（状态行/产物/错误卡）随最后一组走，
+						没有组（全新会话还没有消息）时平铺，与历史行为一致。
+					*/}
+					{turnGroups.map((group, index) => {
+						const isLast = index === turnGroups.length - 1;
+						const anchored = isLast && anchorSpace && group.startsWithUser;
+						return (
+							<div key={group.key} className={anchored ? "turn-group anchor-space" : "turn-group"}>
+								{group.blocks.map(renderBlock)}
+								{isLast && streamTail}
+							</div>
+						);
 					})}
-					{/*
-				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
-				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
-				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
-			*/}
-					{streaming &&
-						(awaitingFirstResponse ? (
-							<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
-						) : (
-							<div className="stream-pending">
-								<span className="text-shimmer">{pendingText(conversation.entries)}</span>
-							</div>
-						))}
-					{/*
-					产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
-					WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
-					交付一般发生在收尾，且流式中面板已被自动打开。
-				*/}
-					{!streaming && artifacts.length > 0 && (
-						<section className="artifacts">
-							<header className="artifacts-header">产物（{artifacts.length}）</header>
-							<div className="artifacts-grid">
-								{artifacts.map((a) => {
-									const isUrl = /^https?:\/\//i.test(a.path);
-									const isHtml = /\.html?$/i.test(a.path);
-									return (
-										<button
-											key={a.path}
-											type="button"
-											className="artifact-card"
-											title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
-											onClick={() => onPreviewArtifact(a.path)}
-										>
-											<IconDoc size={16} />
-											<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-											{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
-											{isHtml && !isUrl && (
-												<span
-													className="artifact-preview-btn"
-													role="button"
-													title="在预览面板打开"
-													onClick={(event) => {
-														event.stopPropagation();
-														onPreviewArtifact(a.path);
-													}}
-												>
-													🌐
-												</span>
-											)}
-										</button>
-									);
-								})}
-							</div>
-							<div className="artifacts-footer">
-								<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("artifacts")}>
-									查看所有产物 ({artifacts.length}) ›
-								</button>
-								<button type="button" className="artifacts-more" onClick={() => onOpenPanelGroup("changes")}>
-									查看所有变更 ›
-								</button>
-							</div>
-						</section>
-					)}
-					{lastError !== undefined && (
-						<ErrorCard
-							message={lastError}
-							modelId={conversation.state.modelId}
-							retryText={retryText}
-							onRetry={() => {
-								if (retryText === undefined) return;
-								retrySubmit(retryText);
-							}}
-						/>
-					)}
+					{turnGroups.length === 0 && streamTail}
 				</div>
 				{/*
 				消息导航刻度轨：钉在 stream-wrap 视口左缘（与 stream-fade /

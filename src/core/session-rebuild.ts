@@ -104,12 +104,20 @@ function summarizeCall(call: PiToolCall): string {
 /**
  * toolResult 的正文（text 块拼接）。空串返回 undefined —— 与 session-host 的
  * detail 口径一致（空正文不上屏）。超长截断并标注，防止恢复视图把超长文本塞进 DOM。
+ *
+ * show_widget 豁免截断：它的 detail 就是 widget 本体（结果 JSON 内含
+ * widget_code），截断即破坏 JSON，恢复出的卡片永远渲染失败 —— 而 spec 要求
+ * 历史重放与实时产出同形态（内容全部来自落盘的工具记录）。live 路径
+ * （session-host toolResultText）本就不截，pi 对扩展工具结果也不截
+ * （截断是 bash/grep 内置工具各自的行为），两路口径在此对齐。
  */
-function detailOf(result: PiToolResultMessage): string | undefined {
+function detailOf(result: PiToolResultMessage, toolName: string): string | undefined {
 	let text = "";
 	for (const block of result.content) if (block.type === "text") text += block.text;
 	if (text === "") return undefined;
-	if (text.length > DETAIL_LIMIT) return text.slice(0, DETAIL_LIMIT) + TRUNCATED_MARK;
+	if (toolName !== "show_widget" && text.length > DETAIL_LIMIT) {
+		return text.slice(0, DETAIL_LIMIT) + TRUNCATED_MARK;
+	}
 	return text;
 }
 
@@ -185,7 +193,7 @@ export function buildConversationEntries(
 					label: resolveToolLabel?.(block.name, outcome) ?? block.name,
 					summary: summarizeCall(block),
 					outcome,
-					detail: result === undefined ? undefined : detailOf(result),
+					detail: result === undefined ? undefined : detailOf(result, block.name),
 					at,
 				};
 				out.push(card);

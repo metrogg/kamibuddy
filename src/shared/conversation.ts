@@ -243,23 +243,27 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			// path 未完整时不落卡（半截路径上屏像 bug）；行数随 path 一起进 change，
 			// UI 的 +N 徽章读同一个字段，生成中与终态两个口径不用分开渲染。
 			// 标签随 changeType 刷新：write 覆盖已有文件时从「生成中」变「修改中」。
+			// rawArgs（show_widget）与行数口径正交：参数本体原文直接落 streamArgs，
+			// 渲染层拿它做渐进解析，不碰 label/summary/change。
 			return {
 				...view,
-				entries: replaceEntry(view.entries, event.id, (entry) =>
-					entry.role === "tool" && event.path !== undefined
-						? {
-							...entry,
-							label: generatingLabel(entry.toolName, event.changeType),
-							summary: event.path,
-							change: {
-								path: event.path,
-								added: event.added,
-								removed: 0,
-								changeType: event.changeType,
-							},
-						}
-						: entry,
-				),
+				entries: replaceEntry(view.entries, event.id, (entry) => {
+					if (entry.role !== "tool") return entry;
+					const withArgs =
+						event.rawArgs !== undefined ? { ...entry, streamArgs: event.rawArgs } : entry;
+					if (event.path === undefined) return withArgs;
+					return {
+						...withArgs,
+						label: generatingLabel(entry.toolName, event.changeType),
+						summary: event.path,
+						change: {
+							path: event.path,
+							added: event.added,
+							removed: 0,
+							changeType: event.changeType,
+						},
+					};
+				}),
 			};
 
 		case "tool_progress":

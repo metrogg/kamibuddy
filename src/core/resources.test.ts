@@ -142,6 +142,25 @@ describe("真实 resources/ 的回归约束", () => {
 		}
 	});
 
+	it("read_me / show_widget 在 craft 与 ask 白名单，plan 不加", () => {
+		// 与 present_files 同款防护。plan 只读调研、产出是计划文本，
+		// 不产出可视化交付，明确不加（spec: add-inline-widgets；
+		// 取舍同步注释在 resources/modes/plan.md 的 frontmatter 里）。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { modes } = loadResources(realDir);
+		for (const id of ["craft", "ask"]) {
+			const mode = modes.find((m) => m.id === id);
+			expect(mode, `模式 ${id} 应存在`).toBeDefined();
+			for (const tool of ["read_me", "show_widget"]) {
+				expect(mode?.tools, `模式 ${id} 的 tools 应含 ${tool}`).toContain(tool);
+			}
+		}
+		const plan = modes.find((m) => m.id === "plan");
+		for (const tool of ["read_me", "show_widget"]) {
+			expect(plan?.tools, `plan 不应有 ${tool}`).not.toContain(tool);
+		}
+	});
+
 	it("questionnaire 三模式白名单都有；powershell 只在 craft", () => {
 		// 与 present_files 同款防护。questionnaire 三模式都加（plan 尤其需要：
 		// 调研阶段就该把方向问清，spec: add-questionnaire-and-powershell）；

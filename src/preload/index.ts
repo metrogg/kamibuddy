@@ -111,6 +111,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.mcpServerToggle, serverName, enabled),
 
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
+	globalShortcutStatus: () => ipcRenderer.invoke(INVOKE.globalShortcutStatus),
 
 	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
 	saveAutomation: (input) => ipcRenderer.invoke(INVOKE.automationSave, input),

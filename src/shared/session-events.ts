@@ -135,6 +135,17 @@ export interface ToolCard {
 	 * tool_execution_start 到达时该标记消失（进入执行态）。
 	 */
 	readonly generating?: boolean;
+	/**
+	 * 生成期累积的原始参数文本（半截 JSON），随 tool_stream_progress.rawArgs 上屏。
+	 *
+	 * 只给「参数本体就是展示内容」的工具：show_widget 的 widget_code 在参数里
+	 * 逐步变长，渲染层在工具结果返回前就拿这段做渐进解析（部分 JSON 提取），
+	 * 流式期间即可渲染半成品 widget。write/edit 不填 —— 它们的进度表达是
+	 * 行数统计（change），不需要把文件内容原文推给 UI。
+	 * 执行期（tool_started）由 session-host 用完整 args 回填一次，
+	 * tool_finished 后键缺席：终态内容以 detail（工具结果）为准。
+	 */
+	readonly streamArgs?: string;
 	readonly at: number;
 }
 
@@ -207,6 +218,12 @@ export type SessionEvent =
 	 * 嵌套结构，流式数行成本高而收益低，生成中只显示卡片本身。
 	 * changeType 由 daemon 在 path 完整时查文件是否存在得出（新建/覆盖），
 	 * 与终态 FileChange.changeType 同口径。
+	 *
+	 * rawArgs 是 show_widget 的通道：它的进度不是行数而是参数本体
+	 * （widget_code 在参数里逐步累积，渲染层靠它做渐进渲染），path/added/
+	 * changeType 对它无意义（发 path:undefined 占位，reducer 见到
+	 * path===undefined 本就不动行数口径）。两个用途共用同一事件而不是
+	 * 各起一个：都是「生成期卡片的增量现场」，消费方都是同一张卡。
 	 */
 	| {
 		readonly type: "tool_stream_progress";
@@ -214,6 +231,8 @@ export type SessionEvent =
 		readonly path: string | undefined;
 		readonly added: number;
 		readonly changeType: "created" | "modified";
+		/** 生成期累积的原始参数文本（目前仅 show_widget 发，见 ToolCard.streamArgs）。 */
+		readonly rawArgs?: string;
 	}
 	/** 工具开始执行（参数已生成完毕）。同 id 的生成中卡片原位翻转为执行态。 */
 	| { readonly type: "tool_started"; readonly card: ToolCard }

@@ -55,10 +55,10 @@ describe("snapshot", () => {
 				isStreaming: false,
 			},
 			entries: [{ id: "u1", role: "user", text: "你好", at: 1 }],
-		availableScenes: [{ id: "work", label: "日常办公", description: "文档与汇报", ready: true }],
-		availableModes: [{ id: "ask", label: "问答", description: "只读", ready: true }],
-		artifacts: [],
-	};
+			availableScenes: [{ id: "work", label: "日常办公", description: "文档与汇报", ready: true }],
+			availableModes: [{ id: "ask", label: "问答", description: "只读", ready: true }],
+			artifacts: [],
+		};
 
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
 
@@ -304,6 +304,38 @@ describe("生成阶段的工具卡片", () => {
 
 		expect(view.entries[0]).toMatchObject({ summary: "" });
 		expect((view.entries[0] as ToolCard).change).toBeUndefined();
+	});
+
+	it("rawArgs 落进卡片 streamArgs（show_widget 渐进渲染的数据源），不碰行数口径", () => {
+		const view = apply([
+			{
+				type: "tool_stream_started",
+				card: toolCard({ toolName: "show_widget", summary: "", generating: true }),
+			},
+			{
+				type: "tool_stream_progress",
+				id: "t1",
+				path: undefined,
+				added: 0,
+				changeType: "created",
+				rawArgs: '{"title":"sales"',
+			},
+			{
+				type: "tool_stream_progress",
+				id: "t1",
+				path: undefined,
+				added: 0,
+				changeType: "created",
+				rawArgs: '{"title":"sales","widget_code":"<svg',
+			},
+		]);
+
+		// rawArgs 是累积快照：后一帧全量替换，reducer 不做拼接。
+		const entry = view.entries[0] as ToolCard;
+		expect(entry.streamArgs).toBe('{"title":"sales","widget_code":"<svg');
+		expect(entry.summary).toBe("");
+		expect(entry.change).toBeUndefined();
+		expect(entry.generating).toBe(true);
 	});
 
 	it("tool_stream_progress 指向不存在的卡片时不造假", () => {

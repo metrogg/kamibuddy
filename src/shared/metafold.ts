@@ -232,6 +232,17 @@ export function buildRenderBlocks(
 			continue;
 		}
 		if (entry.role === "tool") {
+			/*
+			 * show_widget 是内联可视化块，不是「过程」：折进「读取 1 个文件、
+			 * 使用工具 1 次」里图表就从消息流消失了，而它本身就是要给用户看的
+			 * 产物 —— 与 assistant 消息同待遇：打断工具连续性并单独成块
+			 * （渲染侧按 toolName 走 WidgetView，不走 ToolEntry）。
+			 */
+			if (entry.toolName === "show_widget") {
+				flushTools();
+				blocks.push({ kind: "entry", entry });
+				continue;
+			}
 			toolBuffer.push(entry);
 			continue;
 		}

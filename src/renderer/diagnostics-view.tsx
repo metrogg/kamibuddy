@@ -11,6 +11,10 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import {
+	DEFAULT_GLOBAL_SHORTCUT,
+	type GlobalShortcutStatus,
+} from "@shared/ipc.ts";
 import type {
 	ObservabilitySnapshot,
 	RunRecord,
@@ -174,6 +178,40 @@ function RunTimeline({ run }: { run: RunRecord }): React.JSX.Element {
 	);
 }
 
+/* ── 全局唤起热键状态行 ──────────────────────────────────────────── */
+
+/**
+ * 全局唤起热键的注册状态（main 侧 globalShortcut.register 的真实结果，
+ * 经 INVOKE.globalShortcutStatus 由 main 本地应答）。状态在启动注册后
+ * 不再变化，挂载时查一次即可，不随会话事件刷新。
+ */
+function GlobalShortcutRow(): React.JSX.Element {
+	const [status, setStatus] = useState<GlobalShortcutStatus | "error" | undefined>(undefined);
+
+	useEffect(() => {
+		window.kami
+			.globalShortcutStatus()
+			.then(setStatus)
+			.catch(() => setStatus("error"));
+	}, []);
+
+	const accelerator =
+		status !== undefined && status !== "error" ? status.accelerator : DEFAULT_GLOBAL_SHORTCUT;
+	return (
+		<p>
+			全局唤起热键 {accelerator}：
+			{status === undefined && <span className="stat-hint">查询中…</span>}
+			{status === "error" && <span className="stat-err">状态查询失败</span>}
+			{status !== undefined && status !== "error" && status.kind === "registered" && (
+				<span className="stat-ok">已注册</span>
+			)}
+			{status !== undefined && status !== "error" && status.kind === "failed" && (
+				<span className="stat-err">注册失败（可能被占用）</span>
+			)}
+		</p>
+	);
+}
+
 /* ── 主视图 ──────────────────────────────────────────────────────── */
 
 export function DiagnosticsView({
@@ -264,6 +302,13 @@ export function DiagnosticsView({
 
 			<div className="settings-body">
 				{error !== undefined && <div className="settings-error">{error}</div>}
+
+				<section className="settings-section">
+					<header className="settings-section-head">
+						<h2>应用状态</h2>
+					</header>
+					<GlobalShortcutRow />
+				</section>
 
 				{snapshot === undefined ? (
 					<p className="settings-empty">正在读取统计…</p>

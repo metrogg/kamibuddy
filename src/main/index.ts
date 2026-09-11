@@ -10,12 +10,15 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 import {
 	BrowserWindow,
 	app,
 	dialog,
+	globalShortcut,
 	ipcMain,
 	session,
 	shell,
@@ -25,11 +28,20 @@ import {
 import type { DaemonOutbound, DaemonRequest } from "../shared/daemon-protocol.ts";
 import { OFFICE_EXTENSIONS, PDF_EXTENSION, docKindOf } from "../shared/doc-formats.ts";
 import { MAX_IMAGE_BYTES, type ImagePart } from "../shared/image.ts";
-import { INVOKE, PUSH, type DaemonStatus, type DocumentReference, type SaveArtifactRequest } from "../shared/ipc.ts";
+import {
+	INVOKE,
+	PUSH,
+	type DaemonStatus,
+	type DocumentReference,
+	type GlobalShortcutStatus,
+	type SaveArtifactRequest,
+} from "../shared/ipc.ts";
+import { GlobalToggleShortcutController } from "./global-shortcut.ts";
 
 /** main 自己处理、不转发给 daemon 的通道（需要 Electron API 或 main 独有状态）。 */
 const MAIN_HANDLED: readonly string[] = [
 	INVOKE.daemonStatus,
+	INVOKE.globalShortcutStatus,
 	INVOKE.openArtifact,
 	INVOKE.saveArtifactAs,
 	INVOKE.pickWorkspaceDirectory,
@@ -45,6 +57,14 @@ let daemon: UtilityProcess | undefined;
  * 并通过 INVOKE.daemonStatus 供渲染进程主动查询（消除 ready 推送的竞态）。
  */
 let daemonStatus: DaemonStatus = { kind: "starting" };
+/**
+ * 全局唤起热键的注册状态。与 daemonStatus 同理：globalShortcut.register 的
+ * 返回值只有 main 知道，由它持有并经 INVOKE.globalShortcutStatus 供查询。
+ * undefined = whenReady 流程尚未跑到注册（渲染进程此时还不可能挂载）。
+ */
+let globalShortcutStatus: GlobalShortcutStatus | undefined;
+/** 模块级持有以便 will-quit 时 dispose。 */
+let toggleShortcut: GlobalToggleShortcutController | undefined;
 /** 未完成的请求。daemon 崩溃时要全部 reject，否则 renderer 永久挂起。 */
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
@@ -127,12 +147,12 @@ function installCsp(isDev: boolean): void {
 	// 拉文件（img/frame 只是嵌资源，fetch 受 connect-src 管）。
 	const policy = isDev
 		? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob: http://127.0.0.1:*; " +
-			"connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*; " +
-			"frame-src http://127.0.0.1:*"
+		"img-src 'self' data: blob: http://127.0.0.1:*; " +
+		"connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*; " +
+		"frame-src http://127.0.0.1:*"
 		: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
-			"frame-src http://127.0.0.1:*";
+		"img-src 'self' data: blob: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
+		"frame-src http://127.0.0.1:*";
 
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
 		callback({
@@ -174,6 +194,71 @@ function createWindow(): void {
 	else void window.loadFile(join(__dirname, "../renderer/index.html"));
 }
 
+/* ── 全局唤起热键 ───────────────────────────────────────────────── */
+
+/**
+ * main 侧的事件日志落盘（最小实现）。
+ *
+ * 为什么不复用 core/event-log.ts：依赖规则里 main 只允许 import shared
+ * （scripts/check-dependency-rules.ts 机械执行），EventLog 在 core 够不着；
+ * 也不为这一条日志穿透 daemon。这里是与 EventLog 同格式（NDJSON、ts 打点、
+ * 按日期分文件）、同目录（<配置根>/logs）的最小重复 —— WorkBuddy 把
+ * 「跨进程打点到同一泳道 jsonl」列为 P0，排障时 main 与 daemon 的记录
+ * 在同一个文件里按时间交织可查。
+ * 路径推导与 core/config-paths.ts 的 getConfigDir() 保持一致，
+ * 那边改了这里必须同步（这是允许重复的代价，写在这里提醒）。
+ */
+function appendMainEventLog(record: { readonly kind: string; readonly [key: string]: unknown }): void {
+	const override = process.env["KAMIBUDDY_CONFIG_DIR"];
+	const configDir = override !== undefined && override !== "" ? override : join(homedir(), ".kamibuddy");
+	const logDir = join(configDir, "logs");
+	const day = new Date().toISOString().slice(0, 10);
+	try {
+		mkdirSync(logDir, { recursive: true });
+		appendFileSync(join(logDir, `events-${day}.jsonl`), `${JSON.stringify({ ts: Date.now(), ...record })}\n`, "utf8");
+	} catch (error) {
+		// 日志落盘失败（磁盘满/权限）不该炸主流程，但必须响亮地留痕（AGENTS.md §7）。
+		console.error("[main] 事件日志落盘失败:", error);
+	}
+}
+
+/**
+ * 注册全局唤起热键（窗口创建后调用一次，机制见 main/global-shortcut.ts 文件头）。
+ *
+ * 注册只此一次，不随窗口重建重复注册：macOS 上窗口全关后 activate 会重建窗口，
+ * 重复注册同一 accelerator 会被自己占用而失败。因此窗口操作回调不闭包捕获
+ * 某个 BrowserWindow 实例，而是动态读模块级 window —— 窗口销毁重建后
+ * 热键依然指向当前窗口；window 为 undefined 的瞬态读作「不可见未聚焦」，
+ * 落到唤起分支，show/focus 是空操作，不会炸。
+ */
+function setupGlobalShortcut(): void {
+	toggleShortcut = new GlobalToggleShortcutController(
+		{
+			minimize: () => window?.minimize(),
+			restore: () => window?.restore(),
+			show: () => window?.show(),
+			focus: () => window?.focus(),
+			isFocused: () => window?.isFocused() ?? false,
+			isVisible: () => window?.isVisible() ?? false,
+			isMinimized: () => window?.isMinimized() ?? false,
+		},
+		(status) => {
+			globalShortcutStatus = status;
+			if (status.kind === "failed") {
+				// 注册失败（绝大多数是被别的程序占用）不炸启动，但现场必须可查：
+				// 事件日志落一条，诊断页经 INVOKE.globalShortcutStatus 可见。
+				console.warn(`[main] 全局唤起热键 "${status.accelerator}" 注册失败，可能被其他程序占用`);
+				appendMainEventLog({ kind: "global_shortcut", event: "register_failed", accelerator: status.accelerator });
+			}
+		},
+		{
+			register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+			unregisterAll: () => globalShortcut.unregisterAll(),
+		},
+	);
+	toggleShortcut.register();
+}
+
 /* ── IPC 注册 ─────────────────────────────────────────────────────── */
 
 function registerIpc(): void {
@@ -185,6 +270,9 @@ function registerIpc(): void {
 
 	// 由 main 本地应答：只有它知道子进程的真实状况。
 	ipcMain.handle(INVOKE.daemonStatus, () => daemonStatus);
+
+	// 同理：globalShortcut 的注册结果只有 main 知道（诊断页的热键状态行）。
+	ipcMain.handle(INVOKE.globalShortcutStatus, () => globalShortcutStatus);
 
 	ipcMain.handle(INVOKE.openArtifact, async (_event, path: string) => {
 		const error = await shell.openPath(path);
@@ -322,6 +410,7 @@ if (!app.requestSingleInstanceLock()) {
 		registerIpc();
 		startDaemon();
 		createWindow();
+		setupGlobalShortcut();
 
 		app.on("activate", () => {
 			if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -334,5 +423,11 @@ if (!app.requestSingleInstanceLock()) {
 
 	app.on("before-quit", () => {
 		daemon?.kill();
+	});
+
+	// globalShortcut 是进程级注册，退出时必须显式释放，
+	// 否则热键会残留占用到进程句柄回收。
+	app.on("will-quit", () => {
+		toggleShortcut?.dispose();
 	});
 }

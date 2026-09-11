@@ -135,11 +135,10 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
  * questionnaire 同理：它只是把问题递给 UI 等用户作答，输入全部来自用户本人，
  * 不触文件系统、不改任何状态 —— read-only 档下也同样放行（问用户一个问题
  * 不构成「修改文件或执行命令」）。
- * task 同理：它不直接碰文件系统 —— 只是派生子代理，而子代理会话里装着
- * 同一道权限门，子代理的每一次文件/命令操作都各自过门判定（含 read-only 档：
- * 子代理的写操作被它自己那道门的阶段 3 拒掉）。登记放行不是开口子，
- * 真正的判定发生在子代理会话内；若在这里询问，用户看到的是一句任务描述，
- * 根本无从判断子代理将要做什么 —— 那才是假把关。
+ * read_me / show_widget 同理（内联可视化，spec: add-inline-widgets）：
+ * read_me 返回 resources/visualizer/ 下随应用分发的设计指南文本（读的是
+ * 应用自带数据，不是用户文件）；show_widget 把 SVG/HTML 片段交给 UI 内联
+ * 渲染，不触文件系统、不改任何状态 —— 与 questionnaire 同口径放行。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
  * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
@@ -157,7 +156,8 @@ const READ_ONLY = new Set([
 	"present_files",
 	"automation_list",
 	"questionnaire",
-	"task",
+	"read_me",
+	"show_widget",
 ]);
 
 /** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
@@ -291,7 +291,8 @@ function decideUnderMode(
 	/*
 	 * 阶段 2：只读工具（不改变任何状态）。
 	 *
-	 * 无本地路径概念的（web_search / web_fetch / present_files / automation_list）一律放行。
+	 * 无本地路径概念的（web_search / web_fetch / present_files / automation_list /
+	 * questionnaire / read_me / show_widget）一律放行。
 	 * 有路径概念的（read / read_document / find / grep / ls）按归属判：
 	 *   工作区内（或无路径参数，如 ls 列 cwd）→ 放行；
 	 *   工作区外 → 低风险询问；danger-full-access 不受限，与写侧语义一致。

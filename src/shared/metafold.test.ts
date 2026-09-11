@@ -104,6 +104,20 @@ describe("连续段拆分", () => {
 		expect(units[0]?.cards[0]?.id).toBe("t1");
 		expect(units[1]?.cards[0]?.id).toBe("t2");
 	});
+
+	it("show_widget 不进折叠：打断工具连续性并单独成块（图表折进去就消失了）", () => {
+		const blocks = buildRenderBlocks(
+			[user("u1"), tool("t1"), tool("w1", "show_widget", ""), tool("t2")],
+			{ streaming: false },
+		);
+		expect(kinds(blocks)).toEqual(["entry", "turn-header", "fold", "entry", "fold"]);
+		const units = folds(blocks);
+		expect(units[0]?.cards.map((c) => c.id)).toEqual(["t1"]);
+		expect(units[1]?.cards.map((c) => c.id)).toEqual(["t2"]);
+		// 单独成块的就是那张 show_widget 卡（entry 块携原卡片 id）。
+		const entryIds = blocks.filter((b) => b.kind === "entry").map((b) => b.entry.id);
+		expect(entryIds).toContain("w1");
+	});
 });
 
 describe("进行中的回合不折叠", () => {

@@ -4,11 +4,12 @@
 > 既包含用户看得见的功能，也包含看不见的内部机制 —— 只对着界面看必然漏掉后者。
 >
 > 建立于 2026-09-10。对象 WorkBuddy v5.4.7 / CodeBuddy CLI 2.132.0。
-> 证据在 `开源项目/WorkBuddy/_analysis/extracted/`，细节见 `docs/workbuddy分析/`。
+> 证据在 `docs/WorkBuddy-reference/extracted/`（5.4.7 解包；5.5.4 增量调研用
+> `%TEMP%\wb-asar-554` 即取即用），细节见 `docs/WorkBuddy-reference/notes/` 与 `docs/workbuddy分析/`。
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 189 条：**✅ 36 ／ 🟡 41 ／ ❌ 89 ／ ⛔ 23**
+> 当前 192 条：**✅ 37 ／ 🟡 42 ／ ❌ 88 ／ ⛔ 25**（L23 拆为 a–d 四个子项）
 
 ## 怎么用这份清单
 
@@ -70,7 +71,7 @@ automation_create / automation_list / automation_delete / task。
 | C3 | Shell | Bash（`run_in_background`、`dangerouslyDisableSandbox`）+ PowerShell（Windows 原生，内置检查器，自动适配 5.1/7+） | powershell + `command-guard.ts` 拦 iex / Invoke-Expression / Add-Type / -EncodedCommand / 递归删除 / 下载执行；无后台执行 | 🟡 |
 | C4 | 联网 | WebFetch（支持 `WebFetch(domain:)` 权限规则）+ WebSearch | `web-tools.ts`：web_search + web_fetch，含 SSRF 拦截 | ✅ |
 | C5 | 产物交付 | present_files：绝对路径/URL 分类，HTML 双路（卡 + 预览），localhost HEAD 探测 2s，非绝对路径整单报错 | `present-files.ts` 同协议 | ✅ |
-| C6 | 内联可视化 | `read_me`（拉设计指南模块 diagram/chart/mockup/interactive/art）+ `show_widget`（吐 SVG/HTML 片段内联渲染）；硬校验：禁 DOCTYPE/html/head/body、禁 localStorage、禁 position:fixed、禁 form、SVG viewBox 必须 `0 0 680 H` | 无 | ❌ 办公味最快抓手 |
+| C6 | 内联可视化 | `read_me`（拉设计指南模块 diagram/chart/mockup/interactive/art）+ `show_widget`（吐 SVG/HTML 片段内联渲染）；硬校验：禁 DOCTYPE/html/head/body、禁 localStorage、禁 position:fixed、禁 form、SVG viewBox 必须 `0 0 680 H` | `read_me`（diagram/chart 两模块，指南在 `resources/visualizer/`）+ `show_widget`（同款硬校验 + title 规范化）；sandbox iframe + postMessage（流式剥 script/完成保留、高度自适应 ≤2000px、主题跟随）；spec：`.trae/specs/add-inline-widgets/` | ✅ v1：mockup/interactive/art、mermaid、截图 PNG、sendPrompt 未做 |
 | C7 | 提问 | AskUserQuestion（多选 + 分页） | `questionnaire-tool.ts`（单选 + 其他 + 跳过，平铺不分页） | ✅ |
 | C8 | 计划模式 | EnterPlanMode / ExitPlanMode（计划文件写入是 plan 下唯一额外放行项） | `resources/modes/plan.md` + `/plan` 命令 + 「执行计划」按钮；无显式进出工具 | 🟡 |
 | C9 | 任务清单 | TodoWrite + TaskCreate/Get/List/Update/Output/Stop 全套；依赖关系解除阻塞 | 无 | ❌ |
@@ -254,7 +255,10 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L20 | 追问建议 | `ChatFollowup`：回答后给出可点的后续问题 | 无 | ❌ |
 | L21 | 首页运营位 | `Inspiration`（灵感入口）/ `HomePlaybooks`（剧本）/ `HomePracticeCases`（练习案例）/ `discover`；`DisableInspirationEntry`、`DisableHomePlaybookShuffle`、`DisableHomeQuickEntries` 可分别关 | 有案例卡；无灵感/剧本/发现入口 | 🟡 |
 | L22 | 外观与个性化 | `EnableAppearance`（外观设置）、`EnableProjectPin`（项目置顶）、`NicknameEditEnabled`、`AllowIdentityNameEdit` | 无 | ❌ |
-| L23 | 界面细节开关 | `FloatShortcut`（浮动快捷键）、`EnableUserMessageTopAlignment`（用户消息顶对齐）、`DisableSlotSystem`、`QueueBanner`（排队横幅） | 无 | ❌ |
+| L23a | 浮动快捷键开关 | `FloatShortcut` 是 IDE 插件遗产：桌面端声明 `true` 但 main/renderer 零消费的死开关（5.5.4 实证）。其旁独立存在**全局唤起热键**（`GlobalToggleShortcutController`，默认 Shift+Alt+W，切窗口显隐，设置页可编辑） | `main/global-shortcut.ts`：Shift+Alt+W 全局唤起/最小化（无托盘故用最小化），注册失败降级 + 诊断页可见；不可编辑 | 🟡 热键已做，编辑能力归 L9 |
+| L23b | 用户消息顶对齐 | `EnableUserMessageTopAlignment` 在 5.5.4 已**去开关化**，固化为 cb-chat-ui 默认行为（`useFirstMessageAlign` + 组 min-height 锚定空间）：发送瞬间用户消息吸顶，streaming 吸底跟随，无设置项 | `renderer/send-anchor.ts`：`decideScrollAction` + 待吸顶登记 + `.anchor-space` 组 min-height 两件套复刻；切会话/恢复历史不触发 | ✅ |
+| L23c | 运营位开关 | `DisableSlotSystem`：服务端运营平台下发 HTML 模板进 5 个 Shadow DOM 槽位（home/home_growth/avatar_top/menu_signin/menu_growth），桌面默认开 | 无运营平台后端 | ⛔ 无此前提；借鉴点（门控在 provider 层、缺 key=启用）已记录 spec |
+| L23d | 排队横幅 | `QueueBanner`：云端模型容量排队（6020-6022 错误码 + queueGetStatus 轮询 + 取消/切 Auto 重发/升级），banner 优先级 queue>error>credit>quota | 无云端容量协议；pi 自动重试已覆盖常见 429/overload | ⛔ 无此前提；五态状态机已留档 spec 备将来复刻 |
 | L24 | 反馈与统计 | 消息点赞点踩（`vote_like_dislike`）、`ReportAfterCancel`（取消后上报）、`DisableResponseStatistics`；对话埋点事件族（`chat_message_send` / `chat_tool_action` / `agent_task_created` 等） | 无 | ❌ |
 
 ## M. 渠道与远程

@@ -293,5 +293,8 @@ function buildSubagentExtensions(
 		// （worker 的 frontmatter 含 powershell，必须注册同名工具）。
 		powershellExtensionFactory(),
 		createDocReadTool(),
+		// 不注册 visualizer（read_me / show_widget）：子代理的输出只以文本回传
+		// 主代理，widget 没有渲染通道 —— 注册了只会白占上下文
+		// （spec: add-inline-widgets）。
 	];
 }

@@ -78,9 +78,9 @@ export const INVOKE = {
 	/** 切换模型。 */
 	setModel: "session:set-model",
 	/**
-	 * 切换当前会话的推理强度档位。作用于当前会话桶的宿主；
-	 * pi 恒 clamp 到模型能力内并逐会话持久化（resume 自动还原），
-	 * 生效值随下一条 session_state 下发。
+	 * 切换当前会话的推理强度。pi 恒 clamp 到模型可用档位（不抛错），
+	 * 生效档位随下一条 session_state 下发（renderer 不本地乐观改）。
+	 * 逐会话持久化与 resume 还原由 pi 负责（thinking_level_change 条目）。
 	 */
 	setThinkingLevel: "session:set-thinking-level",
 	/**
@@ -215,16 +215,12 @@ export const INVOKE = {
 	 * （对齐 WorkBuddy「修改后不影响已有数据」）。
 	 */
 	setDefaultWorkspacePath: "settings:set-default-workspace-path",
-	/**
-	 * 读全局默认推理强度（之后新建会话的初始档位）。
-	 * 未配置时 daemon 回 medium 兜底 —— pi 的内置默认就是 medium
-	 * （sdk.ts 的 DEFAULT_THINKING_LEVEL），两处默认值不漂移。
-	 */
+
+	/* ── 推理强度（全局默认） ─────────────────────────────────────────── */
+
+	/** 读全局默认推理强度。未配置时 daemon 回 "medium"（与 pi 内置默认一致）。 */
 	getThinkingLevelDefault: "settings:get-thinking-level-default",
-	/**
-	 * 写全局默认推理强度。只影响之后新建的会话；
-	 * 既有会话以各自会话内选择为准，不被全局改动回溯（spec 方案 B）。
-	 */
+	/** 写全局默认推理强度。只影响之后新建的会话，既有会话不回溯。 */
 	setThinkingLevelDefault: "settings:set-thinking-level-default",
 
 	/* ── 权限 ─────────────────────────────────────────────────────── */
@@ -279,6 +275,12 @@ export const INVOKE = {
 	 * 会话事件本身就是「该刷新了」的信号，多开一条通道只是重复投递。
 	 */
 	statsSnapshot: "stats:snapshot",
+	/**
+	 * 查询全局唤起热键的注册状态。由 main 本地应答，不转发 daemon：
+	 * globalShortcut 是 main 进程的独有状态，daemon 不知道也不该知道
+	 * （与 daemonStatus 同一条透出路径的理由）。
+	 */
+	globalShortcutStatus: "app:global-shortcut-status",
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 
@@ -374,6 +376,24 @@ export type DaemonStatus =
 	| { readonly kind: "starting" }
 	| { readonly kind: "ready" }
 	| { readonly kind: "down"; readonly reason: string };
+
+/**
+ * 全局唤起热键的默认 accelerator。
+ *
+ * 契约放 shared 而不是 main：main 注册时用它，renderer 诊断页显示同一串，
+ * 两处读同一常量才不会「注册的是 A、显示的是 B」。
+ * 机制对齐 WorkBuddy 5.5.4 GlobalToggleShortcutController（L23 spec）。
+ */
+export const DEFAULT_GLOBAL_SHORTCUT = "Shift+Alt+W";
+
+/**
+ * 全局唤起热键的注册状态。由 main 维护——globalShortcut.register 的返回值
+ * 只有 main 知道。failed 绝大多数是热键被别的程序占用，不视为启动错误。
+ * undefined（尚未注册过）不出现在类型里：InvokeMap 的 result 用联合表达。
+ */
+export type GlobalShortcutStatus =
+	| { readonly kind: "registered"; readonly accelerator: string }
+	| { readonly kind: "failed"; readonly accelerator: string };
 
 /** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
 export interface WorkspaceSnapshot {
@@ -571,6 +591,8 @@ export interface InvokeMap {
 	[INVOKE.mcpServerToggle]: { args: [serverName: string, enabled: boolean]; result: void };
 
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
+	/** 尚未注册过（查询早于 whenReady 流程）时为 undefined。 */
+	[INVOKE.globalShortcutStatus]: { args: []; result: GlobalShortcutStatus | undefined };
 
 	[INVOKE.automationList]: { args: []; result: AutomationTask[] };
 	[INVOKE.automationSave]: { args: [input: AutomationSaveInput]; result: AutomationTask };

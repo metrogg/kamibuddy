@@ -71,6 +71,7 @@ const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	read: "读取中",
 	read_document: "阅读文档",
+	read_me: "读取中",
 	ls: "列出中",
 	grep: "搜索中",
 	find: "查找中",
@@ -79,6 +80,9 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	web_search: "搜索中",
 	web_fetch: "抓取中",
 	present_files: "交付中",
+	// show_widget 的执行是毫秒级纯校验，生命周期几乎全在参数生成期 ——
+	// 与 write 同词汇（WorkBuddy tool.writeFile 的「生成中」）。
+	show_widget: "生成中",
 	// 等待用户作答期间卡片停在这个标题上（问卷弹层本身承载等待态）。
 	questionnaire: "向用户提问",
 	// 子代理委派：运行中的阶段性进展（哪个 agent 在干什么）走 tool_progress 增量。
@@ -88,6 +92,7 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	read: "已读取",
 	read_document: "已阅读",
+	read_me: "已读取",
 	ls: "已列出",
 	grep: "已搜索",
 	find: "已查找",
@@ -96,6 +101,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	web_search: "已搜索",
 	web_fetch: "已抓取",
 	present_files: "已交付",
+	show_widget: "已生成",
 	questionnaire: "已回答",
 	task: "已完成",
 };
@@ -104,11 +110,13 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
  * 参数生成期即上屏卡片（tool_stream_started）的工具白名单。
  * write/edit：参数里就是文件内容，生成几十秒、执行毫秒级，等执行态上屏
  * 等于整段生成不可见；web_search/web_fetch：网络请求长耗时，生成期即上屏
- * 消除执行前的空白窗。read/ls/grep/find 不在列：本地快操作几乎瞬时完成，
- * 参数又小（一个路径/一个词），生成期上屏反而闪一下，卡片等执行态再上
+ * 消除执行前的空白窗；show_widget：widget_code 在参数里逐步累积，
+ * 生成期上屏才能边生成边渲染（loading 轮播 → 半成品渐进渲染）。
+ * read/ls/grep/find/read_me 不在列：本地快操作几乎瞬时完成，
+ * 参数又小（一个路径/一个词/一个模块名），生成期上屏反而闪一下，卡片等执行态再上
  * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
  */
-const STREAM_CARD_TOOLS: readonly string[] = ["write", "edit", "web_search", "web_fetch"];
+const STREAM_CARD_TOOLS: readonly string[] = ["write", "edit", "web_search", "web_fetch", "show_widget"];
 
 /** 执行中标签。write/edit 不走这里（它们的执行期沿用生成期标签）。 */
 function runningLabel(toolName: string): string {
@@ -148,6 +156,9 @@ export function restoredToolLabel(toolName: string, outcome: ToolOutcome): strin
 	if (outcome !== "ok") {
 		if (toolName === "write") return "生成（未完成）";
 		if (toolName === "edit") return "修改（未完成）";
+		// show_widget 与 write 同生命周期（执行毫秒级，中断几乎总发生在参数
+		// 生成期）：孤儿调用同样是「没生成完」，不是「生成失败」。
+		if (toolName === "show_widget") return "生成（未完成）";
 		// 其余工具复用 doneLabel 的非 ok 形态：词汇单一来源在 live 路径的
 		// label 函数，这里只做分派，不另起映射表（见函数头注释）。
 		return doneLabel(toolName, outcome);
@@ -427,7 +438,6 @@ export class SessionHost {
 		 * 曾经只传 DEFAULT_TOOLS、切换只发生在 setInteraction —— 新建任务后的
 		 * 首次对话（没人点过切换器）工具集就没有 web_search，模型自称「没有联网
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
-		 * toolsOverride（子代理会话）优先于模式白名单，理由见 options 注释。
 		 */
 		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
 		const { session } = await createAgentSession({
@@ -945,6 +955,12 @@ export class SessionHost {
 					summary: summarizeArgs(event.args),
 					outcome: undefined,
 					detail: undefined,
+					// show_widget：reducer 的 tool_started 是整卡替换，生成期累积的
+					// streamArgs 会被丢掉，而执行结果（detail）还没回来 —— 渲染层在
+					// 这个窗口仍靠 streamArgs 出图，用完整 args 回填一次。
+					...(event.toolName === "show_widget"
+						? { streamArgs: JSON.stringify(event.args) }
+						: {}),
 					at: existing?.at ?? Date.now(),
 				};
 				this.toolCards.set(event.toolCallId, card);
@@ -1024,12 +1040,15 @@ export class SessionHost {
 	 * toolcall_delta 的处理：累积参数原文，并在 id/name 稳定后发出生成中卡片。
 	 *
 	 * 生成期上屏的工具范围见 STREAM_CARD_TOOLS：write/edit 生成期长，
-	 * web_search/web_fetch 执行期长（网络请求），都需要尽早占位消除空白窗；
-	 * read/ls/grep/find 本地瞬时完成，生成期上屏反而闪一下。
+	 * web_search/web_fetch 执行期长（网络请求），show_widget 的内容全在参数里，
+	 * 都需要尽早占位消除空白窗；read/ls/grep/find/read_me 本地瞬时完成，
+	 * 生成期上屏反而闪一下。
 	 *
 	 * write 额外发行数进度（「生成中 +N」的 N 从这里来）。edit 不发 ——
 	 * 它的参数是嵌套的 edits 数组，流式数行要维护部分 JSON 解析状态机，
 	 * 成本高收益低，生成中只显示卡片本身（event 注释里也是这个口径）。
+	 * show_widget 发累积的参数原文（rawArgs）：widget_code 在参数里逐步变长，
+	 * 渲染层拿半截 JSON 做渐进提取，流式期间即可渲染半成品 widget。
 	 */
 	private translateToolCallDelta(
 		inner: Extract<
@@ -1090,6 +1109,20 @@ export class SessionHost {
 					changeType: track.changeType,
 				});
 			}
+		}
+
+		if (block.name === "show_widget") {
+			track.rawArgs += inner.delta;
+			emit({
+				type: "tool_stream_progress",
+				id: block.id,
+				// path/added/changeType 是 write 的行数口径，对 show_widget 无意义；
+				// 它的进度是参数本体（rawArgs），reducer 见 path===undefined 不动行数。
+				path: undefined,
+				added: 0,
+				changeType: "created",
+				rawArgs: track.rawArgs,
+			});
 		}
 	}
 }
