@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConversationView } from "@shared/conversation.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
+import type { QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { buildRenderBlocks } from "@shared/metafold.ts";
 import type { RenderBlock } from "@shared/metafold.ts";
@@ -39,6 +40,7 @@ import { useImeGuard } from "./ime-guard.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
+import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
 import { Markdown } from "./markdown.tsx";
 import { activePendingAlign, decideScrollAction, groupTurnBlocks } from "./send-anchor.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
@@ -76,6 +78,15 @@ interface ChatViewProps {
 	 */
 	readonly onSaveToWorkspace: (name: string) => Promise<void>;
 	readonly onTodo: (feature: string) => void;
+	/**
+	 * 当前会话的待答问卷（App 按 sessionId 路由后下发；undefined = 无）。
+	 * WorkBuddy CBChat 的 hasQuestionFloating 语义：答题期间输入区让位，
+	 * 问卷浮层渲染在 composer 位置。可选 —— App 侧接线落地前不传入，
+	 * 维持只渲染 composer 的现状。
+	 */
+	readonly pendingQuestionnaire?: QuestionnaireRequest;
+	readonly onQuestionnaireSubmit?: (answers: readonly QuestionnaireAnswer[]) => void;
+	readonly onQuestionnaireSkip?: () => void;
 }
 
 /* ── 思考块 ────────────────────────────────────────────────────── */
@@ -600,7 +611,7 @@ function TurnHeader({
 				<IconAssistant size={16} />
 			</div>
 			<div className="turn-meta">
-				<span className="turn-agent">KamiBuddy</span>
+				<span className="turn-agent">嘉立创Work</span>
 				<span className="turn-duration">{duration}</span>
 			</div>
 		</div>
@@ -770,6 +781,9 @@ export function ChatView({
 	onError,
 	onSaveToWorkspace,
 	onTodo,
+	pendingQuestionnaire,
+	onQuestionnaireSubmit,
+	onQuestionnaireSkip,
 }: ChatViewProps): React.JSX.Element {
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
@@ -1226,63 +1240,77 @@ export function ChatView({
 			</div>
 
 			<footer className="chat-composer">
-				{/*
-				输入卡机制（拖放/附件/IME/补全/历史/草稿/字数闸/停止确认）
-				全部在 Composer 内部；这里只注入 chat 的差异面。
-				流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
-			*/}
-				<Composer
-					ref={composerRef}
-					ready={ready}
-					placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
-					rows={2}
-					cwd={conversation.state.cwd}
-					modelId={conversation.state.modelId}
-					onSubmit={handleComposerSubmit}
-					onError={onError}
-					draftKey={sessionId}
-					enableHistory
-					streaming={streaming}
-					onAbort={onAbort}
-				>
-					{/*
+				{pendingQuestionnaire !== undefined ? (
+					/*
+					问卷浮层替换输入区（WorkBuddy CBChat 的 hasQuestionFloating 语义：
+					答题期间 composer 让位，答完/跳过后 composer 恢复）。key 按请求 id
+					挂，新问卷即新挂载（作答状态随之重置，与全局弹层期同口径）。
+				*/
+					<QuestionnaireDialog
+						key={pendingQuestionnaire.id}
+						request={pendingQuestionnaire}
+						onSubmit={(answers) => onQuestionnaireSubmit?.(answers)}
+						onSkip={() => onQuestionnaireSkip?.()}
+					/>
+				) : (
+					/*
+					输入卡机制（拖放/附件/IME/补全/历史/草稿/字数闸/停止确认）
+					全部在 Composer 内部；这里只注入 chat 的差异面。
+					流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
+				*/
+					<Composer
+						ref={composerRef}
+						ready={ready}
+						placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
+						rows={2}
+						cwd={conversation.state.cwd}
+						modelId={conversation.state.modelId}
+						onSubmit={handleComposerSubmit}
+						onError={onError}
+						draftKey={sessionId}
+						enableHistory
+						streaming={streaming}
+						onAbort={onAbort}
+					>
+						{/*
 					「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
 					触发 Composer 内部的附件选择框）+ 模式子菜单（与头部 ModeSwitch
 					同一数据源）+ 专家/技能/连接器占位。
 					弹层向上、左对齐，与下方 PermissionMenu 同一约定。
 				*/}
-					<PlusMenu
-						modes={conversation.availableModes}
-						currentId={conversation.state.interactionId}
-						onInteractionChange={onInteractionChange}
-						onPickFiles={() => void composerRef.current?.pickFiles()}
-						onTodo={onTodo}
-					/>
-					{/*
+						<PlusMenu
+							modes={conversation.availableModes}
+							currentId={conversation.state.interactionId}
+							onInteractionChange={onInteractionChange}
+							onPickFiles={() => void composerRef.current?.pickFiles()}
+							onTodo={onTodo}
+						/>
+						{/*
 					权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
 					时不必退回首页换档。弹层左对齐向上展开（300px），
 					贴右放会溢出窗口右缘被裁掉。
 				*/}
-					<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
-					{/*
+						<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+						{/*
 					模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
 					推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
 					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
 					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
 				*/}
-					<ModelMenu
-						modelId={conversation.state.modelId}
-						thinkingLevel={conversation.state.thinkingLevel}
-						availableThinkingLevels={conversation.state.availableThinkingLevels}
-						onOpenSettings={onOpenSettings}
-						onError={onError}
-					/>
-					<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-						<IconMic size={16} />
-					</button>
-					{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
-					{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
-				</Composer>
+						<ModelMenu
+							modelId={conversation.state.modelId}
+							thinkingLevel={conversation.state.thinkingLevel}
+							availableThinkingLevels={conversation.state.availableThinkingLevels}
+							onOpenSettings={onOpenSettings}
+							onError={onError}
+						/>
+						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+							<IconMic size={16} />
+						</button>
+						{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
+						{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
+					</Composer>
+				)}
 			</footer>
 			{saveOpen && (
 				<SaveToWorkspaceDialog

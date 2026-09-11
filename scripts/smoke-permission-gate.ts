@@ -72,7 +72,7 @@ const sshKeyPath = join(homedir(), ".ssh", "id_rsa");
 
 /* ── 审批桩：记录每次请求，按当前应答器回复 ──────────────────────── */
 
-type ApprovalRequest = Omit<PermissionRequest, "id">;
+type ApprovalRequest = Omit<PermissionRequest, "id" | "sessionId">;
 const approvalLog: ApprovalRequest[] = [];
 // 默认应答是拒绝 —— fail-closed：脚本里忘了设置应答器时，任何询问都表现为拒绝，
 // 绝不会因为桩的默认值把一次该拦的调用放过去。

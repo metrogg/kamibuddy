@@ -95,9 +95,9 @@ export interface SubagentRunnerDeps {
 	/** 自家目录判定（生效根 / 配置目录内直接信任，见 project-trust.ts）。 */
 	readonly isOwnWorkspace: (dir: string) => boolean;
 	readonly getWebSearchConfig: () => WebSearchConfig | undefined;
-	/** 用户在场审批通道（与主会话同一个 requestApproval）。 */
+	/** 用户在场审批通道（与主会话同一个 requestApproval；sessionId 由 daemon 注入）。 */
 	readonly requestApproval: (
-		request: Omit<PermissionRequest, "id">,
+		request: Omit<PermissionRequest, "id" | "sessionId">,
 	) => Promise<PermissionResponse>;
 }
 

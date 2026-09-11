@@ -64,6 +64,9 @@
 	   首页 pills/能力 chip/案例标题都吃这一档，补齐。 */
 	--text-secondary: rgba(0, 0, 0, 0.7);
 	--text-dim: rgba(0, 0, 0, 0.5);
+	/* WorkBuddy 文字第四档 faint（black-30，--cb-question-floating-text-faint）：
+	   问卷浮层禁用态圆形按钮的图标色等最弱层级。 */
+	--text-faint: rgba(0, 0, 0, 0.3);
 	--primary: rgba(0, 0, 0, 0.9);
 	--primary-text: #ffffff;
 	--danger: #f64041;
@@ -74,6 +77,9 @@
 	/* WorkBuddy 输入卡阴影（--wb-main-area-box-shadow 原值），比 --shadow-card 轻得多：
 	   大而淡的铺底 + 小而实的贴边。只给输入卡用，弹层仍走 --shadow-card。 */
 	--shadow-input: 0 16px 32px -8px rgba(0, 0, 0, 0.03), 0 2px 4px -4px rgba(0, 0, 0, 0.06);
+	/* WorkBuddy 问卷浮层 v3 卡片阴影（questionFloating 原值）：
+	   比 --shadow-card 更轻 —— 浮层坐在输入区位置，不该有弹层的压迫感。 */
+	--shadow-questionnaire: 0 6px 16px rgba(0, 0, 0, 0.02), 0 1px 4px rgba(0, 0, 0, 0.03);
 	color-scheme: light;
 }
 
@@ -5257,103 +5263,329 @@ button {
 	overflow-wrap: normal;
 }
 
-/* ── 问卷弹层 ─────────────────────────────────────────────────── */
+/* ── 问卷浮层（WorkBuddy 分步答题 v3，内联替换 composer） ──────── */
 
 /*
- * 与权限弹窗同族：modal-backdrop 共享，卡片同尺寸语言。
- * 上限 4 题 × 7 个选项可能比视口高，卡内滚动而不是撑破遮罩。
+ * 样式真值取自 WorkBuddy lib-chat-ui 的 QuestionFloating v3
+ * （lib-chat-ui-Co_VI_pZ.css 36658-37130，light 主题变量块 1312-1337）。
+ * 浮层是普通块级卡片（渲染在 chat-view 的 composer 位置），不是 modal —
+ * 没有遮罩、没有 alertdialog。header/footer 固定、content 内部滚动：
+ * flex 子项的 overflow 只有在父容器自身被高度约束时才生效，所以
+ * max-height 必须在卡片上（WorkBuddy 注释同款教训：没有它多题时卡片
+ * 按自然高度撑开，把对话区顶飞）。
  */
 .questionnaire-card {
+	box-sizing: border-box;
+	width: 100%;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	width: 100%;
-	max-width: 460px;
-	max-height: calc(100vh - 48px);
-	overflow-y: auto;
-	padding: 18px 20px;
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+	border-radius: 24px;
+	box-shadow: var(--shadow-questionnaire);
+	max-height: min(60vh, 520px);
+	overflow: hidden;
+	animation: questionnaire-slide-up 0.2s ease-out;
+}
+
+@keyframes questionnaire-slide-up {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.questionnaire-card {
+		animation: none;
+	}
+}
+
+/* header：左侧当前题文本（14/500/24），右侧分页器 + X 整卡跳过。 */
+.questionnaire-header {
+	flex: none;
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 20px 24px 8px;
 }
 
 .questionnaire-title {
 	margin: 0;
-	font-size: 15px;
-	font-weight: 600;
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 24px;
+	color: var(--text);
+	word-break: break-word;
 }
 
-.questionnaire-desc {
-	margin: 0;
-	color: var(--text-dim);
-	font-size: 12px;
-	line-height: 1.6;
-}
-
-.questionnaire-question {
+.questionnaire-header-right {
+	flex: none;
 	display: flex;
-	flex-direction: column;
-	gap: 8px;
+	align-items: center;
+	gap: 12px;
 }
 
-.questionnaire-question-text {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 600;
+.questionnaire-pager {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	color: var(--text-secondary);
+}
+
+.questionnaire-pager-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	color: var(--text-secondary);
+	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.questionnaire-pager-btn:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.questionnaire-pager-btn:disabled {
+	opacity: 0.25;
+	cursor: default;
+}
+
+.questionnaire-pager-info {
+	font-size: 14px;
+	line-height: 22px;
+	min-width: 32px;
+	text-align: center;
+	user-select: none;
+}
+
+.questionnaire-skip-all {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	color: var(--text-secondary);
+	transition: opacity 0.15s ease;
+}
+
+.questionnaire-skip-all:hover {
+	opacity: 0.7;
+}
+
+/* 内容区：选项列表内部滚动（卡片 max-height 约束下才生效，见卡片头注释）。 */
+.questionnaire-content {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 12px;
+	scrollbar-width: thin;
 }
 
 .questionnaire-options {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
 }
 
-/* 选项整行可点（radio 语义、button 实现）；选中态描边 + 淡底，与
-   save-space-input 的 focus 描边同用 --primary 档。 */
+/* 选项行：序号块 + 单行省略文字 + 行尾右箭头（hover/选中淡入）；
+   行间 1px 分隔线左右各 inset 12px（::after，v3 同手法）。 */
 .questionnaire-option {
-	display: block;
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 	width: 100%;
-	padding: 7px 10px;
+	height: 40px;
+	padding: 8px;
+	border-radius: 12px;
 	text-align: left;
-	font-size: 13px;
-	color: var(--text);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: 8px;
+	transition: background-color 0.15s ease;
 }
 
-.questionnaire-option:hover {
+.questionnaire-option::after,
+.questionnaire-other-row::after {
+	content: "";
+	position: absolute;
+	left: 12px;
+	right: 12px;
+	bottom: 0;
+	height: 1px;
+	background: var(--bg-hover);
+	pointer-events: none;
+}
+
+.questionnaire-option:hover:not(:disabled),
+.questionnaire-option.selected {
 	background: var(--bg-hover);
 }
 
-.questionnaire-option.selected {
-	border-color: var(--primary);
-	background: var(--bg-raised);
+/* 「其他补充…」有文字时选项行禁用半透明（输入与选项互斥，v3 同口径）。 */
+.questionnaire-option:disabled {
+	cursor: not-allowed;
+	opacity: 0.4;
 }
 
-/* 「其他…」自由输入：与 save-space-input 同输入档位。 */
-.questionnaire-other-input {
-	display: block;
-	width: 100%;
-	padding: 7px 10px;
-	font-size: 13px;
-	color: var(--text);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	outline: none;
-}
-
-.questionnaire-other-input:focus {
-	border-color: var(--primary);
-}
-
-.questionnaire-actions {
+/* 序号块：hover/选中行反白（底升一档成卡片白）。 */
+.questionnaire-option-number {
+	flex: none;
 	display: flex;
-	justify-content: flex-end;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 8px;
+	background: var(--bg-hover);
+	color: var(--text);
+	font-size: 14px;
+	line-height: 14px;
+	user-select: none;
+	transition: background-color 0.15s ease;
+}
+
+.questionnaire-option:hover:not(:disabled) .questionnaire-option-number,
+.questionnaire-option.selected .questionnaire-option-number {
+	background: var(--bg);
+}
+
+.questionnaire-option-text {
+	flex: 1;
+	min-width: 0;
+	font-size: 14px;
+	line-height: 22px;
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.questionnaire-option-arrow {
+	flex: none;
+	color: var(--text-secondary);
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.questionnaire-option:hover:not(:disabled) .questionnaire-option-arrow,
+.questionnaire-option.selected .questionnaire-option-arrow {
+	opacity: 1;
+}
+
+/* 「其他补充…」固定末行：与选项行同高同构，铅笔图标块 + 透明 input，
+   整行是输入热区（点行聚焦，v3 同）。 */
+.questionnaire-other-row {
+	position: relative;
+	display: flex;
+	align-items: center;
 	gap: 8px;
-	margin-top: 4px;
+	height: 40px;
+	padding: 8px;
+	border-radius: 12px;
+	cursor: text;
+	transition: background-color 0.15s ease;
+}
+
+.questionnaire-other-row:hover {
+	background: var(--bg-hover);
+}
+
+.questionnaire-other-icon {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 7px;
+	background: var(--bg-hover);
+	color: var(--text);
+	transition: background-color 0.15s ease;
+}
+
+/* hover/已有文字（ready）时图标块反白，与序号块同一语言。 */
+.questionnaire-other-row:hover .questionnaire-other-icon,
+.questionnaire-other-row.ready .questionnaire-other-icon {
+	background: var(--bg);
+}
+
+.questionnaire-other-input {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	font: inherit;
+	font-size: 14px;
+	line-height: 22px;
+	color: var(--text);
+}
+
+.questionnaire-other-input::placeholder {
+	color: var(--text-dim);
+}
+
+/* footer：左「跳过」胶囊；右侧 32×32 圆形按钮 —— 中间题前进箭头
+   （仅「其他补充…」有文字时激活），末题发送图标（当前题已答时激活）。 */
+.questionnaire-footer {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-height: 52px;
+	padding: 12px 20px 20px;
+}
+
+.questionnaire-skip-btn {
+	height: 32px;
+	padding: 0 12px;
+	border-radius: 24px;
+	background: var(--bg-hover);
+	color: var(--text);
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 22px;
+	transition: opacity 0.15s ease;
+}
+
+.questionnaire-skip-btn:hover {
+	opacity: 0.85;
+}
+
+/* 圆形按钮基类即禁用态（灰底淡图标）；.active 翻成主按钮档。 */
+.questionnaire-icon-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 16px;
+	background: var(--bg-hover);
+	color: var(--text-faint);
+	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.questionnaire-icon-btn:disabled {
+	cursor: not-allowed;
+}
+
+.questionnaire-icon-btn.active {
+	background: var(--primary);
+	color: var(--primary-text);
+}
+
+.questionnaire-icon-btn.active:hover {
+	opacity: 0.88;
 }
 
 /* ── 侧栏「待确认」badge ─────────────────────────────────────── */

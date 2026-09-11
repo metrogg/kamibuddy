@@ -47,12 +47,13 @@ interface SidebarProps {
 	 */
 	readonly unreadIds: ReadonlySet<string>;
 	/**
-	 * 有阻塞式请求在等用户应答（权限审批或问卷），badge 画在当前会话行。
-	 * 由 App 用两条本地请求队列合成（daemon 不推送 pending 计数）；
-	 * 请求契约不带 sessionId，多任务并发下无法按会话路由，只能统一
-	 * 挂在当前行 —— 口径说明见 App 里 pendingConfirm 的注释。
+	 * 有阻塞式请求（权限审批或问卷）在等用户应答的会话 id 集合，
+	 * badge 画在请求归属的会话行上 —— 可同时多行（多任务并发）。
+	 * 由 App 用两条本地请求队列的 sessionId 合成（daemon 不推送
+	 * pending 计数）；空串请求（子代理审批的全局闸）不属于任何行，
+	 * 不进集合 —— 口径说明见 App 里 pendingConfirmIds 的注释。
 	 */
-	readonly pendingConfirm: boolean;
+	readonly pendingConfirmIds: ReadonlySet<string>;
 	readonly onNewTask: () => void;
 	readonly onResumeTask: (path: string) => void;
 	readonly onRenameTask: (path: string, name: string) => void;
@@ -92,7 +93,7 @@ export function Sidebar({
 	link,
 	groups,
 	unreadIds,
-	pendingConfirm,
+	pendingConfirmIds,
 	onNewTask,
 	onResumeTask,
 	onRenameTask,
@@ -214,8 +215,9 @@ export function Sidebar({
 						{task.title}
 					</span>
 					{/* 「待确认」压在时间之前（flex:none，与 meta 同排常驻可见）；
-					    标题侧的圆点/转圈那套 inline 指示放不下文字徽章。 */}
-					{task.current && pendingConfirm && (
+				    标题侧的圆点/转圈那套 inline 指示放不下文字徽章。
+				    按请求归属会话画行（可同时多行），不再只挂当前行。 */}
+					{pendingConfirmIds.has(task.id) && (
 						<span className="task-confirm-badge">待确认</span>
 					)}
 					{/* 标题+时间同排：标题左对齐省略，时间右对齐常驻（WorkBuddy 同款紧凑行）。 */}
@@ -436,7 +438,7 @@ export function Sidebar({
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-brand">
-				<span className="brand-name">KamiBuddy</span>
+				<span className="brand-name">嘉立创Work</span>
 				<span className="brand-version">V0.1.0</span>
 			</div>
 

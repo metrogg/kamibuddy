@@ -740,8 +740,23 @@ const pendingApprovals = new Map<
 	(response: PermissionResponse) => void
 >();
 
+/**
+ * 取桶的真值 sessionId（问卷/审批请求的注入值）。
+ *
+ * 问卷与审批只在 run 期间产生，此时宿主已 adopt（getHost 建成即注册），
+ * 桶 id 恒为真值；空串说明 adopt 顺序变了 —— 按 AGENTS.md §7 响亮抛错，
+ * 不向 renderer 推空 id 误导归属路由。
+ */
+function adoptedSessionId(bucket: SessionBucket<SessionHost>): string {
+	if (bucket.sessionId === "") {
+		throw new Error("问卷/审批请求的桶 sessionId 为空：宿主尚未 adopt，adopt 顺序已变");
+	}
+	return bucket.sessionId;
+}
+
 function requestApproval(
-	request: Omit<PermissionRequest, "id">,
+	request: Omit<PermissionRequest, "id" | "sessionId">,
+	sessionId: string,
 ): Promise<PermissionResponse> {
 	const id = randomUUID();
 	/*
@@ -761,7 +776,7 @@ function requestApproval(
 		post({
 			kind: "push",
 			channel: PUSH.permissionRequest,
-			payload: { id, ...request },
+			payload: { id, sessionId, ...request },
 		});
 	});
 }
@@ -870,7 +885,13 @@ const subagentRunner = createSubagentRunner({
 	isOwnWorkspace: (dir) =>
 		isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
 	getWebSearchConfig,
-	requestApproval,
+	/*
+	 * 子代理审批的归属：subagentRunner 是进程级单例、无桶上下文，拿不到
+	 * 发起它的会话 id —— 传空串，渲染层把空串当「全局」（badge 不落任何行、
+	 * 弹窗全局），不推会误导归属的假 id。已知近似：子代理审批占少数，
+	 * 待 subagent-runner 带桶上下文后再精确化。
+	 */
+	requestApproval: (request) => requestApproval(request, ""),
 });
 
 /**
@@ -1025,9 +1046,12 @@ async function createHost(
 				getSettings: () => activePermissions,
 				// 审批按桶计数：有待答审批的桶豁免 LRU 回收 ——
 				// 用户在答的框不能随宿主一起消失。
+				// sessionId 在此注入（唯一注入点）：审批归属发起它的会话桶，
+				// 渲染层按它路由与归属「待确认」badge。
 				requestApproval: (request) => {
+					const sessionId = adoptedSessionId(bucket);
 					bucket.pendingApprovals += 1;
-					return requestApproval(request).finally(() => {
+					return requestApproval(request, sessionId).finally(() => {
 						bucket.pendingApprovals -= 1;
 						evictIdleHosts();
 					});
@@ -1093,9 +1117,12 @@ async function createHost(
 			// 豁免计数也共用（pendingApprovals：用户在答的框不随宿主被 LRU 回收）；
 			// 权限门登记放行（不触文件系统，见 permission-policy 的 READ_ONLY）。
 			questionnaireExtensionFactory({
+				// sessionId 在此注入（唯一注入点）：问卷归属发起它的会话桶，
+				// 渲染层按它路由（只在查看该会话时上屏）与归属「待确认」badge。
 				requestAnswers: (request) => {
+					const sessionId = adoptedSessionId(bucket);
 					bucket.pendingApprovals += 1;
-					return requestQuestionnaireAnswers(request).finally(() => {
+					return requestQuestionnaireAnswers({ ...request, sessionId }).finally(() => {
 						bucket.pendingApprovals -= 1;
 						evictIdleHosts();
 					});

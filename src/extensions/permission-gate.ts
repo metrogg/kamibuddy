@@ -28,7 +28,10 @@ export interface PermissionGateOptions {
 	 */
 	readonly getSettings?: () => PermissionSettings;
 	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
-	readonly requestApproval: (request: Omit<PermissionRequest, "id">) => Promise<PermissionResponse>;
+	// sessionId 由注入方（daemon 接线闭包）补 —— 扩展不认识会话桶。
+	readonly requestApproval: (
+		request: Omit<PermissionRequest, "id" | "sessionId">,
+	) => Promise<PermissionResponse>;
 	/**
 	 * 无人值守模式（定时任务 run 会话）：审批类请求一律自动拒绝，
 	 * 拒绝原因作为工具结果回给模型 —— 没有人在场点按钮，挂起等审批

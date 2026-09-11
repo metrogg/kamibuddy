@@ -1,16 +1,19 @@
 /**
- * 问卷弹层：questionnaire 工具发起的结构化提问（机制见 shared/ipc.ts 的
+ * 问卷浮层：questionnaire 工具发起的结构化提问（机制见 shared/ipc.ts 的
  * QuestionnaireRequest 头注释）。
  *
- * 与 PermissionDialog 同族的**阻塞式**弹层：daemon 侧的工具执行正 await
- * 在这条链路上，不答就一直挂着。所以遮罩不可点关闭，出口是逐题作答、
- * 逐题跳过与整卡跳过（头部 X）。
+ * WorkBuddy 分步答题 v3（QuestionFloating）形态：**内联浮层而非全局模态** ——
+ * 当前会话有待答问卷时，本卡片渲染在 chat-view 的 composer 位置、替换输入区
+ * （CBChat 的 hasQuestionFloating 语义：答题期间输入区让位），不再是
+ * modal-backdrop 遮罩。阻塞语义不变：daemon 侧的工具执行正 await 在这条
+ * 链路上，出口是逐题作答、逐题跳过与整卡跳过（头部 X）。
  *
- * 交互对齐 WorkBuddy 分步答题 v3（lib-chat-ui 的 QuestionFloating）：
+ * 交互对齐 v3（lib-chat-ui 的 QuestionFloating）：
  *   - 一次一题（分页），头部 ‹ n/N › 分页器可自由翻页回看/改答；
  *   - 点选项 120ms 后自动进下一题；最后一题点选项立即整体提交
  *     （v3 与产品确认的口径：不设独立「提交」按钮）；
- *   - 每题固定「其他…」自由补充出口，输入与选项互斥，回车 = 前进/提交；
+ *   - 「其他补充…」是恒定可见的输入行（不是选中后展开输入框的 radio 形态）：
+ *     输入与选项互斥（有文字时清空已选、选项行禁用半透明），回车 = 前进/提交；
  *   - 逐题可跳过（跳过的题按「未回答」结算，工具侧补标，模型知情）。
  */
 
@@ -19,6 +22,14 @@ import type {
 	QuestionnaireAnswer,
 	QuestionnaireRequest,
 } from "@shared/ipc.ts";
+import {
+	IconArrowRight,
+	IconChevronLeft,
+	IconChevronRight,
+	IconClose,
+	IconEdit,
+	IconSend,
+} from "./icons.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 
 interface QuestionnaireDialogProps {
@@ -27,13 +38,11 @@ interface QuestionnaireDialogProps {
 	readonly onSkip: () => void;
 }
 
-/** 单题作答态：选中项下标、或 OTHER 加自由输入。undefined = 未作答。 */
+/** 单题作答态：选中项下标、或「其他补充…」自由输入（二者互斥）。 */
 interface Selection {
-	readonly selected: number | typeof OTHER | undefined;
+	readonly selected: number | undefined;
 	readonly otherText: string;
 }
-
-const OTHER = "other" as const;
 
 /** 点选项到自动前进的视觉反馈延迟（WorkBuddy v3 同值）。 */
 const AUTO_ADVANCE_MS = 120;
@@ -45,18 +54,20 @@ export function QuestionnaireDialog({
 }: QuestionnaireDialogProps): React.JSX.Element {
 	const total = request.questions.length;
 	const [currentIndex, setCurrentIndex] = useState(0);
-	// 与 questions 平行的作答数组。App 按 request.id 挂 key，新问卷即新挂载，
+	// 与 questions 平行的作答数组。宿主按 request.id 挂 key，新问卷即新挂载，
 	// 不需要 PermissionDialog 那样的 id 变化重置。
 	const [selections, setSelections] = useState<readonly Selection[]>(() =>
 		request.questions.map(() => ({ selected: undefined, otherText: "" })),
 	);
-	// 「其他…」输入框的 Enter = 前进/提交：中文选词的 Enter 只是确认候选，
+	// 「其他补充…」输入框的 Enter = 前进/提交：中文选词的 Enter 只是确认候选，
 	// 不拦就会误提交半张卡（守卫的坑见 ime-guard.ts 头注释）。
 	const ime = useImeGuard();
 	// 自动前进/提交的延迟计时器：任何手动操作（改选、翻页、跳过）都取消它。
 	const advanceTimer = useRef<number>(0);
 	// 末题点选项即提交：防 120ms 窗口内连点/翻页造成重复提交。
 	const submittedRef = useRef(false);
+	// 「其他补充…」行整行是输入热区（WorkBuddy v3：点行聚焦输入框）。
+	const otherInputRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => () => window.clearTimeout(advanceTimer.current), []);
 
@@ -64,15 +75,15 @@ export function QuestionnaireDialog({
 	const question = request.questions[currentIndex];
 	const selection = selections[currentIndex];
 
-	/** 逐题结算成问答对：未作答（没选、或「其他…」空输入）的题不进答案。 */
+	/** 逐题结算成问答对：未作答（没选、且「其他补充…」空输入）的题不进答案。 */
 	const buildAnswers = (source: readonly Selection[]): readonly QuestionnaireAnswer[] =>
 		source.flatMap((s, qi) => {
 			const q = request.questions[qi];
-			if (q === undefined || s.selected === undefined) return [];
-			if (s.selected === OTHER) {
-				const text = s.otherText.trim();
-				return text === "" ? [] : [{ question: q.question, answer: text }];
-			}
+			if (q === undefined) return [];
+			// 自由输入优先：输入与选项互斥（见 setOtherText），有文字时答案取文字。
+			const text = s.otherText.trim();
+			if (text !== "") return [{ question: q.question, answer: text }];
+			if (s.selected === undefined) return [];
 			const option = q.options[s.selected];
 			return option === undefined ? [] : [{ question: q.question, answer: option }];
 		});
@@ -96,19 +107,25 @@ export function QuestionnaireDialog({
 		}, AUTO_ADVANCE_MS);
 	};
 
-	const select = (selected: number | typeof OTHER): void => {
+	const select = (selected: number): void => {
 		if (submittedRef.current) return;
+		// 点选项即与「其他补充…」互斥：清空本题自由输入（v3 单选同口径）。
 		const next = selections.map((s, i) =>
-			i === currentIndex ? { ...s, selected } : s,
+			i === currentIndex ? { selected, otherText: "" } : s,
 		);
 		setSelections(next);
-		// 「其他…」只选中不前进：答案在输入框里，等回车或「下一题/提交」按钮。
-		if (selected !== OTHER) scheduleAdvance(next);
+		scheduleAdvance(next);
 	};
 
 	const setOtherText = (otherText: string): void => {
+		// 输入与选项互斥：有文字时清空本题已选（v3 同口径），
+		// 选项行随之禁用半透明；删空后恢复可选。
 		setSelections((prev) =>
-			prev.map((s, i) => (i === currentIndex ? { ...s, otherText } : s)),
+			prev.map((s, i) =>
+				i === currentIndex
+					? { selected: otherText.trim() === "" ? s.selected : undefined, otherText }
+					: s,
+			),
 		);
 	};
 
@@ -129,11 +146,14 @@ export function QuestionnaireDialog({
 		else setCurrentIndex((i) => Math.min(i + 1, total - 1));
 	};
 
-	// 「其他…」已填文字时 footer 给明确的前进/提交出口（不等回车的人也能走）。
-	const otherTextReady =
-		selection?.selected === OTHER && selection.otherText.trim() !== "";
+	// 点选项自动前进/提交，footer 圆形按钮主要服务「其他补充…」输入的确认出口
+	// （v3 同口径）：中间题仅自由输入有文字时激活；末题当前题已答时激活。
+	const otherTextReady = selection !== undefined && selection.otherText.trim() !== "";
+	const currentAnswered =
+		selection !== undefined && (selection.selected !== undefined || otherTextReady);
+	const advanceActive = isLast ? currentAnswered : otherTextReady;
 	const advanceByButton = (): void => {
-		if (submittedRef.current) return;
+		if (submittedRef.current || !advanceActive) return;
 		if (isLast) submit(selections);
 		else goTo(currentIndex + 1);
 	};
@@ -144,93 +164,85 @@ export function QuestionnaireDialog({
 	}
 
 	return (
-		<div className="modal-backdrop">
-			<div className="questionnaire-card" role="alertdialog" aria-modal="true">
-				<div className="questionnaire-header">
-					<div>
-						<p className="questionnaire-title">向用户提问</p>
-						<p className="questionnaire-desc">
-							模型在继续之前想先和你确认；可逐题跳过，不想回答点右上角 X 整张跳过。
-						</p>
-					</div>
-					<div className="questionnaire-header-controls">
-						{total > 1 && (
-							<span className="questionnaire-pager">
-								<button
-									type="button"
-									className="questionnaire-pager-btn"
-									aria-label="上一题"
-									disabled={currentIndex === 0}
-									onClick={() => goTo(currentIndex - 1)}
-								>
-									‹
-								</button>
-								<span className="questionnaire-pager-text">
-									{currentIndex + 1}/{total}
-								</span>
-								<button
-									type="button"
-									className="questionnaire-pager-btn"
-									aria-label="下一题"
-									disabled={isLast}
-									onClick={() => goTo(currentIndex + 1)}
-								>
-									›
-								</button>
-							</span>
-						)}
-						<button
-							type="button"
-							className="questionnaire-skip-all"
-							aria-label="全部跳过"
-							title="全部跳过"
-							onClick={onSkip}
-						>
-							✕
-						</button>
-					</div>
-				</div>
-
-				<div className="questionnaire-question">
-					<p className="questionnaire-question-text">{question.question}</p>
-					<div className="questionnaire-options" role="radiogroup" aria-label={question.question}>
-						{question.options.map((option, oi) => (
+		<div className="questionnaire-card">
+			<div className="questionnaire-header">
+				{/* v3：header 左侧就是当前题文本，不再有「向用户提问」的固定标题。 */}
+				<p className="questionnaire-title">{question.question}</p>
+				<div className="questionnaire-header-right">
+					{total > 1 && (
+						<span className="questionnaire-pager">
 							<button
-								key={oi}
 								type="button"
-								role="radio"
-								aria-checked={selection.selected === oi}
-								className={
-									selection.selected === oi
-										? "questionnaire-option selected"
-										: "questionnaire-option"
-								}
-								onClick={() => select(oi)}
+								className="questionnaire-pager-btn"
+								aria-label="上一题"
+								disabled={currentIndex === 0}
+								onClick={() => goTo(currentIndex - 1)}
 							>
-								{option}
+								<IconChevronLeft size={16} />
 							</button>
-						))}
-						{/* 固定最后一项：选项覆盖不全时的自由补充出口。 */}
+							<span className="questionnaire-pager-info">
+								{currentIndex + 1}/{total}
+							</span>
+							<button
+								type="button"
+								className="questionnaire-pager-btn"
+								aria-label="下一题"
+								disabled={isLast}
+								onClick={() => goTo(currentIndex + 1)}
+							>
+								<IconChevronRight size={16} />
+							</button>
+						</span>
+					)}
+					<button
+						type="button"
+						className="questionnaire-skip-all"
+						aria-label="全部跳过"
+						title="全部跳过"
+						onClick={onSkip}
+					>
+						<IconClose size={16} />
+					</button>
+				</div>
+			</div>
+
+			<div className="questionnaire-content">
+				<div className="questionnaire-options" role="radiogroup" aria-label={question.question}>
+					{question.options.map((option, oi) => (
 						<button
+							key={oi}
 							type="button"
 							role="radio"
-							aria-checked={selection.selected === OTHER}
+							aria-checked={selection.selected === oi}
+							// 「其他补充…」有文字时选项行禁用半透明（互斥，v3 同口径）。
+							disabled={otherTextReady}
 							className={
-								selection.selected === OTHER
+								selection.selected === oi
 									? "questionnaire-option selected"
 									: "questionnaire-option"
 							}
-							onClick={() => select(OTHER)}
+							onClick={() => select(oi)}
 						>
-							其他…
+							<span className="questionnaire-option-number">{oi + 1}</span>
+							<span className="questionnaire-option-text">{option}</span>
+							<IconChevronRight size={16} className="questionnaire-option-arrow" />
 						</button>
-					</div>
-					{/* 选中「其他…」才出现输入框；挂载即聚焦（同 sidebar 重命名输入的约定）。 */}
-					{selection.selected === OTHER && (
+					))}
+					{/* 固定末行：选项覆盖不全时的自由补充出口。v3 是恒定可见的输入行
+					    （不再是选中后才展开输入框的 radio 形态）；输入即与选项互斥，
+					    回车 = 前进/提交。 */}
+					<div
+						className={otherTextReady ? "questionnaire-other-row ready" : "questionnaire-other-row"}
+						onClick={() => otherInputRef.current?.focus()}
+					>
+						<span className="questionnaire-other-icon">
+							<IconEdit size={12} />
+						</span>
 						<input
+							ref={otherInputRef}
 							className="questionnaire-other-input"
-							placeholder="补充你的答案，回车确认"
-							autoFocus
+							placeholder="其他补充…"
+							aria-label="其他补充"
 							value={selection.otherText}
 							{...ime.bind}
 							onChange={(e) => setOtherText(e.target.value)}
@@ -240,20 +252,27 @@ export function QuestionnaireDialog({
 								}
 							}}
 						/>
-					)}
+					</div>
 				</div>
+			</div>
 
-				<div className="questionnaire-actions">
-					<button type="button" className="mini-btn" onClick={skipCurrent}>
-						跳过本题
-					</button>
-					{/* 点选项自动前进/提交，这个按钮主要服务「其他…」自由输入的确认出口。 */}
-					{otherTextReady && (
-						<button type="button" className="primary-btn" onClick={advanceByButton}>
-							{isLast ? "提交" : "下一题"}
-						</button>
-					)}
-				</div>
+			<div className="questionnaire-footer">
+				<button type="button" className="questionnaire-skip-btn" onClick={skipCurrent}>
+					跳过
+				</button>
+				{/* v3 单选点选项会自动前进/提交，这个按钮主要服务「其他补充…」
+				    输入的确认出口：中间题 = 前进箭头（仅自由输入有文字时激活），
+				    末题 = 发送图标（当前题已答时激活）。 */}
+				<button
+					type="button"
+					className={advanceActive ? "questionnaire-icon-btn active" : "questionnaire-icon-btn"}
+					disabled={!advanceActive}
+					aria-label={isLast ? "提交" : "下一题"}
+					title={isLast ? "提交" : "下一题"}
+					onClick={advanceByButton}
+				>
+					{isLast ? <IconSend size={16} /> : <IconArrowRight size={16} />}
+				</button>
 			</div>
 		</div>
 	);

@@ -170,7 +170,7 @@ function createWindow(): void {
 		minWidth: 900,
 		minHeight: 600,
 		show: false,
-		title: "KamiBuddy",
+		title: "嘉立创Work",
 		webPreferences: {
 			preload: join(import.meta.dirname, "../preload/index.mjs"),
 			// renderer 跑的是不可信内容（模型产出的 HTML 会在预览面板里渲染），

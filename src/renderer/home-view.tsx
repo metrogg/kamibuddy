@@ -136,7 +136,7 @@ export function HomeView({
 				WorkBuddy .wb-home-page 的机制，不是顶对齐流式布局。
 			*/}
 				<div className="home-main">
-					<h1 className="home-title">KamiBuddy，开工吧</h1>
+					<h1 className="home-title">嘉立创Work，开工吧</h1>
 
 					<div className="mode-tabs">
 						{scenes.map((scene) => (

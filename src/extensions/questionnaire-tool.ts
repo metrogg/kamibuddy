@@ -23,7 +23,10 @@ import type { QuestionnaireRequest, QuestionnaireResponse } from "../shared/ipc.
 
 export interface QuestionnaireToolOptions {
 	/** 向宿主发起提问并阻塞等答（id 由工具生成后传入）。 */
-	readonly requestAnswers: (request: QuestionnaireRequest) => Promise<QuestionnaireResponse>;
+	// sessionId 由注入方（daemon 接线闭包）补 —— 扩展不认识会话桶。
+	readonly requestAnswers: (
+		request: Omit<QuestionnaireRequest, "sessionId">,
+	) => Promise<QuestionnaireResponse>;
 	/**
 	 * 无人值守模式（定时任务 run 会话）：直接返回不可用文案。
 	 * 没有人在场作答，挂起等待等于把 run 卡死到超时（同 permission-gate 的

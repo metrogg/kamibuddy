@@ -33,7 +33,6 @@ import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
-import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
 import { SettingsView } from "./settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
@@ -880,16 +879,39 @@ export function App(): React.JSX.Element {
 		[taskList, groupMetas],
 	);
 	/**
-	 * 侧栏「待确认」badge 的驱动：审批或问卷任一 pending 即亮。
+	 * 侧栏「待确认」badge 的驱动：按请求归属会话的 id 集合，可同时点亮多行。
 	 *
 	 * 规格书原本设想复用 daemon 推送的 pending 计数，核查现状后 daemon 并没有
 	 * 这个字段（审批/问卷请求只走各自的 PUSH 通道，不进 session_state），
-	 * 所以改在 App 层用两条本地队列合成。注意局限：PermissionRequest /
-	 * QuestionnaireRequest 都不带 sessionId，多任务并发下无法按会话路由，
-	 * badge 只能画在当前会话行上 —— 后台会话的请求也会点亮它（与单会话期
-	 * 的实现口径一致，按会话路由是请求契约补字段后的后续工作）。
+	 * 所以改在 App 层用两条本地队列合成。多任务并发口径：请求契约带
+	 * sessionId（daemon 接线闭包注入），badge 画在归属会话行而不是当前行。
+	 * 空串请求（子代理审批的全局闸，不属于任何会话行）不进集合 —— 它的
+	 * 呈现靠全局审批模态，侧栏没有可归属的行。
 	 */
-	const pendingConfirm = approvals.length + questionnaires.length > 0;
+	const pendingConfirmIds = useMemo<ReadonlySet<string>>(() => {
+		const ids = new Set<string>();
+		for (const item of approvals) if (item.sessionId !== "") ids.add(item.sessionId);
+		for (const item of questionnaires) if (item.sessionId !== "") ids.add(item.sessionId);
+		return ids;
+	}, [approvals, questionnaires]);
+
+	/**
+	 * 当前可见会话最旧的一张待答问卷（chat-view 内联浮层的数据源）。
+	 *
+	 * 队首未必属于可见会话 —— 后台会话先来的问卷排在前面时，直接取队首
+	 * 会把别的会话的问卷弹到当前视图上（本 spec 要修的串台 bug）。所以按
+	 * 可见会话 id 找第一张匹配的，其余留队列（驱动 badge，切回后按序呈现）。
+	 * 可见指针取 conversation.state.sessionId（与 visibleSessionIdRef 同处
+	 * 切换的等价值，且随 reducer 响应式，切会话必然触发重算）。
+	 *
+	 * 空串语义：问卷恒有真 id（审批才有空串的全局闸），空串问卷按精确匹配
+	 * 处理 —— 仅当可见会话 id 也为空串（pristine 瞬态）时可见，绝不跨会话上屏。
+	 */
+	const visibleSessionId = conversation.state.sessionId;
+	const pendingQuestionnaire = useMemo(
+		() => questionnaires.find((item) => item.sessionId === visibleSessionId),
+		[questionnaires, visibleSessionId],
+	);
 
 	return (
 		<div className="app">
@@ -900,7 +922,7 @@ export function App(): React.JSX.Element {
 					link={link}
 					groups={sidebarGroups}
 					unreadIds={unreadIds}
-					pendingConfirm={pendingConfirm}
+					pendingConfirmIds={pendingConfirmIds}
 					onNewTask={newTask}
 					onResumeTask={resumeTask}
 					onRenameTask={renameTask}
@@ -963,6 +985,17 @@ export function App(): React.JSX.Element {
 					onError={showToast}
 					onSaveToWorkspace={saveToWorkspace}
 					onTodo={showTodo}
+					pendingQuestionnaire={pendingQuestionnaire}
+					onQuestionnaireSubmit={(answers) => {
+						if (pendingQuestionnaire !== undefined) {
+							answerQuestionnaire({ id: pendingQuestionnaire.id, skipped: false, answers });
+						}
+					}}
+					onQuestionnaireSkip={() => {
+						if (pendingQuestionnaire !== undefined) {
+							answerQuestionnaire({ id: pendingQuestionnaire.id, skipped: true, answers: [] });
+						}
+					}}
 				/>
 			)}
 			{/* 设置页自持滚动与返回按钮，不复用对话页的框架。 */}
@@ -1044,10 +1077,15 @@ export function App(): React.JSX.Element {
 				</button>
 			)}
 			{/*
-				一次只展示队首那条：并行工具可能同时来好几条，
-				全都堆在屏幕上用户无从判断哪条对应哪个操作。
-				作答后自动出队，下一条接着弹。
-			*/}
+			审批弹窗有意维持全局模态（与 WorkBuddy 的取舍差异）：它是工具
+			执行的安全闸，危险操作不该因为用户切了视图就看不见 —— 全局
+			阻塞正是要的效果；问卷只是方向确认，才按会话路由进 chat-view
+			的内联浮层。一次只展示队首那条：并行工具可能同时来好几条，
+			全都堆在屏幕上用户无从判断哪条对应哪个操作；作答后自动出队，
+			下一条接着弹。
+			「审批优先于问卷」在新架构下无需额外门控：审批模态带全屏遮罩，
+			天然盖住 chat-view 里的问卷浮层。
+		*/}
 			{approvals[0] !== undefined && (
 				<PermissionDialog
 					key={approvals[0].id}
@@ -1055,29 +1093,6 @@ export function App(): React.JSX.Element {
 					onDecide={(decision, remember) => {
 						const head = approvals[0];
 						if (head !== undefined) decideApproval(head.id, decision, remember);
-					}}
-				/>
-			)}
-			{/*
-				问卷与审批一次只显示一个阻塞弹层，审批优先：审批是工具执行的
-				安全闸（危险操作挂在它后面），问卷只是方向确认 —— 先把闸答完，
-				再回答问题。两条队列各自排队，互不吞并。
-			*/}
-			{approvals[0] === undefined && questionnaires[0] !== undefined && (
-				<QuestionnaireDialog
-					key={questionnaires[0].id}
-					request={questionnaires[0]}
-					onSubmit={(answers) => {
-						const head = questionnaires[0];
-						if (head !== undefined) {
-							answerQuestionnaire({ id: head.id, skipped: false, answers });
-						}
-					}}
-					onSkip={() => {
-						const head = questionnaires[0];
-						if (head !== undefined) {
-							answerQuestionnaire({ id: head.id, skipped: true, answers: [] });
-						}
 					}}
 				/>
 			)}

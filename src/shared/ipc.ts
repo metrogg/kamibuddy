@@ -656,6 +656,12 @@ export type UiResponse = {
  */
 export interface PermissionRequest {
 	readonly id: string;
+	/**
+	 * 发起审批的会话 id。渲染层按它做会话路由与「待确认」badge 归属；
+	 * 唯一注入点是 daemon 的接线闭包（renderer 不推导）。
+	 * 空串 = 全局（子代理审批暂无桶上下文，见 daemon/index.ts subagentRunner 装配处注释）。
+	 */
+	readonly sessionId: string;
 	readonly toolName: string;
 	/** 面向用户的动作描述，如「删除 3 个文件」。 */
 	readonly summary: string;
@@ -699,6 +705,11 @@ export interface QuestionnaireQuestion {
 
 export interface QuestionnaireRequest {
 	readonly id: string;
+	/**
+	 * 发起问卷的会话 id。渲染层按它做会话路由与「待确认」badge 归属；
+	 * 唯一注入点是 daemon 的接线闭包（renderer 不推导）。
+	 */
+	readonly sessionId: string;
 	readonly questions: readonly QuestionnaireQuestion[];
 }
 

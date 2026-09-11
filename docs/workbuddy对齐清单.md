@@ -72,7 +72,7 @@ automation_create / automation_list / automation_delete / task。
 | C4 | 联网 | WebFetch（支持 `WebFetch(domain:)` 权限规则）+ WebSearch | `web-tools.ts`：web_search + web_fetch，含 SSRF 拦截 | ✅ |
 | C5 | 产物交付 | present_files：绝对路径/URL 分类，HTML 双路（卡 + 预览），localhost HEAD 探测 2s，非绝对路径整单报错 | `present-files.ts` 同协议 | ✅ |
 | C6 | 内联可视化 | `read_me`（拉设计指南模块 diagram/chart/mockup/interactive/art）+ `show_widget`（吐 SVG/HTML 片段内联渲染）；硬校验：禁 DOCTYPE/html/head/body、禁 localStorage、禁 position:fixed、禁 form、SVG viewBox 必须 `0 0 680 H` | `read_me`（diagram/chart 两模块，指南在 `resources/visualizer/`）+ `show_widget`（同款硬校验 + title 规范化）；sandbox iframe + postMessage（流式剥 script/完成保留、高度自适应 ≤2000px、主题跟随）；spec：`.trae/specs/add-inline-widgets/` | ✅ v1：mockup/interactive/art、mermaid、截图 PNG、sendPrompt 未做 |
-| C7 | 提问 | AskUserQuestion（多选 + 分页） | `questionnaire-tool.ts`（单选 + 其他 + 跳过，平铺不分页） | ✅ |
+| C7 | 提问 | AskUserQuestion（多选 + 分页；浮层绑定会话、替换输入区，SESSION_MISMATCH 防串台） | `questionnaire-tool.ts`（单选 + 其他 + 跳过）；请求带 sessionId 按会话路由（后台不弹、badge 落归属行），v3 内联浮层替换 composer（样式对齐 lib-chat-ui QuestionFloating）；spec：`.trae/specs/bind-questionnaire-to-session/` | ✅ v1：无多选题；审批弹窗仍全局模态（安全闸取舍） |
 | C8 | 计划模式 | EnterPlanMode / ExitPlanMode（计划文件写入是 plan 下唯一额外放行项） | `resources/modes/plan.md` + `/plan` 命令 + 「执行计划」按钮；无显式进出工具 | 🟡 |
 | C9 | 任务清单 | TodoWrite + TaskCreate/Get/List/Update/Output/Stop 全套；依赖关系解除阻塞 | 无 | ❌ |
 | C10 | 子代理 | Agent 工具：`subagent_type`/`description`/`prompt`/`model`/`mode`/`detached`；4 类定义来源；独立上下文；maxTurns 下限 200 | `task-tool.ts`：单发/并行(≤8, 并发 4)/链式({previous})、深度 1、预算 20、输出去毒 | 🟡 无 detached、无独立模型 |

@@ -32,13 +32,13 @@ interface FakeToolDef {
 
 /** 装好扩展，返回注册到的 questionnaire 工具定义与 requestAnswers 调用记录。 */
 function mount(options: {
-	readonly answer?: (request: QuestionnaireRequest) => QuestionnaireResponse;
+	readonly answer?: (request: Omit<QuestionnaireRequest, "sessionId">) => QuestionnaireResponse;
 	readonly unattended?: boolean;
 }): {
 	readonly tool: FakeToolDef;
-	readonly asked: QuestionnaireRequest[];
+	readonly asked: Array<Omit<QuestionnaireRequest, "sessionId">>;
 } {
-	const asked: QuestionnaireRequest[] = [];
+	const asked: Array<Omit<QuestionnaireRequest, "sessionId">> = [];
 	let tool: FakeToolDef | undefined;
 	const fakePi = {
 		registerTool: (def: FakeToolDef) => {

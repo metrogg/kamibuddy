@@ -38,14 +38,16 @@ type Handler = (event: FakeToolCallEvent) => Promise<{ block?: boolean; reason?:
  * 这样"切档后旧批准是否失效"才测得出来。
  */
 function mount(options: {
-	readonly approve?: (request: Omit<PermissionRequest, "id">) => PermissionResponse;
+	readonly approve?: (
+		request: Omit<PermissionRequest, "id" | "sessionId">,
+	) => PermissionResponse;
 	readonly settings?: PermissionSettings;
 }): {
 	readonly call: Handler;
-	readonly asked: Array<Omit<PermissionRequest, "id">>;
+	readonly asked: Array<Omit<PermissionRequest, "id" | "sessionId">>;
 	readonly setSettings: (next: PermissionSettings) => void;
 } {
-	const asked: Array<Omit<PermissionRequest, "id">> = [];
+	const asked: Array<Omit<PermissionRequest, "id" | "sessionId">> = [];
 	let captured: Handler | undefined;
 	let settings: PermissionSettings = options.settings ?? DEFAULT_PERMISSIONS;
 
@@ -334,7 +336,7 @@ describe("设置每次现读（getter 而非快照）", () => {
 
 	it("不传 getSettings 时行为等于默认档（向后兼容）", async () => {
 		// daemon 之外还有 smoke 脚本等调用方，省略该参数不能改变行为。
-		const asked: Array<Omit<PermissionRequest, "id">> = [];
+		const asked: Array<Omit<PermissionRequest, "id" | "sessionId">> = [];
 		let captured: Handler | undefined;
 		const fakePi = {
 			on: (event: string, handler: unknown) => {
