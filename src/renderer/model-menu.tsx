@@ -9,7 +9,7 @@
  * conversation 状态随之更新，这里的 modelId prop 自然刷新 —— 单一数据流。
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ModelInfo, SettingsSnapshot } from "@shared/settings.ts";
 import type { ThinkingLevel } from "@shared/session-events.ts";
 import { THINKING_LEVEL_LABELS } from "@shared/session-events.ts";
@@ -49,6 +49,20 @@ export function ModelMenu({
 	const [snapshot, setSnapshot] = useState<SettingsSnapshot | undefined>(undefined);
 	// 档位子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover，同 PlusMenu 约定）。
 	const [levelsOpen, setLevelsOpen] = useState(false);
+
+	// Esc 关闭弹层（连同档位子菜单）：菜单没有键盘焦点管理，Esc 是键盘用户唯一的
+	// 关闭路径；与 backdrop 互补（一个管键盘，一个管指针）。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") {
+				setOpen(false);
+				setLevelsOpen(false);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
 
 	const toggle = useCallback(() => {
 		setOpen((v) => {
@@ -115,112 +129,134 @@ export function ModelMenu({
 
 	return (
 		<div className="menu-zone">
-			<button type="button" className="bar-btn bar-btn-text" title={modelId ?? "尚未选择模型"} onClick={toggle}>
+			<button
+				type="button"
+				className="bar-btn bar-btn-text"
+				title={modelId ?? "尚未选择模型"}
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={toggle}
+			>
 				{shortModelName(modelId)}
 				{levelSuffix !== undefined && <span className="model-menu-level">{levelSuffix}</span>}
 				<IconChevronDown size={13} />
 			</button>
 
 			{open && (
-				<div className="pop-menu model-menu">
-					{snapshot === undefined ? (
-						<p className="model-menu-empty">正在读取模型…</p>
-					) : available.length === 0 ? (
-						<>
-							<p className="model-menu-empty">还没有可用模型</p>
-							<button
-								type="button"
-								className="model-menu-goto"
-								onClick={() => {
-									setOpen(false);
-									onOpenSettings();
-								}}
-							>
-								去设置里填 API Key →
-							</button>
-						</>
-					) : (
-						<>
-							{/*
+				<>
+					{/* 透明 backdrop：点菜单外任意处关闭，与 PlusMenu/PermissionMenu 一致。 */}
+					<button
+						type="button"
+						className="ws-backdrop"
+						aria-label="关闭"
+						onClick={() => {
+							setOpen(false);
+							setLevelsOpen(false);
+						}}
+					/>
+					<div className="pop-menu model-menu" role="menu">
+						{snapshot === undefined ? (
+							<p className="model-menu-empty">正在读取模型…</p>
+						) : available.length === 0 ? (
+							<>
+								<p className="model-menu-empty">还没有可用模型</p>
+								<button
+									type="button"
+									className="model-menu-goto"
+									onClick={() => {
+										setOpen(false);
+										onOpenSettings();
+									}}
+								>
+									去设置里填 API Key →
+								</button>
+							</>
+						) : (
+							<>
+								{/*
 								滚动只包模型列表：弹层若整体 overflow-y:auto，向左飞出的
 								档位子菜单会被滚动容器裁掉（overflow 一轴非 visible，
 								另一轴也按非 visible 处理）。列表滚动、底部功能区固定。
 							*/}
-							<div className="model-menu-list">
-								{available.map((model) => {
-									const key = `${model.providerId}/${model.id}`;
-									const active = key === modelId;
-									return (
-										<button
-											key={key}
-											type="button"
-											className={`model-menu-item${active ? " active" : ""}`}
-											onClick={() => pick(key)}
-										>
-											<span className="model-menu-name">{model.name}</span>
-											<span className="model-menu-meta">
+								<div className="model-menu-list">
+									{available.map((model) => {
+										const key = `${model.providerId}/${model.id}`;
+										const active = key === modelId;
+										return (
+											<button
+												key={key}
+												type="button"
+												className={`model-menu-item${active ? " active" : ""}`}
+												role="menuitem"
+												onClick={() => pick(key)}
+											>
+												<span className="model-menu-name">{model.name}</span>
+												<span className="model-menu-meta">
 												{providerName.get(model.providerId) ?? model.providerId} ·{" "}
-												{Math.round(model.contextWindow / 1000)}K
+												{/* K 缩写语义保留，数字走 Intl 分组（1280K → 1,280K）。 */}
+												{new Intl.NumberFormat("zh-CN").format(Math.round(model.contextWindow / 1000))}K
 											</span>
-											{active && <IconCheck size={14} className="model-menu-check" />}
-										</button>
-									);
-								})}
-							</div>
-							{/*
+												{active && <IconCheck size={14} className="model-menu-check" />}
+											</button>
+										);
+									})}
+								</div>
+								{/*
 								推理强度行（WorkBuddy 的「高 >」）：右侧是当前档位 label，
 								点击/hover 展开档位子菜单。非推理模型整行不渲染（见上）。
 							*/}
-							{thinkingRowVisible && (
-								<div
-									className="model-menu-thinking-zone"
-									onMouseEnter={() => setLevelsOpen(true)}
-									onMouseLeave={() => setLevelsOpen(false)}
-								>
-									<button
-										type="button"
-										className="model-menu-thinking"
-										aria-expanded={levelsOpen}
-										onClick={() => setLevelsOpen((v) => !v)}
+								{thinkingRowVisible && (
+									<div
+										className="model-menu-thinking-zone"
+										onMouseEnter={() => setLevelsOpen(true)}
+										onMouseLeave={() => setLevelsOpen(false)}
 									>
-										<span>推理强度</span>
-										<span className="model-menu-thinking-current">
-											{thinkingLevel !== undefined && THINKING_LEVEL_LABELS[thinkingLevel]}
-											<span className="model-menu-thinking-caret" aria-hidden="true">
-												›
+										<button
+											type="button"
+											className="model-menu-thinking"
+											aria-expanded={levelsOpen}
+											onClick={() => setLevelsOpen((v) => !v)}
+										>
+											<span>推理强度</span>
+											<span className="model-menu-thinking-current">
+												{thinkingLevel !== undefined && THINKING_LEVEL_LABELS[thinkingLevel]}
+												<span className="model-menu-thinking-caret" aria-hidden="true">
+													›
+												</span>
 											</span>
-										</span>
-									</button>
-									{levelsOpen && (
-										<div className="pop-menu model-menu-levels">
-											{thinkingOptions.map((level) => (
-												<button
-													key={level}
-													type="button"
-													className={`model-menu-level-item${level === thinkingLevel ? " active" : ""}`}
-													onClick={() => pickThinkingLevel(level)}
-												>
-													{THINKING_LEVEL_LABELS[level]}
-													{level === thinkingLevel && <IconCheck size={14} className="model-menu-check" />}
-												</button>
-											))}
-										</div>
-									)}
-								</div>
-							)}
-							<button
-								type="button"
-								className="model-menu-goto"
-								onClick={() => {
-									setOpen(false);
-									onOpenSettings();
-								}}
-							>
-								全部模型与服务商… →
-							</button>
-						</>
-					)}
-				</div>
+										</button>
+										{levelsOpen && (
+											<div className="pop-menu model-menu-levels" role="menu">
+												{thinkingOptions.map((level) => (
+													<button
+														key={level}
+														type="button"
+														className={`model-menu-level-item${level === thinkingLevel ? " active" : ""}`}
+														role="menuitem"
+														onClick={() => pickThinkingLevel(level)}
+													>
+														{THINKING_LEVEL_LABELS[level]}
+														{level === thinkingLevel && <IconCheck size={14} className="model-menu-check" />}
+													</button>
+												))}
+											</div>
+										)}
+									</div>
+								)}
+								<button
+									type="button"
+									className="model-menu-goto"
+									onClick={() => {
+										setOpen(false);
+										onOpenSettings();
+									}}
+								>
+									全部模型与服务商… →
+								</button>
+							</>
+						)}
+					</div>
+				</>
 			)}
 		</div>
 	);

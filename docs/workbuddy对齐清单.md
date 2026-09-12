@@ -118,7 +118,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | E2 | 内置技能包 | 19 个：ardot 设计 6 个、wb-finance（46 篇 references + 16 脚本）、library（云盘总线）、sites、expert-manager、skill-creator、路由类 3 个等 | 1 个 | ❌ |
 | E3 | 技能自维护 | 提示词强制循环：积累（8+ 工具调用必沉淀）→ 反思（用过必评估改进）→ 纠错（发现错别字当场修，「NEVER ask, NEVER defer」） | 无 | ❌ |
 | E4 | 技能安装 | `marketplace-skill-installer` + `skill-creator`（init/package/validate 三个脚本） | `core/skill-install.ts` 本地目录导入（同名拒绝不覆盖） | 🟡 无市场、无脚手架 |
-| E5 | 专家体系 | expert 模式 + `expert-manager`（创建/打包/注册/校验，含 agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | expert 模式+人格注入+预设 6 员已落地（spec add-expert-mode：`resources/experts/`、模式菜单「专家 ▸」、`setExpert` IPC、`<current-expert>` 钉住）；专家团/CRUD 管理未做 | 🟡 |
+| E5 | 专家体系 | expert 模式 + 人格进系统提示词顶部槽位（Role Override 前缀、剥 frontmatter）+ `<current-expert>` 每轮钉子（不含人格）+ 身份让位（砍 SOUL/tone/style）+ 输入框底栏静态专家 chip（hover 变 × 取消，选择只走「+」菜单）+ `expert-manager`（创建/打包/注册/校验，agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | expert 模式 + 人格顶部槽位注入（override 声明）+ 末尾钉子段 + 风格让位（spec align-expert-system-workbuddy）；预设 9 员（displayDescription/quickPrompts×3/tags×3）；底栏专家 chip（hover × 取消）+ 入口归一（移除头部 chip 与 ModeSwitch 子菜单，spec rework-expert-center-and-chip）；expert-manager CRUD/团队/推荐卡未做（无云端市场前提） | 🟡 机制对齐、管理生命周期未做 |
 | E6 | 推荐引擎 | `recommend-connectors` / `recommend-experts` + `search_plugins` + `suggest_plugin_install`（每次响应至多一次，1–3 张候选卡） | 「专家/技能/连接器」在加号菜单里是占位 | ❌ |
 | E7 | 插件框架 | plugin.json + marketplace.json 两级；注册表 33 条（welcomeMode 3 + interaction 4 + template 1 + skill 19 + mcp-app 1 + builtin-plugin 5）；安装即复制 + 版本化缓存 + 路径遍历封禁；hooks 三条信任通道 | 无插件加载器（用 pi packages + Skills 替代） | ⛔ 见优先级 |
 | E8 | 技能安全扫描 | `SkillSecurityScan` 特性开关 + 安装前审计分级（P0 强烈警告劝退 / P1 警告需确认 / P2 放行），且声明「只审安装、不审使用」控制成本 | 无 | ❌ |
@@ -245,7 +245,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L10 | 主题 | `/theme` 多主题 | 无 | ❌ |
 | L11 | 语音输入与朗读 | ASR：输入框麦克风按钮 + `Cmd+D` / `Ctrl+D` 快捷键；TTS：AI 消息气泡下方朗读按钮；两者是独立特性开关（`DisableVoiceInput` / `DisableVoiceOutput`，专享版与私有化默认关） | 首页与对话页有麦克风图标占位（点击提示待做），无功能 | ❌ |
 | L12 | 设置页 | settings.json + 图形化 | `settings-view.tsx`（Key / 模型 / 自建服务商 / 权限 / 联网搜索） | ✅ |
-| L13 | 技能与专家页 | 插件市场 + 专家管理 | `skills-view.tsx`（本地导入）；专家无 | 🟡 |
+| L13 | 技能与专家页 | 专家/技能/连接器三 tab（同 MarketPage 三路由）；专家市场：搜索（五字段+debounce+IME）、分类 chips（服务端下发）、卡片网格（头像/职称/两行描述/tags/hover 召唤）、详情弹窗（大头像/介绍/quickPrompts 轮播/召唤）、我的专家（空态+创建跳主页预填 expert-manager 引导）；专家团 tab（Desktop） | `skills-view.tsx` 三 tab 专家为首（spec rework-expert-center-and-chip）：`experts-view.tsx` 市场页（本地搜索/tags 聚合分类/卡片网格/详情弹窗/我的专家空态+创建跳主页预填引导语）；专家团占位；无精选场景（用户明确不要）、无运营排序 | 🟡 页面对齐、无精选场景与运营数据 |
 | L14 | 连接器页 | MCP 配置 + 市场 + 授权 | `connectors-view.tsx`（JSON 编辑 + 表单） | ✅ |
 | L15 | 记忆面板 | `/memory` | 无 | ❌ |
 | L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 诊断页（工具时间线）；无成本 | 🟡 |

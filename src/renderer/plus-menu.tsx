@@ -12,7 +12,7 @@
  * 贴右放会溢出窗口右缘被裁掉。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { IconAssistant, IconCheck, IconDoc, IconPlus, IconSkill, IconWeb, IconWorkspace } from "./icons.tsx";
@@ -25,6 +25,12 @@ interface PlusMenuProps {
 	readonly experts: readonly ExpertListItem[];
 	readonly expertId: string | undefined;
 	readonly onSelectExpert: (expertId: string) => void;
+	/**
+	 * 专家子菜单底部「更多专家…」：跳专家页（WorkBuddy 子菜单底部「召唤更多专家」同款入口）。
+	 * 可选：入口归一（rework-expert-center-and-chip Task 3）只接线对话页；
+	 * 首页「+」菜单不传时子菜单底部不渲染该项，行为与之前一致。
+	 */
+	readonly onOpenExperts?: () => void;
 	readonly onPickFiles: () => void;
 	readonly onTodo: (feature: string) => void;
 }
@@ -36,6 +42,7 @@ export function PlusMenu({
 	experts,
 	expertId,
 	onSelectExpert,
+	onOpenExperts,
 	onPickFiles,
 	onTodo,
 }: PlusMenuProps): React.JSX.Element {
@@ -49,6 +56,17 @@ export function PlusMenu({
 		setModesOpen(false);
 		setExpertsOpen(false);
 	};
+
+	// Esc 关闭弹层（连同子菜单）：菜单没有键盘焦点管理，Esc 是键盘用户唯一的
+	// 关闭路径；与 backdrop 互补（一个管键盘，一个管指针）。同 model-menu 约定。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") close();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
 
 	// expert 不裸列在模式子菜单里（无专家的 expert 模式不可达，spec: add-expert-mode）
 	// —— 三模式平铺，专家走下面的「专家 ▸」子菜单，选中具体专家即进 expert 模式。
@@ -70,10 +88,11 @@ export function PlusMenu({
 				<>
 					{/* 透明 backdrop：点菜单外任意处关闭，与同区 PermissionMenu 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={close} />
-					<div className="pop-menu plus-menu">
+					<div className="pop-menu plus-menu" role="menu">
 						<button
 							type="button"
 							className="plus-menu-item"
+							role="menuitem"
 							onClick={() => {
 								close();
 								onPickFiles();
@@ -90,6 +109,8 @@ export function PlusMenu({
 							<button
 								type="button"
 								className="plus-menu-item"
+								role="menuitem"
+								aria-haspopup="menu"
 								aria-expanded={modesOpen}
 								onClick={() => setModesOpen((v) => !v)}
 							>
@@ -100,12 +121,13 @@ export function PlusMenu({
 								</span>
 							</button>
 							{modesOpen && (
-								<div className="plus-menu-sub">
+								<div className="plus-menu-sub" role="menu">
 									{plainModes.map((mode) => (
 										<button
 											key={mode.id}
 											type="button"
 											className={`plus-menu-mode-item${mode.id === currentId ? " active" : ""}`}
+											role="menuitem"
 											onClick={() => {
 												close();
 												// 与头部 ModeSwitch 同语义：未实现的模式仍然列出，
@@ -133,6 +155,8 @@ export function PlusMenu({
 							<button
 								type="button"
 								className="plus-menu-item"
+								role="menuitem"
+								aria-haspopup="menu"
 								aria-expanded={expertsOpen}
 								onClick={() => setExpertsOpen((v) => !v)}
 							>
@@ -143,28 +167,48 @@ export function PlusMenu({
 								</span>
 							</button>
 							{expertsOpen && (
-								<div className="plus-menu-sub">
+								<div className="plus-menu-sub" role="menu">
 									{experts.map((expert) => (
 										<button
 											key={expert.name}
 											type="button"
 											className={`plus-menu-mode-item${expert.name === expertId ? " active" : ""}`}
+											role="menuitem"
+											// 副行只放一行：displayDescription（一句话能力）比头衔更能帮用户
+											// 决定选谁，profession 并进 tooltip 保留（spec: 专家体系对齐 Task 3.1）。
+											title={`${expert.displayName}｜${expert.profession}`}
 											onClick={() => {
 												close();
 												onSelectExpert(expert.name);
 											}}
 										>
 											<span className="plus-menu-mode-label">{expert.displayName}</span>
-											<span className="plus-menu-mode-desc">{expert.profession}</span>
+											<span className="plus-menu-mode-desc">{expert.displayDescription}</span>
 											{expert.name === expertId && <IconCheck size={14} className="plus-menu-mode-check" />}
 										</button>
 									))}
+									{/* 子菜单底部常驻入口（WorkBuddy「召唤更多专家」同款）：跳专家页。
+									    可选 prop —— 未接线的页面（首页）不渲染该项。 */}
+									{onOpenExperts !== undefined && (
+										<button
+											type="button"
+											className="plus-menu-mode-item plus-menu-more-experts"
+											role="menuitem"
+											onClick={() => {
+												close();
+												onOpenExperts();
+											}}
+										>
+											<span className="plus-menu-mode-label">更多专家…</span>
+										</button>
+									)}
 								</div>
 							)}
 						</div>
 						<button
 							type="button"
 							className="plus-menu-item"
+							role="menuitem"
 							onClick={() => {
 								close();
 								onTodo("技能");
@@ -176,6 +220,7 @@ export function PlusMenu({
 						<button
 							type="button"
 							className="plus-menu-item"
+							role="menuitem"
 							onClick={() => {
 								close();
 								onTodo("连接器");

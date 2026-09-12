@@ -190,6 +190,23 @@ export const IconChevronDown = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+export const IconGraduationCap = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 学士帽：「我的专家」空态图标（自创专家 = 传授知识）。 */}
+		<path d="m12 4 10 5-10 5L2 9z" />
+		<path d="M6 11.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5" />
+		<path d="M22 9v5" />
+	</Svg>
+);
+
+export const IconUser = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 人头 + 肩：「我的」语义（我的专家入口）。 */}
+		<circle cx="12" cy="8" r="4" />
+		<path d="M4 21c0-3.5 3.6-6 8-6s8 2.5 8 6" />
+	</Svg>
+);
+
 export const IconChevronLeft = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		<path d="m15 18-6-6 6-6" />

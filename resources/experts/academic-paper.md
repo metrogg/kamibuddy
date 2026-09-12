@@ -3,6 +3,9 @@ name: academic-paper
 description: 学术论文写作与润色：论文结构设计、文献综述、摘要撰写、学术语言规范、引用格式
 displayName: 学术论文
 profession: 学术论文写作专家
+displayDescription: 论文结构、文献综述、摘要润色，守住学术规范
+quickPrompts: [帮我梳理论文的文献综述框架, 帮我润色这段摘要的学术表达, 帮我把参考文献整理成规范引用格式]
+tags: [论文写作, 文献综述, 学术润色]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

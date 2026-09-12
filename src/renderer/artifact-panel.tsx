@@ -707,11 +707,10 @@ function WorkspaceView({
 							>
 								<IconChevronDown
 									size={12}
-									className={`file-tree-chevron${
-										tree.loadedPaths.has(node.path) && !tree.collapsedPaths.has(node.path)
+									className={`file-tree-chevron${tree.loadedPaths.has(node.path) && !tree.collapsedPaths.has(node.path)
 											? " expanded"
 											: ""
-									}`}
+										}`}
 								/>
 								<IconFolder size={14} />
 								<span className="file-tree-name">{node.name}</span>
@@ -721,9 +720,8 @@ function WorkspaceView({
 							<button
 								key={node.path}
 								type="button"
-								className={`file-tree-row file-tree-file${
-									active?.kind === "file" && active.path === node.path ? " selected" : ""
-								}`}
+								className={`file-tree-row file-tree-file${active?.kind === "file" && active.path === node.path ? " selected" : ""
+									}`}
 								/* 文件行没有 chevron：补 18px（12 chevron + 6 gap）让图标与文件夹行对齐。 */
 								style={{ paddingLeft: `${8 + depth * 12 + 18}px` }}
 								title={node.path}
@@ -837,6 +835,16 @@ export function ArtifactPanel({
 		document.body.style.userSelect = "none";
 	};
 
+	// sash 键盘调宽：与鼠标拖拽同一个 setter、同一份 [340, 800] clamp。
+	// 方向口径与拖拽一致 —— 分隔条向左移面板变宽（delta = startX - clientX），
+	// 所以 ArrowLeft 加宽、ArrowRight 收窄（WAI-ARIA window splitter 同约定）。
+	const handleSashKeyDown = (event: React.KeyboardEvent): void => {
+		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+		event.preventDefault();
+		const delta = event.key === "ArrowLeft" ? 10 : -10;
+		onWidthChange(Math.min(Math.max(width + delta, 340), 800));
+	};
+
 	// Esc 退出全屏（监听挂在全屏态上，非全屏不注册）。
 	useEffect(() => {
 		if (!fullscreen) return;
@@ -859,7 +867,9 @@ export function ArtifactPanel({
 					role="separator"
 					aria-orientation="vertical"
 					aria-label="拖拽调整面板宽度"
+					tabIndex={0}
 					onMouseDown={handleSashMouseDown}
+					onKeyDown={handleSashKeyDown}
 				/>
 			)}
 			<header className="preview-head">

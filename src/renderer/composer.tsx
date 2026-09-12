@@ -40,6 +40,13 @@ export interface ComposerHandle {
 	 * 草稿在组件内部，父组件只能经句柄写入 —— 否则案例卡片点了没反应。
 	 */
 	readonly setText: (text: string) => void;
+	/**
+	 * 填入文本并聚焦输入框（对话页专家起手 chips：点 chip 文本进框待发送，
+	 * 不直接发送 —— 用户可能还要补两句）。与 setText 的差别只在聚焦：
+	 * 案例卡片在首页视觉焦点已在输入区，chips 在按钮上，不聚焦用户
+	 * 得再点一下输入框才能接着打字。
+	 */
+	readonly fillText: (text: string) => void;
 }
 
 interface ComposerProps {
@@ -126,6 +133,11 @@ export function Composer({
 				setDraft(text);
 				// 与 onChange 同口径：draftKey 在时同步进草稿 Map。
 				if (draftKey !== undefined) saveDraft(draftKey, text);
+			},
+			fillText: (text) => {
+				setDraft(text);
+				if (draftKey !== undefined) saveDraft(draftKey, text);
+				textareaRef.current?.focus();
 			},
 		}),
 		[img.pickFromDialog, draftKey],
@@ -246,8 +258,9 @@ export function Composer({
 			<div className="composer-input">
 				{ac.menu}
 				<textarea
-					ref={textareaRef}
-					value={draft}
+				ref={textareaRef}
+				value={draft}
+				aria-label="消息输入框"
 					onChange={(e) => {
 						ac.bind.onChange(e);
 						if (draftKey !== undefined) saveDraft(draftKey, e.target.value);

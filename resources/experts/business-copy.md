@@ -3,6 +3,9 @@ name: business-copy
 description: 商业文案创作与诊断：品牌文案、产品卖点、营销邮件、社媒内容，基于 AIDA 等模型与广告法合规
 displayName: 商业文案
 profession: 商业文案专家
+displayDescription: 品牌文案、产品卖点、营销邮件与社媒内容，合规又有转化力
+quickPrompts: [帮我提炼这款产品的主卖点文案, 帮我写一封开发新客户的邮件, 帮我诊断这段广告文案]
+tags: [品牌文案, 产品卖点, 营销邮件]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

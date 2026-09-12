@@ -1,5 +1,6 @@
 /**
- * 提示词组装：场景骨架 + 片段 + 模式行为段 + 回复风格 + 技能清单 → 最终 systemPrompt。
+ * 提示词组装：场景骨架 + 片段 + 专家人格（前部槽位）+ 模式行为段 + 回复风格
+ * + 技能清单 → 最终 systemPrompt。
  *
  * 纯函数，可单测。**不引模板引擎**（AGENTS.md §9）——include 与槽位都是字面量
  * 替换；include 机制对应 WorkBuddy nunjucks 的 {% include %}，但只实现我们用到的
@@ -64,9 +65,10 @@ export interface ComposePromptInput {
 	/** 模型显示名。骨架未使用 {{model}} 时可省。 */
 	readonly model?: string;
 	/**
-	 * expert 模式绑定的人格。提供时注入「当前专家」人格段 +
-	 * 末尾 <current-expert> 钉住段（见 composePromptWithMeta 内的注释）。
-	 * 非 expert 模式缺省；expert 模式下由 requireExpertPersona 保证必有值。
+	 * expert 模式绑定的人格。提供时注入前部槽位人格段（骨架之后、模式行为段
+	 * 之前，带 Role Override 声明）+ 末尾 <current-expert> 钉子段（只钉名字，
+	 * 不含人格本体），并抑制风格段（风格让位于人格，见 composePromptWithMeta
+	 * 内注释）。非 expert 模式缺省；expert 模式下由 requireExpertPersona 保证必有值。
 	 */
 	readonly expert?: ExpertPersona;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
@@ -80,6 +82,7 @@ export interface ComposePromptInput {
 	 * 注入风格段（provenance 标 style:<id>，含「HOW 不影响 WHAT」元规则，
 	 * 见 formatStyleSection）；缺省 = 不注入（偏好里 styleId 为空串的
 	 * 「关闭」态由调用方不传本字段表达）。子代理路径没有本字段可言。
+	 * expert 字段有值时本字段被忽略 —— 选定专家后风格让位于人格。
 	 */
 	readonly style?: { readonly id: string; readonly body: string };
 	/**
@@ -177,13 +180,45 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	for (const piece of pieces) fillSlots(piece, input, filled);
 
 	/*
+	 * 专家人格前部槽位：模式行为段之前注入（WorkBuddy PluginAgentPrompt 顶部
+	 * 槽位的等价物 —— 人格带 Role Override 声明压过骨架里的通用身份；末尾
+	 * <current-expert> 只是不含人格的钉子，见本函数尾部）。v1 曾把人格放在
+	 * 核心段之后，通用身份（办公助手）在前稀释人格 —— spec:
+	 * align-expert-system-workbuddy 把它上移到这里。
+	 * 插在 finalizeCore 之前：人格段与骨架/模式段走同一套按段压平与空段丢弃，
+	 * 「segments 拼接 == text」的等价性论证不需要为人格段单开分支。前段尾部
+	 * 换行剥掉、空行分隔改由人格段自己携带 —— 跨段边界凑不出 \n{3,}，不破坏
+	 * finalizeCore 注释里「段边界最多两个换行」的论证前提。骨架没有
+	 * {{interaction}} 槽位时落在核心段末尾（finalizeCore 的整体 trim 会裁掉
+	 * 人格段的尾部换行，post-core 各段的 \n\n 前缀照常分隔）。
+	 * 人格段在残留检查之前入列：专家正文是定义文件不是用户数据，里面写出
+	 * {{...}} 就是笔误，与模式正文同一条响亮抛错口径。
+	 */
+	if (input.expert !== undefined) {
+		const personaSeg: DraftSegment = {
+			source: "expert",
+			text: `\n\n${formatExpertPersona(input.expert)}\n\n`,
+		};
+		const modeIdx = filled.findIndex((s) => s.source.startsWith("mode:"));
+		if (modeIdx === -1) filled.push(personaSeg);
+		else {
+			const prev = filled[modeIdx - 1];
+			if (prev !== undefined) prev.text = prev.text.replace(/\n+$/, "");
+			filled.splice(modeIdx, 0, personaSeg);
+		}
+	}
+
+	/*
 	 * F8 风格段：交互段之后注入（WorkBuddy 同款位序 —— 先「怎么交互」再「怎么说话」）。
 	 * 插在 finalizeCore 之前：风格段与骨架/模式段走同一套按段压平与空段丢弃，
 	 * 「segments 拼接 == text」的等价性论证不需要为风格段单开分支。
 	 * 骨架没有 {{interaction}} 槽位时（用多少槽位是场景作者的自由）没有交互段可锚，
-	 * 落在核心段末尾 —— 此时它仍在 expert / pi-context / time 之前，位序语义不变。
+	 * 落在核心段末尾 —— 此时它仍在 pi-context / time 之前，位序语义不变。
+	 * expert 模式不注入：选定专家后用户自定义风格让位于人格（WorkBuddy
+	 * user-context-expert-identity 的精简语义 —— 表达层的唯一权威是人格，
+	 * 风格与人格并存只会冲突）；craft/ask 等模式没有 expert 字段，不受影响。
 	 */
-	if (input.style !== undefined) {
+	if (input.style !== undefined && input.expert === undefined) {
 		const styleSeg: DraftSegment = {
 			source: `style:${input.style.id}`,
 			text: `\n\n${formatStyleSection(input.style.body)}`,
@@ -207,12 +242,14 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 
 	const all: DraftSegment[] = [...core];
 	/*
-	 * 记忆段：通用骨架之后、专家人格段之前（WorkBuddy 的 USER.md / 画像注入
-	 * 槽同款位序 —— 先「通用 OS + 记忆背景」，再叠人格 APP）。两段都推在
-	 * 残留检查**之后**：记忆内容是用户数据，用户往 MEMORY.md 里写了
-	 * 「{{示例}}」不该让会话组装抛错（残留检查管的是骨架/模式/片段的笔误，
-	 * 不管用户数据）。段文本只经 trim 不再压平：按段压平服务于 finalizeCore
-	 * 的等价性论证，这里的段自带 \n\n 前缀、join 后接缝天然是两个换行。
+	 * 记忆段：核心段（骨架 + 人格 + 模式）之后、pi 上下文之前。人格上前部
+	 * 槽位后（spec: align-expert-system-workbuddy）记忆排在人格之后 —— 与
+	 * WorkBuddy 选专家后精简用户自定义身份的让位方向一致（人格优先于用户侧
+	 * 设定）。两段都推在残留检查**之后**：记忆内容是用户数据，用户往
+	 * MEMORY.md 里写了「{{示例}}」不该让会话组装抛错（残留检查管的是
+	 * 骨架/模式/片段的笔误，不管用户数据）。段文本只经 trim 不再压平：按段
+	 * 压平服务于 finalizeCore 的等价性论证，这里的段自带 \n\n 前缀、join
+	 * 后接缝天然是两个换行。
 	 */
 	if (input.memorySystemBody !== undefined && input.memorySystemBody.trim() !== "") {
 		all.push({
@@ -223,14 +260,6 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	if (input.memoryContent !== undefined && input.memoryContent.trim() !== "") {
 		all.push({ source: "memory", text: `\n\n${input.memoryContent.trim()}` });
 	}
-	/*
-	 * expert 人格段：接在骨架之后（WorkBuddy PluginAgentPrompt 槽的等价物 ——
-	 * 主提示是通用 OS，专家 = OS + 人格 APP）。场景骨架照常使用：
-	 * 专家与场景轴的联动 v1 不做（spec: add-expert-mode 声明），骨架即通用骨架。
-	 */
-	if (input.expert !== undefined) {
-		all.push({ source: "expert", text: `\n\n${formatExpertPersona(input.expert)}` });
-	}
 	const piBlock = formatPiContextBlock(input);
 	if (piBlock !== "") {
 		all.push({ source: "pi-context", text: `\n\n${piBlock}` });
@@ -239,16 +268,18 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	// （前面各段同分钟内字节一致，变化的只有最后一小段）。
 	all.push({ source: "time", text: `\n\n${formatRuntimeTime(input.now ?? new Date())}` });
 	/*
-	 * <current-expert> 钉住段放最末（WorkBuddy CurrentExpertReminderSection 的
+	 * <current-expert> 钉子段放最末（WorkBuddy CurrentExpertReminderSection 的
 	 * 同款防漂移：多轮对话后模型会忘记自己的专家身份，它每轮 user-context 钉一次）。
-	 * v1 没有用户消息级注入机制（WorkBuddy 的 composeUserPrompt），钉住段随每轮
+	 * 只是钉子：专家名 + 一句「遵循其角色与工作流」，人格本体只在前部槽位
+	 * 出现一次 —— 重复人格既浪费 token，两处文本还有漂移风险。
+	 * v1 没有用户消息级注入机制（WorkBuddy 的 composeUserPrompt），钉子段随每轮
 	 * 重组的系统提示词落在离对话历史最近的位置 —— 同一会话内它是稳定文本，
 	 * 不破坏上面的前缀缓存口径。
 	 */
 	if (input.expert !== undefined) {
 		all.push({
 			source: "expert",
-			text: `\n\n<current-expert>${input.expert.displayName}</current-expert>`,
+			text: `\n\n<current-expert>${input.expert.displayName}</current-expert>\n请始终以该专家的角色与工作流推进本会话。`,
 		});
 	}
 
@@ -392,9 +423,17 @@ function finalizeCore(segments: readonly DraftSegment[]): DraftSegment[] {
 	return merged.filter((s) => s.text !== "");
 }
 
-/** 「当前专家」人格段：身份一行 + 正文全文（人格本体）。 */
+/**
+ * 「当前专家」人格段：标题 + 身份一行 + Role Override 声明 + 正文全文（人格本体）。
+ *
+ * override 声明压的是骨架里的通用身份（「办公助手」类描述）：骨架不按模式
+ * 裁剪（场景×模式双轴解耦，裁剪会让每个场景骨架背上模式分支），人格只能靠
+ * 这段声明取得冲突时的权威 —— 对齐 WorkBuddy 人格槽位的 Role Override 前缀
+ * 语义，措辞自创（合规红线：不抄原文）。声明紧贴人格正文之前，中间不隔别的
+ * 段落，「以本段为准」的指代才不含糊。
+ */
 function formatExpertPersona(expert: ExpertPersona): string {
-	return `## 当前专家\n\n你当前的专家身份：${expert.displayName}（${expert.profession}）。\n\n${expert.body.trim()}`;
+	return `## 当前专家\n\n你当前的专家身份：${expert.displayName}（${expert.profession}）。\n\n身份覆盖：以下是你在本会话中的专家身份定义。它与此前任何通用身份描述冲突时，以本段为准——这是本会话中你的权威角色。\n\n${expert.body.trim()}`;
 }
 
 /**

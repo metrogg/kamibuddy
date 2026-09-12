@@ -141,6 +141,7 @@ function ProviderRow({
 						type="password"
 						value={draft}
 						autoComplete="off"
+						aria-label={`${provider.name} API Key`}
 						placeholder="粘贴 API Key，回车保存"
 						onChange={(e) => setDraft(e.target.value)}
 						onKeyDown={(e) => {
@@ -303,6 +304,7 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 							className="provider-select"
 							value={providerId}
 							disabled={busy}
+							aria-label="搜索服务商"
 							onChange={(e) => setProviderId(e.target.value as WebSearchProviderId)}
 						>
 							<option value="">选择搜索服务商</option>
@@ -316,6 +318,7 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 							type="password"
 							value={apiKey}
 							autoComplete="off"
+							aria-label="联网搜索 API Key"
 							placeholder="粘贴 API Key，回车保存"
 							onChange={(e) => setApiKey(e.target.value)}
 							onKeyDown={(e) => {
@@ -402,6 +405,7 @@ function ThinkingLevelSection({ busy }: { readonly busy: boolean }): React.JSX.E
 								className="provider-select"
 								value={level}
 								disabled={busy}
+								aria-label="新建会话的初始推理档位"
 								onChange={(e) => change(e.target.value as ThinkingLevel)}
 							>
 								{options.map((option) => (
@@ -472,6 +476,7 @@ function StyleSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
 								className="provider-select"
 								value={config.styleId}
 								disabled={busy}
+								aria-label="回复风格"
 								onChange={(e) => change(e.target.value)}
 							>
 								{config.styles.map((style) => (
@@ -830,7 +835,12 @@ function PromptPreviewSection(): React.JSX.Element {
 						<div className="preview-segments">
 							{result.segments.map((seg, index) => (
 								<div key={index} className="seg-card">
-									<button type="button" className="seg-head" onClick={() => toggleSegment(index)}>
+									<button
+										type="button"
+										className="seg-head"
+										aria-expanded={expanded.has(index)}
+										onClick={() => toggleSegment(index)}
+									>
 										<span className={`seg-tag seg-${sourceCategory(seg.source)}`}>{seg.source}</span>
 										<span className="seg-chars">{seg.chars} 字</span>
 										<span className={`seg-chevron${expanded.has(index) ? " open" : ""}`}>
@@ -1066,6 +1076,8 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 					value={form.id}
 					disabled={isEdit}
 					placeholder="company-gateway"
+					spellCheck={false}
+					autoComplete="off"
 					onChange={(e) => patch({ id: e.target.value })}
 				/>
 				{/* id 是 auth.json 的键，改了等于换一个服务商，所以编辑时锁定。 */}
@@ -1081,8 +1093,10 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 			<label className="field">
 				<span className="field-label">接口地址</span>
 				<input
+					type="url"
 					value={form.baseUrl}
 					placeholder="https://api.example.com/v1"
+					autoComplete="off"
 					onChange={(e) => patch({ baseUrl: e.target.value })}
 				/>
 				<span className="field-hint">填到版本号那一层，多数服务是 /v1</span>
@@ -1141,12 +1155,14 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 						<input
 							className="model-id"
 							value={model.id}
+							aria-label="模型 ID"
 							placeholder="模型 ID，如 glm-4.7"
 							onChange={(e) => patchModel(index, { id: e.target.value })}
 						/>
 						<input
 							className="model-name"
 							value={model.name}
+							aria-label="模型显示名"
 							placeholder="显示名（可留空）"
 							onChange={(e) => patchModel(index, { name: e.target.value })}
 						/>
@@ -1154,6 +1170,7 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 							className="model-num"
 							type="number"
 							value={model.contextWindow}
+							aria-label="上下文窗口"
 							title="上下文窗口"
 							onChange={(e) => patchModel(index, { contextWindow: Number(e.target.value) })}
 						/>
@@ -1161,6 +1178,7 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 							className="model-num"
 							type="number"
 							value={model.maxTokens}
+							aria-label="单次最大输出"
 							title="单次最大输出"
 							onChange={(e) => patchModel(index, { maxTokens: Number(e.target.value) })}
 						/>
@@ -1284,7 +1302,7 @@ function ModelPicker({ models, providers, activeModelId, busy, onPick }: ModelPi
 								<span className="model-card-meta">
 									{nameOf.get(model.providerId) ?? model.providerId}
 									{" · "}
-									{Math.round(model.contextWindow / 1000)}K
+									{new Intl.NumberFormat("zh-CN").format(Math.round(model.contextWindow / 1000))}K
 									{model.reasoning && " · 思考"}
 									{model.vision && " · 看图"}
 								</span>

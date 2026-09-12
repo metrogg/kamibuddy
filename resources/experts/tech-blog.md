@@ -3,6 +3,9 @@ name: tech-blog
 description: 技术内容创作：技术博客、深度文章、教程、架构文档、README 与技术文章诊断
 displayName: 技术博客
 profession: 技术博客写作专家
+displayDescription: 深度文章、教程、架构文档与 README，代码能跑、概念讲透
+quickPrompts: [帮我写一篇新手入门教程, 帮我把这次架构改造写成技术文章, 帮我诊断这篇技术博客初稿]
+tags: [深度文章, 技术教程, 架构文档]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

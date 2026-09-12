@@ -41,6 +41,17 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 		reload();
 	}, [reload]);
 
+	// Esc 关闭弹层：菜单没有键盘焦点管理，Esc 是键盘用户唯一的关闭路径；
+	// 与 backdrop 互补（一个管键盘，一个管指针）。同 model-menu 约定。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
+
 	const toggle = useCallback(() => {
 		setOpen((v) => {
 			if (!v) reload();
@@ -86,7 +97,14 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 
 	return (
 		<div className="permission-menu-zone">
-			<button type="button" className="context-chip" title={chipTitle} onClick={toggle} aria-expanded={open}>
+			<button
+				type="button"
+				className="context-chip"
+				title={chipTitle}
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={toggle}
+			>
 				{chipLabel}
 				<IconChevronDown size={12} />
 			</button>
@@ -95,7 +113,7 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 				<>
 					{/* 透明 backdrop：点面板外任意处关闭，与同区 WorkspacePicker 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
-					<div className="pop-menu permission-menu">
+					<div className="pop-menu permission-menu" role="menu">
 						{info === undefined ? (
 							<p className="permission-menu-empty">正在读取权限…</p>
 						) : (
@@ -107,6 +125,7 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 											key={preset.id}
 											type="button"
 											className={`permission-menu-item${active ? " active" : ""}`}
+											role="menuitem"
 											onClick={() => pick(preset)}
 										>
 											<span className="permission-menu-name">{preset.label}</span>
@@ -119,6 +138,7 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 								<button
 									type="button"
 									className="permission-menu-goto"
+									role="menuitem"
 									onClick={() => {
 										setOpen(false);
 										onOpenSettings();

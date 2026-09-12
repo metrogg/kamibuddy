@@ -143,6 +143,12 @@ export function App(): React.JSX.Element {
 	 */
 	const [experts, setExperts] = useState<readonly ExpertListItem[]>([]);
 	/**
+	 * 待消费的输入框预填文本（创建专家引导语 / 市场页 quickPrompt）。
+	 * 目标视图（home 或 chat）挂载后经 composer 句柄填入并立即回调清空 ——
+	 * 一次性语义：留在 state 里的话，往返视图会重复填充。
+	 */
+	const [pendingPrefill, setPendingPrefill] = useState<string | undefined>(undefined);
+	/**
 	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
 	 * 多任务并发后未读以 sessionId 为键（不再假设单会话）：run 结束的
@@ -554,12 +560,13 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
-	 * 选择专家（选中即进 expert 模式）。与 changeInteraction 同一数据流：
-	 * 不在本地回写，daemon 推 session_state（interactionId=expert + expertId）
-	 * 后菜单勾选与头部显示随之刷新。
+	 * 选择专家（选中即进 expert 模式）；传 undefined = 取消选中（daemon 清 expertId
+	 * 并回落 craft，见 setExpert 通道的清除语义）。与 changeInteraction 同一数据流：
+	 * 不在本地回写，daemon 推 session_state（interactionId + expertId）后
+	 * 菜单勾选与 composer-bar 专家 chip 随之刷新。
 	 */
 	const selectExpert = useCallback(
-		(expertId: string) => {
+		(expertId: string | undefined) => {
 			if (link.kind !== "ready") return;
 			window.kami.setExpert(expertId).catch((error: unknown) => {
 				showToast(error instanceof Error ? error.message : String(error));
@@ -694,6 +701,44 @@ export function App(): React.JSX.Element {
 			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [link.kind, resyncSnapshot]);
+
+	/**
+	 * 从专家市场页启用专家（WorkBuddy「使用专家」同款）：开新任务 → 绑定专家
+	 * → 落新任务对话页；prefill 有值时填入输入框待发送（quickPrompt 路径）。
+	 *
+	 * 顺序不能反：daemon 的 newTask 沿用旧会话的两轴与专家绑定，先 setExpert
+	 * 会把旧会话也翻成 expert 模式（副作用外溢到后台保活的会话）；先 newTask
+	 * 再 setExpert，专家只绑在新的 pristine 会话上（与首页「+」菜单选专家
+	 * 同一条 daemon 路径，pristine 桶可用）。
+	 */
+	const useExpert = useCallback(
+		(expertId: string, prefill?: string) => {
+			if (link.kind !== "ready") return;
+			window.kami
+				.newTask()
+				.then(() => window.kami.setExpert(expertId))
+				.then(() => {
+					resyncSnapshot();
+					if (prefill !== undefined) setPendingPrefill(prefill);
+					setView("chat");
+				})
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[link.kind, resyncSnapshot],
+	);
+
+	/**
+	 * 创建专家（WorkBuddy buildCreateExpertModeBlocks 语义：jump home + 引导语
+	 * 填入输入框待编辑，不发送）。不做 expert-manager 技能 chip（spec 明确不做），
+	 * 创建引导只靠这段预填文本。
+	 */
+	const createExpert = useCallback(() => {
+		setPendingPrefill("帮我创建一个 XXX 专家，擅长 XXXXX。我的经验是：[请补充你的行业背景、相关经验]");
+		setView("home");
+	}, []);
 
 	/**
 	 * 恢复历史会话：桶命中直接换指针上屏（后台事件持续折叠进桶，现场
@@ -1013,6 +1058,8 @@ export function App(): React.JSX.Element {
 					experts={experts}
 					expertId={conversation.state.expertId}
 					onSelectExpert={selectExpert}
+					prefill={pendingPrefill}
+					onPrefillConsumed={() => setPendingPrefill(undefined)}
 					onSceneChange={changeScene}
 					onOpenSettings={openSettings}
 					onError={showToast}
@@ -1034,6 +1081,9 @@ export function App(): React.JSX.Element {
 					turnFoldCache={turnFoldCacheRef}
 					experts={experts}
 					onSelectExpert={selectExpert}
+					onOpenExperts={() => setView("skills")}
+					prefill={pendingPrefill}
+					onPrefillConsumed={() => setPendingPrefill(undefined)}
 					onPreviewArtifact={(path) => {
 						// URL 产物走外部打开（系统浏览器），不进预览面板 ——
 						// 面板只服务本地文件（静态服务根=工作区）。
@@ -1098,12 +1148,8 @@ export function App(): React.JSX.Element {
 					onTodo={showTodo}
 					onToast={showToast}
 					experts={experts}
-					onSelectExpert={(name) => {
-						// 专家页签选专家 = setExpert + 回对话页（与模式菜单「专家 ▸」同一语义，
-						// 只是入口在管理页，选完要把用户带回能用专家的地方）。
-						selectExpert(name);
-						setView("chat");
-					}}
+					onUseExpert={useExpert}
+					onCreateExpert={createExpert}
 				/>
 			)}
 			{view === "settings" && (

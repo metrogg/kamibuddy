@@ -3,6 +3,9 @@ name: legal-contract
 description: 起草与审查合同、协议、条款等法律文书，覆盖技术服务、买卖、租赁、劳务、NDA、框架协议
 displayName: 法律合同
 profession: 法律合同专家
+displayDescription: 起草与审查各类合同协议，必备条款不缺、风险点先知
+quickPrompts: [帮我起草一份技术服务合同, 帮我审查这份合同的风险点, 帮我写一份保密协议]
+tags: [合同起草, 合同审查, 风险识别]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

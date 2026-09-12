@@ -3,10 +3,11 @@
  * 顶部三个页签 + 右上操作区 + 内容区。
  *
  * 与它的差异（如实呈现，不画死按钮）：
- * - 没有市场/SkillHub —— 我们没有分发后端，本页只管理「已安装」。
+ * - 没有市场/SkillHub —— 我们没有分发后端，技能页只管理「已安装」。
  *   后接市场时再补「精选技能」区。
- * - 专家页签展示内置+用户级专家库（选择即切专家模式，与模式菜单「专家 ▸」同源）；
- *   专家团/市场/CRUD 未做（spec add-expert-mode 声明）。
+ * - 专家页签是完整的专家市场页（experts-view.tsx，WorkBuddy ExpertCenterPage
+ *   同构：搜索/分类/卡片/详情弹窗/我的专家），专家团为占位 tab（spec:
+ *   rework-expert-center-and-chip）。
  * - 导入支持「含 SKILL.md 的文件夹」与「单个 .md」；zip 解包后排期。
  *
  * 导入成功后提示词在**下一轮对话**即生效（daemon 每轮现读技能清单），
@@ -17,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { SkillsSnapshot, SkillInfo } from "@shared/settings.ts";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import { ConnectorsView } from "./connectors-view.tsx";
+import { ExpertsView } from "./experts-view.tsx";
 import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
 
 interface SkillsViewProps {
@@ -24,23 +26,25 @@ interface SkillsViewProps {
 	readonly onTodo: (feature: string) => void;
 	/** 导入成功 / 失败都走这个轻提示。 */
 	readonly onToast: (text: string) => void;
-	/** 专家库（App 启动时经 listExperts 拉取，与模式菜单「专家 ▸」同一份）。 */
+	/** 专家库（App 启动时经 listExperts 拉取，含用户级覆盖与 source 标记）。 */
 	readonly experts: readonly ExpertListItem[];
-	/** 选中专家：切 expert 模式并回到对话（App 层组合 setExpert + 路由）。 */
-	readonly onSelectExpert: (name: string) => void;
+	/** 启用专家：选中 + 进新任务对话页（App 层组合 newTask/setExpert/路由/预填）。 */
+	readonly onUseExpert: (expertId: string, prefill?: string) => void;
+	/** 创建专家：跳回主页并把引导语填入输入框（App 层组合 prefill + 路由）。 */
+	readonly onCreateExpert: () => void;
 }
 
-/** 顶部页签。 */
+/** 顶部页签。专家为首 tab（WorkBuddy 专家/技能/连接器 同款顺序）。 */
 const TABS = [
-	{ id: "expert", label: "专家", ready: true },
+	{ id: "experts", label: "专家", ready: true },
 	{ id: "skills", label: "技能", ready: true },
 	{ id: "connectors", label: "连接器", ready: true },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function SkillsView({ onClose, onTodo, onToast, experts, onSelectExpert }: SkillsViewProps): React.JSX.Element {
-	const [tab, setTab] = useState<TabId>("skills");
+export function SkillsView({ onClose, onTodo, onToast, experts, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
+	const [tab, setTab] = useState<TabId>("experts");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [busy, setBusy] = useState(false);
@@ -98,12 +102,14 @@ export function SkillsView({ onClose, onTodo, onToast, experts, onSelectExpert }
 				<button type="button" className="bar-btn" aria-label="返回" onClick={onClose}>
 					<IconBack size={17} />
 				</button>
-				<nav className="skills-tabs">
-					{TABS.map((t) => (
-						<button
-							key={t.id}
-							type="button"
-							className={`skills-tab${tab === t.id ? " active" : ""}`}
+				<nav className="skills-tabs" role="tablist">
+				{TABS.map((t) => (
+					<button
+						key={t.id}
+						type="button"
+						role="tab"
+						aria-selected={tab === t.id}
+						className={`skills-tab${tab === t.id ? " active" : ""}`}
 							onClick={() => {
 								if (!t.ready) {
 									onTodo(`「${t.label}」`);
@@ -136,23 +142,8 @@ export function SkillsView({ onClose, onTodo, onToast, experts, onSelectExpert }
 			<div className="skills-body">
 				{tab === "connectors" ? (
 					<ConnectorsView onToast={onToast} />
-				) : tab === "expert" ? (
-					<div className="skill-grid">
-						{experts.map((expert) => (
-							<button
-								key={expert.name}
-								type="button"
-								className="skill-card expert-card"
-								onClick={() => onSelectExpert(expert.name)}
-							>
-								<div className="skill-card-head">
-									<span className="skill-card-name">{expert.displayName}</span>
-									<span className="provider-tag">{expert.profession}</span>
-								</div>
-								<p className="skill-card-desc">{expert.description}</p>
-							</button>
-						))}
-					</div>
+				) : tab === "experts" ? (
+					<ExpertsView experts={experts} onUseExpert={onUseExpert} onCreateExpert={onCreateExpert} />
 				) : (
 					<>
 						{error !== undefined && <div className="settings-error">{error}</div>}

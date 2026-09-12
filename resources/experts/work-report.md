@@ -3,6 +3,9 @@ name: work-report
 description: 撰写年终总结、述职报告、项目汇报、竞聘演讲、周报月报等职场汇报材料
 displayName: 工作周报
 profession: 职场汇报写作专家
+displayDescription: 周报月报、年终总结、述职竞聘，用数据讲清你的贡献
+quickPrompts: [帮我写本周的工作周报, 帮我把今年的工作整理成年终总结, 帮我搭一份述职报告的框架]
+tags: [周报, 年终总结, 述职]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

@@ -3,6 +3,9 @@ name: general-writer
 description: 通用写作兜底：公文、周报、方案、邮件、散文、新媒体稿等无特定领域严格规范的写作任务
 displayName: 通用写作
 profession: 通用写作专家
+displayDescription: 公文、邮件、方案、随笔都能写，无专属规范任务的兜底
+quickPrompts: [帮我写一封正式的工作邮件, 帮我把这些要点整理成一份方案, 帮我润色这篇随笔]
+tags: [公文, 邮件, 方案]
 ---
 <!-- 预设照搬自 WorkBuddy 内置专家（tencent-docx/experts），临时方案待定制替换。 -->
 

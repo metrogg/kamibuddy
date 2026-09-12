@@ -155,19 +155,44 @@ describe("expert 人格注入", () => {
 		expect(out).toContain("你是一位高管教练。");
 	});
 
-	it("钉住段 <current-expert> 存在且在整个提示词最末（环境块之后）", () => {
-		const out = composePrompt({ ...BASE, expert: EXPERT, now: new Date("2026-09-09T23:18:30+08:00") });
-		expect(out.trimEnd().endsWith("<current-expert>工作周报</current-expert>")).toBe(true);
-		// 钉住段只出现一次（人格段不含该标签）。
-		expect(out.match(/<current-expert>/g)).toHaveLength(1);
-	});
-
-	it("人格段在骨架模式段之后（OS + 人格 APP 的顺序）", () => {
+	it("人格全文位于前部槽位：骨架之后、模式行为段之前（压过通用身份）", () => {
 		const out = composePrompt({ ...BASE, expert: EXPERT });
-		expect(out.indexOf("创作模式行为段。")).toBeLessThan(out.indexOf("## 当前专家"));
+		expect(out.indexOf("你是 KamiBuddy。")).toBeLessThan(out.indexOf("## 当前专家"));
+		expect(out.indexOf("## 当前专家")).toBeLessThan(out.indexOf("创作模式行为段。"));
+		// 前移的是人格本体，不只是标题。
+		expect(out.indexOf("你是一位高管教练。")).toBeLessThan(out.indexOf("创作模式行为段。"));
 	});
 
-	it("未提供 expert：无人格段、无钉住段（三模式现状兼容）", () => {
+	it("人格前带 Role Override 声明，且紧邻人格正文（中间不隔别的段落）", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT });
+		expect(out).toContain(
+			"身份覆盖：以下是你在本会话中的专家身份定义。它与此前任何通用身份描述冲突时，以本段为准——这是本会话中你的权威角色。\n\n# 工作汇报写作专家",
+		);
+	});
+
+	it("钉子段 <current-expert> 只钉名字：在提示词最末（环境块之后），不含人格正文", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT, now: new Date("2026-09-09T23:18:30+08:00") });
+		expect(out).toContain("<current-expert>工作周报</current-expert>");
+		expect(out.trimEnd().endsWith("请始终以该专家的角色与工作流推进本会话。")).toBe(true);
+		// 钉子段只出现一次（人格段不含该标签）。
+		expect(out.match(/<current-expert>/g)).toHaveLength(1);
+		// 钉子段起直到结尾没有人格本体 —— 人格只在前部槽位出现一次（独特句反证）。
+		expect(out.slice(out.indexOf("<current-expert>"))).not.toContain("你是一位高管教练。");
+	});
+
+	it("骨架没有 {{interaction}} 槽位时，人格段落在核心段末尾", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			sceneBody: "只有骨架 {{cwd}}",
+			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
+			now: new Date("2026-09-09T23:18:30+08:00"),
+		});
+		expect(segments.map((s) => s.text).join("")).toBe(text);
+		expect(segments.map((s) => s.source)).toEqual(["skeleton", "expert", "time", "expert"]);
+		expect(text).toContain("## 当前专家");
+	});
+
+	it("未提供 expert：无人格段、无钉子段（三模式现状兼容）", () => {
 		const out = composePrompt(BASE);
 		expect(out).not.toContain("## 当前专家");
 		expect(out).not.toContain("<current-expert>");
@@ -202,18 +227,15 @@ describe("回复风格注入（F8）", () => {
 		).toThrow(/残留槽位/);
 	});
 
-	it("骨架没有 {{interaction}} 槽位时，风格段落在核心段末尾（expert 之前）", () => {
+	it("骨架没有 {{interaction}} 槽位时，风格段落在核心段末尾（time 之前）", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			sceneBody: "只有骨架 {{cwd}}",
 			style: STYLE,
-			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
 			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
 		expect(segments.map((s) => s.text).join("")).toBe(text);
-		const sources = segments.map((s) => s.source);
-		expect(sources.indexOf("style:socratic")).toBeLessThan(sources.indexOf("expert"));
-		expect(text.indexOf("## 回复风格")).toBeLessThan(text.indexOf("## 当前专家"));
+		expect(segments.map((s) => s.source)).toEqual(["skeleton", "style:socratic", "time"]);
 	});
 
 	it("provenance：style:<id> 段紧跟 mode:<id> 段，拼接与 text 字节一致", () => {
@@ -232,17 +254,17 @@ describe("回复风格注入（F8）", () => {
 		);
 	});
 
-	it("风格与 expert 共存：interaction → style → … → expert 位序", () => {
-		const { segments } = composePromptWithMeta({
-			...BASE,
-			modeId: "expert",
-			style: STYLE,
-			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
-			now: new Date("2026-09-09T23:18:30+08:00"),
-		});
-		const sources = segments.map((s) => s.source);
-		expect(sources.indexOf("mode:expert")).toBeLessThan(sources.indexOf("style:socratic"));
-		expect(sources.indexOf("style:socratic")).toBeLessThan(sources.indexOf("expert"));
+	it("expert 模式风格让位：不注入风格段；同一份风格在 craft 模式照常注入", () => {
+		// WorkBuddy user-context-expert-identity 的精简语义：选定专家后表达层
+		// 的唯一权威是人格，用户自定义风格让位（spec: align-expert-system-workbuddy）。
+		const EXPERT = { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" };
+		const expertOut = composePrompt({ ...BASE, modeId: "expert", style: STYLE, expert: EXPERT });
+		expect(expertOut).not.toContain("## 回复风格");
+		expect(expertOut).not.toContain("风格只影响表达方式");
+		expect(expertOut).toContain("## 当前专家");
+		// craft 对照：让位只发生在 expert 分支，风格段本身不受影响。
+		const craftOut = composePrompt({ ...BASE, modeId: "craft", style: STYLE });
+		expect(craftOut).toContain("## 回复风格");
 	});
 });
 
@@ -255,7 +277,7 @@ describe("记忆段注入（spec: add-memory-system）", () => {
 		expect(out).toContain("## 记忆系统\n\n三层记忆的结构与写入纪律。");
 	});
 
-	it("memoryContent 有内容时注入内容段；两者都在骨架之后、expert 人格段之前", () => {
+	it("memoryContent 有内容时注入内容段；两者都在核心段（含人格）之后", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			memorySystemBody: MEMORY_SYSTEM,
@@ -267,7 +289,8 @@ describe("记忆段注入（spec: add-memory-system）", () => {
 		expect(segments.map((s) => s.text).join("")).toBe(text);
 		const sources = segments.map((s) => s.source);
 		expect(sources.indexOf("memory-system")).toBeLessThan(sources.indexOf("memory"));
-		expect(sources.indexOf("memory")).toBeLessThan(sources.indexOf("expert"));
+		// 人格上了前部槽位（spec: align-expert-system-workbuddy），记忆段排在人格之后。
+		expect(sources.indexOf("expert")).toBeLessThan(sources.indexOf("memory-system"));
 		expect(text.indexOf("创作模式行为段。")).toBeLessThan(text.indexOf("## 记忆系统"));
 	});
 
@@ -316,6 +339,10 @@ describe("requireExpertPersona", () => {
 			description: "周报月报等汇报材料",
 			displayName: "工作周报",
 			profession: "职场汇报写作专家",
+			displayDescription: "用数据讲清你的贡献",
+			quickPrompts: ["问题一", "问题二", "问题三"],
+			tags: ["标签一", "标签二", "标签三"],
+			source: "builtin",
 			body: "人格正文",
 		},
 	];
@@ -502,7 +529,7 @@ describe("provenance 分段（composePromptWithMeta）", () => {
 		expect(segments[1]?.text).toBe("纪律A\n纪律B");
 	});
 
-	it("expert / pi-context / time 段齐全且顺序正确；钉住段在最末", () => {
+	it("expert / pi-context / time 段齐全且顺序正确；钉子段在最末", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			expert: {
@@ -515,9 +542,11 @@ describe("provenance 分段（composePromptWithMeta）", () => {
 		});
 		expect(join(segments)).toBe(text);
 		const sources = segments.map((s) => s.source);
-		// 骨架核心段之后：人格（expert）→ pi-context → time → 钉住段（expert）。
-		expect(sources.slice(0, 3)).toEqual(["skeleton", "mode:unknown", "skeleton"]);
-		expect(sources.slice(3)).toEqual(["expert", "pi-context", "time", "expert"]);
-		expect(segments.at(-1)?.text).toBe("\n\n<current-expert>工作周报</current-expert>");
+		// 人格前部槽位在骨架与模式段之间；核心段之后：pi-context → time → 钉子段。
+		expect(sources.slice(0, 3)).toEqual(["skeleton", "expert", "mode:unknown"]);
+		expect(sources.slice(3)).toEqual(["skeleton", "pi-context", "time", "expert"]);
+		expect(segments.at(-1)?.text).toBe(
+			"\n\n<current-expert>工作周报</current-expert>\n请始终以该专家的角色与工作流推进本会话。",
+		);
 	});
 });

@@ -34,6 +34,7 @@ import {
 } from "./icons.tsx";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
+import { ExpertAvatar } from "./expert-avatar.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
@@ -79,9 +80,18 @@ interface ChatViewProps {
 	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
-	/** 专家列表（头部 ModeSwitch 的「专家 ▸」子菜单与当前专家显示的数据源，App 层统一下发）。 */
+	/** 专家列表（「+」菜单专家子菜单与 composer-bar 当前专家 chip 的数据源，App 层统一下发）。 */
 	readonly experts: readonly ExpertListItem[];
-	readonly onSelectExpert: (expertId: string) => void;
+	/** 选择专家；传 undefined = 取消选中（daemon setExpert 通道的清除语义，回落 craft）。 */
+	readonly onSelectExpert: (expertId: string | undefined) => void;
+	/** 「+」菜单专家子菜单底部的「更多专家…」入口：跳专家页（App 层路由）。 */
+	readonly onOpenExperts: () => void;
+	/**
+	 * 预填文本（专家市场页 quickPrompt 路径）：App 跳入对话页时带入，
+	 * 进输入框后即经 onPrefillConsumed 消费（留在 App state 会重复填充）。
+	 */
+	readonly prefill?: string;
+	readonly onPrefillConsumed: () => void;
 	/** 点击产物卡片：在右侧面板预览（面板里有外部打开入口）。 */
 	readonly onPreviewArtifact: (path: string) => void;
 	/** 点击正文行内 code 的路径徽章：App 决定面板预览还是外部打开。 */
@@ -178,6 +188,16 @@ function UserBubble({
 	// 点击放大的那张图；undefined = 预览关闭。MVP 不做轮播/缩放（YAGNI）。
 	const [preview, setPreview] = useState<ImagePart | undefined>(undefined);
 
+	// Esc 关闭大图预览：遮罩是不可聚焦的容器，键盘用户没有其它关闭路径。
+	useEffect(() => {
+		if (preview === undefined) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setPreview(undefined);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [preview]);
+
 	return (
 		<div className="entry user" data-entry-id={entryId}>
 			<div className="user-bubble">
@@ -186,13 +206,16 @@ function UserBubble({
 					// key 用下标与 AttachmentStrip 同口径：列表项无本地状态，src 是同步解码的 data URL。
 					<div className="user-bubble-images">
 						{images.map((part, index) => (
-							<img
+							<button
 								key={index}
-								src={imageDataUrl(part)}
-								alt=""
-								draggable={false}
+								type="button"
+								className="user-bubble-thumb"
+								aria-label="查看大图"
 								onClick={() => setPreview(part)}
-							/>
+							>
+								{/* width/height 只是解码前的占位宽高比（防布局抖动），渲染尺寸由 CSS 决定。 */}
+								<img src={imageDataUrl(part)} alt="" draggable={false} width={160} height={200} />
+							</button>
 						))}
 					</div>
 				)}
@@ -210,8 +233,13 @@ function UserBubble({
 				</button>
 			</div>
 			{preview !== undefined && (
-				// 全屏遮罩显示大图，点击任意处（含大图本身）关闭。
-				<div className="image-preview-overlay" onClick={() => setPreview(undefined)}>
+				// 全屏遮罩显示大图，点击任意处（含大图本身）关闭；Esc 关闭在上面的 effect。
+				<div
+					className="image-preview-overlay"
+					role="dialog"
+					aria-label="图片预览"
+					onClick={() => setPreview(undefined)}
+				>
 					<img src={imageDataUrl(preview)} alt="" draggable={false} />
 				</div>
 			)}
@@ -760,7 +788,7 @@ function WaitingPendingLine({
 
 	const showTip = tipShown && !dismissed;
 	return (
-		<div className="stream-pending">
+		<div className="stream-pending" aria-live="polite">
 			<span className="text-shimmer">{soothed ? WAITING_SOOTHED_TEXT : "等待模型响应…"}</span>
 			{showTip && (
 				<span
@@ -876,118 +904,153 @@ function TurnHeader({
 	);
 }
 
+/* ── 专家起手 chips（quickPrompts） ──────────────────────────────── */
+
+/**
+ * 选中专家后输入区上方的 3 个起手问题 chips（spec: 专家体系对齐 Task 3.2，
+ * 机制对标 WorkBuddy 专家会话的引导问题条）。
+ *
+ * 显隐口径：父组件只在「有专家命中 + 本会话还没有任何 user 消息」时挂载本组件；
+ * 本组件自持「点过即隐藏」（dismissed）。切换专家重显靠父组件以 expert name
+ * 作 key 重挂载 —— dismissed 随旧专家卸载，新专家从干净状态开始。
+ */
+function QuickPromptChips({
+	prompts,
+	onPick,
+}: {
+	readonly prompts: readonly string[];
+	/** 点击 chip：文本进输入框（不发送），chips 随即隐藏。 */
+	readonly onPick: (text: string) => void;
+}): React.JSX.Element | null {
+	const [dismissed, setDismissed] = useState(false);
+	if (dismissed) return null;
+	return (
+		<div className="quick-prompts">
+			{prompts.map((prompt) => (
+				<button
+					key={prompt}
+					type="button"
+					className="quick-prompt-chip"
+					title={prompt}
+					onClick={() => {
+						setDismissed(true);
+						onPick(prompt);
+					}}
+				>
+					{prompt}
+				</button>
+			))}
+		</div>
+	);
+}
+
+/* ── 当前专家 chip（composer-bar 左区） ─────────────────────────── */
+
+/**
+ * composer-bar 左区的当前专家 chip（WorkBuddy cr-chip 同款，位置在默认权限旁）：
+ * 静态不可点（role=status，不挂点击）；hover/focus-within 时头像原位换成 ×，
+ * 点击取消选中 —— onClear 走 setExpert(undefined)，daemon 回落 craft。
+ * 两态切换纯 CSS 实现（见 index.css .expert-chip），这里没有状态。
+ */
+function ExpertChip({
+	expert,
+	onClear,
+}: {
+	readonly expert: ExpertListItem;
+	readonly onClear: () => void;
+}): React.JSX.Element {
+	return (
+		<span className="expert-chip" role="status" title={`当前专家：${expert.displayName}`}>
+			<ExpertAvatar displayName={expert.displayName} />
+			<button
+				type="button"
+				className="expert-chip-close"
+				aria-label={`取消选中专家 ${expert.displayName}`}
+				title="取消选中"
+				onClick={onClear}
+			>
+				×
+			</button>
+			<span className="expert-chip-name">{expert.displayName}</span>
+		</span>
+	);
+}
+
 /* ── 交互模式切换 ────────────────────────────────────────────────── */
 
 interface ModeSwitchProps {
 	readonly interactions: readonly ModeDescriptor[];
 	readonly currentId: string;
 	readonly onChange: (id: string) => void;
-	/** 专家列表与当前专家（「专家 ▸」子菜单数据源），与 PlusMenu 同源（App 层统一下发）。 */
-	readonly experts: readonly ExpertListItem[];
-	readonly expertId: string | undefined;
-	readonly onSelectExpert: (expertId: string) => void;
 	readonly onTodo: (feature: string) => void;
 }
 
-/** 交互轴切换（ask / craft / plan / expert），对标 WorkBuddy 的 interactionmode。 */
+/** 交互轴切换（ask / craft / plan），对标 WorkBuddy 的 interactionmode。 */
 function ModeSwitch({
 	interactions,
 	currentId,
 	onChange,
-	experts,
-	expertId,
-	onSelectExpert,
 	onTodo,
 }: ModeSwitchProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
-	// 「专家」子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover，同 PlusMenu 约定）。
-	const [expertsOpen, setExpertsOpen] = useState(false);
 	const current = interactions.find((m) => m.id === currentId);
-	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 
-	const toggle = (): void => {
-		setOpen((v) => !v);
-		// 主菜单开合都复位子菜单：下次重开从「专家」行开始，而不是残留展开态（同 ModelMenu 约定）。
-		setExpertsOpen(false);
-	};
+	// Esc 关闭弹层：菜单以 mousedown 外无键盘焦点管理，Esc 是键盘用户唯一的关闭路径
+	//（与 PlusMenu 的 backdrop 互补：一个管指针，一个管键盘）。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
 
 	// expert 不裸列（无专家的 expert 模式不可达，spec: add-expert-mode）——
-	// 三模式平铺，「专家 ▸」行挂子菜单列具体专家，选中即进 expert 模式。
+	// 三模式平铺；专家选择入口统一为「+」菜单专家子菜单与专家页
+	//（spec: rework-expert-center-and-chip，头部不再有专家入口）。
 	const plainModes = interactions.filter((m) => m.id !== "expert");
 
 	return (
 		<div className="menu-zone">
-			<button type="button" className="bar-btn bar-btn-text" onClick={toggle}>
+			<button
+				type="button"
+				className="bar-btn bar-btn-text"
+				aria-haspopup="menu"
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+			>
 				{current?.label ?? currentId}
 				<IconChevronDown size={13} />
 			</button>
 			{open && (
-				<div className="pop-menu mode-menu">
-					{plainModes.map((mode) => (
-						<button
-							key={mode.id}
-							type="button"
-							className={`mode-menu-item${mode.id === currentId ? " active" : ""}`}
-							onClick={() => {
-								setOpen(false);
-								// 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），
-								// 但点击给 toast 反馈，而不是发出去让 daemon 报错。
-								if (mode.ready) onChange(mode.id);
-								else onTodo(`「${mode.label}」模式`);
-							}}
-						>
-							<span className="mode-menu-label">
-								{mode.label}
-								{!mode.ready && <span className="mode-menu-tag">待做</span>}
-							</span>
-							<span className="mode-menu-desc">{mode.description}</span>
-						</button>
-					))}
-					<div
-						className="mode-menu-sub-zone"
-						onMouseEnter={() => setExpertsOpen(true)}
-						onMouseLeave={() => setExpertsOpen(false)}
-					>
-						<button
-							type="button"
-							className={`mode-menu-item${currentId === "expert" ? " active" : ""}`}
-							aria-expanded={expertsOpen}
-							onClick={() => setExpertsOpen((v) => !v)}
-						>
-							<span className="mode-menu-label">
-								专家
-								<span className="mode-menu-caret" aria-hidden="true">
-									▸
+				<>
+					{/* 透明 backdrop：点菜单外任意处关闭，与 PlusMenu/PermissionMenu 一致。 */}
+					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
+					<div className="pop-menu mode-menu" role="menu">
+						{plainModes.map((mode) => (
+							<button
+								key={mode.id}
+								type="button"
+								className={`mode-menu-item${mode.id === currentId ? " active" : ""}`}
+								role="menuitem"
+								onClick={() => {
+									setOpen(false);
+									// 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），
+									// 但点击给 toast 反馈，而不是发出去让 daemon 报错。
+									if (mode.ready) onChange(mode.id);
+									else onTodo(`「${mode.label}」模式`);
+								}}
+							>
+								<span className="mode-menu-label">
+									{mode.label}
+									{!mode.ready && <span className="mode-menu-tag">待做</span>}
 								</span>
-							</span>
-							{/* 当前专家名钉在行上（WorkBuddy 档同行右侧回显的同款语义）；
-							    未进专家模式时退为引导文案。 */}
-							<span className="mode-menu-desc">
-								{currentExpert?.displayName ?? "选定专家后以它的身份与方法工作"}
-							</span>
-						</button>
-						{expertsOpen && (
-							<div className="pop-menu mode-menu-sub">
-								{experts.map((expert) => (
-									<button
-										key={expert.name}
-										type="button"
-										className={`mode-menu-item${expert.name === expertId ? " active" : ""}`}
-										onClick={() => {
-											setOpen(false);
-											setExpertsOpen(false);
-											onSelectExpert(expert.name);
-										}}
-									>
-										<span className="mode-menu-label">{expert.displayName}</span>
-										<span className="mode-menu-desc">{expert.profession}</span>
-										{expert.name === expertId && <IconCheck size={14} className="mode-menu-check" />}
-									</button>
-								))}
-							</div>
-						)}
+								<span className="mode-menu-desc">{mode.description}</span>
+							</button>
+						))}
 					</div>
-				</div>
+				</>
 			)}
 		</div>
 	);
@@ -1054,6 +1117,7 @@ function SaveToWorkspaceDialog({
 					// 弹层里唯一的输入框，自动聚焦即预期（同侧栏重命名行）。
 					autoFocus
 					placeholder="空间名称"
+					aria-label="空间名称"
 					disabled={submitting}
 					onChange={(e) => {
 						setName(e.target.value);
@@ -1104,6 +1168,9 @@ export function ChatView({
 	onInteractionChange,
 	experts,
 	onSelectExpert,
+	onOpenExperts,
+	prefill,
+	onPrefillConsumed,
 	onPreviewArtifact,
 	onPathClick,
 	onOpenPanelGroup,
@@ -1124,6 +1191,16 @@ export function ChatView({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）。
 	const composerRef = useRef<ComposerHandle>(null);
+	/*
+	 * 预填消费（专家市场页 quickPrompt：点「专家帮你做」= 带该问题启用）。
+	 * 文本进输入框待发送、不直接发送（与起手 chips 同口径：用户可能还要补两句），
+	 * 填入后立即通知 App 清空 —— 留在 App state 里的话，往返首页再回来会再填一遍。
+	 */
+	useEffect(() => {
+		if (prefill === undefined) return;
+		composerRef.current?.fillText(prefill);
+		onPrefillConsumed();
+	}, [prefill, onPrefillConsumed]);
 	/*
 	 * 内容列宽随容器动态计算（WorkBuddy use-dynamic-chat-content-width 同款）：
 	 * 固定 832 在宽屏两侧留白过多。ResizeObserver 挂一次（空依赖），
@@ -1148,9 +1225,9 @@ export function ChatView({
 	}, []);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
-	// 当前专家（仅 expert 模式有值）：头部显示与子菜单勾选共用这份查找。
-	// 列表尚未拉回时退显原始 name —— expertId 是 session_state 的权威值，
-	// 列表只是展示映射，缺映射不该把「有专家」这个事实藏起来。
+	// 当前专家（仅 expert 模式有值）：composer-bar chip、起手 chips 与「+」菜单
+	// 勾选共用这份查找。expertId 是 session_state 的权威值，列表只是展示映射；
+	// 列表尚未拉回/专家被删时 chip 与起手 chips 不渲染（菜单勾选仍以 expertId 为准）。
 	const expertId = conversation.state.expertId;
 	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
@@ -1183,16 +1260,19 @@ export function ChatView({
 	const lastUserEntry = entries.findLast((e) => e.role === "user");
 	const lastUserId = lastUserEntry?.id;
 	const retryText = lastUserEntry?.text;
+	// 起手 chips「发送一条后消失」的判定：entries 里有无 user 消息（权威口径，
+	// 恢复历史会话也正确 —— 有历史的会话 chips 本就不该再出现）。
+	const hasUserMessage = lastUserEntry !== undefined;
 
 	/*
 		轮折叠开合状态：Map<turnId, expanded>，**缺省 = 折叠** —— run 结束
-		（含错误/取消）与历史轮一律默认折叠，不需要任何「折叠写入」；Map 里
-		只可能存在手点记录。写路径只有两条（状态机见 turn-fold.ts）：
-		手点 toggleTurn；新 run 开始时 collapseAllTurnFolds 全部收回（sticky：
-		收回后没有任何自动展开路径，状态抖动不会闪回展开）。
-		状态按会话隔离：App 持有的多桶缓存按 sessionId 存取（viewCacheRef
-		同款机制），不落盘。
-	*/
+								（含错误/取消）与历史轮一律默认折叠，不需要任何「折叠写入」；Map 里
+								只可能存在手点记录。写路径只有两条（状态机见 turn-fold.ts）：
+								手点 toggleTurn；新 run 开始时 collapseAllTurnFolds 全部收回（sticky：
+								收回后没有任何自动展开路径，状态抖动不会闪回展开）。
+								状态按会话隔离：App 持有的多桶缓存按 sessionId 存取（viewCacheRef
+								同款机制），不落盘。
+								*/
 	const [turnFolds, setTurnFolds] = useState<TurnFoldMap>(
 		() => turnFoldCache.current.get(sessionId) ?? EMPTY_TURN_FOLDS,
 	);
@@ -1232,11 +1312,11 @@ export function ChatView({
 
 	/*
 		跟随判定只看「测量到的位置」（距底 < 阈值），不看事件来源（wheel/touch/程序）。
-		为什么不用「程序滚动中」标记区分：跟随贴底本身就是程序滚动，标记方案要在
-		每次程序写 scrollTop 前后维护时序，流式增量下极易漏一拍把跟随误关掉。
-		位置是地面真值 —— 程序贴底后测量结果恒为「在底部」，天然不会误判；
-		用户上滚离开底部（不管用什么输入设备）测量结果恒为「不在底部」。
-	*/
+									为什么不用「程序滚动中」标记区分：跟随贴底本身就是程序滚动，标记方案要在
+									每次程序写 scrollTop 前后维护时序，流式增量下极易漏一拍把跟随误关掉。
+									位置是地面真值 —— 程序贴底后测量结果恒为「在底部」，天然不会误判；
+									用户上滚离开底部（不管用什么输入设备）测量结果恒为「不在底部」。
+									*/
 	const handleStreamScroll = (): void => {
 		const node = scrollRef.current;
 		if (node === null) return;
@@ -1527,7 +1607,7 @@ export function ChatView({
 				(awaitingFirstResponse ? (
 					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
 				) : (
-					<div className="stream-pending">
+					<div className="stream-pending" aria-live="polite">
 						<span className="text-shimmer">{pendingText(entries)}</span>
 					</div>
 				))}
@@ -1549,30 +1629,31 @@ export function ChatView({
 									const isUrl = /^https?:\/\//i.test(a.path);
 									const isHtml = /\.html?$/i.test(a.path);
 									return (
-										<button
-											key={a.path}
-											type="button"
-											className="artifact-card"
-											title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
-											onClick={() => onPreviewArtifact(a.path)}
-										>
-											<IconDoc size={16} />
-											<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-											{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+										<div key={a.path} className="artifact-card-wrap">
+											<button
+												type="button"
+												className="artifact-card"
+												title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
+												onClick={() => onPreviewArtifact(a.path)}
+											>
+												<IconDoc size={16} />
+												<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+												{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+											</button>
 											{isHtml && !isUrl && (
-												<span
+												// button 里不许再嵌 button（非法嵌套交互）：独立成卡片兄弟节点，
+												// CSS 绝对定位回右上角原位，视觉与嵌套时一致。
+												<button
+													type="button"
 													className="artifact-preview-btn"
-													role="button"
+													aria-label="在预览面板打开"
 													title="在预览面板打开"
-													onClick={(event) => {
-														event.stopPropagation();
-														onPreviewArtifact(a.path);
-													}}
+													onClick={() => onPreviewArtifact(a.path)}
 												>
 													🌐
-												</span>
+												</button>
 											)}
-										</button>
+										</div>
 									);
 								})}
 							</div>
@@ -1641,22 +1722,8 @@ export function ChatView({
 					interactions={conversation.availableModes}
 					currentId={conversation.state.interactionId}
 					onChange={onInteractionChange}
-					experts={experts}
-					expertId={expertId}
-					onSelectExpert={onSelectExpert}
 					onTodo={onTodo}
 				/>
-				{/*
-				当前专家钉在头部（WorkBuddy 专家会话头部同款位置）：expert 模式下
-				模式切换器只显示「专家」这个模式名，具体是哪位专家必须有常驻回显，
-				否则对话进行到一半用户无从确认人格是否还是当初选的那位。
-			*/}
-				{expertId !== undefined && (
-					<span className="chat-expert" title={`当前专家：${currentExpert?.displayName ?? expertId}`}>
-						<IconAssistant size={13} />
-						专家：{currentExpert?.displayName ?? expertId}
-					</span>
-				)}
 			</header>
 
 			{/*
@@ -1760,61 +1827,85 @@ export function ChatView({
 					全部在 Composer 内部；这里只注入 chat 的差异面。
 					流式期间仍可输入：发出去会作为 steer 插进当前这轮（SessionHost.prompt）。
 				*/
-					<Composer
-						ref={composerRef}
-						ready={ready}
-						placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
-						rows={2}
-						cwd={conversation.state.cwd}
-						modelId={conversation.state.modelId}
-						onSubmit={handleComposerSubmit}
-						onError={onError}
-						draftKey={sessionId}
-						enableHistory
-						streaming={streaming}
-						onAbort={onAbort}
-					>
+					<>
 						{/*
-					「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
-					触发 Composer 内部的附件选择框）+ 模式/专家子菜单（与头部 ModeSwitch
-					同一数据源）+ 技能/连接器占位。
-					弹层向上、左对齐，与下方 PermissionMenu 同一约定。
+					专家起手 chips：问卷浮层分支替代整个输入区，chips 只在 Composer
+					分支内出现。key 挂专家名 —— 切换专家重挂载，「点过即隐藏」随之复位。
+					列表未拉回/专家找不到（currentExpert undefined）时不渲染。
 				*/}
-						<PlusMenu
-							modes={conversation.availableModes}
-							currentId={conversation.state.interactionId}
-							onInteractionChange={onInteractionChange}
-							experts={experts}
-							expertId={expertId}
-							onSelectExpert={onSelectExpert}
-							onPickFiles={() => void composerRef.current?.pickFiles()}
-							onTodo={onTodo}
-						/>
-						{/*
-					权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
-					时不必退回首页换档。弹层左对齐向上展开（300px），
-					贴右放会溢出窗口右缘被裁掉。
-				*/}
-						<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
-						{/*
+						{currentExpert !== undefined && !hasUserMessage && (
+							<QuickPromptChips
+								key={currentExpert.name}
+								prompts={currentExpert.quickPrompts}
+								onPick={(text) => composerRef.current?.fillText(text)}
+							/>
+						)}
+						<Composer
+							ref={composerRef}
+							ready={ready}
+							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "正在准备…"}
+							rows={2}
+							cwd={conversation.state.cwd}
+							modelId={conversation.state.modelId}
+							onSubmit={handleComposerSubmit}
+							onError={onError}
+							draftKey={sessionId}
+							enableHistory
+							streaming={streaming}
+							onAbort={onAbort}
+						>
+							{/*
+				「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
+				触发 Composer 内部的附件选择框）+ 模式/专家子菜单（专家选择的
+				唯一入口，底部「更多专家…」跳专家页）+ 技能/连接器占位。
+				弹层向上、左对齐，与下方 PermissionMenu 同一约定。
+			*/}
+							<PlusMenu
+								modes={conversation.availableModes}
+								currentId={conversation.state.interactionId}
+								onInteractionChange={onInteractionChange}
+								experts={experts}
+								expertId={expertId}
+								onSelectExpert={onSelectExpert}
+								onOpenExperts={onOpenExperts}
+								onPickFiles={() => void composerRef.current?.pickFiles()}
+								onTodo={onTodo}
+							/>
+							{/*
+				权限预设就地快切（与首页同一组件、同一数据源）：对话中撞权限
+				时不必退回首页换档。弹层左对齐向上展开（300px），
+				贴右放会溢出窗口右缘被裁掉。
+			*/}
+							<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
+							{/*
+				当前专家 chip（WorkBuddy 底栏左区、默认权限旁的同款位置）：静态展示，
+				hover/focus-within 头像原位变 ×，点击取消选中（setExpert(undefined)
+				回落 craft）。列表里找不到（未拉回/已删除）时不渲染 —— chip 只是
+				展示映射，菜单勾选仍以 session_state 的 expertId 为准。
+			*/}
+							{currentExpert !== undefined && (
+								<ExpertChip expert={currentExpert} onClear={() => onSelectExpert(undefined)} />
+							)}
+							{/*
 					模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
 					推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
 					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
 					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
 				*/}
-						<ModelMenu
-							modelId={conversation.state.modelId}
-							thinkingLevel={conversation.state.thinkingLevel}
-							availableThinkingLevels={conversation.state.availableThinkingLevels}
-							onOpenSettings={onOpenSettings}
-							onError={onError}
-						/>
-						<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-							<IconMic size={16} />
-						</button>
-						{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
-						{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
-					</Composer>
+							<ModelMenu
+								modelId={conversation.state.modelId}
+								thinkingLevel={conversation.state.thinkingLevel}
+								availableThinkingLevels={conversation.state.availableThinkingLevels}
+								onOpenSettings={onOpenSettings}
+								onError={onError}
+							/>
+							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
+								<IconMic size={16} />
+							</button>
+							{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
+							{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
+						</Composer>
+					</>
 				)}
 			</footer>
 			{saveOpen && (

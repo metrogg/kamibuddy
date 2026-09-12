@@ -86,8 +86,8 @@ export const INVOKE = {
 	 */
 	setExpert: "session:set-expert",
 	/**
-	 * 专家列表（模式菜单「专家 ▸」子菜单与对话头部的展示数据源）。
-	 * 只带展示三字段 —— 人格正文不经 IPC，compose 时 daemon 从专家库自取。
+	 * 专家列表（模式菜单「专家 ▸」子菜单、对话头部与起手 chips 的展示数据源）。
+	 * 只带展示字段 —— 人格正文不经 IPC，compose 时 daemon 从专家库自取。
 	 */
 	listExperts: "session:list-experts",
 	/** 切换模型。 */
@@ -517,7 +517,7 @@ export interface CompletionData {
 	readonly commands: readonly CommandItem[];
 }
 
-/** 一位专家的列表项（session:list-experts 的结果元素）：菜单与头部展示三字段。 */
+/** 一位专家的列表项（session:list-experts 的结果元素）：菜单、对话头部与起手 chips 的展示数据源。 */
 export interface ExpertListItem {
 	/** 专家 id（= 文件名，setExpert 的入参）。 */
 	readonly name: string;
@@ -525,6 +525,14 @@ export interface ExpertListItem {
 	readonly profession: string;
 	/** 一句话描述（专家卡片用；菜单只用 displayName/profession）。 */
 	readonly description: string;
+	/** 菜单副行的一句话能力描述。 */
+	readonly displayDescription: string;
+	/** 恰好 3 个起手问题（对话页输入区上方的可点 chips）。 */
+	readonly quickPrompts: readonly string[];
+	/** 恰好 3 个领域关键词（专家卡片 tag chips 与分类行聚合用）。 */
+	readonly tags: readonly string[];
+	/** 来源（专家市场页「我的专家」子页的判定依据：同名用户级覆盖内置后即为 user）。 */
+	readonly source: "builtin" | "user";
 }
 
 /** 一条历史会话的列表项（session:list 的结果元素）。 */

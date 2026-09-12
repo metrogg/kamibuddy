@@ -5,6 +5,27 @@
  * 届时文档流水线与应用 UI 的色值统一收口到 token；这里先用 CSS 变量集中管理。
  */
 
+/*
+ * MiSans 随包子集（src/renderer/fonts/，来源与子集口径见 resources/fonts/README.md）。
+ * 为什么随包：界面大量 font-weight:600 在微软雅黑上只能合成加粗（雅黑无真 600 字重），
+ * 笔画发虚，12-14px 小字号更明显；MiSans 有真 Semibold，且对小字号屏显做了优化。
+ * 只声明 400/600 两档：界面只用这两档字重，其余字重不随包。
+ * vite 会把 CSS url() 相对引用的 woff2 打进 renderer 产物（CSP default-src 'self' 已覆盖）。
+ */
+@font-face {
+	font-family: "MiSans";
+	src: url("./fonts/MiSans-Regular.woff2") format("woff2");
+	font-weight: 400;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "MiSans";
+	src: url("./fonts/MiSans-Semibold.woff2") format("woff2");
+	font-weight: 600;
+	font-display: swap;
+}
+
 /* 根部错误边界：渲染异常时的错误卡（白屏无反馈是体验缺陷，ErrorBoundary 是最后防线）。 */
 .error-boundary {
 	display: flex;
@@ -31,7 +52,7 @@
 
 .error-boundary-message {
 	margin: 0 0 24px;
-	font-size: 13px;
+	font-size: var(--text-list);
 	color: var(--text-dim);
 	word-break: break-word;
 }
@@ -69,10 +90,46 @@
 	--text-faint: rgba(0, 0, 0, 0.3);
 	--primary: rgba(0, 0, 0, 0.9);
 	--primary-text: #ffffff;
+	/* 黑主色的交互档位（WB --wb-bg-pill-active 体系）：选中/激活态降到 75% 黑，
+	   激活态上 hover 加深到 82% —— 档位比 --primary 浅是有意的：pill 选中要
+	   比主按钮柔和，hover 加深是「回主色方向」的反馈。 */
+	--primary-active: rgba(0, 0, 0, 0.75);
+	--primary-hover: rgba(0, 0, 0, 0.82);
 	--danger: #f64041;
 	--ok: #0cbf5b;
-	--radius-lg: 16px;
+	/* 链接/勾选项等需要可辨识的场景色（收编路径徽章既有蓝 #1470b4，与 WorkBuddy
+	   同色）。此前 .markdown a 与 .view-switcher-check 已引用本变量但 :root 从未
+	   定义 —— var() 解析失败回退继承色，markdown 链接与正文同色，只有 hover
+	   下划线可辨；补定义即修复。 */
+	--accent: #1470b4;
+	/* 琥珀警示色：toast-warning / mcp-connecting / 待确认 badge 三处独立硬编码
+	   #d9822b 的收口（seg-time 类别色同色相但语义是分类调色板，不收编）。 */
+	--warning: #d9822b;
+	/* 圆角三档（Task 4 全文审计 158 处 border-radius 的收口，逐组决策记此一处）：
+	   - 6px×16 → sm（等值）；7px×12 → sm（表单控件/菜单项，就近 −1）；
+	   - 8px×27 按组件语义分两档：小控件/按钮/行项/chip×19 → sm，
+	     卡片/气泡媒体/pre/代码卡×8 → md；
+	   - 10px×1（toast）→ md（等值）；case-cover 16px → lg（等值）；
+	   - questionnaire-icon-btn 的 16px 是 32×32 之半、语义是「圆」→ 50%（渲染等价）；
+	   - 保留不归档（逐字不同且有语义）：1/2/3px（favicon/小标记）、4/5px（低于 sm 的
+	     微圆角：badge/小按钮/进度 thumb）、12px×6（cases-action 是 24 高之半的胶囊、
+	     entry 气泡卡、ws/permission 浮层大卡、问卷选项行 v3 对齐值，强并会丢语义）、
+	     22/24px（WB 输入卡/槽体系原值）、50%/999px（圆形/胶囊）。 */
+	--radius-sm: 6px;
 	--radius-md: 10px;
+	--radius-lg: 16px;
+	/* 字号五档（Task 4）：核心路径的直写 px 换档，calc/低频边缘处不动。
+	   - meta 12：辅助信息（分组标题/时间戳/折叠小字/等宽小字）
+	   - list 13：列表正文（侧栏任务行/菜单项/toast/表格）
+	   - body 14：正文（助手消息/工具行/pills/按钮，同全局 body 基准）
+	   - emphasis 15：强调正文——用户气泡 15 与助手正文 14 的一档差是有意
+	     区分发言者（WB 同口径），不是漂移；同档还有回合文字行/清单行/md 小标题
+	   - display 30：展示标题（首页 home-title，WB 原值） */
+	--text-meta: 12px;
+	--text-list: 13px;
+	--text-body: 14px;
+	--text-emphasis: 15px;
+	--text-display: 30px;
 	--shadow-card: 0 6px 24px rgb(0 0 0 / 6%);
 	/* WorkBuddy 输入卡阴影（--wb-main-area-box-shadow 原值），比 --shadow-card 轻得多：
 	   大而淡的铺底 + 小而实的贴边。只给输入卡用，弹层仍走 --shadow-card。 */
@@ -91,10 +148,11 @@ body {
 	margin: 0;
 	background: var(--bg);
 	color: var(--text);
-	/* WorkBuddy 全局字体栈原值（"PingFang SC" 在 macOS 生效，Windows 落到
-	   Segoe UI；"Microsoft YaHei" 是我们保留的 CJK 兜底，WB 栈里没有，
-	   但没有它 Windows 中文渲染依赖系统隐式回退，不确定性更高）。 */
-	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+	/* WorkBuddy 全局字体栈 + 随包 MiSans 插入位（"PingFang SC" 之后、"Segoe UI" 之前）：
+	   macOS 仍命中苹方（MiSans 排在系统栈后、不影响 Mac 观感）；Windows 上前几项
+	   全部缺席，落到随包 MiSans（含真 600 字重），"Microsoft YaHei" 降级为
+	   MiSans 加载失败/缺字时的兜底（@font-face 用 swap，首帧可能先显示雅黑再切换）。 */
+	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "MiSans", "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 button {
@@ -104,6 +162,25 @@ button {
 	border: 0;
 	padding: 0;
 	cursor: pointer;
+}
+
+/* 全局键盘焦点环：此前全站仅 mcp-switch 一处有焦点指示，键盘用户 Tab 进去
+   就「丢焦点」。用 text-dim 而不用 --primary：中性灰在浅色底上对比足够，
+   又不会让每次 Tab 都蹦出一个「主按钮级」的重信号。
+   与既有自绘焦点样的关系（审计结论，勿随手删）：
+   - mcp-switch：input 全透明，环画在轨道上（--primary，兄弟选择器），本规则
+     落在不可见 input 上无视觉影响；
+   - ws-create input:focus 用类+伪类，特异性高于本规则，保留其 --primary 环；
+   - composer textarea / questionnaire-other-input 的 outline:none 各有容器级
+     替代（:focus-within 边框/描边），见各自区块；
+   - rename/save-space 等 input 已有 :focus 边框变色，叠加本环属双保险，不冲突。 */
+button:focus-visible,
+[role="button"]:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+	outline: 2px solid var(--text-dim);
+	outline-offset: 2px;
 }
 
 .app {
@@ -139,7 +216,7 @@ button {
 
 .brand-name {
 	font-weight: 600;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 }
 
 .brand-version {
@@ -174,13 +251,18 @@ button {
 	align-items: center;
 	gap: 9px;
 	padding: 7px 8px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	color: var(--text);
 	text-align: left;
 }
 
 .nav-item:hover {
 	background: var(--bg-hover);
+}
+
+/* 未实现的占位导航降灰：占位展示≠可用，视觉要诚实（点击仍给 onTodo 反馈）。 */
+.nav-item-pending {
+	color: var(--text-faint);
 }
 
 .sidebar-section {
@@ -226,7 +308,7 @@ button {
 	align-items: center;
 	gap: 4px;
 	padding: 0 8px 4px;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	/* WorkBuddy 侧栏分组标题（claw-sidebar-drawer__section-title）：12px/600/三级灰。 */
 	font-weight: 600;
 	color: var(--text-dim);
@@ -236,7 +318,7 @@ button {
 	display: block;
 	width: 100%;
 	text-align: left;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 }
 
 .section-title-btn:hover {
@@ -256,7 +338,7 @@ button {
 .section-empty {
 	margin: 0;
 	padding: 4px 8px;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 }
 
@@ -270,8 +352,8 @@ button {
 .task-item {
 	position: relative;
 	width: 100%;
-	border-radius: 8px;
-	font-size: 13px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
 }
 
 /* WorkBuddy 同款紧凑行：标题+时间同排（标题左对齐省略，时间右对齐常驻），
@@ -318,6 +400,8 @@ button {
 	font-size: 11px;
 	color: var(--text-dim);
 	white-space: nowrap;
+	/* 比例宽数字随时间推移变位数/字形宽度会抖行宽，等宽数字消除抖动。 */
+	font-variant-numeric: tabular-nums;
 }
 
 /* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。 */
@@ -361,7 +445,7 @@ button {
 	color: var(--text);
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	outline: none;
 }
 
@@ -375,7 +459,7 @@ button {
 	align-items: center;
 	gap: 6px;
 	padding: 6px 8px;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 }
 
@@ -387,8 +471,8 @@ button {
 
 .task-confirm-btn {
 	padding: 1px 8px;
-	border-radius: 6px;
-	font-size: 12px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-meta);
 	background: var(--bg-raised);
 }
 
@@ -405,8 +489,8 @@ button {
 	display: block;
 	width: 100%;
 	padding: 5px 8px;
-	border-radius: 8px;
-	font-size: 12px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 	text-align: left;
 }
@@ -423,7 +507,7 @@ button {
 	position: relative;
 	display: flex;
 	align-items: center;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 }
 
 .space-group-header:hover {
@@ -465,7 +549,7 @@ button {
 .space-group-name {
 	flex: 1;
 	min-width: 0;
-	font-size: 13px;
+	font-size: var(--text-list);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -503,8 +587,8 @@ button {
 
 .space-menu-item {
 	padding: 6px 10px;
-	border-radius: 6px;
-	font-size: 12px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-meta);
 	text-align: left;
 }
 
@@ -555,7 +639,7 @@ button {
 	align-items: center;
 	gap: 6px;
 	padding: 8px;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 }
 
@@ -612,13 +696,15 @@ button {
 }
 
 .home-title {
-	/* WorkBuddy .wb-home-header__title 原值：30px/42px/600/90% 黑/无字距。 */
+	/* WorkBuddy .wb-home-header__title 原值：30px/42px/600/90% 黑（=--primary）/无字距。 */
 	margin: 0 0 16px;
-	font-size: 30px;
+	font-size: var(--text-display);
 	line-height: 42px;
 	font-weight: 600;
-	color: rgba(0, 0, 0, 0.9);
+	color: var(--primary);
 	letter-spacing: 0;
+	/* 窄窗折行时两行视觉重心均衡（标题是展示文本，balance 不影响布局测量）。 */
+	text-wrap: balance;
 }
 
 .mode-tabs {
@@ -641,7 +727,7 @@ button {
 	height: 32px;
 	padding: 0 12px;
 	border-radius: 999px;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	font-weight: 500;
 	color: var(--text-secondary);
@@ -651,13 +737,13 @@ button {
 .mode-tab.active {
 	/* WB pill 选中态不是主按钮的 90% 黑，是 75% 黑（--wb-bg-pill-active），
 	   hover 加深到 82%；字重升到 600。 */
-	background: rgba(0, 0, 0, 0.75);
+	background: var(--primary-active);
 	color: var(--primary-text);
 	font-weight: 600;
 }
 
 .mode-tab.active:hover {
-	background: rgba(0, 0, 0, 0.82);
+	background: var(--primary-hover);
 }
 
 .mode-tab:not(.active):hover {
@@ -699,7 +785,7 @@ button {
 	padding: 0 12px;
 	border: 1px solid var(--border);
 	border-radius: 999px;
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 400;
 	color: var(--text-secondary);
 	background: var(--bg);
@@ -761,6 +847,13 @@ button {
 	outline: none;
 }
 
+/* textarea 自身 outline:none 的焦点替代做在卡片上（输入卡是视觉整体，环画在
+   textarea 上会切成内嵌小框）。边框加深与 rename-input 的 :focus 同款语言；
+   不用 drag-over 的 --primary：那是「拖放目标」的强信号，键盘聚焦是常态。 */
+.composer-card:focus-within {
+	border-color: var(--text-dim);
+}
+
 .composer-card textarea::placeholder {
 	color: var(--text-dim);
 }
@@ -793,7 +886,7 @@ button {
 	gap: 8px;
 	width: 100%;
 	padding: 6px 10px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -888,7 +981,7 @@ button {
 	font-size: 16px;
 	line-height: 1;
 	padding: 2px 4px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 }
 
 .cu-close:hover {
@@ -906,6 +999,8 @@ button {
 .cu-percent {
 	font-size: 18px;
 	font-weight: 600;
+	/* 余量百分比随消耗刷新，比例宽数字会带着同行小字左右抖。 */
+	font-variant-numeric: tabular-nums;
 }
 
 .cu-used {
@@ -983,7 +1078,7 @@ button {
 	align-items: center;
 	gap: 4px;
 	padding: 6px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	color: var(--text-dim);
 }
 
@@ -1069,7 +1164,7 @@ button {
 	flex: 0 0 auto;
 	width: 48px;
 	height: 48px;
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	border: 1px solid var(--border);
 	background: var(--bg-hover);
 	overflow: hidden;
@@ -1119,7 +1214,7 @@ button {
 	gap: 6px;
 	max-width: 240px;
 	padding: 4px 6px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	border: 1px solid var(--border);
 	background: var(--bg-raised);
 	font-size: 12px;
@@ -1268,8 +1363,8 @@ button {
 }
 
 .cases-action:hover {
-	/* WB hover：字色 90% 黑 + tertiary 浅灰底（--bg-raised = #F7F7F7 同值）。 */
-	color: rgba(0, 0, 0, 0.9);
+	/* WB hover：字色 90% 黑（=--primary）+ tertiary 浅灰底（--bg-raised = #F7F7F7 同值）。 */
+	color: var(--primary);
 	background: var(--bg-raised);
 }
 
@@ -1289,50 +1384,27 @@ button {
 	border: 0;
 	background: transparent;
 	text-align: center;
-	transition: transform 0.18s ease;
-}
-
-.case-card:hover {
-	/* WB hover：整卡上浮 2px，阴影只落在封面上（不起整卡阴影）。 */
-	transform: translateY(-2px);
-}
-
-.case-card:hover .case-cover {
-	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .case-cover {
-	display: block;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	width: 100%;
 	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 8% 黑描边。 */
 	aspect-ratio: 16 / 9;
 	border: 0.5px solid rgba(0, 0, 0, 0.08);
-	border-radius: 16px;
-	transition: box-shadow 0.18s ease;
+	border-radius: var(--radius-lg);
+	/* 体裁图标封面：统一单色底 + 淡色 28px 图标，替掉原 6 组 pastel 渐变 —
+	   渐变只装饰不表意，图标与案例体裁同义（Task 6 审美修正）。 */
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	transition: background-color 0.18s ease;
 }
 
-.case-cover-0 {
-	background: linear-gradient(135deg, #dfe9ff, #f6e6ff);
-}
-
-.case-cover-1 {
-	background: linear-gradient(135deg, #dff5e3, #e8f7ff);
-}
-
-.case-cover-2 {
-	background: linear-gradient(135deg, #fff0db, #ffe3e3);
-}
-
-.case-cover-3 {
-	background: linear-gradient(135deg, #e3f0ff, #d8f5f0);
-}
-
-.case-cover-4 {
-	background: linear-gradient(135deg, #f3e8ff, #e0edff);
-}
-
-.case-cover-5 {
-	background: linear-gradient(135deg, #e8ecff, #fff4de);
+.case-card:hover .case-cover {
+	/* hover 反馈只落在封面底色加深一档（原整卡上浮 + 封面投影，随渐变一并退役）。 */
+	background: var(--bg-hover);
 }
 
 .case-title {
@@ -1655,13 +1727,15 @@ button {
 }
 
 .turn-agent {
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 }
 
 .turn-duration {
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
+	/* 进行中的回合时长每秒刷新，比例宽数字每秒抖行宽（尾部 chevron 跟着跳）。 */
+	font-variant-numeric: tabular-nums;
 	/* chevron 挂在时长行尾（轮折叠开关）：图标与文字基线对齐靠 inline-flex。 */
 	display: inline-flex;
 	align-items: center;
@@ -1697,7 +1771,7 @@ button {
    的取消终态），所以用最低调的三级灰单行，不做成卡片也不加图标。 */
 .user-cancelled {
 	padding: 4px 14px;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	color: var(--text-dim);
 }
 
@@ -1718,7 +1792,7 @@ button {
 	/* 纯文字行：宽度随内容收拢，无卡片底。通栏矩形会和真正的内容卡
 	   抢视觉层级 —— 折叠行是过程的注脚，不是内容。 */
 	width: fit-content;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	line-height: 1.75;
 	color: var(--text-dim);
 	text-align: left;
@@ -1812,7 +1886,7 @@ button {
 	/* WorkBuddy 气泡自身（_userMessageBubble）是紧凑排版：padding 仅 8px 12px；
 	   上下 32px 的呼吸感在外层消息行（.entry.user 的 margin），不在气泡内边距。 */
 	padding: 8px 12px;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	line-height: 1.6;
 	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
 	background: var(--bg-raised);
@@ -1831,13 +1905,19 @@ button {
 	margin-top: 8px;
 }
 
+/* 缩略图的可点外壳：button 复位走全局 button 规则，这里只接回原 img 上的
+   zoom-in 光标与圆角（焦点环沿圆角走）。 */
+.user-bubble-thumb {
+	cursor: zoom-in;
+	border-radius: var(--radius-md);
+}
+
 .user-bubble-images img {
 	display: block;
 	width: 160px;
 	max-height: 200px;
 	object-fit: cover;
-	border-radius: 8px;
-	cursor: zoom-in;
+	border-radius: var(--radius-md);
 }
 
 /* hover 工具条（user / assistant 共用基类）：常驻占位只切透明度，
@@ -1859,7 +1939,10 @@ button {
 	pointer-events: none;
 }
 
-.entry:hover .entry-toolbar {
+/* :focus-within 与 hover 同口径（同 .task-item-ops 的写法）：键盘 Tab 进
+   消息区时工具条不能消失，否则按钮对键盘用户不可达。 */
+.entry:hover .entry-toolbar,
+.entry:focus-within .entry-toolbar {
 	opacity: 1;
 	pointer-events: auto;
 }
@@ -1932,7 +2015,7 @@ button {
 .image-preview-overlay img {
 	max-width: 100%;
 	max-height: 100%;
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 }
 
 .entry.assistant {
@@ -1942,7 +2025,7 @@ button {
 	background: transparent;
 	border-radius: 0;
 	padding: 0 14px;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 20px;
 	/* 消息流节奏：上下 8px。 */
 	margin: 8px 0;
@@ -1970,7 +2053,7 @@ button {
 	border: 1px solid var(--border);
 	box-shadow: var(--shadow-card);
 	color: var(--text);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	line-height: 1;
 }
 
@@ -1992,7 +2075,7 @@ button {
 	max-width: calc(100% - 32px);
 	padding: 12px 14px;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	background: var(--bg-raised);
 }
 
@@ -2009,7 +2092,7 @@ button {
 }
 
 .error-card-title {
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 1.5;
 	color: var(--text);
 	word-break: break-word;
@@ -2021,7 +2104,7 @@ button {
 	align-items: center;
 	gap: 6px;
 	margin-left: 24px;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 }
 
@@ -2047,8 +2130,8 @@ button {
 	align-self: flex-start;
 	margin-left: 24px;
 	padding: 6px 14px;
-	border-radius: 6px;
-	font-size: 13px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
 	font-weight: 500;
 	color: var(--primary-text);
 	background: var(--primary);
@@ -2074,7 +2157,7 @@ button {
 	gap: 6px;
 	width: 100%;
 	padding: 2px 0;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 	transition: color 0.16s ease;
 }
@@ -2099,7 +2182,7 @@ button {
 	/* WorkBuddy 实测值：上 2px、左 12px 内边距 + 4px 左边条标识「推导过程」。 */
 	padding: 2px 0 0 12px;
 	border-left: 4px solid var(--border);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 	/* 展开态限高 200px 内部滚动（WorkBuddy 同值）。 */
@@ -2122,7 +2205,7 @@ button {
 .markdown h2,
 .markdown h3 {
 	margin: 14px 0 6px;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 	line-height: 1.4;
 }
@@ -2153,21 +2236,21 @@ button {
 	background: rgb(0 0 0 / 5%);
 	border-radius: 4px;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-	font-size: 12px;
+	font-size: var(--text-meta);
 }
 
 .markdown pre {
 	margin: 8px 0;
 	padding: 10px 12px;
 	background: rgb(0 0 0 / 5%);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	overflow-x: auto;
 }
 
 .markdown pre code {
 	padding: 0;
 	background: transparent;
-	font-size: 12px;
+	font-size: var(--text-meta);
 }
 
 /* 行内 code 路径徽章（markdown.tsx InlineCode，对标 WorkBuddy cb-clickable-path
@@ -2208,7 +2291,7 @@ button {
 .code-block {
 	margin: 8px 0;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	overflow: hidden;
 	background: rgb(0 0 0 / 5%);
 }
@@ -2223,7 +2306,7 @@ button {
 }
 
 .code-block-lang {
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-dim);
 }
 
@@ -2251,7 +2334,7 @@ button {
 .markdown table {
 	margin: 8px 0;
 	border-collapse: collapse;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .markdown th,
@@ -2266,13 +2349,14 @@ button {
 	font-weight: 600;
 }
 
+/* 链接可辨识靠颜色+常态下划线双线索（仅靠色相对色弱用户不友好，此前
+   --accent 未定义时甚至只剩 hover 才出现下划线）；offset 微调避免下划线
+   贴死 CJK 字形。 */
 .markdown a {
 	color: var(--accent);
 	cursor: pointer;
-}
-
-.markdown a:hover {
 	text-decoration: underline;
+	text-underline-offset: 2px;
 }
 
 .markdown hr {
@@ -2293,7 +2377,7 @@ button {
 	/* 回合内工具行节奏：上下 4px，紧凑（WorkBuddy 回合内同口径）。 */
 	margin: 4px 0;
 	padding: 0;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 1.75;
 	color: var(--text-dim);
 	white-space: normal;
@@ -2424,7 +2508,7 @@ button {
 		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
 		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
 	color: var(--text-dim);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -2449,7 +2533,7 @@ button {
 .todo-list-box {
 	background: var(--bg-sidebar);
 	color: var(--text);
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-family: inherit;
 	white-space: normal;
 }
@@ -2515,7 +2599,7 @@ button {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	line-height: 1.75;
 }
 
@@ -2559,7 +2643,7 @@ button {
 	display: flex;
 	gap: 6px;
 	flex: 0 0 auto;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
@@ -2625,7 +2709,7 @@ button {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 }
 
@@ -2718,6 +2802,18 @@ button {
 	grid-template-columns: 1fr;
 }
 
+/* 卡片 button 与 🌐 预览钮的公共外壳：预览钮从卡内独立出来后
+   （button 里不许再嵌 button），靠它绝对定位回右上角。 */
+.artifact-card-wrap {
+	position: relative;
+}
+
+/* 预览钮浮在卡上不再占 flex 位，右缘补出它的位置（10+22+8=40，与原
+   嵌套布局的间距一致），文件名/大小不钻到按钮底下。 */
+.artifact-card-wrap:has(.artifact-preview-btn) .artifact-card {
+	padding-right: 40px;
+}
+
 .artifact-card {
 	position: relative;
 	display: flex;
@@ -2725,7 +2821,7 @@ button {
 	gap: 8px;
 	width: 100%;
 	padding: 7px 10px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 	font-size: 13px;
 }
@@ -2742,14 +2838,19 @@ button {
 	min-width: 0;
 }
 
-/* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。 */
+/* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。
+   绝对定位而非卡内 flex 项 —— 从卡片 button 里独立出来后浮回原位。 */
 .artifact-preview-btn {
+	position: absolute;
+	right: 10px;
+	top: 50%;
+	transform: translateY(-50%);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	width: 22px;
 	height: 22px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	font-size: 13px;
 	line-height: 1;
 	flex-shrink: 0;
@@ -3106,7 +3207,7 @@ button {
 	gap: 6px;
 	width: 100%;
 	padding: 5px 8px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 	font-size: 13px;
 	color: var(--text-dim);
@@ -3148,7 +3249,7 @@ button {
 	gap: 6px;
 	width: 100%;
 	padding: 4px 8px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 	font-size: 13px;
 	color: var(--text-dim);
@@ -3221,7 +3322,7 @@ button {
 	display: flex;
 	align-items: center;
 	flex: 0 0 auto;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	color: var(--text-dim);
 	font-size: 13px;
 }
@@ -3248,7 +3349,7 @@ button {
 	align-items: center;
 	padding: 5px 6px 5px 2px;
 	color: var(--text-dim);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 }
 
 .preview-tab-close:hover {
@@ -3315,7 +3416,7 @@ button {
 .preview-action {
 	padding: 6px 14px;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: var(--text);
 	font-size: 13px;
@@ -3419,7 +3520,7 @@ button {
 	width: 3em;
 	padding: 2px 4px;
 	border: 1px solid var(--border);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	font-size: 12px;
 	text-align: center;
 	color: var(--text);
@@ -3619,6 +3720,37 @@ button {
 	margin-inline: auto;
 }
 
+/* ── 专家起手 chips（quickPrompts，对话页输入卡上方） ─────────────── */
+
+/* 与内容列同宽对齐由 .chat-composer > * 管，这里只管行内布局。
+   问题文本长短不一，窄窗口允许折行 —— 起手问题截断/滚动就读不懂了，
+   与首页能力 chip 强制单行滚动的口径不同（那是导航，这是句子）。 */
+.quick-prompts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+/* pill 语言沿用首页 .capability-chip 那套（白底细边胶囊、hover 浅底），
+   字号 13px 略小、高 30 略矮 —— 它是起手引导，不是主导航。 */
+.quick-prompt-chip {
+	display: flex;
+	align-items: center;
+	height: 30px;
+	padding: 0 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 13px;
+	color: var(--text-secondary);
+	background: var(--bg);
+}
+
+.quick-prompt-chip:hover {
+	background: #f2f2f2;
+	color: var(--text);
+}
+
 /* ── 工作空间选择器 ─────────────────────────────────────────────── */
 
 .ws-picker {
@@ -3664,7 +3796,7 @@ button {
 	gap: 1px;
 	width: 100%;
 	padding: 7px 10px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -3706,7 +3838,7 @@ button {
 	align-items: center;
 	gap: 7px;
 	padding: 7px 10px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	font-size: 13px;
 	text-align: left;
 }
@@ -3726,7 +3858,7 @@ button {
 	min-width: 0;
 	padding: 6px 9px;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	font: inherit;
 }
 
@@ -3738,7 +3870,7 @@ button {
 .ws-create button {
 	flex: 0 0 auto;
 	padding: 6px 12px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
 	font-size: 13px;
@@ -3787,8 +3919,8 @@ button {
 	background: var(--bg);
 	color: var(--text);
 	border: 1px solid var(--border);
-	border-radius: 10px;
-	font-size: 13px;
+	border-radius: var(--radius-md);
+	font-size: var(--text-list);
 	box-shadow: var(--shadow-card);
 	pointer-events: auto;
 	animation: toast-in 0.16s ease-out;
@@ -3810,7 +3942,7 @@ button {
 }
 
 .toast-warning .toast-icon {
-	color: #d9822b;
+	color: var(--warning);
 }
 
 .toast-spinner {
@@ -3820,6 +3952,13 @@ button {
 	border: 2px solid var(--border);
 	border-top-color: var(--text-dim);
 	animation: toast-spin 0.8s linear infinite;
+}
+
+/* 减少动态偏好下停转：spinner 只表「进行中」，静态环同样传达，旋转纯装饰。 */
+@media (prefers-reduced-motion: reduce) {
+	.toast-spinner {
+		animation: none;
+	}
 }
 
 @keyframes toast-in {
@@ -3953,7 +4092,7 @@ button {
 	min-height: 160px;
 	padding: 7px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -3975,7 +4114,7 @@ button {
 	gap: 4px;
 	padding: 5px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	font-size: 12px;
 	color: var(--text);
@@ -4002,7 +4141,7 @@ button {
 
 .primary-btn {
 	padding: 7px 18px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
 	font-size: 13px;
@@ -4035,6 +4174,13 @@ button {
 	border-radius: var(--radius-md);
 	background: var(--bg);
 	text-align: left;
+	/* 「显示全部」几百张卡时跳过屏外卡的渲染。挂逐卡不挂容器：
+	   容器是单个盒，content-visibility 对它只有「整体跳过」一档，
+	   网格轨道尺寸会塌；逐卡跳过才拿得到虚拟化收益。
+	   contain-intrinsic-size 给跳过期的占位尺寸（约 210×62，实测卡高），
+	   防滚动条随滚动跳动。 */
+	content-visibility: auto;
+	contain-intrinsic-size: 210px 62px;
 }
 
 .model-card:hover:not(:disabled) {
@@ -4152,7 +4298,7 @@ button {
 	flex: 1 1 260px;
 	padding: 6px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -4163,6 +4309,19 @@ button {
 	cursor: pointer;
 	/* select 的默认下箭头占位比 input 内边距宽，保持两行控件视觉对齐。 */
 	max-width: 320px;
+}
+
+/* 推理档位/回复风格/搜索服务商的 select 与 .key-input select 同一控件档位：
+   前两者坐在 provider-main 行内，吃不到 .key-input 的后代选择器。 */
+.provider-select {
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
 }
 
 .key-note {
@@ -4196,7 +4355,7 @@ button {
 .preview-field select {
 	padding: 6px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -4449,7 +4608,7 @@ button {
 .field input:not([type]) {
 	padding: 7px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -4503,7 +4662,7 @@ button {
 	gap: 2px;
 	padding: 8px 12px;
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	text-align: left;
 	font-size: 12px;
@@ -4529,7 +4688,7 @@ button {
 .model-row input {
 	padding: 6px 8px;
 	border: 1px solid var(--border);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -4563,7 +4722,7 @@ button {
 	align-items: center;
 	justify-content: center;
 	padding: 4px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	color: var(--text-dim);
 	flex: 0 0 auto;
 }
@@ -4609,7 +4768,7 @@ button {
 	flex-direction: column;
 	gap: 2px;
 	padding: 7px 9px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -4662,15 +4821,76 @@ button {
 	padding-right: 30px;
 }
 
-/* 对话页头部的当前专家回显：非交互，纯状态钉（交互入口在 ModeSwitch 里）。 */
-.chat-expert {
-	display: flex;
+/* ── composer-bar 当前专家 chip ─────────────────────────────────── */
+
+/* WorkBuddy cr-chip 同款：32px 高、999 圆角、透明底，静态不可点
+  （DOM 上是 role=status 的 span，不挂点击、cursor 继承默认）。
+   hover/focus-within 时底变浅灰（与 bar-btn 悬停同一语言），
+   头像原位换成 × 关闭按钮 —— 两态切换纯 CSS，组件无状态。 */
+.expert-chip {
+	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	flex: 0 0 auto;
-	font-size: 12px;
-	color: var(--text-dim);
+	gap: 6px;
+	height: 32px;
+	padding: 0 10px;
+	border-radius: 999px;
+	font-size: 13px;
+	color: var(--text);
 	white-space: nowrap;
+}
+
+.expert-chip:hover,
+.expert-chip:focus-within {
+	background: var(--bg-hover);
+}
+
+/* 首字符圆形头像基础样式：16px 圆、白字居中；背景色由组件按名称 hash 内联下发。
+   类名不叫 expert-chip-avatar：专家市场页卡片（36px）与详情弹窗（72px）复用同一
+   组件（expert-avatar.tsx），尺寸变体类叠加在基础类上（见专家市场页一节）。 */
+.expert-avatar {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	font-size: 10px;
+	line-height: 1;
+	color: #fff;
+}
+
+/* × 与头像同位互替：默认隐藏，hover/focus-within 时它出现、头像让位。 */
+.expert-chip-close {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	padding: 0;
+	font-size: 12px;
+	line-height: 1;
+	color: var(--text-dim);
+}
+
+.expert-chip-close:hover {
+	color: var(--text);
+}
+
+.expert-chip:hover .expert-avatar,
+.expert-chip:focus-within .expert-avatar {
+	display: none;
+}
+
+.expert-chip:hover .expert-chip-close,
+.expert-chip:focus-within .expert-chip-close {
+	display: inline-flex;
+}
+
+/* 「+」菜单专家子菜单底部的「更多专家…」：与专家项同款行式，
+   顶部一条细分隔线标示它是入口而非一位专家。 */
+.plus-menu-more-experts {
+	border-top: 1px solid var(--border);
 }
 
 /* ── 诊断页 ───────────────────────────────────────────────────── */
@@ -4748,7 +4968,7 @@ button {
 .comp-bar {
 	display: flex;
 	height: 14px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	overflow: hidden;
 	background: var(--bg-raised);
 	margin-bottom: 8px;
@@ -4864,8 +5084,16 @@ button {
 
 .mode-menu-desc,
 .plus-menu-mode-desc {
-	font-size: 11px;
+	/* 副行一句话（模式说明 / 专家 displayDescription）：12px 次要色单行截断。
+	   长句折行会把双行菜单项撑成三行；截断后完整文本走按钮 title tooltip。
+	   max-width 直接钉在 desc 上而非给子菜单加整体上限：短句菜单保持原宽，
+	   只有超长副行被截（专家体系对齐 Task 3.1）。 */
+	font-size: 12px;
 	color: var(--text-dim);
+	max-width: 300px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 /* ── 停止生成 ─────────────────────────────────────────────────── */
@@ -4990,7 +5218,7 @@ button {
 	overflow: auto;
 	background: var(--bg-sidebar);
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	font-size: 12px;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
@@ -5047,7 +5275,7 @@ button {
 	color: var(--text);
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	outline: none;
 }
 
@@ -5089,7 +5317,7 @@ button {
 	flex-direction: column;
 	gap: 1px;
 	padding: 7px 30px 7px 10px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -5164,7 +5392,7 @@ button {
 	flex-direction: column;
 	gap: 2px;
 	padding: 8px 30px 8px 10px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -5229,7 +5457,7 @@ button {
 	gap: 8px;
 	width: 100%;
 	padding: 7px 10px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	font-size: 13px;
 	text-align: left;
 	white-space: nowrap;
@@ -5273,7 +5501,7 @@ button {
 	flex-direction: column;
 	gap: 2px;
 	padding: 7px 30px 7px 10px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
@@ -5410,21 +5638,6 @@ button {
 	background: var(--bg);
 }
 
-/* 专家卡片是可点击的选择入口（技能卡片是纯展示）：
-   button 复位 + 左对齐文本 + hover 反馈。 */
-.expert-card {
-	font: inherit;
-	color: inherit;
-	text-align: left;
-	cursor: pointer;
-	transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.expert-card:hover {
-	border-color: var(--text-dim);
-	background: var(--bg-hover);
-}
-
 .skill-card:hover {
 	box-shadow: var(--shadow-card);
 }
@@ -5466,6 +5679,450 @@ button {
 	white-space: nowrap;
 }
 
+/* ── 专家市场页（experts-view，WorkBuddy ExpertCenterPage 同构）────────────
+ * 类名加 ex- 前缀（对应 WorkBuddy 的 ec- 语义）。浅色规格取自 ec-*：
+ * 卡片 16px 圆角 / padding 16 20、头像 36 圆、描述 2 行截断、tag 灰 chip、
+ * hover 右上浮现「使用」、弹窗 520px 圆角 16。
+ * ──────────────────────────────────────────────────────────────── */
+
+.ex {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+/* 顶栏：搜索框 + 右侧「我的专家」入口。 */
+.ex-topbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.ex-search {
+	flex: 0 1 320px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
+	padding: 0 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-raised);
+	color: var(--text-dim);
+}
+
+.ex-search:focus-within {
+	border-color: var(--text-dim);
+	background: var(--bg);
+}
+
+.ex-search-icon {
+	flex: 0 0 auto;
+}
+
+.ex-search-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.ex-search-input::placeholder {
+	color: var(--text-faint);
+}
+
+.ex-mine {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
+	padding: 0 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.ex-mine:hover {
+	background: var(--bg-hover);
+}
+
+/* 我的专家子页顶栏的「< 全部专家」返回（文字即按钮，与子 tab 同层级）。 */
+.ex-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px 10px;
+	border-radius: 8px;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ex-back:hover {
+	background: var(--bg-hover);
+}
+
+/* 子 tab 行（专家 | 专家团）：标题式文字 tab，选中态底部 2px 指示条。 */
+.ex-subtabs {
+	display: flex;
+	gap: 20px;
+	border-bottom: 1px solid var(--border);
+}
+
+.ex-subtab {
+	position: relative;
+	padding: 4px 2px 10px;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
+.ex-subtab:hover {
+	color: var(--text);
+}
+
+.ex-subtab.active {
+	color: var(--text);
+}
+
+.ex-subtab.active::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--primary);
+}
+
+/* 分类 chips 行：可横向滚动且隐藏滚动条（触摸板横滑是主要交互，
+   常驻滚动条会把 28px 的行高压出双轨）。 */
+.ex-cats {
+	display: flex;
+	gap: 8px;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.ex-cats::-webkit-scrollbar {
+	display: none;
+}
+
+.ex-cat {
+	flex: 0 0 auto;
+	height: 28px;
+	padding: 4px 12px;
+	border-radius: 6px;
+	background: var(--bg-raised);
+	font-size: 12px;
+	color: var(--text-secondary);
+	box-sizing: border-box;
+}
+
+.ex-cat:hover {
+	background: var(--bg-hover);
+}
+
+/* 选中态深底白字（主按钮色反白，与 mode-tab.active 同一选中语言）。 */
+.ex-cat.active,
+.ex-cat.active:hover {
+	background: var(--primary);
+	color: var(--primary-text);
+}
+
+/* 卡片网格。 */
+.ex-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+	gap: 12px;
+}
+
+.ex-card {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-height: 154px;
+	padding: 16px 20px;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: var(--bg);
+	cursor: pointer;
+	transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ex-card:hover {
+	border-color: var(--text-dim);
+	background: var(--bg-raised);
+}
+
+.ex-card-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+/* 头像尺寸变体：基础样式在 .expert-avatar（chat chip 的 16px），
+   市场页卡片 36 / 详情弹窗 72，字号随圆等比放大。 */
+.ex-card-avatar {
+	width: 36px;
+	height: 36px;
+	font-size: 16px;
+	flex: 0 0 auto;
+}
+
+.ex-card-title {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.ex-card-name {
+	font-size: 14px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ex-card-profession {
+	font-size: 12px;
+	color: var(--text-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 两行截断 + min-height 保两行：卡片高度不因描述长短参差不齐。 */
+.ex-card-desc {
+	margin: 0;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--text-secondary);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	min-height: 36px;
+}
+
+.ex-card-tags {
+	display: flex;
+	gap: 6px;
+	/* 钉底：描述长短不一时 tags 行仍对齐卡片底边。 */
+	margin-top: auto;
+}
+
+.ex-tag {
+	display: inline-flex;
+	align-items: center;
+	height: 20px;
+	padding: 0 8px;
+	border-radius: 4px;
+	background: var(--bg-hover);
+	font-size: 11px;
+	color: var(--text-secondary);
+}
+
+/* hover 浮现的「使用」：absolute 钉右上，只切 opacity —— 插入/移除会
+   推挤卡片标题布局，且 grid 里所有卡片 hover 时此起彼伏地跳动。 */
+.ex-card-use {
+	position: absolute;
+	top: 16px;
+	right: 20px;
+	height: 26px;
+	padding: 0 12px;
+	border: none;
+	border-radius: 6px;
+	background: var(--primary);
+	color: var(--primary-text);
+	font-size: 12px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.ex-card:hover .ex-card-use,
+.ex-card:focus-within .ex-card-use {
+	opacity: 1;
+}
+
+/* 「创建专家」卡片：虚线边框 + 居中占位语，表达「虚位待建」而非一位专家。 */
+.ex-create-card {
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border-style: dashed;
+	color: var(--text-dim);
+	font-size: 13px;
+}
+
+/* 空态（搜索无结果 / 专家团占位 / 我的专家为空共用）。 */
+.ex-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 64px 0;
+	text-align: center;
+}
+
+.ex-empty-icon {
+	color: var(--text-faint);
+}
+
+.ex-empty-title {
+	margin: 0;
+	font-size: 14px;
+	color: var(--text-secondary);
+}
+
+.ex-empty-sub {
+	margin: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.ex-create-btn {
+	margin-top: 8px;
+	height: 32px;
+	padding: 0 16px;
+	border: none;
+	border-radius: 8px;
+	background: var(--primary);
+	color: var(--primary-text);
+	font-size: 13px;
+}
+
+.ex-create-btn:hover {
+	background: var(--primary-hover);
+}
+
+/* 详情弹窗：遮罩 0.4（WorkBuddy ec 弹层档位，比 modal-backdrop 的 0.32 略深），
+   z-index 90 低于阻塞审批弹窗（100）—— 审批是安全闸，必须永远压得住它。 */
+.ex-modal-mask {
+	position: fixed;
+	inset: 0;
+	z-index: 90;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: rgba(0, 0, 0, 0.4);
+}
+
+.ex-modal {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	width: 100%;
+	max-width: 520px;
+	max-height: 85vh;
+	overflow-y: auto;
+	padding: 24px;
+	border-radius: 16px;
+	background: var(--bg);
+	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+}
+
+.ex-modal-head {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+
+/* 可见关闭钮钉在头行右端、与头像顶对齐（遮罩点击关闭不可发现，给实体出口）。 */
+.ex-modal-close {
+	margin-left: auto;
+	align-self: flex-start;
+}
+
+.ex-detail-avatar {
+	width: 72px;
+	height: 72px;
+	font-size: 30px;
+	flex: 0 0 auto;
+}
+
+.ex-modal-title {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.ex-modal-name {
+	font-size: 18px;
+	font-weight: 600;
+}
+
+.ex-modal-profession {
+	font-size: 13px;
+	color: var(--text-secondary);
+}
+
+.ex-modal-desc {
+	margin: 0;
+	font-size: 13px;
+	line-height: 20px;
+	color: var(--text-secondary);
+}
+
+.ex-modal-tags {
+	display: flex;
+	gap: 6px;
+}
+
+/* 「专家帮你做」：quickPrompts 列表，灰底分区与描述拉开层级。 */
+.ex-modal-prompts {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+	border-radius: 10px;
+	background: var(--bg-raised);
+}
+
+.ex-modal-prompts-title {
+	margin: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.ex-modal-prompt {
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg);
+	font-size: 13px;
+	color: var(--text);
+	text-align: left;
+}
+
+.ex-modal-prompt:hover {
+	border-color: var(--text-dim);
+}
+
+.ex-modal-use {
+	height: 38px;
+	border: none;
+	border-radius: 10px;
+	background: var(--primary);
+	color: var(--primary-text);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.ex-modal-use:hover {
+	background: var(--primary-hover);
+}
+
 /* ── 定时任务管理页 ─────────────────────────────────────────────
  * 骨架复用 .settings（同 diagnostics-view），这里只有任务列表、
  * 状态徽标、运行记录与表单弹层。视觉全部取既有变量与卡片档位。
@@ -5504,6 +6161,13 @@ button {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
+}
+
+/* 任务行 hover 态：行内承载展开/暂停/编辑/删除一组操作，hover 反馈把它标示为
+   可交互单元（与会话列表行、任务清单行的 hover 语言一致）。mcp-row 不联动 ——
+   它只是展示行，给了反而暗示可点。 */
+.auto-row:hover {
+	background: var(--bg-hover);
 }
 
 .auto-row-main,
@@ -5605,7 +6269,7 @@ button {
 	align-items: center;
 	gap: 10px;
 	padding: 4px 6px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	font-size: 12px;
 	text-align: left;
 }
@@ -5664,6 +6328,8 @@ button {
 	max-width: 520px;
 	max-height: 100%;
 	overflow-y: auto;
+	/* 卡内滚动到底不把滚轮事件透传給背后页面（滚动链在弹层里尤其突兀）。 */
+	overscroll-behavior: contain;
 	padding: 18px 20px;
 	background: var(--bg);
 	border: 1px solid var(--border);
@@ -5699,7 +6365,7 @@ button {
 .mcp-json-editor {
 	padding: 7px 10px;
 	border: 1px solid var(--border);
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
@@ -5747,7 +6413,7 @@ button {
 }
 
 /* 状态色：绿/红取既有 --ok / --danger 的 color-mix 档位（同 auto-run-badge）；
-   连接中的黄与 toast-warning 同色（#d9822b），token 体系统一时一并收口。 */
+   连接中的黄与 toast-warning 同色，已收口为 --warning。 */
 .mcp-badge {
 	display: inline-flex;
 	align-items: center;
@@ -5756,8 +6422,8 @@ button {
 }
 
 .mcp-badge-connecting {
-	background: color-mix(in srgb, #d9822b 12%, var(--bg));
-	color: #d9822b;
+	background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+	color: var(--warning);
 }
 
 .mcp-badge-connected {
@@ -5775,8 +6441,8 @@ button {
 	display: inline-block;
 	width: 9px;
 	height: 9px;
-	border: 1.5px solid color-mix(in srgb, #d9822b 30%, var(--bg));
-	border-top-color: #d9822b;
+	border: 1.5px solid color-mix(in srgb, var(--warning) 30%, var(--bg));
+	border-top-color: var(--warning);
 	border-radius: 50%;
 	animation: task-spin 0.8s linear infinite;
 }
@@ -5949,7 +6615,7 @@ button {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	color: var(--text-secondary);
 	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
@@ -5978,7 +6644,7 @@ button {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	color: var(--text-secondary);
 	transition: opacity 0.15s ease;
 }
@@ -6047,7 +6713,7 @@ button {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--bg-hover);
 	color: var(--text);
 	font-size: 14px;
@@ -6109,7 +6775,7 @@ button {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 7px;
+	border-radius: var(--radius-sm);
 	background: var(--bg-hover);
 	color: var(--text);
 	transition: background-color 0.15s ease;
@@ -6132,6 +6798,17 @@ button {
 	font-size: 14px;
 	line-height: 22px;
 	color: var(--text);
+}
+
+/* input 保持 outline:none，焦点替代做在整行上：行才是视觉容器（整行即热区），
+   环画在 input 上会切成行内小框。inset 阴影而非 border —— 行高固定 40，
+   加 border 会挤压内容移位，inset 描边零布局位移、视觉等同边框。 */
+.questionnaire-other-input:focus-visible {
+	outline: none;
+}
+
+.questionnaire-other-row:focus-within {
+	box-shadow: inset 0 0 0 1px var(--text-dim);
 }
 
 .questionnaire-other-input::placeholder {
@@ -6173,7 +6850,7 @@ button {
 	justify-content: center;
 	width: 32px;
 	height: 32px;
-	border-radius: 16px;
+	border-radius: 50%;
 	background: var(--bg-hover);
 	color: var(--text-faint);
 	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
@@ -6196,8 +6873,7 @@ button {
 
 /*
  * 审批或问卷 pending 时亮在当前会话行（时间戳之前，flex:none 常驻可见）。
- * 琥珀色与 toast-warning 同色（#d9822b），token 体系统一时一并收口
- * （先例见 mcp-badge-connecting 的头注释）。
+ * 琥珀色与 toast-warning 同色，已收口为 --warning。
  */
 .task-confirm-badge {
 	flex: none;
@@ -6205,6 +6881,23 @@ button {
 	border-radius: 5px;
 	font-size: 11px;
 	line-height: 1.5;
-	color: #d9822b;
-	background: color-mix(in srgb, #d9822b 12%, var(--bg));
+	color: var(--warning);
+	background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+}
+
+/*
+ * 减少动态偏好的全局兜底：一处收口替代逐区块补丁 —— 新增动画不必
+ * 再各自记挂 reduced-motion 变体（0.01ms 近似即时，保留事件时序）。
+ * !important 只为压过内联与未来的逐区块规则；既有逐区块规则保留，
+ * 与本条不冲突（同值或更细的「退化形态」定义，如扫光退静态文字）。
+ */
+@media (prefers-reduced-motion: reduce) {
+
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
 }

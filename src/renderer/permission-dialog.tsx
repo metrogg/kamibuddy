@@ -55,13 +55,21 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 
 	return (
 		<div className="modal-backdrop">
-			<div className={`permission-card risk-${request.risk}`} role="alertdialog" aria-modal="true">
+			<div
+				className={`permission-card risk-${request.risk}`}
+				role="alertdialog"
+				aria-modal="true"
+				aria-labelledby="permission-summary"
+			>
 				<div className="permission-head">
 					<span className={`permission-badge risk-${request.risk}`}>{RISK_TEXT[request.risk]}</span>
 					<span className="permission-tool">{request.toolName}</span>
 				</div>
 
-				<p className="permission-summary">{request.summary}</p>
+				{/* summary 同时当可访问名：它是用户判断批不批的那句话，alertdialog 的名字理应就是它。 */}
+				<p className="permission-summary" id="permission-summary">
+					{request.summary}
+				</p>
 
 				{hasDetails && (
 					<>

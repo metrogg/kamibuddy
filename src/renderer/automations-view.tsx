@@ -497,12 +497,23 @@ function AutomationForm({
 }): React.JSX.Element {
 	const patch = (part: Partial<FormDraft>): void => onChange({ ...draft, ...part });
 
+	// Esc 关闭：遮罩不响应点击是防误触（表单内容多，误触一次全丢），
+	// 但键盘用户需要一个非指针的退出路径，语义与「取消」按钮一致。
+	// 保存中不关：与「取消」按钮 disabled 同口径，避免请求在途时弹层消失。
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape" && !saving) onCancel();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [saving, onCancel]);
+
 	return (
 		// 遮罩不响应点击关闭：表单内容多，误触一次全丢，只能从按钮退出
 		// （与权限弹窗「不许悬空」的考虑一致）。
 		<div className="modal-backdrop">
-			<div className="auto-form-card" role="dialog" aria-modal="true">
-				<h2 className="save-space-title">
+			<div className="auto-form-card" role="dialog" aria-modal="true" aria-labelledby="auto-form-title">
+				<h2 className="save-space-title" id="auto-form-title">
 					{draft.id === undefined ? "新建定时任务" : "编辑定时任务"}
 				</h2>
 
@@ -544,6 +555,7 @@ function AutomationForm({
 								className={
 									draft.scheduleType === type ? "mini-btn active" : "mini-btn"
 								}
+								aria-pressed={draft.scheduleType === type}
 								onClick={() => patch({ scheduleType: type })}
 							>
 								{label}

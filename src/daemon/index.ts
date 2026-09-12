@@ -2136,9 +2136,9 @@ const handlers: Record<string, Handler> = {
 	},
 
 	/**
-	 * 专家列表：renderer「专家 ▸」子菜单与对话头部的展示数据源。
+	 * 专家列表：renderer「专家 ▸」子菜单、对话头部与起手 chips 的展示数据源。
 	 * 每次现载不缓存（与 setExpert 的校验同一条读路径，用户级覆盖即时生效）；
-	 * 只映射展示三字段，人格正文不下发 —— compose 时 daemon 自取。
+	 * 只映射展示字段，人格正文不下发 —— compose 时 daemon 自取。
 	 */
 	[INVOKE.listExperts]: async () =>
 		loadExpertsNow().map((e) => ({
@@ -2146,6 +2146,10 @@ const handlers: Record<string, Handler> = {
 			displayName: e.displayName,
 			profession: e.profession,
 			description: e.description,
+			displayDescription: e.displayDescription,
+			quickPrompts: e.quickPrompts,
+			tags: e.tags,
+			source: e.source,
 		})),
 
 	/**

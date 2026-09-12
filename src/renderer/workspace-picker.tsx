@@ -48,6 +48,17 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 		});
 	}, [open]);
 
+	// Esc 关闭弹层：弹层没有键盘焦点管理，Esc 是键盘用户唯一的关闭路径；
+	// 与 backdrop 互补（一个管键盘，一个管指针）。同 model-menu 约定。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
+
 	const fail = (e: unknown): void => {
 		setError(e instanceof Error ? e.message : String(e));
 		setBusy(false);
@@ -151,10 +162,16 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 								<div className="ws-create">
 									<input
 										value={name}
+										aria-label="新工作空间名称"
 										onChange={(e) => setName(e.target.value)}
 										onKeyDown={(e) => {
 											if (e.key === "Enter") create();
-											if (e.key === "Escape") setCreating(false);
+											if (e.key === "Escape") {
+												// 拦住冒泡：输入框的 Esc 只退出创建态，
+												// 不连带触发弹层级的 Esc 关闭。
+												e.stopPropagation();
+												setCreating(false);
+											}
 										}}
 										placeholder="空间名称，如：季度汇报"
 										disabled={busy}
