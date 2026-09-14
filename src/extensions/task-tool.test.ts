@@ -9,13 +9,17 @@
  *   - agent 不存在 → 可用清单（name + description）回给模型改选，且不消耗预算；
  *   - spawn 预算：每个子任务消耗 1，耗尽给预算文案（单发/并行/链式口径一致）；
  *   - 并行并发派发与汇总文案；链式 {previous} 替换与失败即停；
- *   - runSubagent 抛错 → 诊断文本（不是工具异常）。
+ *   - runSubagent 抛错 → 诊断文本（不是工具异常）；
+ *   - 子代理状态投影：onUpdate 部分结果的 details.subagents（queued →
+ *     running → done/failed、activity 剥前缀、并行同名按下标各自独立），
+ *     终态 details 与 results 同投影。
  */
 
 import { describe, expect, it } from "vitest";
 import { Compile } from "typebox/compile";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "../core/agents.ts";
+import type { SubagentStatus } from "../shared/session-events.ts";
 import {
 	taskExtensionFactory,
 	type SubagentRunOutcome,
@@ -29,12 +33,21 @@ interface SubtaskReport {
 	readonly turns: number;
 }
 
+interface FakeDetails {
+	readonly mode: "single" | "parallel" | "chain";
+	readonly results: readonly SubtaskReport[];
+	readonly subagents: readonly SubagentStatus[];
+}
+
 interface FakeToolResult {
 	readonly content: ReadonlyArray<{ type: "text"; text: string }>;
-	readonly details: {
-		readonly mode: "single" | "parallel" | "chain";
-		readonly results: readonly SubtaskReport[];
-	};
+	readonly details: FakeDetails;
+}
+
+/** onUpdate 收到的部分结果（与终态同形状：results 恒空，投影在 subagents）。 */
+interface FakePartial {
+	readonly content: ReadonlyArray<{ type: "text"; text: string }>;
+	readonly details: FakeDetails;
 }
 
 interface FakeToolDef {
@@ -318,21 +331,134 @@ describe("链式模式", () => {
 	});
 });
 
-describe("进度与中断接线", () => {
-	it("execute 的 onUpdate 作为 onProgress 传给执行器（tool_progress 的源头）", async () => {
-		const { tool, calls } = mount();
-		const updates: string[] = [];
-		await tool.execute("t1", { agent: "scout", task: "查一下" }, undefined, (partial) => {
-			const p = partial as { content: Array<{ type: string; text: string }> };
-			updates.push(p.content[0]?.text ?? "");
-		});
-		// 工具本身不造进展文案（那是执行器的职责），但通道必须接通：
-		// 执行器拿到的 onProgress 调一次，onUpdate 就该收一次。
-		expect(calls[0]?.onProgress).toBeDefined();
-		calls[0]?.onProgress?.("scout：正在 read a.md");
-		expect(updates).toEqual(["scout：正在 read a.md"]);
+describe("子代理状态投影", () => {
+	/** 收集 onUpdate 的全部部分结果。 */
+	function collect(): { partials: FakePartial[]; onUpdate: (partial: unknown) => void } {
+		const partials: FakePartial[] = [];
+		return { partials, onUpdate: (partial) => partials.push(partial as FakePartial) };
+	}
+
+	it("初始化即发全 queued 投影；部分结果 content 文本恒空，进度全走 details.subagents", async () => {
+		const { tool } = mount();
+		const { partials, onUpdate } = collect();
+		await tool.execute("t1", { agent: "scout", task: "查一下" }, undefined, onUpdate);
+
+		expect(partials.length).toBeGreaterThan(0);
+		for (const p of partials) {
+			expect(p.content[0]?.text).toBe("");
+			expect(p.details.results).toEqual([]);
+		}
+		expect(partials[0]?.details.subagents).toEqual([
+			{ agent: "scout", task: "查一下", status: "queued", activity: "", turns: 0 },
+		]);
 	});
 
+	it("onProgress 剥掉「agent名：」前缀落到该条目 activity；完成置 done 带 turns/output", async () => {
+		const { tool } = mount({
+			behavior: async (request) => {
+				request.onProgress?.(`${request.agent.name}：正在 read a.md`);
+				return { output: "侦察完毕", turns: 3 };
+			},
+		});
+		const { partials, onUpdate } = collect();
+		const result = await tool.execute("t1", { agent: "scout", task: "查一下" }, undefined, onUpdate);
+
+		// 时序：queued（初始化）→ running（起跑）→ running（activity 更新）→ done。
+		expect(partials.map((p) => p.details.subagents[0]?.status)).toEqual([
+			"queued",
+			"running",
+			"running",
+			"done",
+		]);
+		expect(partials[2]?.details.subagents[0]?.activity).toBe("正在 read a.md");
+
+		expect(result.details.subagents).toEqual([
+			{
+				agent: "scout",
+				task: "查一下",
+				status: "done",
+				activity: "正在 read a.md",
+				turns: 3,
+				output: "侦察完毕",
+			},
+		]);
+		// 模型看到的回传文本不受投影改造影响。
+		expect(result.content[0]?.text).toContain("侦察完毕");
+	});
+
+	it("失败置 failed，output 是诊断文本（turns 归零）", async () => {
+		const { tool } = mount({
+			behavior: async () => {
+				throw new Error("timeout");
+			},
+		});
+		const result = await tool.execute("t1", { agent: "scout", task: "查一下" });
+		expect(result.details.subagents[0]).toMatchObject({
+			status: "failed",
+			output: "timeout",
+			turns: 0,
+		});
+	});
+
+	it("并行同名 agent 各自独立：按下标定位，不按名字合并", async () => {
+		const { tool } = mount({
+			behavior: async (request) => {
+				request.onProgress?.(`${request.agent.name}：正在处理${request.task}`);
+				return { output: `产出${request.task}`, turns: 1 };
+			},
+		});
+		const { partials, onUpdate } = collect();
+		const result = await tool.execute(
+			"t1",
+			{
+				tasks: [
+					{ agent: "scout", task: "甲" },
+					{ agent: "scout", task: "乙" },
+				],
+			},
+			undefined,
+			onUpdate,
+		);
+
+		// 甲起跑时乙还在排队：两个条目的状态/活动各自推进，互不覆盖。
+		const firstRunning = partials.find((p) => p.details.subagents[0]?.status === "running");
+		expect(firstRunning?.details.subagents[1]?.status).toBe("queued");
+		expect(
+			firstRunning?.details.subagents.map((s) => s.activity),
+		).toEqual(["", ""]);
+
+		expect(result.details.subagents).toEqual([
+			{ agent: "scout", task: "甲", status: "done", activity: "正在处理甲", turns: 1, output: "产出甲" },
+			{ agent: "scout", task: "乙", status: "done", activity: "正在处理乙", turns: 1, output: "产出乙" },
+		]);
+	});
+
+	it("链式失败即停：未执行的后续步在投影里保持 queued（如实表达没轮到）", async () => {
+		const { tool } = mount({
+			behavior: async (request) => {
+				if (request.agent.name === "worker") throw new Error("权限被拒");
+				return { output: "第一步行", turns: 3 };
+			},
+		});
+		const result = await tool.execute("t1", {
+			chain: [
+				{ agent: "scout", task: "第一步" },
+				{ agent: "worker", task: "第二步" },
+				{ agent: "scout", task: "第三步" },
+			],
+		});
+		expect(result.details.subagents.map((s) => s.status)).toEqual(["done", "failed", "queued"]);
+	});
+
+	it("agent 不存在：该条目置 failed，output 是可用清单指导", async () => {
+		const { tool } = mount();
+		const result = await tool.execute("t1", { agent: "ghost", task: "查一下" });
+		expect(result.details.subagents[0]?.status).toBe("failed");
+		expect(result.details.subagents[0]?.output).toContain("没有名为「ghost」的子代理");
+	});
+});
+
+describe("中断接线", () => {
 	it("signal 原样传给执行器（主会话中断的传播链）", async () => {
 		const { tool, calls } = mount();
 		const controller = new AbortController();

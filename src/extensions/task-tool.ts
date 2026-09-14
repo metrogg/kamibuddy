@@ -14,13 +14,18 @@
  * 语义必须由我们自己判定，混合入参得到的是明确指导而不是被静默选边。
  * schema 仍负责各分支的形状边界（1-8 个、非空字符串）。
  *
- * 进度：execute 的 onUpdate 是 pi 提供的部分结果通道，经 SessionHost 翻成
- * tool_progress 更新工具卡 —— 子代理执行器的 onProgress 回调就接到这里。
+ * 进度：execute 的 onUpdate 是 pi 提供的部分结果通道，但走的不是文本——
+ * 每次子代理状态变化都发一份**全量投影**（details.subagents，整体替换语义，
+ * 契约见 shared/session-events.ts 的 SubagentStatus 注释），由 SessionHost
+ * 桥接成 subagent_progress 事件。并行多代理各自推进，文本 delta 会让进度行
+ * 交错混在一行 detail 里，投影替换则幂等且天然分组；模型看到的回传
+ * （content 文本）不受影响，只改 UI 进度通道。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
+import type { SubagentStatus } from "../shared/session-events.ts";
 
 /** 委派给执行器的一次子代理运行（cwd 由 daemon 装配时补注入）。 */
 export interface SubagentRunRequest {
@@ -58,6 +63,12 @@ interface SubtaskReport {
 interface TaskToolDetails {
 	readonly mode: "single" | "parallel" | "chain";
 	readonly results: readonly SubtaskReport[];
+	/**
+	 * 子代理运行状态的全量投影（UI 进度通道，整体替换语义）。
+	 * 部分结果与终态同形状：部分结果里 results 恒空、靠 subagents 表达进展；
+	 * 终态两者皆全，subagents 与 results 一一对应（同下标）。
+	 */
+	readonly subagents: readonly SubagentStatus[];
 }
 
 const TaskItem = Type.Object({
@@ -158,65 +169,115 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 									"请按其中一种重新调用。",
 							},
 						],
-						details: { mode: "single", results: [] },
+						details: { mode: "single", results: [], subagents: [] },
 					};
 				}
 				const mode: TaskToolDetails["mode"] =
 					tasks !== undefined ? "parallel" : chain !== undefined ? "chain" : "single";
 
 				const agents = options.listAgents();
-				const progress = (text: string): void => {
-					// 部分结果只携带进展一句话，details 给占位空结构（形状必须与终态一致）。
+
+				/*
+				 * 状态投影：按下标定位（同名 agent 在并行/链式里可同时出现多次，
+				 * 名字不能当键）。每次变化发一份全量拷贝 —— 消费端整体替换，
+				 * 发可变本体引用会让 UI 与后续突变纠缠。
+				 * 初始化即发一次（全 queued）：工具卡从执行开始就能摆出全部
+				 * 子任务的分组骨架，而不是等第一个子代理起跑才有内容。
+				 */
+				const plan: ReadonlyArray<{ agent: string; task: string }> =
+					tasks ??
+					chain ??
+					// 走到这里三选一判定已保证单发两半齐全；写全条件让窄化自足。
+					(singleAgent !== undefined && singleTask !== undefined
+						? [{ agent: singleAgent, task: singleTask }]
+						: []);
+				const projection: SubagentStatus[] = plan.map((p) => ({
+					agent: p.agent,
+					task: p.task,
+					status: "queued",
+					activity: "",
+					turns: 0,
+				}));
+				const emitProjection = (): void => {
+					// content 文本恒空：进度全走 details.subagents，文本 delta 通道
+					// 对多代理分组进度是负资产（交错混杂），details 形状与终态一致。
 					onUpdate?.({
-						content: [{ type: "text" as const, text }],
-						details: { mode, results: [] },
+						content: [{ type: "text" as const, text: "" }],
+						details: { mode, results: [], subagents: projection.map((s) => ({ ...s })) },
 					});
 				};
+				const patchEntry = (index: number, patch: Partial<SubagentStatus>): void => {
+					const current = projection[index];
+					if (current === undefined) return;
+					projection[index] = { ...current, ...patch };
+					emitProjection();
+				};
+				emitProjection();
 
-				const runOne = async (agentName: string, taskText: string): Promise<SubtaskReport> => {
+				// 执行器的进展文本带「agent名：」前缀（daemon/subagent-runner.ts 的口径），
+				// 投影的 agent 字段已有名字，activity 只留动作部分，不重复显示。
+				const stripPrefix = (agentName: string, text: string): string => {
+					const prefix = `${agentName}：`;
+					return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+				};
+
+				const runOne = async (
+					index: number,
+					agentName: string,
+					taskText: string,
+				): Promise<SubtaskReport> => {
 					const agent = agents.find((a) => a.name === agentName);
 					// agent 不存在不消耗预算：这是入参错误，不是一次真实执行。
 					if (agent === undefined) {
-						return {
-							agent: agentName,
-							ok: false,
-							text: `没有名为「${agentName}」的子代理。${availableAgentsText(agents)}\n请改用上述之一重新委派。`,
-							turns: 0,
-						};
+						const text = `没有名为「${agentName}」的子代理。${availableAgentsText(agents)}\n请改用上述之一重新委派。`;
+						patchEntry(index, { status: "failed", output: text });
+						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 					if (!options.checkBudget()) {
+						patchEntry(index, { status: "failed", output: BUDGET_EXHAUSTED_TEXT });
 						return { agent: agentName, ok: false, text: BUDGET_EXHAUSTED_TEXT, turns: 0 };
 					}
+					patchEntry(index, { status: "running" });
 					try {
 						const { output, turns } = await options.runSubagent({
 							agent,
 							task: taskText,
 							...(signal === undefined ? {} : { signal }),
-							onProgress: progress,
+							// 排队消息（并发上限超出的「排队等待空位」）也经此落到
+							// activity：状态保持 running，等待原因对用户可见。
+							onProgress: (text) =>
+								patchEntry(index, { activity: stripPrefix(agent.name, text) }),
 						});
+						patchEntry(index, { status: "done", turns, output });
 						return { agent: agentName, ok: true, text: output, turns };
 					} catch (error) {
 						// 子代理失败不是工具失败：诊断回给主代理，由它决定换路还是如实上报。
-						return {
-							agent: agentName,
-							ok: false,
-							text: error instanceof Error ? error.message : String(error),
-							turns: 0,
-						};
+						const text = error instanceof Error ? error.message : String(error);
+						patchEntry(index, { status: "failed", output: text });
+						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 				};
 
+				/** 终态 details：results 给模型/回放，subagents 给 UI 终态卡（同投影拷贝语义）。 */
+				const finalDetails = (results: readonly SubtaskReport[]): TaskToolDetails => ({
+					mode,
+					results,
+					subagents: projection.map((s) => ({ ...s })),
+				});
+
 				if (singleAgent !== undefined && singleTask !== undefined) {
-					const report = await runOne(singleAgent, singleTask);
+					const report = await runOne(0, singleAgent, singleTask);
 					return {
 						content: [{ type: "text" as const, text: formatReport(report) }],
-						details: { mode, results: [report] },
+						details: finalDetails([report]),
 					};
 				}
 
 				if (tasks !== undefined) {
 					// 并发派发，执行器内部的并发闸（4）负责排队，这里不需要再限流。
-					const reports = await Promise.all(tasks.map((t) => runOne(t.agent, t.task)));
+					const reports = await Promise.all(
+						tasks.map((t, index) => runOne(index, t.agent, t.task)),
+					);
 					const okCount = reports.filter((r) => r.ok).length;
 					return {
 						content: [
@@ -227,7 +288,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 									reports.map(formatReport).join("\n\n---\n\n"),
 							},
 						],
-						details: { mode, results: reports },
+						details: finalDetails(reports),
 					};
 				}
 
@@ -236,11 +297,12 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					throw new Error("task 工具模式判定失效：三种用法均未命中");
 				}
 				// 链式：顺序执行，{previous} 替换为上一步输出（首步无占位内容，替换为空串）；
-				// 任一步失败即停，返回已完成步与失败步骤诊断。
+				// 任一步失败即停，返回已完成步与失败步骤诊断。未执行的后续步在投影里
+				// 保持 queued —— 如实表达「没轮到」，不编一个取消态。
 				const reports: SubtaskReport[] = [];
 				let previous = "";
-				for (const step of chain) {
-					const report = await runOne(step.agent, step.task.replaceAll("{previous}", previous));
+				for (const [index, step] of chain.entries()) {
+					const report = await runOne(index, step.agent, step.task.replaceAll("{previous}", previous));
 					reports.push(report);
 					if (!report.ok) {
 						return {
@@ -252,7 +314,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 										reports.map(formatReport).join("\n\n---\n\n"),
 								},
 							],
-							details: { mode, results: reports },
+							details: finalDetails(reports),
 						};
 					}
 					previous = report.text;
@@ -266,7 +328,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 								reports.map(formatReport).join("\n\n---\n\n"),
 						},
 					],
-					details: { mode, results: reports },
+					details: finalDetails(reports),
 				};
 			},
 		});

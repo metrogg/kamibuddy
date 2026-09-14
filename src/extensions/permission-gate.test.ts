@@ -13,9 +13,11 @@
 import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { appendPermissionRule } from "../core/permission-rules-store.ts";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
 import { DEFAULT_PERMISSIONS, type PermissionSettings } from "../shared/permissions.ts";
 import { createPermissionGate } from "./permission-gate.ts";
+import { rememberRuleFromApproval, type PermissionRule } from "./permission-rules.ts";
 
 const HOME = resolve(sep, "users", "someone");
 const WORKSPACE = join(HOME, "KamiBuddy");
@@ -36,20 +38,25 @@ type Handler = (event: FakeToolCallEvent) => Promise<{ block?: boolean; reason?:
  * 返回的 setSettings 可在运行中改权限档位 —— 镜像 daemon 的真实形态
  * （getSettings 读的是模块级变量，用户改预设后立即变），
  * 这样"切档后旧批准是否失效"才测得出来。
+ * setRules 同理镜像 getRules 的 getter 形态：批准写回（appendRule）后，
+ * 已装好的门下一次工具调用就该按新规则集判。
  */
 function mount(options: {
 	readonly approve?: (
 		request: Omit<PermissionRequest, "id" | "sessionId">,
 	) => PermissionResponse;
 	readonly settings?: PermissionSettings;
+	readonly rules?: readonly PermissionRule[];
 }): {
 	readonly call: Handler;
 	readonly asked: Array<Omit<PermissionRequest, "id" | "sessionId">>;
 	readonly setSettings: (next: PermissionSettings) => void;
+	readonly setRules: (next: readonly PermissionRule[]) => void;
 } {
 	const asked: Array<Omit<PermissionRequest, "id" | "sessionId">> = [];
 	let captured: Handler | undefined;
 	let settings: PermissionSettings = options.settings ?? DEFAULT_PERMISSIONS;
+	let rules: readonly PermissionRule[] = options.rules ?? [];
 
 	const fakePi = {
 		on: (event: string, handler: unknown) => {
@@ -61,6 +68,7 @@ function mount(options: {
 		paths: { workspaceDir: WORKSPACE, configDir: CONFIG },
 		cwd: WORKSPACE,
 		getSettings: () => settings,
+		getRules: () => rules,
 		requestApproval: async (request) => {
 			asked.push(request);
 			return options.approve?.(request) ?? { id: "x", decision: "deny" };
@@ -73,6 +81,9 @@ function mount(options: {
 		asked,
 		setSettings: (next) => {
 			settings = next;
+		},
+		setRules: (next) => {
+			rules = next;
 		},
 	};
 }
@@ -386,5 +397,123 @@ describe("设置每次现读（getter 而非快照）", () => {
 		expect(await captured({ toolName: "write", input: { path: join(WORKSPACE, "a.md") } })).toBeUndefined();
 		expect(await captured({ toolName: "write", input: { path: OUTSIDE } })).toBeUndefined();
 		expect(asked).toHaveLength(1);
+	});
+});
+
+/* ── powershell 持久前缀规则（getRules 透传，spec: add-permission-rules-engine） ── */
+
+describe("powershell 前缀规则（getRules 透传）", () => {
+	it("allow 规则命中：不弹窗直接放行", async () => {
+		const { call, asked } = mount({ rules: [{ tool: "powershell", prefix: "git", action: "allow" }] });
+
+		const result = await call({ toolName: "powershell", input: { command: "git status --short" } });
+
+		expect(result).toBeUndefined();
+		expect(asked).toHaveLength(0);
+	});
+
+	it("deny 规则命中：直拒不弹窗，原因（含规则来源）回给模型", async () => {
+		const { call, asked } = mount({ rules: [{ tool: "powershell", prefix: "Remove-Item", action: "deny" }] });
+
+		const result = await call({ toolName: "powershell", input: { command: "Remove-Item ./a" } });
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("Remove-Item");
+		expect(asked).toHaveLength(0);
+	});
+
+	it("拆分最严获胜：git allow 下 `git status && Remove-Item ./dist` 仍高风险弹窗", async () => {
+		// 第二段无命中 → 规则不表态 → 维持现状询问，不被 git 规则放行。
+		const { call, asked } = mount({
+			approve: () => ({ id: "x", decision: "allow" }),
+			rules: [{ tool: "powershell", prefix: "git", action: "allow" }],
+		});
+
+		await call({ toolName: "powershell", input: { command: "git status && Remove-Item ./dist" } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
+	});
+
+	it("read-only 档下 allow 规则不生效（规则阶段在只读拒绝之后）", async () => {
+		const { call, asked } = mount({
+			settings: { sandbox: "read-only", approval: "ask" },
+			rules: [{ tool: "powershell", prefix: "git", action: "allow" }],
+		});
+
+		const result = await call({ toolName: "powershell", input: { command: "git status" } });
+
+		expect(result?.block).toBe(true);
+		expect(asked).toHaveLength(0);
+	});
+
+	it("规则放行与「本次会话记住」互不相干：allow 规则命中不经过 remembered", async () => {
+		// shell 询问是高风险，remembered 本来就不记它（gate 的双保险）；
+		// 规则是 shell 唯一的免问通道 —— 钉住「规则 allow 后 bash 同类命令仍要问」
+		// 的边界：免问效果来自规则本身，不是记住了什么。
+		const { call, asked } = mount({ rules: [{ tool: "powershell", prefix: "git", action: "allow" }] });
+
+		await call({ toolName: "powershell", input: { command: "git status" } });
+		await call({ toolName: "bash", input: { command: "git status" } });
+
+		expect(asked).toHaveLength(1); // 只有 bash 弹了窗
+		expect(asked[0]).toMatchObject({ toolName: "bash", risk: "high" });
+	});
+});
+
+/* ── 批准写回（rememberPrefix → 规则 → 免问，spec Task 3） ────────────── */
+
+describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
+	/*
+	 * daemon/index.ts 无法直接单测（模块顶层 requireParentPort 在非 utilityProcess
+	 * 下即抛），所以这里用「门 + daemon 回程 handler 的同款纯函数」复现整条链路：
+	 *   审批响应带 rememberPrefix → rememberRuleFromApproval 校验构造
+	 *   → appendPermissionRule 幂等并入 → 门的 getRules 下一次调用即按新规则判。
+	 * 校验本身的边界用例（解释器/分隔符/空白/非 powershell/deny）在
+	 * permission-rules.test.ts 的 rememberRuleFromApproval 套件里。
+	 */
+	it("端到端链路：勾选写回并允许后，同类命令不再弹窗", async () => {
+		const { call, asked, setRules } = mount({
+			approve: () => ({ id: "x", decision: "allow", rememberPrefix: "git" }),
+		});
+
+		// 第一次：无规则，高风险弹窗；用户勾「以后都允许「git」开头的命令」并允许。
+		const first = await call({ toolName: "powershell", input: { command: "git log --oneline" } });
+		expect(first).toBeUndefined();
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
+
+		// daemon 审批回程 handler 的同款路径：校验载荷 → 构造规则 → 幂等并入内存规则集。
+		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "git" });
+		expect(rule).toEqual({ tool: "powershell", prefix: "git", action: "allow" });
+		if (rule === undefined) throw new Error("应产出规则");
+		setRules(appendPermissionRule(rule, []));
+
+		// 后续同类命令命中 allow 规则，免弹窗 —— 「写回即刻生效」由 getRules getter 保证。
+		const second = await call({ toolName: "powershell", input: { command: "git diff" } });
+		expect(second).toBeUndefined();
+		expect(asked).toHaveLength(1);
+	});
+
+	it("幂等：同一条规则重复写回，规则集引用不变（不落盘）", () => {
+		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "git" });
+		if (rule === undefined) throw new Error("应产出规则");
+		const once = appendPermissionRule(rule, []);
+		expect(appendPermissionRule(rule, once)).toBe(once);
+	});
+
+	it("非法 rememberPrefix 载荷不产生规则，同类命令仍逐次询问", async () => {
+		// 解释器前缀：写回它等于允许一切，daemon 侧必须忽略（弹窗本就不显示该选项，
+		// 这里模拟的是被篡改的渲染进程硬发）。
+		const { call, asked } = mount({
+			approve: () => ({ id: "x", decision: "allow", rememberPrefix: "python" }),
+		});
+
+		await call({ toolName: "powershell", input: { command: "python script.py" } });
+		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "python" });
+		expect(rule).toBeUndefined();
+		// 规则集维持为空（setRules 从未被调），下一次同类命令照样弹窗。
+		await call({ toolName: "powershell", input: { command: "python other.py" } });
+		expect(asked).toHaveLength(2);
 	});
 });

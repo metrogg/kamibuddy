@@ -582,10 +582,10 @@ export function App(): React.JSX.Element {
 	 * 或该请求已被别处应答），把弹窗留在屏幕上只会让用户反复点击一个死按钮。
 	 */
 	const decideApproval = useCallback(
-		(id: string, decision: "allow" | "deny", remember: boolean) => {
+		(id: string, decision: "allow" | "deny", remember: boolean, rememberPrefix?: string) => {
 			setApprovals((queue) => queue.filter((item) => item.id !== id));
 			window.kami
-				.respondToPermission({ id, decision, remember })
+				.respondToPermission({ id, decision, remember, ...(rememberPrefix === undefined ? {} : { rememberPrefix }) })
 				.catch((error: unknown) => {
 					showToast(error instanceof Error ? error.message : String(error));
 				});
@@ -1244,9 +1244,9 @@ export function App(): React.JSX.Element {
 				<PermissionDialog
 					key={approvals[0].id}
 					request={approvals[0]}
-					onDecide={(decision, remember) => {
+					onDecide={(decision, remember, rememberPrefix) => {
 						const head = approvals[0];
-						if (head !== undefined) decideApproval(head.id, decision, remember);
+						if (head !== undefined) decideApproval(head.id, decision, remember, rememberPrefix);
 					}}
 				/>
 			)}

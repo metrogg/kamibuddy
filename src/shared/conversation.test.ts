@@ -13,6 +13,7 @@ import type {
 	ConversationEntry,
 	SessionEvent,
 	SessionSnapshot,
+	SubagentStatus,
 	ToolCard,
 } from "./session-events.ts";
 import type { PresentedFile } from "./artifacts.ts";
@@ -247,6 +248,56 @@ describe("工具卡片", () => {
 
 		expect(view.entries).toHaveLength(1);
 		expect(view.entries[0]).toEqual(done);
+	});
+});
+
+describe("subagent_progress 子代理投影", () => {
+	const agent = (name: string, overrides: Partial<SubagentStatus> = {}): SubagentStatus => ({
+		agent: name,
+		task: `${name} 的任务`,
+		status: "running",
+		activity: "正在 web_search 资料",
+		turns: 1,
+		...overrides,
+	});
+
+	it("投影落到对应 id 的工具卡上（全量替换语义）", () => {
+		const view = apply([
+			{ type: "tool_started", card: toolCard({ toolName: "task", label: "委派子代理" }) },
+			{ type: "subagent_progress", id: "t1", agents: [agent("researcher"), agent("writer")] },
+		]);
+
+		expect(view.entries).toHaveLength(1);
+		expect((view.entries[0] as ToolCard).subagents).toEqual([
+			agent("researcher"),
+			agent("writer"),
+		]);
+	});
+
+	it("指向不存在的 id 时不编造卡片，原样返回", () => {
+		const view = apply([{ type: "subagent_progress", id: "ghost", agents: [agent("researcher")] }]);
+		expect(view.entries).toHaveLength(0);
+	});
+
+	it("指向非 tool 条目时不产生任何变化", () => {
+		const view = apply([
+			{ type: "assistant_started", messageId: "a1", at: 10 },
+			{ type: "subagent_progress", id: "a1", agents: [agent("researcher")] },
+		]);
+
+		expect(view.entries).toHaveLength(1);
+		expect(view.entries[0]).toMatchObject({ role: "assistant", text: "" });
+		expect((view.entries[0] as ToolCard).subagents).toBeUndefined();
+	});
+
+	it("二次到达整体替换而不是合并（2 个代理 → 1 个代理，最终为 1 个）", () => {
+		const view = apply([
+			{ type: "tool_started", card: toolCard({ toolName: "task", label: "委派子代理" }) },
+			{ type: "subagent_progress", id: "t1", agents: [agent("researcher"), agent("writer")] },
+			{ type: "subagent_progress", id: "t1", agents: [agent("researcher", { turns: 3 })] },
+		]);
+
+		expect((view.entries[0] as ToolCard).subagents).toEqual([agent("researcher", { turns: 3 })]);
 	});
 });
 

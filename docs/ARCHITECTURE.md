@@ -348,6 +348,25 @@ conversation_search 换本地 grep 会话 JSONL。
   全空零 token。
 - 身份层（SOUL/BOOTSTRAP）明确不做——与专家人格有交互，单独 spec。
 
+### 4.10 子代理活动走结构化投影，不走文本进度（2026-09-14，spec add-subagent-live-activity）
+
+子代理执行的可视化曾只有「一句话进度 → `tool_progress` 文本 delta → 追加到
+工具卡 detail」一条路，两个结构性缺陷：卡片默认折叠进度不可见；并行多代理的
+进度行交错混在同一段文本里，无法归因。改为 **task 工具在部分结果 details 携带
+`subagents` 全量投影**（每代理：状态/最新动作/轮数/终态输出），session-host 桥接
+成 `subagent_progress` 事件，渲染层 TaskAgentCard 按代理分组实时渲染。
+
+关键子决策：
+- **整体替换语义，不做增量合并**：并行代理各自推进，增量合并会逼出键控 diff
+  （同名 agent 并行时名字不能当键）；全量投影幂等，重放与实时同一条 reducer 路径。
+- **隔离设计不破**：子会话事件仍不直接转发主会话事件流（subagent-runner 收集型
+  emit 不变）；活动信息只经 task 工具的 details 投影，主消息流不冒子会话工具卡。
+- **模型通道与 UI 通道分离**：投影期部分结果 content 文本恒空（模型终态才拿
+  formatReport 汇总）；session-host 的 subagents 判定必须先于「空串早退」，
+  否则投影被静默吞掉。
+- **卡片默认展开规则**：运行中展开（用户正要看）、终态折叠（结论优先），
+  用户手动开合优先——与 TodoListCard 同一语义族。
+
 ## 5. pi 能力边界（D1 验证结论）
 
 | 项                     | 结论                                                                                                          |

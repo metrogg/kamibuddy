@@ -305,6 +305,16 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				),
 			};
 
+		case "subagent_progress":
+			// 整体替换语义：每次携带全量投影直接覆盖，不做增量合并
+			// （契约见 session-events.ts 的 SubagentStatus 注释）。
+			return {
+				...view,
+				entries: replaceEntry(view.entries, event.id, (entry) =>
+					entry.role === "tool" ? { ...entry, subagents: event.agents } : entry,
+				),
+			};
+
 		case "tool_finished": {
 			const card: ToolCard = event.card;
 			const replaced = replaceEntry(view.entries, card.id, () => card);

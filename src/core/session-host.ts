@@ -29,6 +29,7 @@ import {
 import type {
 	SessionEvent,
 	SessionState,
+	SubagentStatus,
 	ThinkingLevel,
 	ToolCard,
 	ToolOutcome,
@@ -296,6 +297,20 @@ function toolResultText(result: unknown): string {
 function toolResultDetails(result: unknown): unknown {
 	if (typeof result !== "object" || result === null) return undefined;
 	return (result as { details?: unknown }).details;
+}
+
+/**
+ * task 工具的子代理投影（details.subagents）：部分结果与终态共用同一条通道。
+ *
+ * 运行时判空 + Array.isArray 防御 —— pi 的 details 是扩展自定义的 unknown，
+ * 非 task 工具（或旧格式会话）没有该键则返回 undefined，调用方走原逻辑。
+ * 数组项不逐字段校验：投影的生产方就是本仓库的 task 工具（同进程、同构建），
+ * 不是外来数据；逐项窄化是给不可信输入的，用在这里是纯防御性兜底。
+ */
+function subagentsOf(details: unknown): readonly SubagentStatus[] | undefined {
+	if (typeof details !== "object" || details === null) return undefined;
+	const subagents = (details as { subagents?: unknown }).subagents;
+	return Array.isArray(subagents) ? (subagents as readonly SubagentStatus[]) : undefined;
 }
 
 export interface SessionHostOptions {
@@ -1220,6 +1235,14 @@ export class SessionHost {
 			}
 
 			case "tool_execution_update": {
+				// task 工具的结构化投影优先于文本 delta，且判定必须放在取文本之前：
+				// 投影期 content.text 恒为空串（进度全走 details.subagents），
+				// 落到下面的空串早退会把整段投影静默吞掉。
+				const subagents = subagentsOf(toolResultDetails(event.partialResult));
+				if (subagents !== undefined) {
+					emit({ type: "subagent_progress", id: event.toolCallId, agents: subagents });
+					return;
+				}
 				const delta = toolResultText(event.partialResult);
 				if (delta === "") return;
 				emit({ type: "tool_progress", id: event.toolCallId, delta });
@@ -1262,6 +1285,11 @@ export class SessionHost {
 				const sources =
 					event.toolName === "web_search" ? parseSources(toolResultDetails(event.result)) : undefined;
 
+				// task 工具的子代理终态投影：与 sources 同源（result.details 只在
+				// execution_end 拿到），挂上后终态卡自带完整分组结果，不依赖
+				// 运行期 subagent_progress 是否到过（如恢复会话的回放路径）。
+				const subagents = subagentsOf(toolResultDetails(event.result));
+
 				emit({
 					type: "tool_finished",
 					card: {
@@ -1286,6 +1314,8 @@ export class SessionHost {
 						// tool_execution_end 事件不携带 args，见该处注释）。
 						...(started?.todos === undefined ? {} : { todos: started.todos }),
 						...(sources === undefined ? {} : { sources }),
+						// task 卡的终态投影（提取见上方 subagents 注释）。
+						...(subagents === undefined ? {} : { subagents }),
 						at: started?.at ?? Date.now(),
 					},
 				});

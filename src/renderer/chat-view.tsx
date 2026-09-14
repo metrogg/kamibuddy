@@ -51,6 +51,7 @@ import { activePendingAlign, decideScrollAction } from "./send-anchor.ts";
 import { computeChatContentWidth } from "./chat-content-width.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
 import { SourceFavicon } from "./sources-panel.tsx";
+import { TaskAgentCard } from "./task-agent-card.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import { projectTodoList, windowTodos } from "./todo-projection.ts";
 import {
@@ -1546,6 +1547,11 @@ export function ChatView({
 			// 是消息流最新内容时默认展开（活面板），历史位置默认折叠。
 			if (entry.toolName === "todo_write") {
 				return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
+			}
+			// task 工具带子代理投影时走分组活动卡（spec: add-subagent-live-activity）；
+			// 无投影的旧会话 task 卡回退普通工具卡（向后兼容）。
+			if (entry.toolName === "task" && entry.subagents !== undefined) {
+				return <TaskAgentCard key={entry.id} card={entry} />;
 			}
 			return <ToolEntry key={entry.id} card={entry} showChangeDetails={personalization.showChangeDetails} />;
 		}

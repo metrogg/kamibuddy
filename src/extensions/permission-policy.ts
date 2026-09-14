@@ -22,7 +22,9 @@
  *   2. 只读工具：无本地路径的一律放行；有路径的在工作区内放行，
  *      区外低风险询问（danger-full-access 不受限）
  *   3. 沙箱模式的范围约束（read-only 拒一切写与命令）
- *   4. 工具种类（shell 任何档都问；写工具按 应用目录内高风险询问 →
+ *   4. 工具种类（shell 任何档都问 —— 但 powershell 先过持久前缀规则：
+ *      全段 allow → 放行、任一段 deny → 直拒、无命中维持高风险询问，
+ *      spec: add-permission-rules-engine；写工具按 应用目录内高风险询问 →
  *      工作区内放行 → 区外询问 的顺序判；改应用自身数据的
  *      automation_create/delete 询问；MCP 工具询问；未知工具询问）
  *   5. 审批策略（ask → 弹窗；never → 确定性拒绝）
@@ -56,6 +58,7 @@ import {
 	type PermissionSettings,
 	type SandboxMode,
 } from "../shared/permissions.ts";
+import { evaluateCommand, type PermissionRule } from "./permission-rules.ts";
 
 /** 判定结果。ask 时需要弹窗，deny 时直接拒绝并把 reason 回给模型。 */
 export type PermissionDecision =
@@ -270,6 +273,10 @@ function isMemoryPath(target: string, configDir: string, cwd: string): boolean {
  * `settings` 省略时用 DEFAULT_PERMISSIONS（= workspace-write + ask），
  * **恰好等于引入沙箱模式之前的行为** —— 所以加这个参数不改变任何既有调用点。
  *
+ * `rules` 是持久前缀规则集（spec: add-permission-rules-engine），可选：
+ * 省略 = 无规则，powershell 维持逐次高风险询问。作为参数注入而不是在
+ * 本模块里读盘 —— 这一层保持纯函数、可单测，IO 归 daemon 装配侧。
+ *
  * 不写「未知工具一律放行」也不写「一律拒绝」：
  * 未知工具按 ask 处理，让人来决定 —— 这是 fail-safe 的默认，
  * 且不会悄悄阻断新能力。
@@ -279,8 +286,9 @@ export function decide(
 	paths: PolicyPaths,
 	cwd: string,
 	settings: PermissionSettings = DEFAULT_PERMISSIONS,
+	rules?: readonly PermissionRule[],
 ): PermissionDecision {
-	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox);
+	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules);
 
 	// 审批策略只作用在「要问」的结果上 —— allow / deny 都已是终局。
 	if (decision.kind !== "ask") return decision;
@@ -300,6 +308,7 @@ function decideUnderMode(
 	paths: PolicyPaths,
 	cwd: string,
 	mode: SandboxMode,
+	rules?: readonly PermissionRule[],
 ): PermissionDecision {
 	const { toolName, path: rawPath, command } = facts;
 
@@ -431,6 +440,29 @@ function decideUnderMode(
 		 */
 		if (toolName === "powershell" && mode === "danger-full-access") {
 			return { kind: "allow" };
+		}
+		/*
+		 * 规则阶段（spec: add-permission-rules-engine）：powershell 的持久前缀规则。
+		 *
+		 * 位置是有意的，三个「不越过」：
+		 *   - 在阶段 1（凭据禁区）与阶段 3（read-only 拒）之后 —— 凭据目录与
+		 *     只读档永远比规则强，用户写过 git allow 也不能在只读档跑 git；
+		 *   - 在 danger-full-access 放行之后 —— 该档语义是「不再逐次询问」，
+		 *     规则（含 deny）不参与，完全访问就是完全访问；
+		 *   - 在兜底高风险询问之前 —— 无命中（unmatched）维持现状逐次询问。
+		 *
+		 * bash 不走规则（上面注释的 fail-closed 理由不变）：它没有危险命令
+		 * 检查器，规则面先不覆盖 —— evaluateCommand 也只匹配 rule.tool ===
+		 * 调用工具的规则，powershell 的规则到不了 bash。
+		 *
+		 * 规则放行 ≠ 检查器放行：危险命令检查器（command-guard）在工具层独立
+		 * 运行，allow 规则放行的命令照样过检查器（iex 类照样拦）——
+		 * 「门管要不要问人，检查器管这条命令能不能跑」的分工不变。
+		 */
+		if (toolName === "powershell" && rules !== undefined && command !== undefined) {
+			const verdict = evaluateCommand(command, toolName, rules);
+			if (verdict.kind === "allow") return { kind: "allow" };
+			if (verdict.kind === "deny") return { kind: "deny", reason: verdict.reason };
 		}
 		return {
 			kind: "ask",

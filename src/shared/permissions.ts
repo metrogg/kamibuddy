@@ -192,3 +192,194 @@ export function canEscalate(from: SandboxMode, to: SandboxMode): boolean {
 export function resolveAsk(policy: ApprovalPolicy): "ask" | "deny" {
 	return policy === "ask" ? "ask" : "deny";
 }
+
+/* ── 持久前缀规则（permissions.rules.json） ────────────────────── */
+
+/**
+ * 一条持久的前缀规则（spec: add-permission-rules-engine）。
+ *
+ * 为什么住 shared/ 而不是 extensions/permission-rules.ts：
+ * 依赖方向是机械校验的（scripts/check-dependency-rules.ts）——
+ * core/ 不许 import extensions/，而规则文件的读写 store 在
+ * core/permission-rules-store.ts；批准写回（Task 3）的 IPC 载荷与审批弹窗
+ * 又要经过 renderer（只许 import shared/）。三处都要用的契约只能放这里。
+ *
+ * 没有 "ask" 态：无命中本来就是询问，写一条 ask 规则等于没写。
+ */
+export interface PermissionRule {
+	/** 规则作用的工具名。v1 只有 "powershell"（bash 无检查器，规则面先不覆盖）。 */
+	readonly tool: string;
+	/**
+	 * 命令段前缀：段以它开头、且其后紧跟空白或正好结尾才算命中
+	 * （git 命中 git status 与 git，不命中 gitx）。
+	 */
+	readonly prefix: string;
+	readonly action: "allow" | "deny";
+}
+
+/**
+ * 解析 permissions.rules.json 的正文，返回合法规则行。
+ *
+ * 全程降级不抛错（与 memory.ts 同口径）：规则文件是用户数据 —— 手改、
+ * 同步冲突、写一半断电都可能碰坏它。一行坏不该让整个权限判定炸掉，
+ * 也不该文件一坏就静默全放行；坏文件/坏行 = 该行不存在，判定自然回落到
+ * 「无命中 → 询问」这个 fail-closed 默认。
+ *
+ * version 字段不校验：v1 只有 1，将来加版本时老读法忽略新字段即可，
+ * 现在写死校验等于给未来的自己留一颗拒读的雷。
+ */
+export function parseRulesFile(json: string): readonly PermissionRule[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		return [];
+	}
+	if (typeof parsed !== "object" || parsed === null) return [];
+	const rules = (parsed as { readonly rules?: unknown }).rules;
+	if (!Array.isArray(rules)) return [];
+	const out: PermissionRule[] = [];
+	for (const row of rules as unknown[]) {
+		if (typeof row !== "object" || row === null) continue;
+		const record = row as Record<string, unknown>;
+		const tool = record["tool"];
+		const prefix = record["prefix"];
+		const action = record["action"];
+		if (typeof tool !== "string" || tool === "") continue;
+		if (typeof prefix !== "string" || prefix.trim() === "") continue;
+		if (action !== "allow" && action !== "deny") continue;
+		out.push({ tool, prefix, action });
+	}
+	return out;
+}
+
+/* ── 命令拆分与写回前缀提取 ────────────────────────────────────── */
+
+/*
+ * 这两个函数与 PermissionRule 同住 shared/ 的理由和 parseRulesFile 一样：
+ * 批准写回（spec: add-permission-rules-engine Task 3）的弹窗在 renderer
+ * （只许 import shared/）要用 firstTokenPrefix 决定给不给「以后都允许
+ * 「{首词}」开头的命令」选项，daemon 又要用同款校验守住 IPC 载荷 ——
+ * 而 firstTokenPrefix 依赖 splitCommand，两个只能一起搬。
+ * extensions/permission-rules.ts 保留 re-export，规则引擎的 API 面不断。
+ */
+
+/**
+ * 按**未加引号**的 `&&`、`||`、`;` 把命令切成段；trim、空段丢弃。
+ *
+ * 不切单 `|`：PowerShell 管道是单条数据流，`Get-ChildItem | Select-Object Name`
+ * 是日常写法，切了会把正常命令碎成「两段命令」而被规则误判。
+ * 代价（有意的注入面，写清而不是假装不存在）：
+ * `git status | Remove-Item x` 整段以 git 开头，会命中 git 的 allow 规则被放行 ——
+ * 管道后段藏在段内，规则看不到它。v1 接受这个缺口，因为兜底在工具层：
+ * 危险命令检查器（command-guard）对破坏类命令独立拦截，与规则互不相干
+ * （「门管要不要问人，检查器管能不能跑」）。
+ *
+ * 引号不区分单双：PowerShell 里 '...' 是字面量、"..." 内 $ 会展开，语义不同，
+ * 但拆分只关心「分隔符是否在字符串里」，两种引号内的分隔符都不切。
+ *
+ * 不解释转义（反引号、`""`）：看错的后果是引号状态提前结束、命令被多切 ——
+ * 多出的段无命中 → 回落询问，错误方向是 fail-closed 的，所以不为它堆复杂度。
+ */
+export function splitCommand(command: string): readonly string[] {
+	const segments: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+	const flush = (): void => {
+		const trimmed = current.trim();
+		if (trimmed !== "") segments.push(trimmed);
+		current = "";
+	};
+	let i = 0;
+	while (i < command.length) {
+		const ch = command.charAt(i);
+		if (quote !== undefined) {
+			if (ch === quote) quote = undefined;
+			current += ch;
+			i += 1;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			current += ch;
+			i += 1;
+			continue;
+		}
+		if (ch === ";") {
+			flush();
+			i += 1;
+			continue;
+		}
+		if ((ch === "&" && command.charAt(i + 1) === "&") || (ch === "|" && command.charAt(i + 1) === "|")) {
+			flush();
+			i += 2;
+			continue;
+		}
+		// 单个 &（调用运算符）与单个 |（管道）都不是分隔符，原样保留。
+		current += ch;
+		i += 1;
+	}
+	flush();
+	return segments;
+}
+
+/**
+ * 解释器/包装器首词黑名单（批准写回用）。
+ *
+ * 「允许 python 开头的所有命令」等于允许一切 —— `python -c` 什么都能跑，
+ * 前缀根本代表不了这类命令的真实行为。写回这种规则等于把门钥匙交出去，
+ * 所以弹窗对这些首词不提供写回选项。
+ */
+const INTERPRETER_TOKENS: ReadonlySet<string> = new Set([
+	"powershell",
+	"pwsh",
+	"cmd",
+	"iex",
+	"irm",
+	"python",
+	"python3",
+	"node",
+	"npm",
+	"npx",
+	"bash",
+	"sh",
+	"wsl",
+]);
+
+/**
+ * 内联脚本旗标（小写比较）：首词后跟这些旗标时，命令本体在旗标参数里，
+ * 首词同样代表不了命令 —— 与解释器黑名单同一条理由。
+ * 精确匹配第二词；PowerShell 的参数缩写（-enc 之类）v1 不展开，
+ * 漏掉的后果只是不提供写回选项（保守方向），不为它堆参数解析器。
+ */
+const INLINE_SCRIPT_FLAGS: ReadonlySet<string> = new Set(["-c", "-e", "-command", "-encodedcommand"]);
+
+/**
+ * 取批准写回用的前缀（命令首词）；不适合写回时返回 undefined。
+ *
+ * 三种不写回：
+ *   1. 多段命令（`a && b`）—— 链式命令的「首词」语义模糊，
+ *      写回 `a` 的前缀会让 `a && anything` 里的 anything 也被顺带覆盖判定；
+ *   2. 首词是解释器/包装器（含 .exe 后缀形态，比较不分大小写）；
+ *   3. 首词后跟 -c / -e / -Command / -EncodedCommand 的内联脚本形态。
+ *
+ * 返回首词原文（不做大小写归一）—— 规则按原文记，与 matchesPrefix 的
+ * 大小写敏感语义一致。
+ */
+export function firstTokenPrefix(command: string): string | undefined {
+	const segments = splitCommand(command);
+	if (segments.length !== 1) return undefined;
+	const segment = segments[0];
+	if (segment === undefined) return undefined;
+	const spaceAt = segment.search(/\s/);
+	const first = spaceAt === -1 ? segment : segment.slice(0, spaceAt);
+	if (first === "") return undefined;
+	// 黑名单比较不分大小写：PowerShell 命令不区分大小写，
+	// 黑名单若区分就成了「换个大小写就能写回 IEX」的放行缝。
+	const bare = first.toLowerCase().replace(/\.exe$/, "");
+	if (INTERPRETER_TOKENS.has(bare)) return undefined;
+	const rest = spaceAt === -1 ? "" : segment.slice(spaceAt).trimStart();
+	const second = rest.split(/\s/, 1)[0]?.toLowerCase() ?? "";
+	if (INLINE_SCRIPT_FLAGS.has(second)) return undefined;
+	return first;
+}

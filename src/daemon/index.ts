@@ -46,6 +46,11 @@ import {
 import { ModelCatalog, parseModelKey } from "../core/model-catalog.ts";
 import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
 import {
+	appendPermissionRule,
+	loadPermissionRules,
+	savePermissionRules,
+} from "../core/permission-rules-store.ts";
+import {
 	getEffectiveWorkspaceRoot,
 	readPreferences,
 	writePreferences,
@@ -85,6 +90,7 @@ import { automationExtensionFactory } from "../extensions/automation-tools.ts";
 import { conversationSearchExtensionFactory } from "../extensions/conversation-search-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { defaultProtectedDirs, isPathInside } from "../extensions/permission-policy.ts";
+import { rememberRuleFromApproval } from "../extensions/permission-rules.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
@@ -97,6 +103,7 @@ import {
 	isSandboxMode,
 	presetIdFor,
 	type PermissionInfo,
+	type PermissionRule,
 	type PermissionSettings,
 } from "../shared/permissions.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
@@ -261,6 +268,29 @@ let activeModelKey: string | undefined = readPreferences().activeModelKey;
  * 读盘会把 IO 放进热路径。改动经 setPermissions 通道走，写盘与内存同步更新。
  */
 let activePermissions: PermissionSettings = readPreferences().permissions ?? DEFAULT_PERMISSIONS;
+
+/**
+ * 当前持久前缀规则集（spec: add-permission-rules-engine）。启动时从
+ * permissions.rules.json 读入模块级变量，之后每次判定读内存不读盘 ——
+ * 与 activePermissions 同范式：权限门每次工具调用都要读它，IO 不能进热路径。
+ * 坏文件按空规则集降级（store 的口径），warn 落 daemon 日志。
+ */
+let activePermissionRules: readonly PermissionRule[] = loadPermissionRules((message) => {
+	console.error(message);
+});
+
+/**
+ * 批准写回（Task 3）：把一条规则并入内存规则集并落盘。
+ * 幂等：同 tool+prefix+action 已存在时不重写文件（appendPermissionRule 返回
+ * 原数组引用，据此短路）。内存先更新再落盘 —— 门经 getRules 读内存，
+ * 「即刻生效」不依赖写盘完成。
+ */
+export function appendRule(rule: PermissionRule): void {
+	const next = appendPermissionRule(rule, activePermissionRules);
+	if (next === activePermissionRules) return;
+	activePermissionRules = next;
+	savePermissionRules(next);
+}
 
 /**
  * 受保护的凭据目录，进程启动时算一次。
@@ -927,7 +957,15 @@ function sanitizeForLog(event: SessionEvent): unknown {
  */
 const pendingApprovals = new Map<
 	string,
-	(response: PermissionResponse) => void
+	{
+		/**
+		 * 原始审批请求的工具名。批准写回（Task 3）要用它复核：
+		 * rememberPrefix 只有附着在 powershell 审批上才有意义 ——
+		 * 响应来自 IPC，渲染层给 write 审批附个 prefix 不该产生任何规则。
+		 */
+		readonly toolName: string;
+		readonly resolve: (response: PermissionResponse) => void;
+	}
 >();
 
 /**
@@ -962,7 +1000,7 @@ function requestApproval(
 		summary: request.summary,
 	});
 	return new Promise<PermissionResponse>((resolve) => {
-		pendingApprovals.set(id, resolve);
+		pendingApprovals.set(id, { toolName: request.toolName, resolve });
 		post({
 			kind: "push",
 			channel: PUSH.permissionRequest,
@@ -1256,6 +1294,9 @@ async function createHost(
 				// getter 而非快照：用户改了预设，下一次工具调用即生效。
 				// 权限档是全局设置（spec A）：一改对所有会话的后续工具调用生效。
 				getSettings: () => activePermissions,
+				// 前缀规则同 getSettings 的 getter 范式：批准写回（appendRule）后，
+				// 已建好的宿主下一次工具调用即按新规则免问/直拒。
+				getRules: () => activePermissionRules,
 				// 审批按桶计数：有待答审批的桶豁免 LRU 回收 ——
 				// 用户在答的框不能随宿主一起消失。
 				// sessionId 在此注入（唯一注入点）：审批归属发起它的会话桶，
@@ -2812,11 +2853,21 @@ const handlers: Record<string, Handler> = {
 
 	[INVOKE.permissionResponse]: async ([response]) => {
 		const answer = response as PermissionResponse;
-		const resolve = pendingApprovals.get(answer.id);
+		const pending = pendingApprovals.get(answer.id);
 		// 找不到通常是重复应答（用户连点两下）。静默忽略即可，不是错误 ——
 		// 也不落审计日志：那不是一次真实的选择，记上只会污染事后还原。
-		if (resolve === undefined) return;
+		if (pending === undefined) return;
 		pendingApprovals.delete(answer.id);
+		/*
+		 * 批准写回（spec: add-permission-rules-engine Task 3）：
+		 * 用户勾了「以后都允许「{首词}」开头的命令」时，把 allow 规则并入内存
+		 * 规则集并落盘（appendRule 幂等，内存先更新 —— 门经 getRules 读内存，
+		 * 下一次同类命令即免问）。校验全在 rememberRuleFromApproval：
+		 * 不信任 IPC 载荷，非法 prefix（解释器/含分隔符/含空白）与非
+		 * powershell 审批上附着的 prefix 一律忽略，不炸不拒。
+		 */
+		const rule = rememberRuleFromApproval(pending.toolName, answer);
+		if (rule !== undefined) appendRule(rule);
 		// 以用户实际作出选择的位置为准落日志（而非 resolve 包装）：
 		// 审计要的是「用户批了什么」，重复应答与悬空 id 都不算选择。
 		eventLog.append({
@@ -2824,8 +2875,10 @@ const handlers: Record<string, Handler> = {
 			id: answer.id,
 			decision: answer.decision,
 			remember: answer.remember === true,
+			// 写回成功的规则前缀一并入档：审计要能还原「这次批准留下了什么持久影响」。
+			...(rule === undefined ? {} : { rulePrefix: rule.prefix }),
 		});
-		resolve(answer);
+		pending.resolve(answer);
 	},
 
 	/* ── 结构化提问回程 ─────────────────────────────────────────────── */

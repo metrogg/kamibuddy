@@ -11,11 +11,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { PermissionRequest } from "@shared/ipc.ts";
+import { firstTokenPrefix } from "@shared/permissions.ts";
 import { IconChevronDown } from "./icons.tsx";
 
 interface PermissionDialogProps {
 	readonly request: PermissionRequest;
-	readonly onDecide: (decision: "allow" | "deny", remember: boolean) => void;
+	readonly onDecide: (decision: "allow" | "deny", remember: boolean, rememberPrefix?: string) => void;
 }
 
 const RISK_TEXT: Readonly<Record<PermissionRequest["risk"], string>> = {
@@ -26,6 +27,7 @@ const RISK_TEXT: Readonly<Record<PermissionRequest["risk"], string>> = {
 
 export function PermissionDialog({ request, onDecide }: PermissionDialogProps): React.JSX.Element {
 	const [remember, setRemember] = useState(false);
+	const [rememberRule, setRememberRule] = useState(false);
 	const [open, setOpen] = useState(false);
 	const denyRef = useRef<HTMLButtonElement>(null);
 	const allowRef = useRef<HTMLButtonElement>(null);
@@ -36,6 +38,7 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 		const target = request.risk === "high" ? denyRef.current : allowRef.current;
 		target?.focus();
 		setRemember(false);
+		setRememberRule(false);
 		setOpen(false);
 	}, [request.id, request.risk]);
 
@@ -52,6 +55,17 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 	}, [onDecide]);
 
 	const hasDetails = request.details !== "";
+
+	/*
+	 * 批准写回（spec: add-permission-rules-engine）：powershell 的**单段**命令
+	 * 才提供「以后都允许「{首词}」开头的命令」。details 就是完整命令
+	 * （permission-policy 的 SHELL 分支）；多段命令或解释器/内联脚本前缀
+	 * （firstTokenPrefix 返回 undefined）不提供 —— 那种前缀代表不了命令行为，
+	 * 写回等于把门钥匙交出去。daemon 侧还会用同一套校验复核回填值，
+	 * 这里的判断只决定选项**显不显示**。
+	 */
+	const writeBackPrefix =
+		request.toolName === "powershell" ? firstTokenPrefix(request.details) : undefined;
 
 	return (
 		<div className="modal-backdrop">
@@ -90,20 +104,37 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 			 * medium/low 保持可记住，否则连续写同目录文件会逐个弹窗，逼人放弃使用。
 			 */}
 			{request.risk !== "high" && (
-				<label className="check permission-remember">
-					<input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-					本次会话内不再询问同类操作
-				</label>
-			)}
+			<label className="check permission-remember">
+				<input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+				本次会话内不再询问同类操作
+			</label>
+		)}
 
-				<div className="permission-actions">
-					<button ref={denyRef} type="button" className="mini-btn danger" onClick={() => onDecide("deny", false)}>
-						拒绝
-					</button>
-					<button ref={allowRef} type="button" className="primary-btn" onClick={() => onDecide("allow", remember)}>
-						允许
-					</button>
-				</div>
+			{/*
+			 * 「以后都允许」与上面「本次会话记住」不冲突：powershell 询问一律高风险，
+			 * 会话级记住本就不提供（上面的双保险）；这里是跨会话的持久前缀规则，
+			 * 作用域与持久性都不同（spec 的 MODIFIED Requirement 写明了这个细化）。
+			 */}
+		{writeBackPrefix !== undefined && (
+			<label className="check permission-remember">
+				<input type="checkbox" checked={rememberRule} onChange={(e) => setRememberRule(e.target.checked)} />
+				以后都允许「{writeBackPrefix}」开头的命令
+			</label>
+		)}
+
+			<div className="permission-actions">
+				<button ref={denyRef} type="button" className="mini-btn danger" onClick={() => onDecide("deny", false)}>
+					拒绝
+				</button>
+				<button
+					ref={allowRef}
+					type="button"
+					className="primary-btn"
+					onClick={() => onDecide("allow", remember, rememberRule ? writeBackPrefix : undefined)}
+				>
+					允许
+				</button>
+			</div>
 			</div>
 		</div>
 	);

@@ -2591,6 +2591,112 @@ textarea:focus-visible {
 	line-height: 1.75;
 }
 
+/* ── 子代理活动卡（task 工具，spec: add-subagent-live-activity） ──────────
+   开合机制整个复用 .tool-detail-box（同 todo-list-box 手法），这里只覆盖
+   排版与底色：分组行是文本行而不是等宽输出；底色与清单卡同档（gray-3）。 */
+.task-agent-box {
+	background: var(--bg-sidebar);
+	color: var(--text);
+	font-size: var(--text-body);
+	font-family: inherit;
+	white-space: normal;
+}
+
+.task-agent-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+/* 分组行：glyph 列 + 主列（标题行 + 动作行）。done 带输出时整行是按钮。 */
+.task-agent-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	text-align: left;
+}
+
+.task-agent-row.expandable {
+	cursor: pointer;
+}
+
+.task-agent-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.task-agent-title {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+	line-height: 1.75;
+}
+
+/* agent 名是分组标识，加粗强调；task 摘要次要色、过长截断（title 兜底在 tsx）。 */
+.task-agent-name {
+	flex: 0 0 auto;
+	font-weight: 600;
+	font-size: var(--text-emphasis);
+	color: var(--text);
+}
+
+.task-agent-task {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-dim);
+}
+
+/* 动作行：运行中是最新动作（扫光在 tsx 摘挂），失败时是诊断文本（可换行）。 */
+.task-agent-action {
+	color: var(--text-dim);
+	font-size: var(--text-body);
+	line-height: 1.6;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.task-agent-action.text-shimmer {
+	--shimmer-color: var(--text-secondary);
+}
+
+/* 成功勾绿（--ok）/ 失败叉红（--danger），与 tool-dot 终态同色系。 */
+.task-agent-check {
+	color: var(--ok);
+}
+
+.task-agent-cross {
+	color: var(--danger);
+}
+
+/* done 组的可展开输出盒：等宽小字，缩进与主列对齐（glyph 16 + gap 8）。 */
+.task-agent-output {
+	margin: 2px 0 4px 24px;
+	padding: 8px 12px;
+	border-radius: var(--radius-md);
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	font-size: var(--text-meta);
+	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 200px;
+	overflow: auto;
+}
+
+/* 投影未到达窗口期的一行占位（与 todo-placeholder 同语言）。 */
+.task-agent-placeholder {
+	color: var(--text-dim);
+	line-height: 1.75;
+}
+
 /* 减少动态偏好：呼吸点与 spinner 停转（静态点/静态环仍表达状态），
    折叠展开过渡退化为瞬时切换。扫光、preview-panel、file-tree-chevron
    的覆盖在各自区块。 */

@@ -17,6 +17,7 @@ import {
 	type PolicyPaths,
 	type ToolCallFacts,
 } from "./permission-policy.ts";
+import type { PermissionRule } from "./permission-rules.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
 
 /** 用 resolve 构造平台正确的绝对路径，避免在 Windows 上写死 /home/... 而失真。 */
@@ -814,5 +815,85 @@ describe("内置资源目录（resourcesDir）只读放行", () => {
 			kind: "ask",
 			risk: "low",
 		});
+	});
+});
+
+/* ── powershell 持久前缀规则（spec: add-permission-rules-engine） ── */
+
+describe("powershell 前缀规则（判定链阶段 4 的规则阶段）", () => {
+	const GIT_ALLOW: PermissionRule = { tool: "powershell", prefix: "git", action: "allow" };
+	const RM_DENY: PermissionRule = { tool: "powershell", prefix: "Remove-Item", action: "deny" };
+
+	it("allow 前缀免弹窗：默认档下 git status --short → 直接放行", () => {
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status --short" }), PATHS, CWD, undefined, [GIT_ALLOW]),
+		).toEqual({ kind: "allow" });
+	});
+
+	it("deny 直拒：Remove-Item ./a → 拒绝且 reason 带规则来源（不弹窗）", () => {
+		const result = decide(
+			facts({ toolName: "powershell", command: "Remove-Item ./a" }),
+			PATHS,
+			CWD,
+			undefined,
+			[RM_DENY],
+		);
+		expect(result.kind).toBe("deny");
+		if (result.kind !== "deny") throw new Error("应为 deny");
+		expect(result.reason).toContain("Remove-Item");
+		expect(result.reason).toContain("拒绝规则");
+	});
+
+	it("拆分最严获胜：git allow 下 `git status && rm -rf ./dist` 第二段无命中 → 维持高风险询问", () => {
+		// 这条是整个规则引擎存在的理由：允许了 git status，
+		// 不能把 && 后面跟的任何东西一并放行。
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status && rm -rf ./dist" }), PATHS, CWD, undefined, [
+				GIT_ALLOW,
+			]),
+		).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("read-only 档仍拒：规则阶段在只读拒绝（阶段 3）之后", () => {
+		// 用户写过 git allow 也不能在只读档跑 git —— 模式约束不被规则越过。
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD, READONLY, [GIT_ALLOW]).kind,
+		).toBe("deny");
+	});
+
+	it("danger-full-access 不受影响：该档本就直接放行，规则（含 deny）不参与", () => {
+		// 规则阶段排在 danger-full-access 放行之后 —— 完全访问就是完全访问。
+		expect(
+			decide(facts({ toolName: "powershell", command: "Remove-Item ./a" }), PATHS, CWD, FULL, [RM_DENY]),
+		).toEqual({ kind: "allow" });
+	});
+
+	it("bash 不受规则影响：powershell 的 allow 规则管不了 bash 调用", () => {
+		// bash 没有危险命令检查器，规则面先不覆盖 —— 维持高风险询问的 fail-closed。
+		expect(
+			decide(facts({ toolName: "bash", command: "git status" }), PATHS, CWD, undefined, [GIT_ALLOW]),
+		).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("其他工具的规则不匹配 powershell（rule.tool 必须等于调用工具）", () => {
+		const bashRule: PermissionRule = { tool: "bash", prefix: "git", action: "allow" };
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD, undefined, [bashRule]),
+		).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("不传规则时维持现状（向后兼容：powershell 默认档高风险询问）", () => {
+		expect(decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "high",
+		});
+	});
+
+	it("approval=never 下规则命中的 allow 仍放行（规则阶段产出的是终局 allow，不经审批策略）", () => {
+		// 与「记住的批准」不同：规则 allow 在 decide 内部就是终局，
+		// never 只把 ask 转 deny，碰不到它。
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD, NO_ASK, [GIT_ALLOW]),
+		).toEqual({ kind: "allow" });
 	});
 });

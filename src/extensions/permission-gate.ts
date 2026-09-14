@@ -14,6 +14,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
 import { decide, rememberKey, type PolicyPaths, type ToolCallFacts } from "./permission-policy.ts";
+import type { PermissionRule } from "./permission-rules.ts";
 
 export interface PermissionGateOptions {
 	readonly paths: PolicyPaths;
@@ -27,6 +28,14 @@ export interface PermissionGateOptions {
 	 * 省略时用 DEFAULT_PERMISSIONS（= 引入模式之前的行为）。
 	 */
 	readonly getSettings?: () => PermissionSettings;
+	/**
+	 * 取当前持久前缀规则集（spec: add-permission-rules-engine）。
+	 *
+	 * 与 getSettings 同范式（getter 而非快照）：批准写回（Task 3）追加规则后，
+	 * **下一次工具调用就该免问** —— 已建好的会话宿主不该拿旧规则集判。
+	 * 省略 = 无规则，powershell 维持逐次高风险询问（引入规则前的行为）。
+	 */
+	readonly getRules?: () => readonly PermissionRule[];
 	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
 	// sessionId 由注入方（daemon 接线闭包）补 —— 扩展不认识会话桶。
 	readonly requestApproval: (
@@ -75,7 +84,7 @@ export function createPermissionGate(options: PermissionGateOptions) {
 	return (pi: ExtensionAPI): void => {
 		pi.on("tool_call", async (event) => {
 			const facts = extractFacts(event.toolName, event.input);
-			const decision = decide(facts, options.paths, options.cwd, options.getSettings?.());
+			const decision = decide(facts, options.paths, options.cwd, options.getSettings?.(), options.getRules?.());
 
 			if (decision.kind === "allow") return undefined;
 

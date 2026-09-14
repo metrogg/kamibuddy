@@ -561,6 +561,109 @@ describe("web_search 来源卡", () => {
 	});
 });
 
+describe("task 子代理投影桥", () => {
+	type ToolFinishedEvent = Extract<SessionEvent, { type: "tool_finished" }>;
+
+	const RUNNING_PROJECTION = [
+		{ agent: "scout", task: "查一下", status: "running", activity: "正在 read a.md", turns: 0 },
+		{ agent: "worker", task: "写文档", status: "queued", activity: "", turns: 0 },
+	] as const;
+	const DONE_PROJECTION = [
+		{ agent: "scout", task: "查一下", status: "done", activity: "", turns: 2, output: "侦察完毕" },
+		{ agent: "worker", task: "写文档", status: "done", activity: "", turns: 1, output: "文档已成" },
+	] as const;
+
+	function startTask(host: SessionHost): void {
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "task",
+			args: { tasks: [{ agent: "scout", task: "查一下" }, { agent: "worker", task: "写文档" }] },
+		} as unknown as AgentSessionEvent);
+	}
+
+	it("partialResult.details 带 subagents → 发 subagent_progress（整体替换），不发 tool_progress", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+		startTask(host);
+		translate(host, {
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "task",
+			// content.text 恒空（投影期口径）——若桥接判定落在空串早退之后，
+			// 这条投影会被静默吞掉，本用例即回归那个坑。
+			partialResult: {
+				content: [{ type: "text", text: "" }],
+				details: { mode: "parallel", results: [], subagents: RUNNING_PROJECTION },
+			},
+		} as unknown as AgentSessionEvent);
+
+		const progress = events.filter((e) => e.type === "subagent_progress");
+		expect(progress).toHaveLength(1);
+		const first = progress[0];
+		expect(first?.type === "subagent_progress" && first.id).toBe("c1");
+		expect(first?.type === "subagent_progress" && first.agents).toEqual(RUNNING_PROJECTION);
+		expect(events.some((e) => e.type === "tool_progress")).toBe(false);
+	});
+
+	it("details 无 subagents 的部分结果仍走 tool_progress 文本 delta（其他工具不受影响）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+		translate(host, {
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "powershell",
+			partialResult: { content: [{ type: "text", text: "半行输出" }] },
+		} as unknown as AgentSessionEvent);
+
+		const deltas = events.filter((e) => e.type === "tool_progress");
+		expect(deltas).toHaveLength(1);
+		expect(deltas[0]?.type === "tool_progress" && deltas[0].delta).toBe("半行输出");
+		expect(events.some((e) => e.type === "subagent_progress")).toBe(false);
+	});
+
+	it("终态 result.details 带 subagents → 挂到 tool_finished 卡片的 subagents 字段", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+		startTask(host);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "task",
+			isError: false,
+			result: {
+				content: [{ type: "text", text: "并行执行 2 个子任务，成功 2 个：…" }],
+				details: { mode: "parallel", results: [], subagents: DONE_PROJECTION },
+			},
+		} as unknown as AgentSessionEvent);
+
+		const card = events.find((e): e is ToolFinishedEvent => e.type === "tool_finished")?.card;
+		expect(card?.subagents).toEqual(DONE_PROJECTION);
+	});
+
+	it("终态 details 无 subagents → 卡片 subagents 键缺席，照常落成", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "read",
+			args: { path: "a.md" },
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "read",
+			isError: false,
+			result: { content: [{ type: "text", text: "文件内容" }] },
+		} as unknown as AgentSessionEvent);
+
+		const card = events.find((e): e is ToolFinishedEvent => e.type === "tool_finished")?.card;
+		expect(card).toBeDefined();
+		expect(card !== undefined && "subagents" in card).toBe(false);
+	});
+});
+
 describe("show_widget 流式通道", () => {
 	type StreamProgressEvent = Extract<SessionEvent, { type: "tool_stream_progress" }>;
 

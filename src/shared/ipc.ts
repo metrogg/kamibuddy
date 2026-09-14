@@ -912,6 +912,16 @@ export interface PermissionResponse {
 	 * 避免用户误批一次后长期失效却不自知。
 	 */
 	readonly remember?: boolean;
+	/**
+	 * 批准写回（spec: add-permission-rules-engine）：powershell 审批弹窗的
+	 * 「以后都允许「{首词}」开头的命令」被勾选并允许时，由 renderer 回填命令首词。
+	 *
+	 * 与 remember 的区别：remember 是会话级、不落盘；本字段触发 daemon 把
+	 * `{ tool: "powershell", prefix, action: "allow" }` 追加进规则文件，跨会话生效。
+	 * daemon 侧必须经 rememberRuleFromApproval 全套校验后才写盘 ——
+	 * 本字段来自渲染进程，只是候选，不是命令。
+	 */
+	readonly rememberPrefix?: string;
 }
 
 /* ────────────────────────────────────────────────────────────────

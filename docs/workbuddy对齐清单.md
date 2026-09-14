@@ -75,7 +75,7 @@ automation_create / automation_list / automation_delete / task。
 | C7 | 提问 | AskUserQuestion（多选 + 分页；浮层绑定会话、替换输入区，SESSION_MISMATCH 防串台） | `questionnaire-tool.ts`（单选 + 其他 + 跳过）；请求带 sessionId 按会话路由（后台不弹、badge 落归属行），v3 内联浮层替换 composer（样式对齐 lib-chat-ui QuestionFloating）；spec：`.trae/specs/bind-questionnaire-to-session/` | ✅ v1：无多选题；审批弹窗仍全局模态（安全闸取舍） |
 | C8 | 计划模式 | EnterPlanMode / ExitPlanMode（计划文件写入是 plan 下唯一额外放行项） | `resources/modes/plan.md` + `/plan` 命令 + 「执行计划」按钮；无显式进出工具 | 🟡 |
 | C9 | 任务清单 | TodoWrite + TaskCreate/Get/List/Update/Output/Stop 全套；依赖关系解除阻塞 | `todo_write`（全量替换 + 守则引导，见 L6）；Task 系列与依赖关系无 | 🟡 |
-| C10 | 子代理 | Agent 工具：`subagent_type`/`description`/`prompt`/`model`/`mode`/`detached`；4 类定义来源；独立上下文；maxTurns 下限 200 | `task-tool.ts`：单发/并行(≤8, 并发 4)/链式({previous})、深度 1、预算 20、输出去毒 | 🟡 无 detached、无独立模型 |
+| C10 | 子代理 | Agent 工具：`subagent_type`/`description`/`prompt`/`model`/`mode`/`detached`；4 类定义来源；独立上下文；maxTurns 下限 200 | `task-tool.ts`：单发/并行(≤8, 并发 4)/链式({previous})、深度 1、预算 20、输出去毒；运行中分组活动卡（`subagent_progress` 结构化投影 + TaskAgentCard 实时展示每代理状态/动作，spec add-subagent-live-activity） | 🟡 无 detached、无独立模型 |
 | C11 | 多代理团队 | TeamCreate/TeamDelete/SendMessage + TeammateRunner + mailbox + delegate 模式 | 无 | ❌ |
 | C12 | 技能工具 | Skill / SkillManage / SlashCommand | 技能经 pi 原生 `/skill:name` 加载；无管理工具 | 🟡 |
 | C13 | 定时任务 | CronCreate/List/Delete（会话级、3 天过期、每会话 50、退出失效） | `automation-tools.ts` + 调度器 + 落盘库 + 管理页（once/interval/daily/weekly），比 WorkBuddy 更持久 | ✅ 我方领先 |
@@ -169,7 +169,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 |---|---|---|---|---|
 | H1 | 权限模式 | 用户可切 7 种（default/acceptEdits/auto/dontAsk/plan/bypassPermissions/delegate）+ 程序化 3 种（fullAccess/work/ignore）；Shift+Tab 循环 | 双旋钮（sandbox: read-only/workspace-write/danger-full-access × approval: ask/never）+ 三档预设 | 🟡 词汇对齐了，模式数少 |
 | H2 | 9 阶判定链 | hooks → deny（永远最强）→ 可信 allow → 命令安全检查 → ask → bypass 短路 → 不可信 allow → 模式基线 → 非交互兜底 | `permission-policy.ts` 有序 5 阶段（凭据目录 → 无路径只读 → 本地只读 → 写与命令 → 审批策略） | 🟡 同思路，层数少 |
-| H3 | 规则语法 | `Tool(spec)`：`Bash(npm:*)`、`Edit(src/**)`、`WebFetch(domain:)`、`mcp__server__tool`；Bash 前缀会解析 `&&`/`\|\|`/`;`/`\|` 逐子命令判定 | 无规则语法，只有档位 + 路径归属判定 | ❌ |
+| H3 | 规则语法 | `Tool(spec)`：`Bash(npm:*)`、`Edit(src/**)`、`WebFetch(domain:)`、`mcp__server__tool`；Bash 前缀会解析 `&&`/`\|\|`/`;`/`\|` 逐子命令判定 | 前缀规则引擎（spec add-permission-rules-engine）：`~/.kamibuddy/permissions.rules.json` 三态 allow/deny + 前缀边界匹配（git≠gitx）+ `&&`/`\|\|`/`;` 逐段最严获胜（不切管道）+ 批准写回（弹窗「以后都允许「git」开头的命令」→ 落盘即刻生效，解释器前缀禁写回）；仅 powershell，path 工具仍走路径归属记住 | 🟡 shell 已对齐，无 path/WebFetch 规则与规则编辑 UI |
 | H4 | 可信/不可信 allow | allow 分两层：未信任目录的项目级规则不能越过命令检查（防克隆恶意仓库即提权） | 有 `project-trust.ts`（记住信任、不记住不信任）；无 allow 规则层，故此攻击面本不存在 | 🟡 |
 | H5 | auto 分类器 | LLM 子代理只裁决剩余 ask（allow/deny，无中间态）；fail-closed、连续失败自动降级 default、过宽规则（`Bash(*)`）临时失效、`auto-mode critique` 自检 | 无 | ❌ |
 | H6 | dontAsk | 未预批准直接拒绝不弹框，连 AskUserQuestion/ExitPlanMode 也拒（CI 白名单场景） | `approval: never` 语义相同（确定性拒绝，不静默放行） | ✅ |

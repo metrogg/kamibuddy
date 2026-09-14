@@ -137,6 +137,28 @@ export interface SourceRef {
 	readonly site?: string;
 }
 
+/**
+ * 一个子代理的运行状态（task 工具的分组活动投影项）。
+ *
+ * 契约语义是**整体投影替换**：每次 subagent_progress 事件携带全量数组，
+ * 消费端整体替换、不做增量合并。原因：并行多代理各自推进，增量合并
+ * 会逼出键控 diff（按 agent 名对账、处理消失项），而替换语义幂等、
+ * 且天然解决旧 tool_progress 文本 delta 方案里多代理进度行交错的问题。
+ */
+export interface SubagentStatus {
+	/** 子代理名（task 工具的 agent 参数）。 */
+	readonly agent: string;
+	/** 任务描述摘要。 */
+	readonly task: string;
+	readonly status: "queued" | "running" | "done" | "failed";
+	/** 最新动作行，如「正在 web_search xxx」「已完成 N 轮」；无进展时为空串。 */
+	readonly activity: string;
+	/** 已完成的 agent 轮数。 */
+	readonly turns: number;
+	/** 终态：成功输出或失败诊断；运行中缺省。 */
+	readonly output?: string;
+}
+
 export interface ToolCard {
 	readonly id: ToolCallId;
 	readonly role: "tool";
@@ -192,6 +214,13 @@ export interface ToolCard {
 	 * 增强展示，缺席不阻碍卡片照常落成。
 	 */
 	readonly sources?: readonly SourceRef[];
+	/**
+	 * task 工具卡的分组活动/结果投影（结构化载荷）。仅 task 卡填充：
+	 * 运行中由 subagent_progress 事件实时整体替换，终态由 tool_finished
+	 * 卡片携带（整体替换语义见 SubagentStatus 注释）。
+	 * 缺省表示非 task 卡或旧格式会话 —— 渲染层回退普通工具卡渲染。
+	 */
+	readonly subagents?: readonly SubagentStatus[];
 	readonly at: number;
 }
 
@@ -303,6 +332,13 @@ export type SessionEvent =
 	| { readonly type: "tool_started"; readonly card: ToolCard }
 	/** 工具流式输出（如命令 stdout）。 */
 	| { readonly type: "tool_progress"; readonly id: ToolCallId; readonly delta: string }
+	/**
+	 * task 工具（子代理委派）的运行中分组活动投影。
+	 * 由 session-host 从部分结果 details 的 subagents 数组桥接而来，
+	 * 携带全量投影（整体替换语义，见 SubagentStatus 注释）；
+	 * 恢复历史会话时由消息回放从落盘 details 经同路径还原。
+	 */
+	| { readonly type: "subagent_progress"; readonly id: ToolCallId; readonly agents: readonly SubagentStatus[] }
 	/** 工具执行结束。 */
 	| { readonly type: "tool_finished"; readonly card: ToolCard }
 	/** run 结束。outcome 区分正常完成与用户取消（取消语义见 RunOutcome 注释）。 */
