@@ -647,7 +647,7 @@ function logBrokerFallback(kind, operation, filePath, error) {
 
 ### 9.3 明确"未验证/未查清"
 - tsbx 规则里 auto_grant、inherit_user 的**精确运行时语义**（未反编译 tsbx.dll；仅据命名与字面串推断）。
-- Windows 沙箱**是否内核态驱动**（只看到 DLL/FFI/共享内存/rule center，未见 .sys 驱动文件 → **倾向"用户态 + 文件过滤"，但未证实**）。
+- Windows 沙箱**是否内核态驱动** —— **已证伪（2026-09-14 补证）**：`docs/WorkBuddy/resources/app.asar.unpacked/cli/vendor/sandbox/5.4.7/` 与全仓库均**无任何 `.sys` 文件**，在全部解包产物中 `AppContainer | JobObject | CreateRestrictedToken` 零命中。结论应定为**「用户态 Rust 栈」**（sandbox-cli.exe 会话编排 + tsbx*.dll 规则/下发 + sandbox-center rule center + 共享内存/命名管道 IPC），而非内核态过滤驱动。
 - network_rules 在 Windows 是否由别处（Rust LocalProxy）真正强制（注释这么说，但没找到 LocalProxy 产物）。
 - 桌面 permissionMode 的**会话默认值来自哪**（确认了"归一化未知→bypass"，但没追到 UI/DB 给每个会话写入的具体默认值；背景自动化明确是 fullAccess）。
 - cli/dist 与桌面 main/* 是**不同 bundle**，只在 codebuddy.js/codebuddy-headless.js（两者关键函数一致）与 server.js（主进程）取证，未穷举其他 main 模块。
