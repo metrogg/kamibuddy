@@ -20,7 +20,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { AutomationStore } from "../core/automation-store.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
@@ -31,15 +31,13 @@ import {
 	getResourcesDir,
 	getSessionsDir,
 	getTempTasksDir,
-	getWorkspaceDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
-import { buildMemorySection, ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
+import { ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
 import {
 	McpConfigError,
-	readMcpConfig,
 	readMcpConfigSource,
 	toggleMcpServer,
 	writeMcpConfig,
@@ -58,6 +56,13 @@ import {
 } from "../core/preferences.ts";
 import { PreviewServers } from "../core/preview-server.ts";
 import { buildPromptPreview } from "./prompt-preview.ts";
+import {
+	buildSessionMemorySection,
+	listSessionPromptTemplates,
+	readSessionArtifact,
+	readSessionMcpConfig,
+	statSessionArtifact,
+} from "./session-cwd-reads.ts";
 import {
 	composePromptWithMeta,
 	requireExpertPersona,
@@ -89,7 +94,6 @@ import {
 	validateDisplayName,
 } from "../core/workspace-registry.ts";
 import { indexFiles } from "../core/file-index.ts";
-import { listPromptTemplates } from "../core/prompt-templates.ts";
 import { automationExtensionFactory } from "../extensions/automation-tools.ts";
 import { conversationSearchExtensionFactory } from "../extensions/conversation-search-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
@@ -129,6 +133,15 @@ import {
 	pickEvictions,
 	type SessionBucket,
 } from "./session-registry.ts";
+import {
+	allocatePendingCwd,
+	isOwnedSessionDir,
+	isRevealableCwd,
+	isSelectableWorkspaceDir,
+	isTaskCwd,
+	isTaskPrivateCwd,
+	promoteSessionDir,
+} from "./workspace-model.ts";
 import type {
 	DaemonOutbound,
 	DaemonRequest,
@@ -142,8 +155,6 @@ import {
 	type McpConfigSnapshot,
 	type PermissionRequest,
 	type PermissionResponse,
-	type ArtifactContent,
-	type PathStat,
 	type PersonalizationPatch,
 	type PromptPreviewRequest,
 	type PromptRequest,
@@ -330,7 +341,14 @@ const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
 function listSkills(expertSkillsDir?: string): SkillInfo[] {
 	try {
 		const { skills } = loadSkills({
-			cwd: getWorkspaceDir(),
+			/*
+			 * cwd 只决定「项目级技能」的发现目录（pi 取 `<cwd>/.pi/skills`，见
+			 * pi core/skills.ts）：内置技能走 skillPaths 的绝对路径、用户级技能走
+			 * agentDir=getConfigDir()，都不受 cwd 影响。用生效根而非内置默认根：
+			 * 用户改了「默认存储路径」后，新根下放的项目级技能要能被发现，
+			 * 与设置项口径一致（否则改完路径技能就找不到了）。
+			 */
+			cwd: getEffectiveWorkspaceRoot(),
 			agentDir: getConfigDir(),
 			skillPaths: sessionSkillPaths(BUILTIN_SKILLS_DIR, expertSkillsDir),
 			includeDefaults: true,
@@ -449,7 +467,7 @@ async function composeSystemPrompt(
 	// 记忆段每轮现读（同技能清单口径：模型用 edit 改了 MEMORY.md，下一轮即生效）。
 	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
 	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
-	const memoryContent = buildMemorySection(cwd);
+	const memoryContent = buildSessionMemorySection(cwd);
 	const composed = composePromptWithMeta({
 		sceneBody: scene.body,
 		modeBody: mode.body,
@@ -483,14 +501,19 @@ async function composeSystemPrompt(
  * 多任务并发后「当前工作空间」不再等于「当前会话的 cwd」：会话与 cwd 终身
  * 绑定（cwd 在建会话时一次性注入 pi 的工具集），切换工作空间只决定**后续
  * 新建任务**落在哪，既有会话原地不动（WorkBuddy 同模型）。
- * 临时任务模型下必有值：默认 = 生效根下的共享临时目录（`<根>/临时任务`）。
+ *
+ * 空串 = **待分配**：未选工作空间的新任务不预设目录，首次执行（真正建宿主）时
+ * 才在生效根下分配独立时间戳目录（spec: align-per-task-dirs）。不再默认指向
+ * 共享临时目录 `<根>/临时任务`（已退役为历史目录）。
  */
-let defaultWorkspaceDir: string = tempTasksDir();
+let defaultWorkspaceDir: string = "";
 
 /**
- * 临时任务的共享目录。**现算不缓存**：生效根 = env > 设置项 > 内置默认
- * （getEffectiveWorkspaceRoot 每次现读偏好文件），用户改默认存储路径后，
- * 下一次新建/切换临时任务即刻用新根。
+ * 历史共享临时目录 `<根>/临时任务`。**现算不缓存**：生效根 = env > 设置项 > 内置
+ * 默认（getEffectiveWorkspaceRoot 每次现读偏好文件），用户改默认存储路径后即刻用新根。
+ *
+ * 新任务不再落这里（改用自动分配目录，见 defaultWorkspaceDir）；唯一保留的用途是
+ * resume 时把旧 playground 占位会话迁移到这个历史任务目录（见 resumeSessionOnce）。
  */
 function tempTasksDir(): string {
 	return getTempTasksDir(getEffectiveWorkspaceRoot());
@@ -505,24 +528,25 @@ function docxEnvContext(): EnvContext {
 }
 
 /**
- * 「该 cwd 归任务区（临时任务）」的判定。三种 true：
+ * 「该 cwd 归任务区（临时任务）」的判定。口径收在 workspace-model.ts 的 isTaskCwd：
+ * 待分配空串 / 自动分配目录 / 历史共享临时目录 / 生效根本身 / 旧 playground 占位。
  *
- *   1. 临时任务共享目录（<生效根>/临时任务）—— 新模型的默认任务形态；
- *   2. 生效根本身 —— 根目录是「任务区」不是空间组（WorkBuddy 同：根不成组）；
- *   3. 配置目录下的 playground 旧占位目录 —— playground 时代存量会话的技术 cwd，
- *      归类到任务区（resume 时会把 cwd 迁移到临时目录，见 resumeSession）。
- *
- * 用**当前**生效根判定（WorkBuddy isClawRuntimeCwd 同款局限）：
- * 用户改默认根后，旧根下的临时会话不再识别为临时、归空间区 —— 可接受的归类漂移。
+ * **改成形态判定、不再比对生效根**（spec: align-per-task-dirs）：用户改默认存储路径后，
+ * 旧任务（cwd 在原根下）依旧归任务区，不再整体漂到空间区。这里只负责现读生效根与
+ * 配置目录两个口径（可能因设置变更而变），形态规则本身在纯函数里（可单测）。
  */
 function isTempCwd(cwd: string): boolean {
-	const root = getEffectiveWorkspaceRoot();
-	return (
-		cwd === getTempTasksDir(root) ||
-		cwd === root ||
-		// 旧 playground 占位目录：只用于**存量会话归类**，新会话不再产生这个 cwd。
-		cwd === join(getConfigDir(), "playground")
-	);
+	return isTaskCwd(cwd, { root: getEffectiveWorkspaceRoot(), configDir: getConfigDir() });
+}
+
+/**
+ * resume 之后「新建任务」的默认落点：工作空间会话沿用其 cwd（同一空间开新活），
+ * 任务私有目录（自动分配目录 / 历史共享临时目录 / 旧 playground）一律回到**待分配**
+ *（空串）—— 否则新任务会落进某个具体任务的目录，既破坏「每任务独立目录」，
+ * 也让转正 rename 会连带新任务。生效根本身仍是工作空间语义，照旧沿用。
+ */
+function defaultCwdAfterResume(cwd: string): string {
+	return isTaskPrivateCwd(cwd, getConfigDir()) ? "" : cwd;
 }
 
 /**
@@ -545,7 +569,8 @@ function freshConversation(
 	return {
 		state: {
 			sessionId: "",
-			// 启动即临时任务：cwd 是共享临时目录（真实路径），不再是「无目录」。
+			// 未选工作空间时 cwd 为空串 = 待分配：首次执行（建宿主）时才分配独立时间戳
+			// 目录（见 createHost），此刻不落盘。空串同样被 isTempCwd 判为任务区。
 			cwd,
 			isTempTask: isTempCwd(cwd),
 			sceneId,
@@ -790,46 +815,6 @@ function toggleAutomation(id: string): AutomationTask {
 	automationStore.upsert(next);
 	pushAutomationChanged();
 	return next;
-}
-
-/** 预览文本的上限：超过按二进制处理（面板只读展示，不做大文件）。 */
-const ARTIFACT_TEXT_MAX = 512 * 1024;
-
-/**
- * 读产物文件内容（readArtifact 通道）。路径限**当前会话**的工作区内：
- * 相对路径对该会话 cwd resolve；绝对路径必须落在其内——
- * 预览面板能看的文件与权限门放行的写范围必须同界（配置目录里的密钥
- * 绝不能经这条通道被读出来）。
- */
-function readArtifactContent(path: string): ArtifactContent {
-	const cwd = currentBucket.cwd;
-	const abs = resolve(cwd, path);
-	if (abs !== cwd && !abs.startsWith(cwd + sep)) {
-		throw new Error("路径超出当前工作区");
-	}
-	const stat = statSync(abs); // 不存在让 ENOENT 直接抛给调用方（响亮失败）
-	const size = stat.size;
-	if (size > ARTIFACT_TEXT_MAX) return { size, text: undefined };
-	const buf = readFileSync(abs);
-	if (buf.includes(0)) return { size, text: undefined }; // NUL = 二进制
-	return { size, text: buf.toString("utf8") };
-}
-
-/**
- * 路径存在性探测（statPath 通道）：对话正文行内 code 路径徽章的高亮依据。
- * 与 readArtifact 不同界 —— 它只报存在性与类型、不报内容，所以不套工作区
- * 边界：徽章要服务工作区外的路径（如 Downloads 里的附件）；读内容仍由
- * readArtifact / preview-server 的边界把守，工作区外文件点击后落外部打开。
- * 相对路径按当前会话 cwd resolve（WorkBuddy resolveConversationFilePath 同口径）。
- */
-function statArtifactPath(path: string): PathStat {
-	const abs = resolve(currentBucket.cwd, path);
-	try {
-		return { kind: statSync(abs).isDirectory() ? "directory" : "file" };
-	} catch {
-		// 探测的意义就是回答「在不在」——不存在/不可达都是 missing，不是错误。
-		return { kind: "missing" };
-	}
 }
 
 function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEvent): void {
@@ -1085,8 +1070,8 @@ const mcpHandleByBucket = new WeakMap<SessionBucket<SessionHost>, McpClientHandl
 
 /**
  * MCP 配置编辑的目标层级：当前会话是正式工作区 → 项目级 <工作区>/.mcp.json；
- * 临时任务 → undefined（写用户级 ~/.kamibuddy/mcp.json）——
- * 共享临时目录是所有临时任务共用的 cwd，往里落配置文件会串味到别的任务。
+ * 临时任务 / 待分配 → undefined（写用户级 ~/.kamibuddy/mcp.json）——
+ * 任务目录是任务私有的（且转正时会被改名），往里落配置文件既串味也无稳定落点。
  */
 function mcpEditCwd(): string | undefined {
 	return isTempCwd(currentBucket.cwd) ? undefined : currentBucket.cwd;
@@ -1213,7 +1198,28 @@ async function createHost(
 		);
 	}
 
-	// 会话与 cwd 终身绑定：桶在建任务/恢复时定好 cwd，这里只读取。
+	/*
+	 * 分配时机：待分配（cwd 为空串，见 newTask / 初始桶）在**首次真正建宿主**时才落成
+	 * 真实目录 —— 用户可能点了「新建任务」却没发消息就切走，那一刻不该留下空目录
+	 *（spec: align-per-task-dirs）。目录名 = 生效根下 `<YYYY-MM-DD-HH-mm-ss>`，
+	 * 会话 header 的 cwd 由下面 SessionHost.create 从这里带进去。
+	 *
+	 * 不在这里发 session_state：本函数约定不发事件（见文件上方注释），分配结果写回
+	 * bucket.cwd，随 adoptHost 的权威 session_state（host.state.cwd）同步给 UI。
+	 */
+	if (bucket.cwd === "") {
+		bucket.cwd = allocatePendingCwd(bucket.cwd, getEffectiveWorkspaceRoot());
+		// 新分配的目录没有既存预览服务（旧模型的临时任务共用 <根>/临时任务，启动时
+		// 预热过）；按新 cwd 懒建，失败不阻断会话 —— 预览是增强能力，聊天主链路不该
+		// 被它拖死，记日志留现场（与启动预热同一口径）。
+		void previewServers.ensure(bucket.cwd).catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(`预览服务启动失败：${message}`);
+			eventLog.append({ kind: "ipc_error", channel: "preview:ensure", message });
+		});
+	}
+
+	// 会话与 cwd 终身绑定：桶在建任务/恢复时定好 cwd（或上面刚分配好），这里只读取。
 	// 建会话前确保目录存在（SessionHost.create 里也会 mkdir，
 	// 但权限门要先拿到一个已确定存在的目录）。
 	const cwd = bucket.cwd;
@@ -1477,39 +1483,37 @@ async function createHost(
  * 切换工作空间 = 只改「新建任务的默认 cwd 来源」（spec MODIFIED：工作空间切换语义）。
  *
  * 不再作废旧会话：既有会话 cwd 终身绑定，旧宿主留在注册表里后台保活，
- * 其 run 不受切换影响（WorkBuddy 同模型）。空串表示「临时任务」
- * （共享临时目录，新建任务的默认态）。
+ * 其 run 不受切换影响（WorkBuddy 同模型）。空串表示「临时任务」，即**待分配** ——
+ * 不预设目录，首次执行时才分配独立时间戳目录（spec: align-per-task-dirs）。
  *
  * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
  * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
- * 临时目录是自家构造（生效根下），不过这道校验 —— 同 getEffectiveWorkspaceRoot
- * 的回退语义，非法根在那一层已被忽略。
+ * 待分配（空串）不是真实目录，不过校验；生效根下的自动目录是自家构造，也不经这里。
  */
 async function applyWorkspace(dir: string): Promise<string> {
-	// 空串 = 临时任务。现算不缓存：改默认存储路径后，下一次切临时任务即刻用新根。
-	const next = dir === "" ? tempTasksDir() : dir;
+	// 空串 = 临时任务 = 待分配：不建目录、不起预览（没有目录可服务）。真目录才校验 + 建 + 起服务。
 	if (dir !== "") {
-		const error = validateWorkspacePath(next, {
+		const error = validateWorkspacePath(dir, {
 			configDir: getConfigDir(),
 			appDir: getAppDir(),
 		});
 		if (error !== undefined) throw new Error(error);
-	}
-	mkdirSync(next, { recursive: true });
-	defaultWorkspaceDir = next;
+		mkdirSync(dir, { recursive: true });
 
-	// 多根预览池：按 cwd 各起一个实例，不再关旧根。仍 await —— 服务起不来时
-	// 工作区切换应该响亮失败（沿用旧 setRoot 的口径），而不是带病继续。
-	await previewServers.ensure(next);
+		// 多根预览池：按 cwd 各起一个实例，不再关旧根。仍 await —— 服务起不来时
+		// 工作区切换应该响亮失败（沿用旧 setRoot 的口径），而不是带病继续。
+		await previewServers.ensure(dir);
+	}
+	defaultWorkspaceDir = dir;
 
 	// 既有会话一律不动。唯一例外：pristine 桶（还没建宿主、没有任何历史）
 	// 换绑到新默认空间 —— 它还不算「一个既有会话」，用户切完空间发首条消息
-	// 理应落在新空间，而不是旧默认目录。
-	if (currentBucket.hostPromise === undefined && currentBucket.cwd !== next) {
-		currentBucket.cwd = next;
-		updateStateLocally(currentBucket, { cwd: next, isTempTask: isTempCwd(next) });
+	// 理应落在新空间（待分配时则是首次执行分配），而不是旧默认目录。
+	if (currentBucket.hostPromise === undefined && currentBucket.cwd !== dir) {
+		currentBucket.cwd = dir;
+		updateStateLocally(currentBucket, { cwd: dir, isTempTask: isTempCwd(dir) });
 	}
-	return next;
+	return dir;
 }
 
 /* ── 历史会话管理（list / resume / rename / delete） ────────────── */
@@ -1680,7 +1684,7 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	// 同文件单写者：已注册的会话直接切过去（含正在后台运行的）。
 	const existing = findBucketByFile(path);
 	if (existing !== undefined) {
-		defaultWorkspaceDir = existing.cwd;
+		defaultWorkspaceDir = defaultCwdAfterResume(existing.cwd);
 		setCurrentBucket(existing);
 		await previewServers.ensure(existing.cwd);
 		pushTaskListChanged(); // current 标记易主
@@ -1788,7 +1792,7 @@ async function resumeSessionOnce(path: string): Promise<void> {
 		artifacts: artifactsFromEntries(rebuilt),
 	};
 
-	defaultWorkspaceDir = nextCwd;
+	defaultWorkspaceDir = defaultCwdAfterResume(nextCwd);
 	setCurrentBucket(bucket);
 
 	// 预览服务按 cwd 懒建（多根池，临时任务同样起服务）。
@@ -1806,26 +1810,48 @@ async function resumeSessionOnce(path: string): Promise<void> {
 }
 
 /**
+ * 用原 cwd 同文件重开宿主（saveToWorkspace 的失败恢复路径）。
+ *
+ * 转正流程中途失败时宿主已 dispose，但会话必须仍可用，所以按正常「open → createHost →
+ * adoptHost」把它重新打开。调用方负责先把 bucket.cwd 复位到原 cwd。
+ */
+async function reopenHost(bucket: SessionBucket<SessionHost>, sessionFile: string): Promise<void> {
+	const manager = SessionManager.open(sessionFile, getSessionsDir());
+	const attempt = createHost(bucket, manager);
+	bucket.hostPromise = attempt;
+	adoptHost(bucket, await attempt);
+}
+
+/**
  * 「保存到工作空间」：临时任务转正为命名空间。
  *
- * 这不是 open 别人的会话文件，而是**当前会话原地换 cwd** —— 会话文件
- * 不动位置、消息历史不动、sessionId 不变，只重写 header.cwd（归组键）
- * 并以新 cwd 重建宿主（cwd 在建会话时一次性注入工具集，见 createHost）。
- * 所以桶与桶内 conversation 原样保留，不需要 resume 那套 entries 重建。
+ * 这是**原地转正**：会话文件不动位置、消息历史不动、sessionId 不变，只把该任务的
+ * 独立目录改名成空间名、重写 header.cwd（归组键），并以新 cwd 重建宿主（cwd 在建
+ * 会话时一次性注入工具集，见 createHost）。桶与桶内 conversation 原样保留，
+ * 不需要 resume 那套 entries 重建。
  *
- * 同会话写操作：整个流程排进当前桶的互斥链（session-registry.ts），
- * 与该会话的 prompt / compact 串行 —— dispose/重建宿主绝不能与 run 并发。
- * 链上执行时上一 run 必已收尾（prompt 在链上是整段 run）；流式守卫保留
- * 为不变式断言 —— 若它触发说明存在绕过互斥链的起 run 路径，
+ * 为什么是「重命名目录」而不是旧的「另建命名目录 + 切 cwd」（spec: align-per-task-dirs）：
+ * 每任务已有独立目录，产物与 `<cwd>/.kamibuddy/` 记忆都在里面，整体 rename 即随目录
+ * 迁移；另建目录会把产物留在旧目录、记忆断档。这是对 WorkBuddy 的改良（它只加显示名、
+ * 目录仍叫时间戳，时间戳目录会永久堆积）。
+ *
+ * 同会话写操作：整个流程排进当前桶的互斥链（session-registry.ts），与该会话的
+ * prompt / compact 串行 —— dispose/重建宿主绝不能与 run 并发。链上执行时上一 run 必已
+ * 收尾；流式守卫保留为不变式断言 —— 若它触发说明存在绕过互斥链的起 run 路径，
  * 响亮失败好过带着流式态拆宿主（pi 的 compact/重建对流式会话语义不明）。
  *
- * 失败原子性：守卫 / 名称校验 / 目录占用检查全部在 dispose 之前完成。
- * dispose 之后重建失败（如模型被删）时旧宿主已销毁 —— 会话文件与历史
- * 完好（JSONL 在盘），下次操作经 resume 可完整重开。
+ * dispose 与 rename 的先后（**先 dispose，再 rename**，理由写在这里备查）：
+ * 宿主持有可能占用 cwd 的资源（MCP 子进程的 cwd、扩展打开的文件句柄），Windows 上
+ * 被占用的目录 rename 会 EPERM/EBUSY —— 先 dispose 让这些占用随之释放，改名才尽
+ * 可能成功。代价是改名失败时宿主已销毁，必须用**原 cwd 同文件重开宿主**恢复
+ *（见 catch），保证失败后会话仍可用、不留不可用状态。
  *
- * 已生成文件留在临时目录不动（spec 决策）：共享临时目录是所有临时任务共用的，
- * 无法干净归属单个任务的文件，强行搬迁会带走别的任务的产物 ——
- * WorkBuddy 同为共享目录结构（spec：align-temp-task-workspace-model）。
+ * 失败原子性：
+ *   - 守卫 / 名称校验 / 目标存在性检查全在 dispose 之前完成；
+ *   - 改名失败 → 恢复宿主 + 响亮报错（可读提示：关闭占用程序后重试），目录与 cwd 原样；
+ *   - header 改写失败 → 把目录改回原名并复位 cwd、恢复宿主（否则 header 指向已被改走的
+ *     旧路径，resume 会凭空补出一个空目录）；
+ *   - 重建宿主失败 → 出表让会话回到「未打开」态（文件与历史在盘，resume 可重开）。
  */
 async function saveToWorkspace(name: string): Promise<void> {
 	const bucket = currentBucket;
@@ -1846,9 +1872,9 @@ async function saveToWorkspace(name: string): Promise<void> {
 		 * 复用显示名校验是因为命名规则同族（非空/非法字符/255/重名/保留名），
 		 * 但这里创建的是**真实目录**不是显示名覆盖 —— 所以根下子目录必须在
 		 * siblings 里（显示名校验只看组名的话，根下已有的非组目录会漏网）。
-		 * 根不存在按空数组：走到这里临时目录已建过（createHost 的 mkdir），根
-		 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续，
-		 * 下面的 mkdir 会把根连带补建。
+		 * 根不存在按空数组：走到这里任务目录已建过（createHost 的分配 / mkdir），根
+		 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续；下面的落盘
+		 * 会把根补建（回退分支的 mkdir 递归补建；rename 分支的源目录本就在根下，根必在）。
 		 */
 		let dirNames: string[] = [];
 		try {
@@ -1883,19 +1909,48 @@ async function saveToWorkspace(name: string): Promise<void> {
 		if (sessionFile === undefined)
 			throw new Error("会话尚未落盘，无法保存到工作空间");
 
-		mkdirSync(target, { recursive: true });
+		const originalCwd = bucket.cwd;
+		// 独占自动目录才可整体 rename；历史共享临时目录等走 promoteSessionDir 的回退分支
+		//（见其注释），回退分支没有「改回原名」这一说。
+		const renamed = isOwnedSessionDir(originalCwd);
 
-		/* ── 切换点：dispose → 改写归组键 → 同文件同 id 重建宿主 ── */
+		/* ── 切换点：dispose → 目录改名 → 重写归组键 → 同文件同 id 重建宿主 ── */
 
 		host.dispose();
 
-		// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
-		rewriteSessionHeaderCwd(sessionFile, target);
+		try {
+			// rename 分支整体改名（产物与记忆随目录走）；共享临时目录走 mkdir 回退。
+			promoteSessionDir(originalCwd, target);
+		} catch (error) {
+			// 改名失败（目录被占用 / 无权限 / 跨卷）：宿主已 dispose，用原 cwd 重开恢复可用。
+			await reopenHost(bucket, sessionFile);
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new Error(`目录重命名失败（${detail}）。请关闭占用该目录的程序后重试`);
+		}
 
 		bucket.cwd = target;
 
 		// 预览服务按 cwd 懒建（多根池），与 applyWorkspace / resumeSession 同口径。
 		await previewServers.ensure(target);
+
+		try {
+			// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
+			rewriteSessionHeaderCwd(sessionFile, target);
+		} catch (error) {
+			// header 没改成功：把目录改回原名、cwd 复位，再恢复宿主 —— 否则 header 仍
+			// 指向已被改走的旧路径，resume 会凭空补出一个空目录、用户以为产物丢了。
+			if (renamed) {
+				try {
+					renameSync(target, originalCwd);
+				} catch {
+					// 回退 rename 也失败（极少）：目录留在 target、header 仍指旧路径，
+					// 交给 resume 按 header 补目录 —— 比在这里静默吞掉更可排查。
+				}
+			}
+			bucket.cwd = originalCwd;
+			await reopenHost(bucket, sessionFile);
+			throw error;
+		}
 
 		// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择）。
 		// SessionManager.open 重新打开同一文件：header 已是新 cwd，sessionId 不变
@@ -1907,8 +1962,8 @@ async function saveToWorkspace(name: string): Promise<void> {
 			adoptHost(bucket, await attempt);
 		} catch (error) {
 			// 重建失败时旧宿主已 dispose：出表让会话回到「未打开」态
-			//（文件与历史在盘，resume 可完整重开）—— 不留「注册了却没有宿主」
-			// 的僵尸桶，否则下次 prompt 会在旧 id 名下静默开出新会话文件。
+			//（文件与历史在盘，header 已指向 target，resume 可完整重开）—— 不留
+			//「注册了却没有宿主」的僵尸桶，否则下次 prompt 会在旧 id 名下静默开出新会话文件。
 			bucketsById.delete(bucket.sessionId);
 			bucket.hostPromise = undefined;
 			throw error;
@@ -1927,7 +1982,9 @@ type Handler = (args: readonly unknown[]) => Promise<unknown>;
  * 不再作废旧会话（spec B：切换语义翻转）—— 旧桶留在注册表里后台保活，
  * 其 run 照跑；新任务开一个 pristine 桶（宿主懒建，首次 prompt 才占资源）。
  * 工作空间选择保留：新任务落在 defaultWorkspaceDir（applyWorkspace 设定的
- * 默认 cwd 来源）；两轴沿用旧会话的选择（开新活不是改偏好）。
+ * 默认 cwd 来源）—— 未选工作空间时它是空串（待分配），这里**不建任何目录**，
+ * 首次执行（建宿主）时才分配独立时间戳目录（见 createHost）；两轴沿用旧会话的
+ * 选择（开新活不是改偏好）。
  */
 async function newTask(): Promise<void> {
 	if (currentBucket.hostPromise === undefined) {
@@ -2002,7 +2059,7 @@ const handlers: Record<string, Handler> = {
 		// 配置坏了（JSONC / schema）servers 给空 —— configJson 照返，编辑器仍能修错，
 		// 解析错误在会话建立时的日志与保存时的校验里都会响亮报出。
 		try {
-			const config = readMcpConfig(currentBucket.cwd);
+			const config = readSessionMcpConfig(currentBucket.cwd);
 			return {
 				servers: Object.entries(config.servers).map(([name, serverConfig]) => ({
 					name,
@@ -2315,12 +2372,14 @@ const handlers: Record<string, Handler> = {
 		const host = await bucket.hostPromise;
 
 		/*
-		 * 输出固定落默认根的 exports/（getWorkspaceDir()，不是当前工作区）：
-		 * 临时任务的 cwd 是所有临时任务共享的目录，导出物落在其下会混进
-		 * 别的任务的产物堆里；固定落点让用户总能在一个地方找到自己的导出物，
-		 * 不用记「当时用的哪个工作区」（core/session-export.ts 文件头是同一决策）。
+		 * 输出固定落**生效根**的 exports/（getEffectiveWorkspaceRoot()，不是当前会话 cwd）：
+		 * 临时任务的 cwd 是各任务自己的目录，导出物落在其下会散落到各处；
+		 * 固定落点让用户总能在一个地方找到自己的导出物，不用记「当时用的哪个工作区」。
+		 * 用生效根而非内置默认根：用户在设置里改「默认存储路径」改的就是生效根，
+		 * 导出物应随之落到新根，否则「改完路径后部分数据仍落旧位置」的口径不一致
+		 * （core/session-export.ts 文件头是同一决策）。
 		 */
-		const exportsDir = join(getWorkspaceDir(), "exports");
+		const exportsDir = join(getEffectiveWorkspaceRoot(), "exports");
 		mkdirSync(exportsDir, { recursive: true });
 
 		// 文件名标题与会话列表同口径（命名 ?? 首条消息截断）。列表里查不到
@@ -2335,7 +2394,7 @@ const handlers: Record<string, Handler> = {
 		return { outputPath };
 	},
 
-	// 临时任务转正：命名 → 根下建目录 → 当前会话以新 cwd 重建（见 saveToWorkspace）。
+	// 临时任务转正：命名 → 根下把任务目录 rename 为空间名（自动目录整体改名，非自动目录回退建新目录）→ 当前会话以新 cwd 重建（见 saveToWorkspace）。
 	[INVOKE.saveToWorkspace]: async ([name]) => saveToWorkspace(name as string),
 
 	[INVOKE.setScene]: async ([sceneId]) => {
@@ -2654,7 +2713,7 @@ const handlers: Record<string, Handler> = {
 		content: existsSync(profilePath()) ? readFileSync(profilePath(), "utf8") : "",
 	}),
 
-	// 覆盖写全文。画像在 compose 时现读现拼（buildMemorySection），
+	// 覆盖写全文。画像在 compose 时现读现拼（buildSessionMemorySection），
 	// 所以写完下一轮对话即生效，无需通知任何运行中的会话。
 	[INVOKE.setProfile]: async ([content]) => {
 		writeFileSync(profilePath(), content as string, "utf8");
@@ -2742,7 +2801,7 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-			memoryContent: buildMemorySection(currentBucket.cwd),
+			memoryContent: buildSessionMemorySection(currentBucket.cwd),
 			personalization: readPersonalizationSection(),
 		});
 	},
@@ -2791,8 +2850,9 @@ const handlers: Record<string, Handler> = {
 			})),
 			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
 			// 发现目录必须与会话实际生效的一致 —— cwd 取当前会话桶的 cwd
-			//（会话与 cwd 终身绑定，桶即真相）。
-			...listPromptTemplates(currentBucket.cwd, getConfigDir()).map((t) => ({
+			//（会话与 cwd 终身绑定，桶即真相）。空串 = 待分配（还没工作目录）由
+			// listSessionPromptTemplates 收口为空列表，不落到 daemon 进程 cwd 去扫。
+			...listSessionPromptTemplates(currentBucket.cwd, getConfigDir()).map((t) => ({
 				name: t.name,
 				description: t.description,
 				source: "template" as const,
@@ -2813,7 +2873,12 @@ const handlers: Record<string, Handler> = {
 		current: defaultWorkspaceDir,
 		// 生效根现读（不缓存）：改默认存储路径后，空间列表即刻反映新根。
 		defaultRoot: getEffectiveWorkspaceRoot(),
-		workspaces: listWorkspaces(getEffectiveWorkspaceRoot()),
+		// 过滤掉每任务的自动分配目录与历史共享临时目录：它们躺在根下，但不是
+		// 可切换的工作空间（切进去等于和别的任务共用 cwd），混进下拉就是噪音
+		// —— WorkBuddy 的 picker 用 isManualWorkspaceCwd 做同一件事。
+		// 只在这里过滤（不改 listWorkspaces）：那是「列出根下子目录」的通用原语，
+		// 保留全部目录，过滤是选择器自己的口径（谓词见 workspace-model.ts）。
+		workspaces: listWorkspaces(getEffectiveWorkspaceRoot()).filter(isSelectableWorkspaceDir),
 		previewBaseUrl: previewServers.baseUrlFor(defaultWorkspaceDir),
 	}),
 
@@ -2879,11 +2944,18 @@ const handlers: Record<string, Handler> = {
 	 * （组由会话文件派生），所以校验放这里；真正的 shell.openPath 在 main 侧
 	 * —— main 的本地 handler 先把本通道转发到这里，通过后才 openPath。
 	 * 若不校验，任意网页/XSS 都能让 main 打开任意路径（~\.ssh、系统目录）。
+	 *
+	 * 白名单 = 已知工作空间 ∪ 任一已知会话的 cwd（后者是为任务区放开，见
+	 * isRevealableCwd）：任务区会话不成组（listWorkspaceGroups 只收非临时会话），
+	 * 不把它们的 cwd 纳入，任务行「打开文件夹」就找不到自己的时间戳目录。
+	 * 未知路径（家目录、系统目录）不在任一列表中，仍一律拒。
 	 */
 	[INVOKE.workspaceReveal]: async ([cwd]) => {
-		const resolvedTarget = resolve(cwd as string);
-		const groups = await listWorkspaceGroups();
-		if (!groups.some((g) => resolve(g.cwd) === resolvedTarget)) {
+		const known = [
+			...(await listWorkspaceGroups()).map((g) => g.cwd),
+			...(await listSessions()).map((s) => s.cwd),
+		];
+		if (!isRevealableCwd(cwd as string, known)) {
 			throw new Error("不是已知的工作空间");
 		}
 	},
@@ -2891,8 +2963,8 @@ const handlers: Record<string, Handler> = {
 	/* ── 产物 ─────────────────────────────────────────────────────── */
 
 	// 预览面板的文本读取。HTML 预览不走这里（走静态服务），这里管文本类。
-	[INVOKE.readArtifact]: async ([path]) => readArtifactContent(path as string),
-	[INVOKE.statPath]: async ([path]) => statArtifactPath(path as string),
+	[INVOKE.readArtifact]: async ([path]) => readSessionArtifact(currentBucket.cwd, path as string),
+	[INVOKE.statPath]: async ([path]) => statSessionArtifact(currentBucket.cwd, path as string),
 
 	/* ── 权限审批回程 ─────────────────────────────────────────────── */
 
@@ -3110,13 +3182,17 @@ function start(): void {
 		platform: `${process.platform}-${process.arch}`,
 	});
 
-	// 初始工作区（共享临时目录）的预览服务（多根池里第一个实例）。
+	// 初始默认落点的预览服务（多根池里第一个实例）。默认落点可能是空串（待分配，
+	// 未选工作空间的新任务首次执行时才分配目录）—— 没有目录可服务，跳过；那种 cwd 的
+	// 预览由 createHost 在分配后按真 cwd 懒建。
 	// 失败不阻断启动 —— 预览是增强能力，聊天主链路不该被它拖死；记日志留现场。
-	void previewServers.ensure(defaultWorkspaceDir).catch((error: unknown) => {
-		const message = error instanceof Error ? error.message : String(error);
-		console.error(`预览服务启动失败：${message}`);
-		eventLog.append({ kind: "ipc_error", channel: "preview:ensure", message });
-	});
+	if (defaultWorkspaceDir !== "") {
+		void previewServers.ensure(defaultWorkspaceDir).catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(`预览服务启动失败：${message}`);
+			eventLog.append({ kind: "ipc_error", channel: "preview:ensure", message });
+		});
+	}
 
 	/*
 	 * docx 引擎 venv 后台预热（对标 WorkBuddy 的 SessionStart hook：

@@ -8,11 +8,12 @@
  *   - 文件系统根、相对路径
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { createWorkspace, listWorkspaces, validateWorkspacePath } from "./workspace.ts";
+import { basename, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { autoSessionDirName, isAutoSessionDirName } from "../shared/workspace.ts";
+import { createSessionDir, createWorkspace, listWorkspaces, validateWorkspacePath } from "./workspace.ts";
 
 const GUARDS = {
 	configDir: "C:\\Users\\test\\.kamibuddy",
@@ -109,5 +110,87 @@ describe("listWorkspaces", () => {
 
 	it("根目录不存在时返回空列表", () => {
 		expect(listWorkspaces(join(tmpdir(), "kami-ws-definitely-not-exist"))).toEqual([]);
+	});
+});
+
+describe("createSessionDir", () => {
+	const tempRoots: string[] = [];
+	const tempRoot = (): string => {
+		const dir = mkdtempSync(join(tmpdir(), "kami-session-dir-"));
+		tempRoots.push(dir);
+		return dir;
+	};
+	// 用临时目录跑，跑完清理，绝不污染用户家目录或仓库根。
+	afterEach(() => {
+		for (const dir of tempRoots.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("正常创建：basename 是指定时间的本地格式，目录真实存在", () => {
+		const root = tempRoot();
+		const now = new Date(2026, 8, 14, 17, 30, 45); // 本地时间 2026-09-14 17:30:45
+		const dir = createSessionDir(root, now);
+		expect(basename(dir)).toBe("2026-09-14-17-30-45");
+		expect(dir).toBe(join(root, "2026-09-14-17-30-45"));
+		expect(existsSync(dir)).toBe(true);
+	});
+
+	it("同秒冲突：第二次落到 +1 秒，两个目录都在", () => {
+		const root = tempRoot();
+		const now = new Date(2026, 8, 14, 17, 30, 45);
+		const first = createSessionDir(root, now);
+		const second = createSessionDir(root, now);
+		expect(basename(first)).toBe("2026-09-14-17-30-45");
+		expect(basename(second)).toBe("2026-09-14-17-30-46");
+		expect(existsSync(first)).toBe(true);
+		expect(existsSync(second)).toBe(true);
+	});
+
+	it("跨分钟边界递增：按「基准 + 秒」换算，不被格式化截断搞错", () => {
+		const root = tempRoot();
+		const now = new Date(2026, 8, 14, 17, 30, 59);
+		// 预建基准秒与下一秒，逼出第三个候选
+		mkdirSync(join(root, "2026-09-14-17-30-59"));
+		mkdirSync(join(root, "2026-09-14-17-31-00"));
+		const third = createSessionDir(root, now);
+		// 基准 + 2 秒 = 17:31:01；若实现对秒做字符串递增会错成 17:30:60 之类，这里锁住正确结果。
+		expect(basename(third)).toBe("2026-09-14-17-31-01");
+		expect(existsSync(third)).toBe(true);
+	});
+
+	it("root 不存在时递归补建（含中间层级）", () => {
+		const root = join(tempRoot(), "deep", "nested", "root");
+		expect(existsSync(root)).toBe(false);
+		const dir = createSessionDir(root, new Date(2026, 8, 14, 17, 30, 45));
+		expect(dir).toBe(join(root, "2026-09-14-17-30-45"));
+		expect(existsSync(dir)).toBe(true);
+	});
+
+	it("第 100 次尝试命中「基准 +99 秒」", () => {
+		const root = tempRoot();
+		const now = new Date(2026, 8, 14, 17, 30, 45);
+		// 预建 attempt 0..98 共 99 个连续秒目录，只剩最后一次尝试可用。
+		for (let i = 0; i < 99; i += 1) {
+			mkdirSync(join(root, autoSessionDirName(new Date(now.getTime() + i * 1000))));
+		}
+		const dir = createSessionDir(root, now);
+		expect(basename(dir)).toBe("2026-09-14-17-32-24"); // 17:30:45 + 99s
+	});
+
+	it("100 个连续秒全被占用时响亮报错", () => {
+		const root = tempRoot();
+		const now = new Date(2026, 8, 14, 17, 30, 45);
+		// 真实预建「上限」个目录来做等价断言，而不是导出内部常量：100 个空目录的创建成本极低，
+		// 恰好填满上限即可触发耗尽分支（多建一个反而掩盖边界），用真实目录数锁行为比读常量更可靠。
+		for (let i = 0; i < 100; i += 1) {
+			mkdirSync(join(root, autoSessionDirName(new Date(now.getTime() + i * 1000))));
+		}
+		expect(() => createSessionDir(root, now)).toThrow(/时间戳会话目录/);
+	});
+
+	it("不传 now 时走真实时钟，basename 命中自动目录形态", () => {
+		const root = tempRoot();
+		const dir = createSessionDir(root);
+		expect(isAutoSessionDirName(basename(dir))).toBe(true);
+		expect(existsSync(dir)).toBe(true);
 	});
 });

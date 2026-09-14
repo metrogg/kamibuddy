@@ -903,7 +903,7 @@ export function App(): React.JSX.Element {
 		[refreshGroups],
 	);
 
-	/** 系统文件管理器打开空间目录（daemon 侧校验是已知工作空间，防任意路径）。 */
+	/** 系统文件管理器打开空间目录（daemon 侧校验是已知工作空间或任一会话的 cwd，防任意路径）。 */
 	const revealWorkspace = useCallback((cwd: string) => {
 		window.kami.revealWorkspace(cwd).catch((error: unknown) => {
 			showToast(error instanceof Error ? error.message : String(error));
@@ -912,7 +912,7 @@ export function App(): React.JSX.Element {
 	}, []);
 
 	/**
-	 * 临时任务转正：daemon 建目录、重写归组键并以新 cwd 重建当前会话。
+	 * 临时任务转正：daemon 把任务目录重命名为空间名、重写归组键并以新 cwd 重建当前会话。
 	 * 成功后按 resume 同口径按权威快照换指针（cwd/isTempTask 易位、预览根变了），
 	 * 会话挪组经推送覆盖，这里只补拉 metas（新空间组可能第一次出现）。
 	 *

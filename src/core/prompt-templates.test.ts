@@ -25,6 +25,28 @@ afterEach(() => {
 	rmSync(base, { recursive: true, force: true });
 });
 
+describe("cwd 缺省 / 空串 = 无项目级（只列全局模板）", () => {
+	beforeEach(() => {
+		writeFileSync(join(agentDir, "prompts", "global.md"), "全局模板");
+		writeFileSync(join(cwd, ".pi", "prompts", "project.md"), "项目模板");
+	});
+
+	it("cwd 缺省：只列全局模板，项目级不入结果", () => {
+		expect(listPromptTemplates(undefined, agentDir).map((t) => t.name)).toEqual(["global"]);
+	});
+
+	it("cwd 为空串：与缺省同义，只列全局（不把空串当项目路径去扫）", () => {
+		expect(listPromptTemplates("", agentDir).map((t) => t.name)).toEqual(["global"]);
+	});
+
+	it("给定真实 cwd：全局 + 项目合并", () => {
+		const names = listPromptTemplates(cwd, agentDir)
+			.map((t) => t.name)
+			.sort();
+		expect(names).toEqual(["global", "project"]);
+	});
+});
+
 describe("listPromptTemplates", () => {
 	it("发现 agentDir/prompts 与 cwd/.pi/prompts 下的 .md，名字取文件名", () => {
 		writeFileSync(join(agentDir, "prompts", "weekly.md"), "写一份周报");

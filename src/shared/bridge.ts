@@ -117,7 +117,7 @@ export interface KamiBridge {
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;
 	/** 在默认根下新建工作空间并切换。名称非法或重名时 reject 原因。 */
 	readonly createWorkspace: (name: string) => Promise<string>;
-	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。传空串 = 临时任务（落共享临时目录）。 */
+	/** 切换到指定目录。危险目录（配置/应用目录）会 reject 原因。传空串 = 临时任务待分配（不建目录，首次执行才分配独立时间戳目录）。 */
 	readonly setWorkspace: (path: string) => Promise<string | undefined>;
 	/** 系统目录选择框。取消返回 undefined。 */
 	readonly pickWorkspaceDirectory: () => Promise<string | undefined>;

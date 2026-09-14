@@ -66,14 +66,22 @@ const PROJECT_CONFIG_FILE = ".mcp.json";
 /**
  * 读取生效的 MCP 配置 = 用户级 + 项目级合并。
  *
- * @param cwd 会话工作目录（项目级 .mcp.json 的位置）。
+ * @param cwd 会话工作目录（项目级 .mcp.json 的位置）。缺省或空串 = 没有工作目录
+ *   （无项目级，只返回用户级）—— daemon 侧「待分配」的新任务（首次发消息前）就是
+ *   这种状态，"" 与 undefined 在调用方同义。二者都**不拼路径**：join("", ".mcp.json")
+ *   得到相对路径，会被 Node 按进程 cwd 解析成无关的「项目级」配置。
  * @throws McpConfigError 任一配置文件存在但坏了（语法 / 结构 / 环境变量未设置）。
  */
-export function readMcpConfig(cwd: string): McpServersConfig {
+export function readMcpConfig(cwd?: string): McpServersConfig {
 	const user = readFileIfExists(getMcpConfigPath());
-	const project = readFileIfExists(join(cwd, PROJECT_CONFIG_FILE));
+	const project = hasWorkspace(cwd) ? readFileIfExists(join(cwd, PROJECT_CONFIG_FILE)) : {};
 	// 同名 server 项目级优先：展开即覆盖。
 	return { servers: { ...user, ...project } };
+}
+
+/** 有可用的工作目录才去读项目级：undefined / "" 都表示「没有工作目录」（待分配）。 */
+function hasWorkspace(cwd: string | undefined): cwd is string {
+	return cwd !== undefined && cwd !== "";
 }
 
 /** 文件不存在 = 空配置；存在但读不了（权限等）或坏了 = 响亮抛错。 */
@@ -234,7 +242,7 @@ export function readMcpConfigSource(cwd?: string): string {
  * 整体写入 mcp.json（JSON 编辑器的保存）。
  *
  * 写入目标：cwd 给定 = 项目级 <cwd>/.mcp.json，缺省 = 用户级 ~/.kamibuddy/mcp.json
- * （daemon 在临时任务会话下传缺省 —— 共享临时目录不该落配置文件）。
+ * （daemon 在临时任务会话下传缺省 —— 任务目录是任务私有的、转正还会改名，不该落配置文件）。
  *
  * 写入前过完整校验（JSONC 语法 + schema + ${VAR} 引用的变量已设置），
  * 坏了拒写抛 McpConfigError —— 写一份读不回的配置等于丢用户数据。

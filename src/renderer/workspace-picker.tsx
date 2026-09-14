@@ -1,7 +1,9 @@
 /**
  * 工作空间选择器。机制对标 WorkBuddy 的 WorkspacePicker：
  * 空间 = 目录；默认根 / 根下已有子目录 / 新建 / 打开本地文件夹。
- * 未显式选择时即临时任务（cwd = <生效根>/临时任务 共享目录），
+ * 未显式选择时即临时任务——其 cwd 是**每个任务自己的自动目录**
+ * `<生效根>/YYYY-MM-DD-HH-mm-ss`（spec: align-per-task-dirs），语义上仍是
+ * 「没选工作空间」，chip 照旧显示「临时任务」（见 pickerLabel）。
  * 不再有「不使用工作空间」——playground 语义已退役（经取证是我们自己的发明）。
  *
  * 安全校验在 daemon（core/workspace.ts）：配置目录 / 应用目录会被拒，
@@ -13,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import type { WorkspaceSnapshot } from "@shared/ipc.ts";
+import { isAutoSessionDirName } from "@shared/workspace.ts";
 import { IconChevronDown, IconPlus, IconWorkspace } from "./icons.tsx";
 
 interface WorkspacePickerProps {
@@ -27,6 +30,21 @@ function baseName(path: string): string {
 	const trimmed = path.replace(/[\\/]+$/, "");
 	const at = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
 	return at === -1 ? trimmed : trimmed.slice(at + 1);
+}
+
+/**
+ * chip 显示的当前工作空间名（纯函数，可单测）。
+ *
+ * 「没选工作空间」现在有几种等价形态，都该显示「临时任务」：
+ *   - undefined / 空串：会话未建立，或新任务尚未首次执行（待分配）；
+ *   - basename 命中自动目录格式：该会话已分配了每任务私有目录
+ *     `<生效根>/YYYY-MM-DD-HH-mm-ss`（spec: align-per-task-dirs），
+ *     语义上仍是临时任务，直接 baseName 只会显示一串时间戳；
+ *   - 历史共享目录 `<根>/临时任务`：baseName 天然就是「临时任务」，无需特判。
+ */
+export function pickerLabel(cwd: string | undefined): string {
+	if (cwd === undefined || cwd === "") return "临时任务";
+	return isAutoSessionDirName(baseName(cwd)) ? "临时任务" : baseName(cwd);
 }
 
 export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React.JSX.Element {
@@ -64,7 +82,7 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 		setBusy(false);
 	};
 
-	/** 统一切换入口。空串 = 临时任务（daemon 映射到共享临时目录），本组件已不提供该入口。 */
+	/** 统一切换入口。空串 = 临时任务（daemon 记为待分配，首次执行才分配目录），本组件已不提供该入口。 */
 	const switchTo = (path: string): void => {
 		// 规范化当前值与目标值：初始瞬态 cwd 为 undefined，与空串同按「未选择」处理，
 		// 避免 ""/undefined 不相等误判。
@@ -126,9 +144,10 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 				aria-expanded={open}
 			>
 				<IconWorkspace size={14} />
-				{/* 临时任务的 cwd 是 <根>/临时任务，baseName 天然显示「临时任务」；
-				    undefined/空串是尚未显式选择的默认态，同样显示「临时任务」。 */}
-				{cwd === undefined || cwd === "" ? "临时任务" : baseName(cwd)}
+				{/* 文案判定收在 pickerLabel（可单测）：cwd 为 undefined/空串、或指向
+				    自动分配目录时都显示「临时任务」——自动目录的语义就是「没选工作空间」。
+				    title 仍给完整路径，用户要知道自己在哪个目录。 */}
+				{pickerLabel(cwd)}
 				<IconChevronDown size={12} />
 			</button>
 

@@ -125,13 +125,13 @@ export function getWorkspaceDir(): string {
 }
 
 /**
- * 临时任务共享目录：`<工作空间根>/临时任务`。
+ * 历史共享临时目录：`<工作空间根>/临时任务`。
  *
- * 对齐 WorkBuddy 的临时任务模型（main/server.js：临时任务 cwd = <根>/Claw，
- * 所有临时任务共享单一目录、工具齐全），目录名用我们自己的词。
+ * 退役为历史目录：新任务已改为每任务独立时间戳目录（见 spec: align-per-task-dirs），
+ * 不再有新会话落入这里；本函数仅供旧会话归类到任务区/迁移用，目录与文件原地保留。
  * 中文目录名在 Node/Windows 无障碍（现有测试里就有中文路径）。
  *
- * 只拼路径不建目录：本文件是纯路径推导层，创建时机在会话建立处（递归 mkdir）。
+ * 只拼路径不建目录：本文件是纯路径推导层。
  */
 export function getTempTasksDir(root: string): string {
 	return join(root, "临时任务");

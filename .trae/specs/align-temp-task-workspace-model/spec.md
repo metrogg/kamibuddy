@@ -1,5 +1,12 @@
 # 临时任务工作空间模型对齐 WorkBuddy（playground 退役）Spec
 
+> **【2026-09-14 更正】** 本 spec 的「临时任务 cwd = `<根>/Claw`（固定单一共享临时目录）」
+> 这一结论**不准确**，已由 spec `align-per-task-dirs` 更正：`Claw` 是「本地助理」窗口专用的
+> 固定目录（`ensureClawCwd` / `findReusableClawConversationId`），**普通新任务**走的是
+> `createDefaultCwd()` —— 在默认根下自动 `mkdir` 一个 `YYYY-MM-DD-HH-mm-ss` 时间戳目录，
+> 每个任务一个独立目录。本 spec 的其余结论（playground 语义退役、默认存储路径设置项、
+> 侧栏分桶键、saveToWorkspace 转正、旧会话归类）仍然有效。
+
 ## Why
 
 我们的 playground（不绑定目录、无文件工具）是**我们自己的发明**，不是 WorkBuddy 的设计——

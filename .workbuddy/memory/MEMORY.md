@@ -62,6 +62,25 @@
   逆向证据表在 `.trae/specs/add-usage-stats/spec.md`（别再重查一遍）。
 - 会计口径的关键不对称：子代理会话从会话维度排除，但**它的 token/费用照算**。
 
+## 设置页与配置层（2026-09-14 调研）
+
+- 现状：6 分区（通用/个性化/记忆与进化/模型/提示词预览/关于）约 20 键，
+  存 `~/.kamibuddy/preferences.json`（`core/preferences.ts`）。
+- **加一个配置键的成本 = 6 处文件 + 2 个 IPC 通道**：每个键手写一对专用通道
+  （`getStyle/setStyle` 等，`shared/ipc.ts` 里已 20+ 个），加键要动
+  preferences.ts → ipc.ts → preload → bridge → daemon handler → UI。
+  **AGENTS.md §5 承诺的 `config.get(key)` 单一入口未落地** —— 任何「批量加配置项」
+  的前置都是先补它（配置注册表 + `config:snapshot`/`config:patch`）。
+- WorkBuddy 桌面设置 = 4 组 15 项（通用:设置/账户/订阅用量/外观/快捷键 ｜
+  功能:个性化/记忆/扩展/模型/Claw ｜ 数据与安全:数据管理/安全中心/系统权限/软件配置 ｜ 关于）。
+  实现在 `ui-docs-viewer-*.js` 的 `SettingsNavigation`，`filteredNavItems` 按
+  feature flag 过滤显隐。CLI 侧 `settings.json` 约 40 键，官方文档在同名 `settings.md`。
+- **pi 已有整套配置白放着**：`settings-manager.ts` 的 `compaction{reserveTokens 16384,
+  keepRecentTokens 20000}`、`retry{maxRetries 3, baseDelayMs 2000}`、
+  `showCacheMissNotices`、`hideThinkingBlock`、`images.blockImages`、`steeringMode`…
+  `session-host.ts:525` 已 `SettingsManager.create()`，只是没接到 UI。
+- **完全没有**：网络代理、会话保留期批清理、手动主题切换、快捷键、子代理模型映射。
+
 ## 完成后必跑
 
 `npm run typecheck && npm run check:deps && npm test`；改 `documents/` 必须跑 `npm test`。

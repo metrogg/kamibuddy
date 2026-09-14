@@ -146,9 +146,9 @@ export const INVOKE = {
 	 */
 	sessionExport: "session:export",
 	/**
-	 * 把当前临时任务会话「保存到工作空间」转正：以 name 在默认根下创建目录、
-	 * 会话以新 cwd 重建并归入新空间组；已生成文件留在临时目录不动
-	 * （共享临时目录无法干净归属单个任务的文件，WorkBuddy 同结构）。
+	 * 把当前临时任务会话「保存到工作空间」转正：把该任务目录在生效根下重命名为
+	 * name（自动目录整体 rename，产物与记忆随目录迁移；历史共享临时目录等非自动
+	 * 目录回退为新建目录），会话以新 cwd 重建并归入新空间组。
 	 * name 经 daemon 校验（工作空间命名规则）；当前会话非临时任务时由 daemon 拒绝。
 	 */
 	saveToWorkspace: "session:save-to-workspace",
@@ -158,7 +158,7 @@ export const INVOKE = {
 	createWorkspace: "workspace:create",
 	/**
 	 * 切换到指定目录。目录经 daemon 校验（配置目录/应用目录会拒）。返回生效的目录路径。
-	 * 传空字符串表示临时任务（不选命名空间，cwd 落共享临时目录）。
+	 * 传空字符串表示临时任务待分配（不选命名空间，不建目录，首次执行才分配独立时间戳目录）。
 	 */
 	setWorkspace: "workspace:set",
 	/**
@@ -544,7 +544,7 @@ export type DocxEnvStatus =
 
 /** 工作空间快照。机制对标 WorkBuddy：空间 = 目录，默认根下建同名子目录。 */
 export interface WorkspaceSnapshot {
-	/** 当前生效的工作空间目录。临时任务时为共享临时目录路径；undefined 仅出现在会话尚未建立的瞬态。 */
+	/** 当前生效的工作目录（新建任务的默认 cwd 来源）。临时任务未选命名空间时为空串（待分配，首次执行才分配独立时间戳目录）；undefined 仅出现在会话尚未建立的瞬态。 */
 	readonly current: string | undefined;
 	/** 默认根目录（「新建工作空间」都建在它下面）。 */
 	readonly defaultRoot: string;
@@ -552,7 +552,8 @@ export interface WorkspaceSnapshot {
 	readonly workspaces: readonly string[];
 	/**
 	 * 产物预览静态服务的 baseUrl（http://127.0.0.1:端口，根=当前工作区）。
-	 * 临时任务会话同样起服务（根=共享临时目录）；undefined 仅出现在尚无工作目录的瞬态。
+	 * 临时任务会话同样起服务（根=该任务的自动目录；待分配空串无目录，不给 baseUrl）；
+	 * undefined 仅出现在尚无工作目录的瞬态。
 	 */
 	readonly previewBaseUrl: string | undefined;
 }
@@ -593,7 +594,7 @@ export interface CommandItem {
 
 /** 输入框补全数据源。 */
 export interface CompletionData {
-	/** `@` 可选文件：当前工作空间内的相对路径（posix 分隔）。临时任务时列共享临时目录内容。 */
+	/** `@` 可选文件：当前工作目录内的相对路径（posix 分隔）。临时任务时列该任务自动目录内容；待分配（空串）时为空。 */
 	readonly files: readonly string[];
 	/** `/` 可选命令。 */
 	readonly commands: readonly CommandItem[];
@@ -626,9 +627,9 @@ export interface SessionSummary {
 	readonly title: string;
 	/** 用户命名（appendSessionInfo）；未命名为 undefined，不要用空串。 */
 	readonly name?: string;
-	/** 会话启动时的工作目录（pi header.cwd）。临时任务会话为共享临时目录（或默认根本身）。 */
+	/** 会话启动时的工作目录（pi header.cwd）。临时任务会话为该任务的自动目录（历史会话可能是共享临时目录，或生效根本身）。 */
 	readonly cwd: string;
-	/** 是否临时任务会话（daemon 按 cwd===临时任务目录/默认根本身 判定好，UI 不推导）。 */
+	/** 是否临时任务会话（daemon 按 cwd 目录名形态判定好：自动时间戳目录 / 历史「临时任务」目录 / 生效根本身 / 旧 playground 占位，UI 不推导）。 */
 	readonly isTempTask: boolean;
 	/** epoch ms。 */
 	readonly createdAt: number;

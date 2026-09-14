@@ -109,6 +109,33 @@ describe("读取与合并", () => {
 	});
 });
 
+describe("cwd 缺省 / 空串 = 无项目级（只返回用户级）", () => {
+	beforeEach(() => {
+		writeUserConfig(
+			JSON.stringify({ mcpServers: { "user-only": { url: "http://user.example/mcp" } } }),
+		);
+		writeProjectConfig(JSON.stringify({ mcpServers: { "project-only": { command: "proj" } } }));
+	});
+
+	it("cwd 缺省：只有用户级，项目级不入结果", () => {
+		const { servers } = readMcpConfig();
+		expect(servers["user-only"]).toEqual({ transport: "http", url: "http://user.example/mcp" });
+		expect(servers["project-only"]).toBeUndefined();
+	});
+
+	it("cwd 为空串：与缺省同义，只返回用户级（不把空串当项目路径去解析）", () => {
+		const { servers } = readMcpConfig("");
+		expect(servers["user-only"]).toBeDefined();
+		expect(servers["project-only"]).toBeUndefined();
+	});
+
+	it("给定真实 cwd：用户级 + 项目级合并", () => {
+		const { servers } = readMcpConfig(workspace);
+		expect(servers["user-only"]).toBeDefined();
+		expect(servers["project-only"]).toBeDefined();
+	});
+});
+
 describe("JSONC 与 ${VAR} 展开", () => {
 	it("注释与尾逗号都能读", () => {
 		writeUserConfig(`{

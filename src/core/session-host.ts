@@ -318,9 +318,10 @@ export interface SessionHostOptions {
 	/** 选中的模型标识（`provider/model`）。undefined 表示让 pi 自己挑第一个可用的。 */
 	readonly modelKey: string | undefined;
 	/**
-	 * 会话工作目录。临时任务模型下**必有值**：临时任务就是普通 cwd 会话
-	 * （cwd = 生效根下的共享临时目录），不再有「无目录」的会话形态，
-	 * 工具集、权限门、预览服务与正式工作空间完全同待遇。
+	 * 会话工作目录。**必有值**：本类只在会话宿主建立时创建，而宿主建立前
+	 * daemon 已把「待分配」的临时任务分配到它自己的目录（生效根下的时间戳目录，
+	 * 见 spec: align-per-task-dirs），所以这里拿到的永远是真实目录 ——
+	 * 不再有「无目录」的会话形态，工具集、权限门、预览服务与正式工作空间同待遇。
 	 */
 	readonly cwd: string;
 	readonly sceneId: string;
@@ -507,7 +508,7 @@ export class SessionHost {
 
 		/*
 		 * 临时任务就是普通 cwd 会话：调用方（daemon）直接给出真实目录
-		 * （正式空间或共享临时目录），本文件不再做任何 cwd 推导。
+	 * （正式空间，或该任务首次执行时分配到的独立目录），本文件不做任何 cwd 推导。
 		 * playground 时代的「configDir/playground 技术占位」已退役 —— 占位目录
 		 * 存在的前提是「不注册文件工具就当安全」，权限门全量落地后这个前提消失，
 		 * 会话需要一个真实产物落点（临时目录）而不是假目录。
@@ -769,7 +770,7 @@ export class SessionHost {
 		const model = this.session.model;
 		return {
 			sessionId: this.session.sessionId,
-			// 临时任务也是真实 cwd（共享临时目录）——契约不再用 undefined 表达「无目录」。
+			// 临时任务也是真实 cwd（该任务自己的目录）——契约不再用 undefined 表达「无目录」。
 			cwd: this.options.cwd,
 			isTempTask: this.options.isTempTask,
 			sceneId: this.sceneId,

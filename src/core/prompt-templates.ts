@@ -76,13 +76,25 @@ function pickDescription(frontmatterValue: unknown, body: string): string {
  * 同名去重：项目级优先（pi 的 expandPromptTemplate 用 find，先命中先生效，
  * 其加载顺序是全局在前 —— 但项目级覆盖全局是这类工具的通行语义，
  * 且此处只影响补全列表展示，不影响 pi 的实际展开）。
+ *
+ * @param cwd 会话工作目录（项目级模板的位置）。缺省或空串 = 没有工作目录（只列全局
+ *   模板）—— daemon 侧「待分配」的新任务就是这种状态，"" 与 undefined 同义。
+ *   二者都**不拼路径**：join("", ".pi", "prompts") 得到相对路径，会被 Node 按进程
+ *   cwd 解析，列出并不属于本会话的模板。
  */
-export function listPromptTemplates(cwd: string, agentDir: string): PromptTemplateItem[] {
+export function listPromptTemplates(cwd: string | undefined, agentDir: string): PromptTemplateItem[] {
 	const globalTemplates = scanDir(join(agentDir, "prompts"));
-	const projectTemplates = scanDir(join(cwd, PROJECT_CONFIG_DIR, "prompts"));
+	const projectTemplates = hasWorkspace(cwd)
+		? scanDir(join(cwd, PROJECT_CONFIG_DIR, "prompts"))
+		: [];
 
 	const byName = new Map<string, PromptTemplateItem>();
 	for (const t of globalTemplates) byName.set(t.name, t);
 	for (const t of projectTemplates) byName.set(t.name, t);
 	return [...byName.values()];
+}
+
+/** 有可用的工作目录才去扫项目级：undefined / "" 都表示「没有工作目录」（待分配）。 */
+function hasWorkspace(cwd: string | undefined): cwd is string {
+	return cwd !== undefined && cwd !== "";
 }

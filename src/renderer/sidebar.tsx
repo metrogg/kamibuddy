@@ -68,7 +68,11 @@ interface SidebarProps {
 	readonly onRenameWorkspace: (cwd: string, name: string) => void;
 	/** 该 cwd 全部会话移入回收目录（可反悔），目录本身不动。 */
 	readonly onRemoveWorkspace: (cwd: string) => void;
-	/** 系统文件管理器打开该目录（daemon 侧校验是已知工作空间，防任意路径）。 */
+	/**
+	 * 系统文件管理器打开该目录。空间组与任务行共用同一条通道（不自建第二个 IPC）：
+	 * 任务未选工作空间时 cwd 是它的自动目录（时间戳），没有这个入口用户找不到产物。
+	 * daemon 侧只接受已知目录（工作空间或会话 cwd），防任意路径。
+	 */
 	readonly onRevealWorkspace: (cwd: string) => void;
 	readonly onOpenSettings: () => void;
 	readonly onOpenDiagnostics: () => void;
@@ -229,6 +233,29 @@ export function Sidebar({
 					<span className="task-item-meta">{meta}</span>
 				</button>
 				<span className="task-item-ops">
+					{/*
+						打开该任务的工作目录。未选工作空间的任务 cwd 是它的自动目录
+						（时间戳命名），用户只能靠这个入口在文件系统里找到产物。
+						空 cwd 是历史 playground 会话（没有真实目录），此时不渲染 ——
+						与本文件其他可选 affordance（转圈/未读点/待确认徽章）同为条件渲染，
+						留个点了没反应的按钮更差。复用空间组同一条 onRevealWorkspace 通道。
+					*/}
+					{task.cwd !== "" && (
+						<button
+							type="button"
+							className="task-op-btn"
+							aria-label="打开文件夹"
+							title="打开文件夹"
+							onClick={() => {
+								// 与导出同口径：先收掉其他行的操作态，避免残留态语义脏。
+								setEditingPath(undefined);
+								setConfirmingPath(undefined);
+								onRevealWorkspace(task.cwd);
+							}}
+						>
+							<IconFolder size={13} />
+						</button>
+					)}
 					{/*
 						历史会话的导出会让 daemon 先恢复该会话（当前上下文被切走），
 						这个语义必须在 tooltip 上可见，否则用户不知道点完对话就换了。

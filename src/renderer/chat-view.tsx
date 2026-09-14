@@ -148,6 +148,26 @@ function ThinkingBlock({
 }): React.JSX.Element {
 	const [override, setOverride] = useState<ThinkingFoldOverride>(undefined);
 	const open = thinkingOpen(streaming, override);
+	/*
+		思考体限高 200px、自带内部滚动条（见 index.css .thinking-body）。它是
+		独立滚动容器，主消息流的贴底跟随管不到它 —— 不主动贴底的话，新吐的字
+		全落在线下，可视区永远停在开头（表现为「思考一直卡在顶上不动」）。
+		跟随判定与主滚动同一口径（handleStreamScroll）：只看**测量到的位置**
+		（距底 < 阈值），用户上翻即解除跟随。不用「程序滚动中」标记位，是因为
+		流式增量下标记的维护时序极易漏拍、把跟随误关掉。
+	*/
+	const bodyRef = useRef<HTMLPreElement>(null);
+	const followRef = useRef(true);
+	useEffect(() => {
+		if (!open) {
+			// 收起即复位：重新展开的是一块从头呈现的正文，跟随从「贴底」重新开始。
+			followRef.current = true;
+			return;
+		}
+		const node = bodyRef.current;
+		if (node === null || !followRef.current) return;
+		node.scrollTop = node.scrollHeight;
+	}, [text, open]);
 
 	return (
 		<div className="thinking-block">
@@ -162,7 +182,20 @@ function ThinkingBlock({
 				)}
 				<span className={streaming ? "text-shimmer" : ""}>深度思考</span>
 			</button>
-			{open && <pre className="thinking-body">{text}</pre>}
+			{open && (
+				<pre
+					className="thinking-body"
+					ref={bodyRef}
+					onScroll={() => {
+						const node = bodyRef.current;
+						if (node === null) return;
+						followRef.current =
+							node.scrollHeight - node.scrollTop - node.clientHeight < BOTTOM_THRESHOLD_PX;
+					}}
+				>
+					{text}
+				</pre>
+			)}
 		</div>
 	);
 }
@@ -1153,9 +1186,10 @@ function ModeSwitch({
 /**
  * 临时任务转正的命名弹层。
  *
- * 命名即建真实目录（daemon 在生效根下创建同名目录并把当前会话切过去），
- * 所以名称校验的权威在 daemon（兄弟目录/空间组的知识只在那边）——
- * renderer 不另写一份规则，两份必漂移（AGENTS.md §4），校验错误串原位透出。
+ * 命名即把该任务的自动目录**重命名**为空间名（daemon 在同根下 rename，产物与
+ * `.kamibuddy/` 记忆随目录一起过去），所以名称校验的权威在 daemon（兄弟目录/空间组
+ * 的知识只在那边）——renderer 不另写一份规则，两份必漂移（AGENTS.md §4）。
+ * 错误串原位透出（含 rename 被占用等失败原因，daemon 给什么显示什么，不另建提示链路）。
  * 中文名选词确认的 Enter 不能误提交，IME 守卫与输入框同一份接线（ime-guard.ts）。
  */
 function SaveToWorkspaceDialog({
@@ -1200,8 +1234,8 @@ function SaveToWorkspaceDialog({
 			<div className="save-space-card" role="dialog" aria-modal="true" aria-label="保存到工作空间">
 				<p className="save-space-title">保存到工作空间</p>
 				<p className="save-space-desc">
-					会以该名称创建空间目录，当前任务迁入其中继续；之后的对话与产物都归到这个空间，
-					随时可以从侧栏回来。
+					会把当前任务的目录重命名为这个空间名，目录里的产物与记忆一起跟过去；
+					之后的对话也归到这个空间，随时可以从侧栏回来。
 				</p>
 				<input
 					className="save-space-input"

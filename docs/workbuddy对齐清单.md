@@ -228,6 +228,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | K7 | 会话导出 | 无对应（WorkBuddy 走分享与发布） | `session-export.ts` 导出 HTML | ✅ 我方领先 |
 | K8 | 检查点操作 | `checkpoint_create` / `checkpoint_restore` / `checkpoint_revert` 三个动作 + `ShowFileDiffOnClick` 点击看 diff | 无回滚能力 | ❌ |
 | K9 | 会话无响应超时 | `session_no_response_timeout`：会话长时间无响应时的处理 | 无 | ❌ |
+| K10 | 任务工作目录分配 | 未指定 cwd 的新任务由 `createDefaultCwd()` 在默认根下 `mkdir` 时间戳目录（`YYYY-MM-DD-HH-mm-ss` 本地时间，同秒冲突按秒递增重试 100 次）并作为该会话 cwd；这类会话标 `isPlayground` → 左栏「任务」区独立卡片、不按 cwd 成组，转正（`moveSession` 置 false）后才在「空间」区按 cwd 成组；`<root>/Claw` 仅「本地助理」窗口专用、不是普通新任务落点；目录名与会话的绑定在 DB `sessions.cwd`，重命名会话/工作空间不改目录名（显示名另存） | 同结构（spec `align-per-task-dirs`）：首次执行时分配 `<生效根>/YYYY-MM-DD-HH-mm-ss`（延迟到首次发消息，不产生空目录；冲突按秒递增 100 次）；`isTempTask` → 任务区、其余按 cwd 成组；`<根>/临时任务` 退役为历史目录（旧会话仍归任务区、文件原地保留）；**转正 = 重命名目录**（产物与 `.kamibuddy/` 记忆随目录迁移，优于原版的「只加显示名、时间戳目录永久堆积」）；任务行可「打开文件夹」；归属判定按目录名形态而非当前生效根（改存储路径后旧任务不漂移） | ✅ 结构对齐；转正重命名与空目录规避为改良 |
 
 ## L. 界面与交互
 
