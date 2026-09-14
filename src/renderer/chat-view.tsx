@@ -14,7 +14,7 @@ import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
 import type { ConversationEntry, ModeDescriptor, RunId, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
-import { WAITING_SOOTHED_TEXT, WAITING_TIPS } from "@shared/waiting-tips.ts";
+import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
 	IconBack,
@@ -430,7 +430,7 @@ function outcomeClass(outcome: ToolCard["outcome"]): string {
  * 而用户真正要看的是结论。WorkBuddy 的主提示词里也明确写了
  * 「中间过程在 UI 被折叠」，是同一个考虑。
  */
-function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
+function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; readonly showChangeDetails: boolean }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	// web_search 特化（spec: add-source-favicons）：卡带 sources 时卡头加
 	// favicon 头像组 + 计数，展开区在 detail 前渲染逐条来源行（WorkBuddy
@@ -481,8 +481,10 @@ function ToolEntry({ card }: { readonly card: ToolCard }): React.JSX.Element {
 					</span>
 				)}
 				{/* write/edit 的增删行徽章（对标 WorkBuddy 的「+276 -0」）。
-				    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。 */}
-				{card.change !== undefined && (
+			    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。
+			    个性化「展示文件变更过程详情」只藏生成中的过程计数（off 时），
+			    完成态终值不受影响 —— 终值是结果信息不是过程详情。 */}
+			{card.change !== undefined && (showChangeDetails || card.generating !== true) && (
 					<span className="tool-change">
 						<span className="added">+{card.change.added}</span>
 						<span className="removed">-{card.change.removed}</span>
@@ -732,6 +734,11 @@ function pendingText(entries: readonly ConversationEntry[]): string {
 
 /** 等待 4s 后出现首条 tip；等待 8s 主文案切换安抚文案；tip 每 10s 轮换。 */
 const TIP_SHOW_DELAY_MS = 4_000;
+/*
+ * 加载欢迎语（个性化开关）：等待 1s 后把主文案换成一句问候 —— 同位替换
+ * 而非上方加行（零布局抖动），与 tips 轮播共存互不干扰。
+ */
+const GREETING_DELAY_MS = 1_000;
 const SOOTHE_DELAY_MS = 8_000;
 const TIP_ROTATE_MS = 10_000;
 
@@ -758,20 +765,28 @@ function nextTipIndex(size: number, current: number | undefined): number {
 function WaitingPendingLine({
 	dismissed,
 	onDismiss,
+	welcomeGreeting,
 }: {
 	readonly dismissed: boolean;
 	readonly onDismiss: () => void;
+	readonly welcomeGreeting: boolean;
 }): React.JSX.Element {
 	const [tipShown, setTipShown] = useState(false);
 	const [soothed, setSoothed] = useState(false);
+	const [greeting, setGreeting] = useState<string | undefined>(undefined);
 	const [tipIndex, setTipIndex] = useState(() => nextTipIndex(WAITING_TIPS.length, undefined));
 	const [paused, setPaused] = useState(false);
 
-	// 一次性计时：4s 出首条 tip、8s 切安抚文案。只在等待阶段计时（组件随阶段挂载）。
+	// 一次性计时：1s 换问候、4s 出首条 tip、8s 切安抚文案。只在等待阶段计时（组件随阶段挂载）。
 	useEffect(() => {
+		const greetingTimer = window.setTimeout(() => {
+			// 一次等待内只取一条不换：轮换问候会把用户的注意力从「还在跑」拉走。
+			setGreeting(WELCOME_GREETINGS[Math.floor(Math.random() * WELCOME_GREETINGS.length)]);
+		}, GREETING_DELAY_MS);
 		const tipTimer = window.setTimeout(() => setTipShown(true), TIP_SHOW_DELAY_MS);
 		const sootheTimer = window.setTimeout(() => setSoothed(true), SOOTHE_DELAY_MS);
 		return () => {
+			window.clearTimeout(greetingTimer);
 			window.clearTimeout(tipTimer);
 			window.clearTimeout(sootheTimer);
 		};
@@ -788,8 +803,10 @@ function WaitingPendingLine({
 
 	const showTip = tipShown && !dismissed;
 	return (
-		<div className="stream-pending" aria-live="polite">
-			<span className="text-shimmer">{soothed ? WAITING_SOOTHED_TEXT : "等待模型响应…"}</span>
+		<div className="stream-pending">
+			<span className="text-shimmer">
+				{soothed ? WAITING_SOOTHED_TEXT : welcomeGreeting && greeting !== undefined ? greeting : "等待模型响应…"}
+			</span>
 			{showTip && (
 				<span
 					className="pending-tip"
@@ -1202,6 +1219,35 @@ export function ChatView({
 		onPrefillConsumed();
 	}, [prefill, onPrefillConsumed]);
 	/*
+	 * 个性化两个 UI 开关（加载欢迎语 / 展示变更过程详情）：组件内 effect 直读
+	 * 一次（与 vision-hint / model-menu 同路径 —— 这两个键不在 settingsSnapshot、
+	 * App 层无下发）。读取失败静默按契约缺省 true：问候与详情都是增强，读不到
+	 * 偏好不该把等待行/工具卡搞坏。disposed 守卫防 StrictMode 双跑回写。
+	 */
+	const [personalization, setPersonalization] = useState<{ welcomeGreeting: boolean; showChangeDetails: boolean }>({
+		welcomeGreeting: true,
+		showChangeDetails: true,
+	});
+	useEffect(() => {
+		let disposed = false;
+		window.kami
+			.getPersonalization()
+			.then((info) => {
+				if (!disposed) {
+					setPersonalization({
+						welcomeGreeting: info.welcomeGreeting,
+						showChangeDetails: info.showChangeDetails,
+					});
+				}
+			})
+			.catch(() => {
+				/* 缺省 true 兜底，见上注释 */
+			});
+		return () => {
+			disposed = true;
+		};
+	}, []);
+	/*
 	 * 内容列宽随容器动态计算（WorkBuddy use-dynamic-chat-content-width 同款）：
 	 * 固定 832 在宽屏两侧留白过多。ResizeObserver 挂一次（空依赖），
 	 * 列宽经 CSS 变量传给 .stream / .chat-composer 的 max-width。
@@ -1472,7 +1518,7 @@ export function ChatView({
 			if (entry.toolName === "todo_write") {
 				return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
 			}
-			return <ToolEntry key={entry.id} card={entry} />;
+			return <ToolEntry key={entry.id} card={entry} showChangeDetails={personalization.showChangeDetails} />;
 		}
 		// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
 		if (entry.role === "user") {
@@ -1605,9 +1651,9 @@ export function ChatView({
 			*/}
 			{streaming &&
 				(awaitingFirstResponse ? (
-					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} />
+					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} welcomeGreeting={personalization.welcomeGreeting} />
 				) : (
-					<div className="stream-pending" aria-live="polite">
+					<div className="stream-pending">
 						<span className="text-shimmer">{pendingText(entries)}</span>
 					</div>
 				))}
@@ -1843,7 +1889,7 @@ export function ChatView({
 						<Composer
 							ref={composerRef}
 							ready={ready}
-							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "正在准备…"}
+							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
 							rows={2}
 							cwd={conversation.state.cwd}
 							modelId={conversation.state.modelId}

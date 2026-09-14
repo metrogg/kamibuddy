@@ -31,6 +31,7 @@
  */
 
 import type { ConversationView } from "../shared/conversation.ts";
+import type { SystemSegmentStat } from "../shared/observability.ts";
 
 /**
  * 保留的空闲宿主上限。WorkBuddy D2 同值（其会话池默认保 5 个空闲）。
@@ -91,6 +92,18 @@ export interface SessionBucket<THost> {
 	systemPromptTokens: number;
 	/** 最近一次组装的技能段 token 估算（compose 时更新），上下文用量明细拆分类用。 */
 	skillsTokens: number;
+	/**
+	 * 最近一次组装的系统提示词分段 provenance（compose 时更新，
+	 * spec: add-observability-ledger），台账 request_snapshot 的 system 部分。
+	 * undefined = 还没组装过（宿主未建 / 首个 run 未开始）。
+	 */
+	systemPromptSegments: readonly SystemSegmentStat[] | undefined;
+	/**
+	 * resume 降级打开时跳过的坏行数（预扫计数，规格见 countSkippedLines）。
+	 * undefined = 本会话不是降级打开的（新建 / 完好会话）——
+	 * emitSessionEvent 把它并入该桶发出的 session_state（renderer 提示用）。
+	 */
+	skippedLines: number | undefined;
 }
 
 export interface CreateBucketOptions {
@@ -115,6 +128,8 @@ export function createBucket<THost>(options: CreateBucketOptions): SessionBucket
 		lastNonPlanInteraction: "craft",
 		systemPromptTokens: 0,
 		skillsTokens: 0,
+		systemPromptSegments: undefined,
+		skippedLines: undefined,
 	};
 }
 

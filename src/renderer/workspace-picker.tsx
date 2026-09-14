@@ -165,14 +165,14 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 										aria-label="新工作空间名称"
 										onChange={(e) => setName(e.target.value)}
 										onKeyDown={(e) => {
-											if (e.key === "Enter") create();
-											if (e.key === "Escape") {
-												// 拦住冒泡：输入框的 Esc 只退出创建态，
-												// 不连带触发弹层级的 Esc 关闭。
-												e.stopPropagation();
-												setCreating(false);
-											}
-										}}
+										if (e.key === "Enter") create();
+										if (e.key === "Escape") {
+											// 拦住冒泡：输入框的 Esc 只退出创建态，
+											// 不连带触发弹层级的 Esc 关闭。
+											e.stopPropagation();
+											setCreating(false);
+										}
+									}}
 										placeholder="空间名称，如：季度汇报"
 										disabled={busy}
 										// 弹出面板里唯一的输入框，自动聚焦即预期

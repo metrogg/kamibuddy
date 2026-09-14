@@ -6,12 +6,13 @@
  * 日志清单按日期倒序只取最近 3 个且只列文件名。
  */
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	buildMemorySection,
+	ensureUserMemoryFiles,
 	loadMemorySystemPrompt,
 	profilePath,
 	userMemoryPath,
@@ -40,6 +41,23 @@ describe("路径推导", () => {
 		expect(userMemoryPath()).toBe(join(configDir, "MEMORY.md"));
 		expect(profilePath()).toBe(join(configDir, "PROFILE.md"));
 		expect(workspaceMemoryDir(cwd)).toBe(join(cwd, ".kamibuddy", "memory"));
+	});
+});
+
+describe("ensureUserMemoryFiles", () => {
+	it("缺失时创建两个空文件；空文件不触发注入（防 ENOENT 误述，见 memory.ts）", () => {
+		ensureUserMemoryFiles();
+		expect(readFileSync(userMemoryPath(), "utf8")).toBe("");
+		expect(readFileSync(profilePath(), "utf8")).toBe("");
+		// 空文件按「没有」处理：不注入段、零 token（占位文字会污染每次组装）。
+		expect(buildMemorySection(cwd)).toBeUndefined();
+	});
+
+	it("已有内容绝不动（wx 旗标语义），重复调用幂等", () => {
+		writeFileSync(userMemoryPath(), "报告都用表格呈现", "utf8");
+		ensureUserMemoryFiles();
+		ensureUserMemoryFiles();
+		expect(readFileSync(userMemoryPath(), "utf8")).toBe("报告都用表格呈现");
 	});
 });
 

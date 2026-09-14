@@ -13,7 +13,8 @@
  *    工具卡片是例外：toolCallId 本身稳定，直接用。
  *
  * 2. **turn 级事件对 UI 无意义** —— 用户看到的是一条条消息和工具卡片，不是「轮」。
- *    turn_start / turn_end 在这里被吞掉，不往上传。
+ *    turn_start / turn_end 仍不往上传，但不白吞：它们是单次模型调用的边界，
+ *    进运行台账（llm_call 条目，spec: add-observability-ledger）。
  */
 
 import {
@@ -41,6 +42,9 @@ import {
 	type FileChange,
 } from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
+import type { RunLedger } from "./run-ledger.ts";
+import { toTokenUsage } from "./session-rebuild.ts";
+import type { SystemSegmentStat } from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
@@ -359,6 +363,19 @@ export interface SessionHostOptions {
 	 * 既有会话还原），所以 resume 路径绝不传它，否则逐会话还原值会被全局默认覆盖。
 	 */
 	readonly thinkingLevel?: ThinkingLevel;
+	/**
+	 * 运行台账工厂（spec: add-observability-ledger）。按 sessionId 建台账 ——
+	 * 台账文件名按真值 sessionId 落，所以由调用方给工厂而不是实例（真值要
+	 * createAgentSession 返回后才有，构造器里即可拿到）。缺省 = 不记台账
+	 * （子代理 / 定时任务 run 会话 v1 不接）。
+	 */
+	readonly createLedger?: (sessionId: string) => RunLedger;
+	/**
+	 * 最近一次组装的系统提示词分段 provenance（request_snapshot 的 system 部分）。
+	 * daemon 在 prompt-switch 的 compose 里现记现取；返回 undefined = 无组装
+	 * 来源（子代理提示词不走 compose），快照的 systemSegments 键缺席。
+	 */
+	readonly getSystemPromptSegments?: () => readonly SystemSegmentStat[] | undefined;
 }
 
 export class SessionHost {
@@ -410,6 +427,37 @@ export class SessionHost {
 		}
 	>();
 
+	/* ── 运行台账记账（spec: add-observability-ledger）──────────────────
+	 * 台账与 UI 事件是两套独立账本：UI 的 currentRunId 跨 willRetry 保持
+	 * （流式态不闪），台账的 run 按真实 agent 尝试闭合（agent_end 无论
+	 * willRetry 都闭合 —— 一次失败的尝试就是一个 endedReason=error 的 run，
+	 * 否则重试链会留一堆永不闭合的孤儿 run）。
+	 */
+
+	/** 运行台账。缺省（未注入 createLedger）= 不记 —— 所有写入点都要判空。 */
+	private readonly ledger: RunLedger | undefined;
+	/** 当前未闭合的台账 run id（agent_start / 空闲压缩开，agent_end / 压缩终态合）。 */
+	private ledgerRunId: string | undefined;
+	/**
+	 * 最近闭合的台账 run id。retry 条目的归属靠它：pi 的事件序是
+	 * agent_end(willRetry) → auto_retry_start（此刻当前 run 已闭合），
+	 * start 条目归到刚失败的尝试上；end(success) 在新 run 内到达，归新 run。
+	 */
+	private lastClosedRunId: string | undefined;
+	/** 台账 run 内的 turn 计数（llm_call 条目的 turnIndex）。 */
+	private ledgerTurnIndex = 0;
+	/** 当前 turn 的开始时刻（turn_start 记账，turn_end 结算 llm_call）。 */
+	private turnStartedAt: number | undefined;
+	/** 当前 turn 首个 text/thinking delta 的到达时刻（TTFT 基准）。 */
+	private turnFirstDeltaAt: number | undefined;
+	/** 执行中的工具调用（toolCallId → 开始现场），tool_execution_end 结算 tool_call 条目。 */
+	private readonly openLedgerTools = new Map<
+		string,
+		{ toolName: string; summary: string; startedAt: number }
+	>();
+	/** 最近一次 auto_retry_start 的退避参数（auto_retry_end 不携带，转发 run_retry 时补齐）。 */
+	private pendingRetry: { maxAttempts: number; delayMs: number } | undefined;
+
 	private constructor(
 		private readonly session: Awaited<
 			ReturnType<typeof createAgentSession>
@@ -419,7 +467,10 @@ export class SessionHost {
 		private interactionId: string,
 		private expertId: string | undefined,
 		private readonly skills: readonly SkillDescriptor[],
-	) { }
+	) {
+		this.ledger = options.createLedger?.(session.sessionId);
+		if (this.ledger !== undefined) this.installRequestSnapshot();
+	}
 
 	static async create(options: SessionHostOptions): Promise<SessionHost> {
 		const model =
@@ -763,8 +814,9 @@ export class SessionHost {
 	 * 会照样编译通过，然后工具卡片静默不再渲染 —— 那是最难查的失败方式
 	 * （AGENTS.md §7：不写防御性兜底掩盖上游问题）。
 	 *
-	 * 只处理 UI 真正需要的那几类；turn_start / turn_end / queue_update
-	 * 等一概吞掉（UI 不呈现「轮」）。
+	 * 只处理 UI 真正需要的那几类；turn_start / turn_end 不上传但进台账
+	 * （llm_call），auto_retry / queue_update 台账与转发都做（renderer 的
+	 * 重试状态行 / 排队徽标）。其余未知类型忽略。
 	 * 不写 default 分支抛错：pi 会持续新增事件类型，未知类型忽略才是正确行为。
 	 */
 	private translate(event: AgentSessionEvent): void {
@@ -778,12 +830,23 @@ export class SessionHost {
 				// 进入流式态（禁输入、出停止键），否则用户以为卡死了。
 				const runId = this.nextId("run");
 				this.currentRunId = runId;
+				this.ledgerRunId = runId;
+				this.ledger?.append("run_start", { runId, ...this.modelIdForLedger() });
 				emit({ type: "run_started", runId });
 				this.emitState();
 				return;
 			}
 
 			case "compaction_end": {
+				// 压缩事实进台账：无论它挂在哪个 run 上（run 内自动 / 空闲手动）。
+				this.ledger?.append("compaction", {
+					reason: event.reason,
+					...(event.result?.tokensBefore === undefined
+						? {}
+						: { tokensBefore: event.result.tokensBefore }),
+					aborted: event.aborted,
+					...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
+				});
 				// willRetry 表示压缩后自动续跑被中断的那轮：流式态归原 run 与后续
 				// agent 事件管，这里不动（同 agent_end 的 willRetry 处理）。
 				if (event.willRetry) return;
@@ -791,12 +854,15 @@ export class SessionHost {
 				if (runId === undefined) return;
 				this.currentRunId = undefined;
 				if (!event.aborted && event.errorMessage === undefined) {
+					this.closeLedgerRun("completed");
 					emit({ type: "run_finished", runId, outcome: "completed" });
 				} else {
+					const message = event.errorMessage ?? "上下文压缩已中断";
+					this.closeLedgerRun("error", message);
 					emit({
 						type: "run_error",
 						runId,
-						message: event.errorMessage ?? "上下文压缩已中断",
+						message,
 					});
 				}
 				this.emitState();
@@ -807,15 +873,27 @@ export class SessionHost {
 				const runId = this.nextId("run");
 				this.currentRunId = runId;
 				this.pendingRunError = undefined;
+				this.ledgerRunId = runId;
+				this.ledgerTurnIndex = 0;
+				this.ledger?.append("run_start", { runId, ...this.modelIdForLedger() });
 				emit({ type: "run_started", runId });
 				this.emitState();
 				return;
 			}
 
 			case "agent_end": {
-				// willRetry 表示 pi 正在自动重试，这一轮还没真结束。
-				// 此时发 run_finished 会让 UI 提前解禁输入框、然后又被下一轮锁住。
-				if (event.willRetry) return;
+				/*
+				 * 台账的 run 在**每个** agent_end 闭合（willRetry 也是一次真实
+				 * 尝试的失败终态），与 UI 的 run 记账（跨 willRetry 保持流式态）
+				 * 是两套口径 —— 否则重试链会在台账里留一串永不闭合的孤儿 run。
+				 * 读 pendingRunError 但不清：那是 UI 的账，归下面的 willRetry 分支管。
+				 */
+				if (event.willRetry) {
+					this.closeLedgerRun("error", this.pendingRunError);
+					// willRetry 表示 pi 正在自动重试，这一轮还没真结束。
+					// 此时发 run_finished 会让 UI 提前解禁输入框、然后又被下一轮锁住。
+					return;
+				}
 				const runId = this.currentRunId ?? this.nextId("run");
 				this.currentRunId = undefined;
 				this.currentAssistantId = undefined;
@@ -839,12 +917,116 @@ export class SessionHost {
 				if (this.pendingRunError !== undefined && !cancelled) {
 					const message = this.pendingRunError;
 					this.pendingRunError = undefined;
+					this.closeLedgerRun("error", message);
 					emit({ type: "run_error", runId, message });
 				} else {
 					this.pendingRunError = undefined;
+					this.closeLedgerRun(cancelled ? "cancelled" : "completed");
 					emit({ type: "run_finished", runId, outcome: cancelled ? "cancelled" : "completed" });
 				}
 				this.emitState();
+				return;
+			}
+
+			case "auto_retry_start": {
+				// pi 的失败退避：等待 delayMs 后发起第 attempt 次重试。
+				// 全量转发给 renderer（等待区状态行，替换「卡住」体感）+ 进台账。
+				this.pendingRetry = { maxAttempts: event.maxAttempts, delayMs: event.delayMs };
+				const runId = this.ledgerRunId ?? this.lastClosedRunId;
+				this.ledger?.append("retry", {
+					...(runId === undefined ? {} : { runId }),
+					phase: "start",
+					attempt: event.attempt,
+					maxAttempts: event.maxAttempts,
+					delayMs: event.delayMs,
+					errorMessage: event.errorMessage,
+				});
+				emit({
+					type: "run_retry",
+					status: "start",
+					attempt: event.attempt,
+					maxAttempts: event.maxAttempts,
+					delayMs: event.delayMs,
+					errorMessage: event.errorMessage,
+				});
+				return;
+			}
+
+			case "auto_retry_end": {
+				// auto_retry_end 不携带 maxAttempts/delayMs，从最近一次 start 记账补齐。
+				const last = this.pendingRetry;
+				this.pendingRetry = undefined;
+				const runId = this.ledgerRunId ?? this.lastClosedRunId;
+				this.ledger?.append("retry", {
+					...(runId === undefined ? {} : { runId }),
+					phase: "end",
+					attempt: event.attempt,
+					success: event.success,
+					...(event.finalError === undefined ? {} : { finalError: event.finalError }),
+				});
+				emit({
+					type: "run_retry",
+					status: event.success ? "success" : "finalError",
+					attempt: event.attempt,
+					maxAttempts: last?.maxAttempts ?? event.attempt,
+					delayMs: last?.delayMs ?? 0,
+					...(event.finalError === undefined ? {} : { errorMessage: event.finalError }),
+				});
+				return;
+			}
+
+			case "queue_update": {
+				// steer / followUp 排队变化：renderer 只渲染计数徽标，台账留全过程。
+				this.ledger?.append("queue", {
+					steering: event.steering,
+					followUp: event.followUp,
+				});
+				emit({
+					type: "queue_changed",
+					steering: event.steering,
+					followUp: event.followUp,
+				});
+				return;
+			}
+
+			case "turn_start": {
+				// 单次模型调用的开始（llm_call 条目的起点）。turn 边界成对是
+				// agent-loop 的契约，turn_end 必有 —— 这里只记账不防御。
+				this.ledgerTurnIndex += 1;
+				this.turnStartedAt = Date.now();
+				this.turnFirstDeltaAt = undefined;
+				return;
+			}
+
+			case "turn_end": {
+				const startedAt = this.turnStartedAt;
+				this.turnStartedAt = undefined;
+				// turn_start 缺失（理论上不发生，见 turn_start 注释）就不造条目 ——
+				// 编一个 startedAt=endedAt 的假跨度比丢一条更难查。
+				if (startedAt === undefined) return;
+				const endedAt = Date.now();
+				const turnIndex = this.ledgerTurnIndex - 1;
+				const message = event.message;
+				const assistant = message.role === "assistant" ? message : undefined;
+				this.ledger?.append("llm_call", {
+					...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
+					turnIndex,
+					startedAt,
+					endedAt,
+					...(this.turnFirstDeltaAt === undefined
+						? {}
+						: { ttftMs: this.turnFirstDeltaAt - startedAt }),
+					...(assistant === undefined
+						? {}
+						: {
+							stopReason: assistant.stopReason,
+							usage: toTokenUsage(assistant.usage),
+							...(assistant.errorMessage === undefined
+								? {}
+								: { errorMessage: assistant.errorMessage }),
+						}),
+				});
+				this.turnFirstDeltaAt = undefined;
 				return;
 			}
 
@@ -905,6 +1087,13 @@ export class SessionHost {
 					return;
 				}
 
+				if (inner.type === "text_delta" || inner.type === "thinking_delta") {
+					// TTFT 基准：本 turn 首个正文/思考 delta 的到达时刻（台账 llm_call）。
+					if (this.turnStartedAt !== undefined && this.turnFirstDeltaAt === undefined) {
+						this.turnFirstDeltaAt = Date.now();
+					}
+				}
+
 				const id = this.currentAssistantId;
 				if (id === undefined) return;
 
@@ -943,15 +1132,9 @@ export class SessionHost {
 						text: textOf(message.content),
 						...(thinking === "" ? {} : { thinking }),
 						// usage 服务于诊断页的 run 级聚合（shared/observability.ts），
-						// 聊天 UI 不展示。pi 的 Usage 止步于此，出口是 shared 的 TokenUsage。
-						usage: {
-							input: message.usage.input,
-							output: message.usage.output,
-							cacheRead: message.usage.cacheRead,
-							cacheWrite: message.usage.cacheWrite,
-							totalTokens: message.usage.totalTokens,
-							cost: message.usage.cost.total,
-						},
+						// 聊天 UI 不展示。pi 的 Usage 止步于此，出口是 shared 的 TokenUsage
+						//（全字段翻译函数与 session-rebuild 同源，两条路径不漂移）。
+						usage: toTokenUsage(message.usage),
 						at: message.timestamp,
 					},
 				});
@@ -981,6 +1164,13 @@ export class SessionHost {
 				// 生成阶段已上屏的同 id 卡片会被 reducer 原位翻转（upsert）；
 				// at 沿用生成开始的时间 —— 卡片的寿命从「开始生成」算起，不是「开始执行」。
 				const existing = this.toolCards.get(event.toolCallId);
+
+				// 台账 tool_call 记账（执行期口径的起点，注释见 ToolCallData）。
+				this.openLedgerTools.set(event.toolCallId, {
+					toolName: event.toolName,
+					summary: summarizeArgs(event.args),
+					startedAt: Date.now(),
+				});
 
 				// write/edit：执行前留下旧内容现场（WorkBuddy checkpoint 同思路），
 				// changeType 与真实 diff 都靠它。此后文件被写掉，旧内容就再也拿不到了。
@@ -1043,6 +1233,27 @@ export class SessionHost {
 				this.pendingChanges.delete(event.toolCallId);
 				const outcome: ToolOutcome = event.isError ? "error" : "ok";
 				const detail = toolResultText(event.result);
+
+				// 台账 tool_call 结算。漏 start（pi 时序异常，理论不该发生）不编造
+				// 零时长条目 —— 上报 event-log 后跳过，run 不受影响（台账纪律）。
+				const ledgerTool = this.openLedgerTools.get(event.toolCallId);
+				this.openLedgerTools.delete(event.toolCallId);
+				if (ledgerTool === undefined) {
+					this.ledger?.reportFailure(
+						`tool_execution_end 缺少配对的 start（${event.toolName}/${event.toolCallId}），tool_call 条目未记`,
+					);
+				} else {
+					this.ledger?.append("tool_call", {
+						...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
+						toolCallId: event.toolCallId,
+						toolName: ledgerTool.toolName,
+						summary: ledgerTool.summary,
+						startedAt: ledgerTool.startedAt,
+						endedAt: Date.now(),
+						outcome,
+					});
+				}
+
 				// web_search 的引用来源：从 result.details 提取并过 URL 安全校验
 				// （core/source-parse.ts）。与 todo_write 的 todos 不同源 —— todos 来自
 				// args（execution_end 不携带 args，靠执行态卡继承），sources 来自
@@ -1092,6 +1303,99 @@ export class SessionHost {
 				this.emitState();
 				return;
 		}
+	}
+
+	/** 台账 run_start 的模型快照（provider/model）；模型未选定（异常路径）键缺席。 */
+	private modelIdForLedger(): { modelId?: string } {
+		const model = this.session.model;
+		return model === undefined ? {} : { modelId: toModelKey(model.provider, model.id) };
+	}
+
+	/**
+	 * 闭合当前台账 run（无开着的是 no-op —— 空闲压缩的 compaction_end 在
+	 * currentRunId 缺失时根本走不到这里，agent_end 的 runId 兜底分支同理）。
+	 * 闭合后把 id 记入 lastClosedRunId：retry 条目的归属靠它（见该字段注释）。
+	 */
+	private closeLedgerRun(reason: "completed" | "cancelled" | "error", error?: string): void {
+		const runId = this.ledgerRunId;
+		this.ledgerRunId = undefined;
+		if (runId === undefined) return;
+		this.lastClosedRunId = runId;
+		this.ledger?.append("run_end", {
+			runId,
+			reason,
+			...(error === undefined ? {} : { error }),
+		});
+	}
+
+	/**
+	 * 挂 pi 的 transformContext 钩子记请求快照（request_snapshot）。
+	 *
+	 * transformContext 是 agent-loop 每次模型调用前的官方观察口
+	 * （agent-loop.ts streamAssistantResponse：transformContext → convertToLlm → LLM），
+	 * pi 在 sdk.ts 已把它接到扩展链（emitContext）—— 这里**包一层而不是替换**：
+	 * 先调原钩子（含全部扩展的改写），对改写结果记快照，然后原样透传返回，
+	 * 不改写任何消息（快照是观测，不是新的改写点）。
+	 *
+	 * 钩子的 pi 侧契约是「must not throw」：记录出错经台账上报通道进 event-log，
+	 * 绝不炸 run（台账纪律同 run-ledger.ts 文件头）。
+	 */
+	private installRequestSnapshot(): void {
+		const agent = this.session.agent;
+		// bind 一层防御 pi 未来把它改成实例方法；当前是箭头闭包，bind 是无害恒等。
+		const inner = agent.transformContext?.bind(agent);
+		agent.transformContext = async (messages, signal) => {
+			const transformed = inner === undefined ? messages : await inner(messages, signal);
+			try {
+				this.recordRequestSnapshot(transformed);
+			} catch (error) {
+				this.ledger?.reportFailure(
+					`request_snapshot 记录失败：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			return transformed;
+		};
+	}
+
+	/**
+	 * 记一条 request_snapshot：system 分段 provenance + 消息分类计数。
+	 *
+	 * **不记正文**（口径钉住）：消息正文在会话 JSONL 已有，台账只记
+	 * 「这轮往模型里送了什么结构」——分段来源与各类条数/字符数，
+	 * 正文双写既膨胀又会与会话 JSONL 漂移。
+	 */
+	private recordRequestSnapshot(messages: readonly unknown[]): void {
+		const user = { count: 0, chars: 0 };
+		const assistant = { count: 0, chars: 0 };
+		const toolResult = { count: 0, chars: 0 };
+		const other = { count: 0, chars: 0 };
+		for (const message of messages) {
+			const role = (message as { role?: unknown }).role;
+			if (role === "user") {
+				user.count += 1;
+				user.chars += textOf((message as { content?: unknown }).content).length;
+			} else if (role === "assistant") {
+				assistant.count += 1;
+				const content = (message as { content?: unknown }).content;
+				assistant.chars += textOf(content).length + thinkingOf(content).length;
+			} else if (role === "toolResult") {
+				toolResult.count += 1;
+				toolResult.chars += textOf((message as { content?: unknown }).content).length;
+			} else {
+				// convertToLlm 之前的原始角色（bashExecution / custom /
+				// branchSummary / compactionSummary）：pi 随后会转写或过滤，
+				// 这里 best-effort 计数（summary/output 字符串或 content 文本）。
+				other.count += 1;
+				other.chars += customMessageChars(message);
+			}
+		}
+		const segments = this.options.getSystemPromptSegments?.();
+		this.ledger?.append("request_snapshot", {
+			...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
+			turnIndex: this.ledgerTurnIndex - 1,
+			...(segments === undefined ? {} : { systemSegments: segments }),
+			messages: { user, assistant, toolResult, other },
+		});
 	}
 
 	/**
@@ -1210,6 +1514,19 @@ function thinkingOf(content: unknown): string {
 		})
 		.map((part) => part.thinking)
 		.join("");
+}
+
+/**
+ * 非标准角色消息（bashExecution / custom / branchSummary / compactionSummary）
+ * 的字符数估算：summary / output 字符串字段优先，退到 content 文本。
+ * 只服务于 request_snapshot 的 other 类计数（best-effort，口径见其注释）。
+ */
+function customMessageChars(message: unknown): number {
+	if (typeof message !== "object" || message === null) return 0;
+	const m = message as { summary?: unknown; output?: unknown; content?: unknown };
+	if (typeof m.summary === "string") return m.summary.length;
+	if (typeof m.output === "string") return m.output.length;
+	return textOf(m.content).length;
 }
 
 /** 供 daemon 判断模型标识是否合法，避免把无效值传进会话。 */

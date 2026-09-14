@@ -711,3 +711,399 @@ describe("restoredToolLabel 的 show_widget 词汇", () => {
 		expect(restoredToolLabel("read_me", "ok")).toBe("已读取");
 	});
 });
+
+/* ── 运行台账与事件转发（spec: add-observability-ledger Task 1）────────── */
+
+import type { RunLedgerDataMap, RunLedgerEntryKind } from "../shared/observability.ts";
+import type { RunLedger } from "./run-ledger.ts";
+
+interface LedgerCall<K extends RunLedgerEntryKind = RunLedgerEntryKind> {
+	readonly kind: K;
+	readonly data: RunLedgerDataMap[K];
+}
+
+/** 捕获台账写入的假 RunLedger（只实现测试路径会碰到的成员）。 */
+function createFakeLedger(): { ledger: RunLedger; calls: LedgerCall[]; failures: string[] } {
+	const calls: LedgerCall[] = [];
+	const failures: string[] = [];
+	const ledger = {
+		append: (kind: RunLedgerEntryKind, data: unknown) => {
+			calls.push({ kind, data: data as never });
+		},
+		reportFailure: (message: string) => failures.push(message),
+	} as unknown as RunLedger;
+	return { ledger, calls, failures };
+}
+
+/** 带台账与 transformContext 的假会话（agent.transformContext 模拟 pi 的 emitContext 透传）。 */
+function createLedgerSession(): {
+	session: unknown;
+	agent: { transformContext?: (m: unknown[], s?: AbortSignal) => Promise<unknown[]> };
+} {
+	const agent: {
+		transformContext?: (m: unknown[], s?: AbortSignal) => Promise<unknown[]>;
+	} = {
+		transformContext: async (m) => m,
+	};
+	const session = {
+		sessionId: "test-session",
+		model: undefined,
+		isStreaming: false,
+		getContextUsage: () => undefined,
+		thinkingLevel: "off",
+		getAvailableThinkingLevels: () => ["off"],
+		agent,
+	};
+	return { session, agent };
+}
+
+function createLedgerHost(
+	session: unknown,
+	emit: (event: SessionEvent) => void,
+	ledger: RunLedger,
+	segments?: readonly { source: string; chars: number }[],
+): SessionHost {
+	const options: SessionHostOptions = {
+		catalog: {} as unknown as ModelCatalog,
+		modelKey: undefined,
+		cwd: "C:\\test",
+		isTempTask: false,
+		sceneId: "work",
+		interactionId: "craft",
+		emit,
+		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
+		createLedger: () => ledger,
+		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
+	};
+	const Ctor = SessionHost as unknown as new (
+		session: unknown,
+		options: SessionHostOptions,
+		sceneId: string,
+		interactionId: string,
+		skills: readonly unknown[],
+	) => SessionHost;
+	return new Ctor(session, options, "work", "craft", []);
+}
+
+/** 全字段 usage（reasoning/cacheWrite1h 有值，cost 带分项）。 */
+const FULL_USAGE = {
+	input: 100,
+	output: 20,
+	cacheRead: 40,
+	cacheWrite: 10,
+	cacheWrite1h: 4,
+	reasoning: 6,
+	totalTokens: 170,
+	cost: { input: 0.001, output: 0.002, cacheRead: 0.0004, cacheWrite: 0.0001, total: 0.0035 },
+};
+
+describe("auto_retry / queue_update 转发与台账", () => {
+	it("auto_retry_start → run_retry(start) 转发 + 台账 retry(start)；end 补齐 start 的退避参数", () => {
+		const events: SessionEvent[] = [];
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		runStarted(host);
+		agentEnd(host, true);
+		translate(host, {
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "Request timed out.",
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+			finalError: "Request timed out.",
+		} as unknown as AgentSessionEvent);
+
+		const retries = events.filter((e) => e.type === "run_retry");
+		expect(retries).toEqual([
+			{
+				type: "run_retry",
+				status: "start",
+				attempt: 1,
+				maxAttempts: 3,
+				delayMs: 2000,
+				errorMessage: "Request timed out.",
+			},
+			{
+				type: "run_retry",
+				status: "finalError",
+				attempt: 1,
+				maxAttempts: 3,
+				delayMs: 2000,
+				errorMessage: "Request timed out.",
+			},
+		]);
+
+		const ledgerRetries = calls.filter((c) => c.kind === "retry");
+		expect(ledgerRetries).toHaveLength(2);
+		expect(ledgerRetries[0]?.data).toMatchObject({
+			phase: "start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "Request timed out.",
+		});
+		expect(ledgerRetries[1]?.data).toMatchObject({
+			phase: "end",
+			attempt: 1,
+			success: false,
+			finalError: "Request timed out.",
+		});
+		// retry start 归属刚闭合的失败尝试（pi 事件序：agent_end(willRetry) 先于 auto_retry_start）。
+		expect((ledgerRetries[0]?.data as { runId?: string }).runId).toBe("run-1");
+	});
+
+	it("重试链在台账里：失败尝试的 run 以 error 闭合，不留永不闭合的孤儿 run", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, true);
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "stop", { text: "好了" });
+		agentEnd(host, false);
+
+		const runs = calls.filter((c) => c.kind === "run_start" || c.kind === "run_end");
+		expect(runs.map((c) => [c.kind, (c.data as { reason?: string }).reason ?? ""])).toEqual([
+			["run_start", ""],
+			["run_end", "error"],
+			["run_start", ""],
+			["run_end", "completed"],
+		]);
+	});
+
+	it("queue_update → queue_changed 转发 + 台账 queue", () => {
+		const events: SessionEvent[] = [];
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		translate(host, {
+			type: "queue_update",
+			steering: ["先别写了"],
+			followUp: ["之后总结一下"],
+		} as unknown as AgentSessionEvent);
+
+		expect(events).toEqual([
+			{ type: "queue_changed", steering: ["先别写了"], followUp: ["之后总结一下"] },
+		]);
+		expect(calls.filter((c) => c.kind === "queue")[0]?.data).toEqual({
+			steering: ["先别写了"],
+			followUp: ["之后总结一下"],
+		});
+	});
+});
+
+describe("turn 边界 → 台账 llm_call", () => {
+	function driveTurn(host: SessionHost): void {
+		runStarted(host);
+		translate(host, { type: "turn_start" } as unknown as AgentSessionEvent);
+		assistantStart(host);
+		translate(host, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", delta: "你", partial: { content: [] } },
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "你好" }],
+				stopReason: "stop",
+				usage: FULL_USAGE,
+				timestamp: 1,
+			},
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "turn_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "你好" }],
+				stopReason: "stop",
+				usage: FULL_USAGE,
+				timestamp: 1,
+			},
+			toolResults: [],
+		} as unknown as AgentSessionEvent);
+		agentEnd(host, false);
+	}
+
+	it("llm_call 条目：turn 边界/TTFT/usage 全字段/stopReason", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		driveTurn(createLedgerHost(session, () => { }, ledger));
+
+		const call = calls.find((c) => c.kind === "llm_call");
+		expect(call).toBeDefined();
+		const data = call?.data as {
+			turnIndex: number;
+			startedAt: number;
+			endedAt: number;
+			ttftMs?: number;
+			stopReason?: string;
+			usage?: Record<string, unknown>;
+			runId?: string;
+		};
+		expect(data.turnIndex).toBe(0);
+		expect(data.runId).toBe("run-1");
+		expect(data.endedAt).toBeGreaterThanOrEqual(data.startedAt);
+		expect(typeof data.ttftMs).toBe("number");
+		expect(data.stopReason).toBe("stop");
+		expect(data.usage).toMatchObject({
+			input: 100,
+			reasoning: 6,
+			cacheWrite1h: 4,
+			costBreakdown: { input: 0.001, output: 0.002, cacheRead: 0.0004, cacheWrite: 0.0001 },
+		});
+	});
+
+	it("assistant_done 的 usage 与台账同一份全字段翻译（reasoning/cacheWrite1h/costBreakdown）", () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		driveTurn(createLedgerHost(session, (e) => events.push(e), ledger));
+
+		const done = events.find((e) => e.type === "assistant_done");
+		expect(done?.type === "assistant_done" && done.message.usage).toMatchObject({
+			reasoning: 6,
+			cacheWrite1h: 4,
+			cost: 0.0035,
+			costBreakdown: { input: 0.001, output: 0.002, cacheRead: 0.0004, cacheWrite: 0.0001 },
+		});
+	});
+
+	it("tool_call 条目是执行期口径（execution_start → end），不含参数生成期", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		runStarted(host);
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "grep",
+			args: { pattern: "foo" },
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "grep",
+			isError: false,
+			result: { content: [{ type: "text", text: "命中 3 处" }] },
+		} as unknown as AgentSessionEvent);
+
+		const data = calls.find((c) => c.kind === "tool_call")?.data as {
+			toolCallId: string;
+			toolName: string;
+			summary: string;
+			startedAt: number;
+			endedAt: number;
+			outcome: string;
+			runId?: string;
+		};
+		expect(data).toMatchObject({
+			toolCallId: "c1",
+			toolName: "grep",
+			summary: "foo",
+			outcome: "ok",
+			runId: "run-1",
+		});
+		expect(data.endedAt).toBeGreaterThanOrEqual(data.startedAt);
+	});
+
+	it("compaction_end → 台账 compaction（reason/tokensBefore/aborted）", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		runStarted(host);
+		translate(host, {
+			type: "compaction_end",
+			reason: "threshold",
+			result: { tokensBefore: 12345 },
+			aborted: false,
+			willRetry: true,
+		} as unknown as AgentSessionEvent);
+
+		expect(calls.find((c) => c.kind === "compaction")?.data).toEqual({
+			reason: "threshold",
+			tokensBefore: 12345,
+			aborted: false,
+		});
+	});
+});
+
+describe("request_snapshot（transformContext 钩子）", () => {
+	it("钩子原样透传不改写，台账记分段 provenance 与消息分类计数（不记正文）", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger, [
+			{ source: "skeleton", chars: 500 },
+			{ source: "mode:craft", chars: 120 },
+		]);
+
+		const messages = [
+			{ role: "user", content: "写个月报", timestamp: 1 },
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "想想" },
+					{ type: "text", text: "好的" },
+				],
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "read",
+				content: [{ type: "text", text: "文件内容" }],
+				isError: false,
+				timestamp: 3,
+			},
+			{ role: "compactionSummary", summary: "早前压缩摘要", tokensBefore: 100, timestamp: 4 },
+		];
+		const hooked = agent.transformContext;
+		expect(hooked).toBeDefined();
+		const returned = await hooked?.(messages, undefined);
+
+		// 透传：返回值就是传入的同一数组（pi 的 emitContext 透传形态），不做任何改写。
+		expect(returned).toBe(messages);
+
+		const snap = calls.find((c) => c.kind === "request_snapshot")?.data as {
+			systemSegments?: readonly { source: string; chars: number }[];
+			messages: Record<string, { count: number; chars: number }>;
+		};
+		expect(snap.systemSegments).toEqual([
+			{ source: "skeleton", chars: 500 },
+			{ source: "mode:craft", chars: 120 },
+		]);
+		expect(snap.messages["user"]).toEqual({ count: 1, chars: 4 });
+		expect(snap.messages["assistant"]).toEqual({ count: 1, chars: 4 });
+		expect(snap.messages["toolResult"]).toEqual({ count: 1, chars: 4 });
+		expect(snap.messages["other"]).toEqual({ count: 1, chars: 6 });
+		// 不记正文：快照里没有任何消息文本。
+		expect(JSON.stringify(snap)).not.toContain("写个月报");
+	});
+
+	it("无组装来源（未注入 getSystemPromptSegments）→ systemSegments 键缺席", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		await agent.transformContext?.([{ role: "user", content: "hi", timestamp: 1 }], undefined);
+
+		const snap = calls.find((c) => c.kind === "request_snapshot")?.data as unknown as
+			| Record<string, unknown>
+			| undefined;
+		expect(snap !== undefined && "systemSegments" in snap).toBe(false);
+	});
+});

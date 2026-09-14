@@ -135,11 +135,11 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 									);
 								})}
 								{/* 完整说明与两个独立旋钮在设置页，弹层只负责预设快切。 */}
-								<button
-									type="button"
-									className="permission-menu-goto"
-									role="menuitem"
-									onClick={() => {
+							<button
+								type="button"
+								className="permission-menu-goto"
+								role="menuitem"
+								onClick={() => {
 										setOpen(false);
 										onOpenSettings();
 									}}

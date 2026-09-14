@@ -36,7 +36,7 @@ import { SourcesPanel } from "./sources-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
-import { SettingsView } from "./settings-view.tsx";
+import { SettingsView } from "./settings/settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
 import { AutomationsView } from "./automations-view.tsx";
@@ -1153,7 +1153,7 @@ export function App(): React.JSX.Element {
 				/>
 			)}
 			{view === "settings" && (
-				<SettingsView onClose={() => setView(returnView)} />
+				<SettingsView onClose={() => setView(returnView)} onOpenDiagnostics={openDiagnostics} />
 			)}
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />

@@ -10,19 +10,31 @@
  * 本页只 import @shared（AGENTS.md §1.3）。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	DEFAULT_GLOBAL_SHORTCUT,
 	type DocxEnvStatus,
 	type GlobalShortcutStatus,
+	type RunLedgerResult,
 } from "@shared/ipc.ts";
 import type {
+	CacheMissReason,
+	LlmCallData,
 	ObservabilitySnapshot,
+	RequestSnapshotData,
+	RunEndReason,
 	RunRecord,
 	TokenUsage,
 } from "@shared/observability.ts";
 import { cacheHitRate } from "@shared/observability.ts";
 import { IconBack, IconChart, IconRefresh } from "./icons.tsx";
+import {
+	foldRunLedger,
+	indexRequestSnapshots,
+	snapshotKey,
+	type LedgerItem,
+	type LedgerRun,
+} from "./run-timeline.ts";
 
 /* ── 格式化小工具 ────────────────────────────────────────────────── */
 
@@ -179,6 +191,490 @@ function RunTimeline({ run }: { run: RunRecord }): React.JSX.Element {
 	);
 }
 
+/* ── 会话时间线（运行台账泳道） ──────────────────────────────────────
+ *
+ * 与上方 RunTimeline 同一套视觉语言（左标签 / 中轨道 / 右耗时），
+ * 数据源从 statsSnapshot 的 toolSpans 换成台账 fold（run-timeline.ts）：
+ * llm 调用 / 工具 / 重试（琥珀）/ 压缩 / 终态标记共轴。
+ * 工具与重试行缩进一级 —— 它们挂在模型调用之下，不是平级步骤。
+ */
+
+const END_REASON_LABELS: Record<RunEndReason, string> = {
+	completed: "完成",
+	cancelled: "已取消",
+	error: "失败",
+	interrupted: "中断",
+};
+
+/** 台账行在 run 时间轴上的跨度（retry/compaction 是时刻标记，零宽按最小宽度画）。 */
+function itemBounds(item: LedgerItem): { readonly s: number; readonly e: number } {
+	switch (item.kind) {
+		case "llm":
+			return { s: item.data.startedAt, e: item.data.endedAt };
+		case "tool":
+			return { s: item.data.startedAt, e: item.data.endedAt };
+		case "retry":
+			return {
+				s: item.at,
+				e: item.at + (item.data.phase === "start" ? (item.data.delayMs ?? 0) : 0),
+			};
+		case "compaction":
+			return { s: item.at, e: item.at };
+	}
+}
+
+function spanStyle(
+	axisStart: number,
+	axisEnd: number,
+	s: number,
+	e: number,
+): { readonly left: string; readonly width: string } {
+	const span = Math.max(axisEnd - axisStart, 1);
+	return {
+		left: `${(((s - axisStart) / span) * 100).toFixed(2)}%`,
+		width: `${Math.max(((e - s) / span) * 100, 0.5).toFixed(2)}%`,
+	};
+}
+
+/** llm 行的悬停摘要：耗时/TTFT/token/cost/缓存命中/stopReason 一行看齐。 */
+function llmTitle(d: LlmCallData): string {
+	const parts = [`模型调用 ${formatMs(d.endedAt - d.startedAt)}`];
+	if (d.ttftMs !== undefined) parts.push(`TTFT ${formatMs(d.ttftMs)}`);
+	if (d.usage !== undefined) {
+		parts.push(`tokens ${formatTokens(d.usage.totalTokens)}`);
+		parts.push(`费用 ${formatCost(d.usage.cost)}`);
+		const hit = cacheHitRate(d.usage);
+		if (hit !== undefined) parts.push(`缓存命中 ${(hit * 100).toFixed(1)}%`);
+	}
+	if (d.stopReason !== undefined) parts.push(`停止 ${d.stopReason}`);
+	if (d.errorMessage !== undefined) parts.push(`错误 ${d.errorMessage}`);
+	return parts.join(" · ");
+}
+
+/** 快照分段占条的配色：循环复用上下文成分条的既有五色，不新增色值。 */
+const SEG_PALETTE = [
+	"comp-system",
+	"comp-user",
+	"comp-assistant",
+	"comp-thinking",
+	"comp-tools",
+] as const;
+
+/** 一轮请求的真实上下文拆分（request_snapshot：分段 provenance + 消息分类）。 */
+function SnapshotBreakdown({
+	snapshot,
+}: {
+	snapshot: RequestSnapshotData;
+}): React.JSX.Element {
+	const segs = snapshot.systemSegments ?? [];
+	const segTotal = segs.reduce((sum, s) => sum + s.chars, 0);
+	const msg = snapshot.messages;
+	const msgParts = [
+		{ key: "user", label: "用户消息", stat: msg.user },
+		{ key: "assistant", label: "助手回复", stat: msg.assistant },
+		{ key: "toolResult", label: "工具结果", stat: msg.toolResult },
+		{ key: "other", label: "其他", stat: msg.other },
+	];
+	const msgTotal = msgParts.reduce((sum, p) => sum + p.stat.chars, 0);
+
+	return (
+		<div className="snap-detail">
+			{segs.length > 0 && segTotal > 0 && (
+				<>
+					<p className="stat-hint">
+						系统提示词分段（真实计数，共 {segTotal.toLocaleString("en-US")} 字符）
+					</p>
+					<div className="comp-bar" role="img" aria-label="系统提示词分段占比">
+						{segs.map((s, i) => (
+							<div
+								key={`${s.source}-${i}`}
+								className={`comp-seg ${SEG_PALETTE[i % SEG_PALETTE.length]}`}
+								style={{ width: `${(s.chars / segTotal) * 100}%` }}
+								title={`${s.source}：${s.chars.toLocaleString("en-US")} 字符（${((s.chars / segTotal) * 100).toFixed(1)}%）`}
+							/>
+						))}
+					</div>
+					<ul className="comp-legend">
+						{segs.map((s, i) => (
+							<li key={`${s.source}-${i}`}>
+								<span className={`comp-dot ${SEG_PALETTE[i % SEG_PALETTE.length]}`} />
+								{s.source} {((s.chars / segTotal) * 100).toFixed(1)}%
+							</li>
+						))}
+					</ul>
+				</>
+			)}
+			<p className="stat-hint">消息组成（条数 / 字符数 / 字符占比）</p>
+			<table className="stat-table">
+				<tbody>
+					{msgParts.map((p) => (
+						<tr key={p.key}>
+							<td>{p.label}</td>
+							<td>{p.stat.count} 条</td>
+							<td>{p.stat.chars.toLocaleString("en-US")} 字符</td>
+							<td>
+								{msgTotal === 0
+									? "—"
+									: `${((p.stat.chars / msgTotal) * 100).toFixed(1)}%`}
+							</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+/** 选中一轮模型调用后的详情：计时五要素 + usage 五字段 + 请求快照拆分。 */
+function LlmDetail({
+	call,
+	snapshot,
+}: {
+	call: LlmCallData;
+	snapshot: RequestSnapshotData | undefined;
+}): React.JSX.Element {
+	const u = call.usage;
+	const hit = u === undefined ? undefined : cacheHitRate(u);
+	return (
+		<div className="timeline-detail">
+			<div className="kv-grid">
+				<span>
+					耗时 <b>{formatMs(call.endedAt - call.startedAt)}</b>
+				</span>
+				{call.ttftMs !== undefined && (
+					<span>
+						TTFT <b>{formatMs(call.ttftMs)}</b>
+					</span>
+				)}
+				{call.stopReason !== undefined && (
+					<span>
+						停止原因 <b>{call.stopReason}</b>
+					</span>
+				)}
+				{call.errorMessage !== undefined && (
+					<span className="stat-err">{call.errorMessage}</span>
+				)}
+			</div>
+			{u !== undefined && (
+				<div className="kv-grid">
+					<span>
+						输入 <b>{formatTokens(u.input)}</b>
+					</span>
+					<span>
+						输出 <b>{formatTokens(u.output)}</b>
+					</span>
+					<span>
+						缓存命中 <b>{formatTokens(u.cacheRead)}</b>
+						{hit !== undefined && `（${(hit * 100).toFixed(1)}%）`}
+					</span>
+					<span>
+						缓存写入 <b>{formatTokens(u.cacheWrite)}</b>
+					</span>
+					<span>
+						合计 <b>{formatTokens(u.totalTokens)}</b>
+					</span>
+					<span>
+						费用 <b>{formatCost(u.cost)}</b>
+					</span>
+				</div>
+			)}
+			{snapshot === undefined ? (
+				<p className="stat-hint">该轮没有请求快照（无组装来源或旧台账）。</p>
+			) : (
+				<SnapshotBreakdown snapshot={snapshot} />
+			)}
+		</div>
+	);
+}
+
+/** 一个 run 的泳道块：头部（边界/终态/用量/缓存命中率）+ 条目行 + 选中轮详情。 */
+function LedgerRunView({
+	run,
+	snapshots,
+	selectedLlm,
+	onSelectLlm,
+}: {
+	run: LedgerRun;
+	snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	selectedLlm: { readonly runId: string; readonly turnIndex: number } | undefined;
+	onSelectLlm: (sel: { readonly runId: string; readonly turnIndex: number }) => void;
+}): React.JSX.Element {
+	// 时间轴：run 边界；未闭合时用最后一个条目的终点兜底（同 RunTimeline）。
+	const axisStart = run.startedAt;
+	const axisEnd =
+		run.endedAt ??
+		run.items.reduce((max, item) => {
+			const { e } = itemBounds(item);
+			return Math.max(max, e);
+		}, axisStart);
+	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage);
+	const selectedCall =
+		selectedLlm === undefined || selectedLlm.runId !== run.runId
+			? undefined
+			: run.items.find(
+					(item): item is Extract<LedgerItem, { kind: "llm" }> =>
+						item.kind === "llm" && item.data.turnIndex === selectedLlm.turnIndex,
+				);
+
+	return (
+		<div className="timeline-run">
+			<div className="timeline-run-head">
+				<span className="timeline-run-title">
+					{run.runId === "" ? "run 外事件" : `${formatClock(run.startedAt)} 开始`}
+				</span>
+				{run.endedAt === undefined ? (
+					<span>进行中</span>
+				) : run.endReason === "completed" ? (
+					<span className="stat-ok">成功</span>
+				) : (
+					<span
+						className={run.endReason === "cancelled" ? undefined : "stat-err"}
+						title={run.error}
+					>
+						{END_REASON_LABELS[run.endReason ?? "interrupted"]}
+					</span>
+				)}
+				{run.modelId !== undefined && <span>{run.modelId}</span>}
+				{run.endedAt !== undefined && (
+					<span>耗时 {formatMs(run.endedAt - run.startedAt)}</span>
+				)}
+				{run.usage !== undefined && (
+					<span>tokens {formatTokens(usageTotal(run.usage))}</span>
+				)}
+				{hit !== undefined && <span>缓存 {(hit * 100).toFixed(1)}%</span>}
+			</div>
+			{run.items.length === 0 ? (
+				<p className="settings-empty">这个 run 没有泳道条目。</p>
+			) : (
+				run.items.map((item, i) => {
+					const { s, e } = itemBounds(item);
+					const style = spanStyle(axisStart, axisEnd, s, e);
+					if (item.kind === "llm") {
+						const d = item.data;
+						const selected =
+							selectedLlm?.runId === run.runId && selectedLlm.turnIndex === d.turnIndex;
+						return (
+							<div
+								key={`llm-${d.turnIndex}-${i}`}
+								className={`timeline-row clickable${selected ? " selected" : ""}`}
+								title={`${llmTitle(d)}（点击查看上下文拆分）`}
+								onClick={() =>
+									onSelectLlm({ runId: run.runId, turnIndex: d.turnIndex })
+								}
+							>
+								<span className="timeline-label">模型 #{d.turnIndex + 1}</span>
+								<div className="timeline-track">
+									<div
+										className={`timeline-span llm${d.errorMessage !== undefined ? " err" : ""}`}
+										style={style}
+									/>
+								</div>
+								<span className="timeline-dur">{formatMs(e - s)}</span>
+							</div>
+						);
+					}
+					if (item.kind === "tool") {
+						const d = item.data;
+						return (
+							<div
+								key={`tool-${d.toolCallId}-${i}`}
+								className="timeline-row nested"
+								title={`${d.toolName} ${formatMs(e - s)}${d.summary === "" ? "" : `：${d.summary}`}（${d.outcome}）`}
+							>
+								<span className="timeline-label">{d.toolName}</span>
+								<div className="timeline-track">
+									<div
+										className={`timeline-span${d.outcome === "error" ? " err" : ""}`}
+										style={style}
+									/>
+								</div>
+								<span className="timeline-dur">{formatMs(e - s)}</span>
+							</div>
+						);
+					}
+					if (item.kind === "retry") {
+						const d = item.data;
+						const title =
+							d.phase === "start"
+								? `第 ${d.attempt}${d.maxAttempts === undefined ? "" : `/${d.maxAttempts}`} 次重试 · ${formatMs(d.delayMs ?? 0)} 后发起${d.errorMessage === undefined ? "" : ` · 上次失败：${d.errorMessage}`}`
+								: d.success === true
+									? "重试成功"
+									: `重试耗尽${d.finalError === undefined ? "" : `：${d.finalError}`}`;
+						return (
+							<div key={`retry-${i}`} className="timeline-row nested" title={title}>
+								<span className="timeline-label">重试</span>
+								<div className="timeline-track">
+									<div className="timeline-span retry" style={style} />
+								</div>
+								<span className="timeline-dur">
+									{d.phase === "start" ? formatMs(d.delayMs ?? 0) : "—"}
+								</span>
+							</div>
+						);
+					}
+					const d = item.data;
+					const reasonLabel =
+						d.reason === "manual" ? "手动" : d.reason === "threshold" ? "阈值" : "溢出";
+					return (
+						<div
+							key={`compaction-${i}`}
+							className="timeline-row nested"
+							title={`上下文压缩（${reasonLabel}）${d.tokensBefore === undefined ? "" : ` · 压缩前 ${formatTokens(d.tokensBefore)} tokens`}${d.aborted ? " · 已中止" : ""}${d.errorMessage === undefined ? "" : ` · ${d.errorMessage}`}`}
+						>
+							<span className="timeline-label">压缩</span>
+							<div className="timeline-track">
+								<div className="timeline-span compaction" style={style} />
+							</div>
+							<span className="timeline-dur">—</span>
+						</div>
+					);
+				})
+			)}
+			{run.endedAt !== undefined && (
+				<div
+					className="timeline-row nested"
+					title={`run ${END_REASON_LABELS[run.endReason ?? "interrupted"]}${run.error === undefined ? "" : `：${run.error}`}`}
+				>
+					<span className="timeline-label">结束</span>
+					<div className="timeline-track">
+						<div
+							className={`timeline-span end${
+								run.endReason === "error" || run.endReason === "interrupted"
+									? " err"
+									: run.endReason === "completed"
+										? " ok"
+										: ""
+							}`}
+							style={spanStyle(axisStart, axisEnd, run.endedAt, run.endedAt)}
+						/>
+					</div>
+					<span className="timeline-dur">—</span>
+				</div>
+			)}
+			{selectedCall !== undefined && selectedLlm !== undefined && (
+				<LlmDetail
+					call={selectedCall.data}
+					snapshot={snapshots.get(
+						snapshotKey(
+							selectedCall.data.runId ??
+								(run.runId === "" ? undefined : run.runId),
+							selectedLlm.turnIndex,
+						),
+					)}
+				/>
+			)}
+		</div>
+	);
+}
+
+/* ── 会话统计与缓存归因（statsSnapshot 的 sessions / cacheWaste） ──────
+ *
+ * 两块数据都是 daemon 从台账 fold 好的（core/observability.ts），本区只做展示。
+ * 口径与「用量概览」不同：那边是进程内累计，这里是台账全历史（重启不清零、
+ * 含被压缩历史，近 pi getSessionStats），头部标注防混。
+ */
+
+/** 缓存失效原因的中文标签（shared CacheMissReason 的展示映射）。 */
+const MISS_REASON_LABELS: Record<CacheMissReason, string> = {
+	idle_ttl: "空闲失效",
+	model_change: "换模失效",
+	other: "其他失效",
+};
+
+function SessionStatsSection({
+	snapshot,
+}: {
+	snapshot: ObservabilitySnapshot;
+}): React.JSX.Element {
+	const sessions = snapshot.sessions;
+	const waste = snapshot.cacheWaste;
+	// 归因卡片只列有记录的原因（other 是兜底桶，常态为空不该占位）。
+	const wasteByReason = (
+		Object.keys(MISS_REASON_LABELS) as CacheMissReason[]
+	)
+		.map((reason) => {
+			const misses = waste.misses.filter((m) => m.reason === reason);
+			return {
+				reason,
+				count: misses.length,
+				tokens: misses.reduce((sum, m) => sum + m.missedTokens, 0),
+				cost: misses.reduce((sum, m) => sum + m.missedCost, 0),
+			};
+		})
+		.filter((r) => r.count > 0);
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>会话统计与缓存归因</h2>
+				<span className="stat-hint">台账全历史口径（含被压缩历史）</span>
+			</header>
+			{sessions.length === 0 ? (
+				<p className="settings-empty">
+					还没有会话统计（台账里跑过任务后可见）。
+				</p>
+			) : (
+				<table className="stat-table">
+					<thead>
+						<tr>
+							<th>会话</th>
+							<th>run</th>
+							<th>轮次</th>
+							<th>模型耗时</th>
+							<th>工具耗时</th>
+							<th>tokens</th>
+							<th>费用</th>
+							<th>缓存命中</th>
+						</tr>
+					</thead>
+					<tbody>
+						{sessions.slice(0, 10).map((s) => (
+							<tr key={s.sessionId}>
+								<td title={s.sessionId}>{s.sessionId.slice(0, 8)}</td>
+								<td>{s.runs}</td>
+								<td>{s.turns}</td>
+								<td>{formatMs(s.llmMs)}</td>
+								<td>{formatMs(s.toolMs)}</td>
+								<td>{formatTokens(usageTotal(s.usage))}</td>
+								<td>{formatCost(s.usage.cost)}</td>
+								<td>
+									{s.cacheHitRate === undefined
+										? "—"
+										: `${(s.cacheHitRate * 100).toFixed(1)}%`}
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			)}
+			{sessions.length > 10 && (
+				<p className="stat-hint">只显示最近活跃的 10 个会话（共 {sessions.length} 个）。</p>
+			)}
+			{waste.missCount === 0 ? (
+				<p className="stat-hint">缓存浪费归因：没有缓存失效记录。</p>
+			) : (
+				<>
+					<p className="stat-hint">
+						缓存浪费合计 {formatTokens(waste.missedTokens)} tokens（
+						{formatCost(waste.missedCost)}，{waste.missCount} 次）——
+						上次 prompt 已有、这次却没走缓存重计费的部分。
+					</p>
+					<div className="stat-grid">
+						{wasteByReason.map((r) => (
+							<StatCard
+								key={r.reason}
+								label={MISS_REASON_LABELS[r.reason]}
+								value={`${formatTokens(r.tokens)} tokens`}
+								hint={`${formatCost(r.cost)} · ${r.count} 次`}
+							/>
+						))}
+					</div>
+				</>
+			)}
+		</section>
+	);
+}
+
 /* ── 全局唤起热键状态行 ──────────────────────────────────────────── */
 
 /**
@@ -279,6 +775,16 @@ export function DiagnosticsView({
 	);
 	/** docx 环境行的重查信号：只跟随手动「刷新」（不随会话事件，见 DocxEnvRow）。 */
 	const [envRefreshTick, setEnvRefreshTick] = useState(0);
+	/** 台账数据（会话时间线分区）。undefined = 还没拉回来。 */
+	const [ledger, setLedger] = useState<RunLedgerResult | undefined>(undefined);
+	/** 用户在选择器里挑的会话；undefined = 跟随 daemon 默认（当前活动会话）。 */
+	const [selectedSessionId, setSelectedSessionId] = useState<string | undefined>(
+		undefined,
+	);
+	/** 时间线里点中的模型调用（展开上下文真实拆分）。 */
+	const [selectedLlm, setSelectedLlm] = useState<
+		{ readonly runId: string; readonly turnIndex: number } | undefined
+	>(undefined);
 
 	const refresh = useCallback(() => {
 		window.kami
@@ -292,8 +798,18 @@ export function DiagnosticsView({
 			});
 	}, []);
 
+	const refreshLedger = useCallback((sessionId?: string) => {
+		window.kami
+			.runLedger(sessionId)
+			.then(setLedger)
+			.catch((e: unknown) => {
+				setError(e instanceof Error ? e.message : String(e));
+			});
+	}, []);
+
 	useEffect(() => {
 		refresh();
+		refreshLedger(selectedSessionId);
 		// 会话事件 = 统计变了的信号。delta 类事件不改变聚合结果，跳过免得空转。
 		const off = window.kami.onSessionEvent(({ event }) => {
 			if (
@@ -304,9 +820,25 @@ export function DiagnosticsView({
 				return;
 			}
 			refresh();
+			refreshLedger(selectedSessionId);
 		});
 		return off;
-	}, [refresh]);
+	}, [refresh, refreshLedger, selectedSessionId]);
+
+	/** 台账 fold 是渲染的一部分（口径见 run-timeline.ts），memo 住避免每帧重算。 */
+	const ledgerRuns = useMemo(
+		() => foldRunLedger(ledger?.entries ?? []),
+		[ledger],
+	);
+	const ledgerSnapshots = useMemo(
+		() => indexRequestSnapshots(ledger?.entries ?? []),
+		[ledger],
+	);
+	/** 展示序：新的在前（与「最近任务」一致），最多画 20 个 run。 */
+	const displayRuns = useMemo(
+		() => [...ledgerRuns].reverse().slice(0, 20),
+		[ledgerRuns],
+	);
 
 	const hitRate =
 		snapshot === undefined ? undefined : cacheHitRate(snapshot.totalUsage);
@@ -347,6 +879,7 @@ export function DiagnosticsView({
 					title="重新拉取统计"
 					onClick={() => {
 						refresh();
+						refreshLedger(selectedSessionId);
 						setEnvRefreshTick((t) => t + 1);
 					}}
 				>
@@ -373,7 +906,7 @@ export function DiagnosticsView({
 						<section className="settings-section">
 							<header className="settings-section-head">
 								<h2>用量概览</h2>
-								<span className="stat-hint">本次启动至今累计</span>
+							<span className="stat-hint">台账全历史累计（重启不清零）</span>
 							</header>
 							<div className="stat-grid">
 								<StatCard
@@ -409,9 +942,16 @@ export function DiagnosticsView({
 							</div>
 						</section>
 
+						<SessionStatsSection snapshot={snapshot} />
+
 						<section className="settings-section">
 							<header className="settings-section-head">
 								<h2>上下文组成</h2>
+								{ledgerSnapshots.size > 0 && (
+									<span className="stat-hint">
+										该会话有真实快照：在下方会话时间线点一轮模型调用查看拆分
+									</span>
+								)}
 							</header>
 							<CompositionBar snapshot={snapshot} />
 						</section>
@@ -513,12 +1053,76 @@ export function DiagnosticsView({
 										</tbody>
 									</table>
 									{selectedRun !== undefined && (
-										<RunTimeline run={selectedRun} />
-									)}
-								</>
+									<RunTimeline run={selectedRun} />
+								)}
+							</>
+						)}
+					</section>
+
+					<section className="settings-section">
+						<header className="settings-section-head">
+							<h2>会话时间线</h2>
+							{ledger !== undefined && ledger.sessions.length > 0 && (
+								<select
+									className="ledger-select"
+									aria-label="选择会话"
+									value={ledger.sessionId ?? ""}
+									onChange={(e) => {
+										const id = e.target.value;
+										setSelectedSessionId(id);
+										setSelectedLlm(undefined);
+										refreshLedger(id);
+									}}
+								>
+									{/*
+									 * 选中项可能不在列表里（请求的会话还没记台账、
+									 * 或 daemon 回退目标不在 mtime 列表内）——补一个选项
+									 * 让 select 恒受控，不悄悄跳回第一项。
+									 */}
+									{ledger.sessionId !== undefined &&
+										!ledger.sessions.includes(ledger.sessionId) && (
+											<option value={ledger.sessionId}>
+												{ledger.sessionId}
+											</option>
+										)}
+									{ledger.sessions.map((id) => (
+										<option key={id} value={id}>
+											{id}
+										</option>
+									))}
+								</select>
 							)}
-						</section>
-					</>
+							<span className="stat-hint">点击模型调用行看上下文拆分</span>
+						</header>
+						{ledger === undefined ? (
+							<p className="settings-empty">正在读取台账…</p>
+						) : ledger.sessionId === undefined ? (
+							<p className="settings-empty">
+								还没有台账数据（跑过任务后可见）。
+							</p>
+						) : displayRuns.length === 0 ? (
+							<p className="settings-empty">该会话的台账还没有泳道条目。</p>
+						) : (
+							<>
+								{displayRuns.map((run, i) => (
+									<LedgerRunView
+										key={`${run.runId}-${run.startedAt}-${i}`}
+										run={run}
+										snapshots={ledgerSnapshots}
+										selectedLlm={selectedLlm}
+										onSelectLlm={setSelectedLlm}
+									/>
+								))}
+								{ledgerRuns.length > displayRuns.length && (
+									<p className="stat-hint">
+										只显示最近 {displayRuns.length} 个 run（共{" "}
+										{ledgerRuns.length} 个）。
+									</p>
+								)}
+							</>
+						)}
+					</section>
+				</>
 				)}
 			</div>
 		</main>

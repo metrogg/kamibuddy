@@ -215,6 +215,25 @@ export interface ErrorEntry {
 
 export type ConversationEntry = UserMessage | AssistantMessage | ToolCard | ErrorEntry | ArtifactsPresentedEntry;
 
+/**
+ * 一次进行中的模型自动重试（run_retry start 折叠而来，reducer 视图状态）。
+ *
+ * pi 的 auto_retry 语义：失败尝试之间静默等待 delayMs 再上 —— 没有这条状态行，
+ * 这段窗口在 UI 上是一个无任何反馈的黑洞（对网关超时尤其常见）。
+ * retryAt = 预定重试发起时刻（daemon 收到事件时按 delayMs 打点）—— 倒计时以
+ * 它为准，不受两端折叠时间差影响。success/finalError 不落此结构：那是「离开
+ * 重试中」的信号，reducer 直接清态，终态由后续 run_finished/run_error 表达。
+ */
+export interface RunRetryState {
+	/** 即将发起的是第几次尝试（pi 的 attempt 口径：首次失败后的第一次重试为 1）。 */
+	readonly attempt: number;
+	readonly maxAttempts: number;
+	/** 预定重试发起时刻（epoch ms）。倒计时 = retryAt − now。 */
+	readonly retryAt: number;
+	/** 上一次失败的原因（模型/网关错误原文，不含 stack）。 */
+	readonly errorMessage?: string;
+}
+
 /** 产物交付条目（artifacts_presented 折叠而来，恢复会话时由 custom 条目翻译）。 */
 export interface ArtifactsPresentedEntry {
 	readonly id: MessageId;
@@ -320,7 +339,31 @@ export type SessionEvent =
 	 * 上下文用量明细（used/total 精确 + 分类估算）。在带用量的 session_state 之后
 	 * 由 daemon 组装发出 —— 分类所需的系统提示词/技能段 token 只有 daemon 知道。
 	 */
-	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail };
+	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail }
+	/**
+	 * 模型自动重试状态（等待 delayMs 后再次发起）。
+	 *
+	 * start 事件由 session-host 在收到 pi auto_retry_start 后转发（计数从 1 开始）；
+	 * end（success / finalError）由 session-host 在 auto_retry_end 后转发， reducer
+	 * 收到后清重试态。终态成功/失败由后续的 run_finished / run_error 表达。
+	 */
+	| {
+		readonly type: "run_retry";
+		readonly status: "start" | "success" | "finalError";
+		readonly attempt: number;
+		readonly maxAttempts: number;
+		readonly delayMs: number;
+		readonly errorMessage?: string;
+	}
+	/**
+	 * steer / followUp 队列变化。daemon 在 pi queue_update 到达时直接转发，
+	 * renderer 只用计数渲染「N 条消息排队中」。数组内容本身不渲染。
+	 */
+	| {
+		readonly type: "queue_changed";
+		readonly steering: readonly string[];
+		readonly followUp: readonly string[];
+	};
 
 /**
  * PUSH.sessionEvent 的信封：事件本体 + 路由键。
@@ -401,6 +444,14 @@ export interface SessionState {
 		readonly usedTokens: number;
 		readonly maxTokens: number;
 	};
+	/**
+	 * resume 降级打开时跳过的坏行数（spec: add-observability-ledger）。
+	 *
+	 * pi 的 loadEntriesFromFile 逐行跳过 JSON 解析失败的坏行但不暴露计数 ——
+	 * daemon 预扫同口径计数后并入 session_state（仅 resume 出损坏会话的桶有值，
+	 * 新建/完好会话键缺席），renderer 据此提示「会话文件有 N 行损坏已跳过」。
+	 */
+	readonly skippedLines?: number;
 }
 
 /**
@@ -443,6 +494,10 @@ export interface SessionSnapshot {
 	readonly cancelledTurns?: readonly MessageId[];
 	/** 本会话已交付的产物（artifacts_presented 折叠而来）。 */
 	readonly artifacts: readonly ArtifactRef[];
+	/** 进行中的模型自动重试（run_retry 折叠而来）。没有重试窗口时为 undefined。 */
+	readonly retry?: RunRetryState;
+	/** steer / followUp 排队条数（queue_changed 折叠而来）。0 / 未收到过都为 undefined。 */
+	readonly queueCount?: number;
 }
 
 /**

@@ -16,6 +16,7 @@ import type {
 	AssistantMessage,
 	ConversationEntry,
 	MessageId,
+	RunRetryState,
 	SessionEvent,
 	SessionSnapshot,
 	SessionState,
@@ -45,6 +46,17 @@ export interface ConversationView {
 	readonly cancelledTurns: readonly MessageId[];
 	/** 本会话已交付的产物（artifacts_presented 折叠而来，唯一来源）。 */
 	readonly artifacts: readonly ArtifactRef[];
+	/**
+	 * 进行中的模型自动重试（run_retry 折叠而来；协议见 session-events.ts）。
+	 * run_finished / run_error / 新 user_message 到来时清空 —— 重试态只活在
+	 * 一次 run 的等待窗口里，不随回合穿越。
+	 */
+	readonly retry?: RunRetryState;
+	/**
+	 * steer / followUp 排队条数（queue_changed 折叠而来）。
+	 * 缺省/0 都不渲染徽标（两条同义，区别只在有没有收到过 queue_changed）。
+	 */
+	readonly queueCount?: number;
 }
 
 export type ConversationAction =
@@ -66,6 +78,8 @@ export const initialConversation: ConversationView = {
 	availableModes: [],
 	cancelledTurns: [],
 	artifacts: [],
+	retry: undefined,
+	queueCount: undefined,
 };
 
 /** 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。 */
@@ -134,6 +148,8 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			turn: action.snapshot.turn,
 			cancelledTurns: action.snapshot.cancelledTurns ?? [],
 			artifacts: action.snapshot.artifacts,
+			retry: action.snapshot.retry,
+			queueCount: action.snapshot.queueCount,
 		};
 	}
 
@@ -142,7 +158,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "history_reset":
 			// 与 daemon resetSession 同口径：历史 / 计时 / 取消痕迹 / 产物 / 用量明细全清；
 			// state 只复位 sessionId 与 isStreaming —— cwd、两轴、模型选择保留
-			// （新建任务不换空间也不换模式）。
+			// （新建任务不换空间也不换模式）。重试/排队同属运行现场，一并清零。
 			return {
 				...view,
 				state: { ...view.state, sessionId: "", isStreaming: false },
@@ -151,10 +167,19 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				turn: undefined,
 				cancelledTurns: [],
 				artifacts: [],
+				retry: undefined,
+				queueCount: undefined,
 			};
 
 		case "run_started":
-			return { ...view, state: { ...view.state, isStreaming: true } };
+			// 新的 run 开始意味着上一轮的重试等待窗口已结束（retry 终态后 pi 才
+			// 会发起新一轮尝试）。排队数不动 —— steer/followUp 的出队由
+			// queue_changed 给出新值，run 边界不代表队列清空。
+			return {
+				...view,
+				state: { ...view.state, isStreaming: true },
+				retry: undefined,
+			};
 
 		case "run_finished": {
 			const cancelled = event.outcome === "cancelled";
@@ -167,6 +192,8 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				cancelledTurns: cancelled
 					? markTurnCancelled(view.entries, view.cancelledTurns)
 					: view.cancelledTurns,
+				// run 落定后重试态必须清掉，避免终态后还挂「N 秒后重试」。
+				retry: undefined,
 			};
 		}
 
@@ -187,14 +214,18 @@ export function conversationReducer(view: ConversationView, action: Conversation
 					},
 				],
 				turn: stopTurn(view.turn, false),
+				retry: undefined,
 			};
 
 		case "user_message":
 			// 回合计时从用户消息落库起表（WorkBuddy：从 user 消息发出到当前）。
+			// 新回合开始：清重试态（避免追问/steer 时上一 run 的重试残留）。排队数
+			// 不由这里清 —— queue_changed 会给出新值，新消息可能只是进队而不是立即发出。
 			return {
 				...view,
 				entries: [...view.entries, event.message],
 				turn: { startedAt: event.message.at },
+				retry: undefined,
 			};
 
 		case "assistant_started":
@@ -297,6 +328,30 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				...view,
 				artifacts: mergePresentedArtifacts(view.artifacts, event.files, Date.now()),
 			};
+
+		case "run_retry":
+			// start 把等待窗口折叠为 retryAt（倒计时基准）；success/finalError
+			// 都清态 —— 成功由后续 assistant 流表达，finalError 由 run_error 表达，
+			// 重试态只是等待窗口的占位，不该越过终态存活。
+			if (event.status === "start") {
+				return {
+					...view,
+					retry: {
+						attempt: event.attempt,
+						maxAttempts: event.maxAttempts,
+						retryAt: Date.now() + event.delayMs,
+						...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
+					},
+				};
+			}
+			return { ...view, retry: undefined };
+
+		case "queue_changed": {
+			// 队列全空时用 undefined 而不是 0：「没有排队」与「队列是 0」在 UI 上同义，
+			// 统一成缺省键让消费方只有一个判定口径（同 retry 字段的取舍）。
+			const queueCount = event.steering.length + event.followUp.length;
+			return { ...view, queueCount: queueCount === 0 ? undefined : queueCount };
+		}
 
 		default:
 			// 未知事件一律忽略而不是返回 undefined——多会话落地后事件路由变复杂，

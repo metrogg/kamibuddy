@@ -108,6 +108,56 @@ export interface ComposePromptInput {
 	 * 固定 now 才能断言环境块的完整文本。
 	 */
 	readonly now?: Date;
+	/**
+	 * 个性化注入（spec: rework-settings-layout）：只含 4 个注入字段——
+	 * welcomeGreeting / showChangeDetails 两个 boolean 是 UI 开关不进提示词，
+	 * 钉在这里免得后人把开关塞进 prompt。位序在记忆段之后、pi 上下文之前。
+	 */
+	readonly personalization?: PersonalizationSection;
+}
+
+/**
+ * 个性化注入段（preferences 四键的 compose 投影）。
+ * 全空 = 零 token 不注入；customInstructions 超 1500 字硬截断
+ * （防用户粘贴长文挤爆上下文，输入侧 textarea 同上限）。
+ */
+export interface PersonalizationSection {
+	/** 自定义指令 → 独立「用户规则」段（超 1500 字截断）。 */
+	readonly customInstructions?: string;
+	/** 对用户的称呼 → 「用户希望被称为「X」」一行。 */
+	readonly userNickname?: string;
+	/** AI 的名字 → 「你的名字是 X」一行。 */
+	readonly assistantName?: string;
+	/** 人设/人格描述 → 「你的人设：X」一行。 */
+	readonly personaDescription?: string;
+}
+
+/** 自定义指令注入上限（与设置页 textarea 的 maxLength 同口径）。 */
+const CUSTOM_INSTRUCTIONS_MAX = 1500;
+
+/**
+ * 个性化段文本。四项全空返回 ""（零 token 不注入）。
+ * 用户规则独立成段（对齐 WorkBuddy always_applied_user_rules 语义：
+ * 用户为自己设定的规则，在合适的场景下遵循），称呼/名字/人设各成一行。
+ */
+function formatPersonalizationSection(p: PersonalizationSection): string {
+	const blocks: string[] = [];
+	if (p.customInstructions !== undefined && p.customInstructions.trim() !== "") {
+		const instructions = p.customInstructions.trim().slice(0, CUSTOM_INSTRUCTIONS_MAX);
+		blocks.push(`## 用户规则\n\n以下是用户为自己设定的规则，请在合适的场景下遵循。\n\n${instructions}`);
+	}
+	const identityLines: string[] = [];
+	if (p.userNickname !== undefined && p.userNickname.trim() !== "") {
+		identityLines.push(`用户希望被称为「${p.userNickname.trim()}」。`);
+	}
+	if (p.assistantName !== undefined && p.assistantName.trim() !== "") {
+		identityLines.push(`你的名字是 ${p.assistantName.trim()}。`);
+	}
+	if (p.personaDescription !== undefined && p.personaDescription.trim() !== "") {
+		identityLines.push(`你的人设：${p.personaDescription.trim()}`);
+	}
+	if (identityLines.length > 0) blocks.push(identityLines.join("\n"));
+	return blocks.join("\n\n");
 }
 
 const SLOT = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;
@@ -142,6 +192,7 @@ export type PromptSegmentSource =
 	| "expert"
 	| "memory-system"
 	| "memory"
+	| "personalization"
 	| `fragment:${string}`
 	| `mode:${string}`
 	| `style:${string}`;
@@ -259,6 +310,15 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	}
 	if (input.memoryContent !== undefined && input.memoryContent.trim() !== "") {
 		all.push({ source: "memory", text: `\n\n${input.memoryContent.trim()}` });
+	}
+	/*
+	 * 个性化段：记忆段之后、pi 上下文之前。与记忆段同批在残留检查**之后**推入
+	 * —— 自定义指令/人设是用户数据，里面写了「{{...}}」不该让组装抛错
+	 * （残留检查管骨架/模式/片段的笔误，不管用户数据）。
+	 */
+	if (input.personalization !== undefined) {
+		const block = formatPersonalizationSection(input.personalization);
+		if (block !== "") all.push({ source: "personalization", text: `\n\n${block}` });
 	}
 	const piBlock = formatPiContextBlock(input);
 	if (piBlock !== "") {

@@ -21,6 +21,7 @@ import type {
 } from "../shared/session-events.ts";
 import {
 	buildConversationEntries,
+	countSkippedLines,
 	validateSessionFilePath,
 } from "./session-rebuild.ts";
 import { restoredToolLabel } from "./session-host.ts";
@@ -155,7 +156,7 @@ describe("buildConversationEntries · 消息映射", () => {
 		]);
 	});
 
-	it("assistant：text/thinking 多块拼接，usage 翻译成 TokenUsage（cost 取 total）", () => {
+	it("assistant：text/thinking 多块拼接，usage 翻译成 TokenUsage（全字段含 cost 分项）", () => {
 		const out = buildConversationEntries([
 			assistantEntry("a1", [
 				{ type: "thinking", thinking: "先想" },
@@ -170,7 +171,17 @@ describe("buildConversationEntries · 消息映射", () => {
 			role: "assistant",
 			text: "第一句第二句",
 			thinking: "先想再想",
-			usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, totalTokens: 18, cost: 0.003 },
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 2,
+				cacheWrite: 1,
+				totalTokens: 18,
+				cost: 0.003,
+				// 翻译是全字段口径（spec: add-observability-ledger）：分项恒跟随 cost 对象；
+				// reasoning / cacheWrite1h 是可选键，pi 未上报时缺席（USAGE 未带）。
+				costBreakdown: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0 },
+			},
 			at: AT,
 		});
 	});
@@ -541,5 +552,24 @@ describe("validateSessionFilePath", () => {
 
 	it("相对路径 → 拒绝", () => {
 		expect(validateSessionFilePath(join("relative", "x.jsonl"), DIR)).toContain("绝对路径");
+	});
+});
+
+describe("countSkippedLines（resume 降级打开的坏行计数）", () => {
+	it("非空行里 JSON.parse 失败的行计数（与 pi 同口径）", () => {
+		const content = [
+			'{"type":"session","id":"s1"}',
+			'{"type":"message","id":"m1"}',
+			'{"type":"message","id":"m2","message":{"role":"user"', // 崩溃截断的半行
+			"", // 空行不算
+			"这不是 JSON",
+			'{"type":"message","id":"m3"}',
+		].join("\n");
+		expect(countSkippedLines(content)).toBe(2);
+	});
+
+	it("完好文件为 0；空文件为 0", () => {
+		expect(countSkippedLines('{"a":1}\n{"b":2}\n')).toBe(0);
+		expect(countSkippedLines("")).toBe(0);
 	});
 });

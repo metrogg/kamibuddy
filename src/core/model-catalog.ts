@@ -15,15 +15,16 @@ import { mkdirSync } from "node:fs";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
 	CredentialSource,
+	CustomModelInput,
 	CustomProviderInput,
 	ModelInfo,
 	ProviderInfo,
 	SettingsSnapshot,
 } from "../shared/settings.ts";
-import { validateCustomProvider } from "../shared/settings.ts";
+import { validateCustomModel, validateCustomProvider } from "../shared/settings.ts";
 import { removeApiKey as removeApiKeyFromFile, writeApiKey } from "./api-keys.ts";
 import { getAuthPath, getConfigDir, getModelsPath, getModelsStorePath } from "./config-paths.ts";
-import { deleteCustomProvider, listOwnedProviderIds, readCustomProvider, upsertCustomProvider } from "./custom-providers.ts";
+import { deleteCustomProvider, listOwnedProviderIds, readCustomProvider, upsertCustomProvider, upsertProviderModel } from "./custom-providers.ts";
 
 /** 模型的全局唯一标识，形如 `deepseek/deepseek-chat`。 */
 export function toModelKey(providerId: string, modelId: string): string {
@@ -141,6 +142,31 @@ export class ModelCatalog {
 		if (apiKey !== undefined && apiKey.trim() !== "") {
 			await this.runtime.setRuntimeApiKey(input.id, apiKey.trim());
 		}
+	}
+
+	/**
+	 * 往预置（内置）服务商追加一个模型 —— 「添加模型」弹层的预置路径。
+	 *
+	 * 与 saveCustomProvider 分工：那条路建的是完整自建条目（baseUrl/api 齐全），
+	 * 并明令禁止与内置同名；这条路只往 models.json 的同 id 条目里加一个模型，
+	 * pi compose 时与内置目录按模型 id 合并（继承内置 baseUrl/api），
+	 * 落盘口径见 custom-providers.ts 的 upsertProviderModel。
+	 */
+	async addProviderModel(providerId: string, model: CustomModelInput): Promise<void> {
+		// 渲染进程已校验过一次；daemon 再验是防绕过（同 saveCustomProvider 的口径）。
+		const errors = validateCustomModel(model);
+		if (errors.length > 0) {
+			throw new Error(`模型配置有误：${errors.join("；")}`);
+		}
+		// 目标必须是目录里真实存在的服务商：写错 id 会在 models.json 留下一个
+		// 永不生效的孤儿条目，界面上什么都看不到，用户无从排查。
+		if (!this.runtime.getProviders().some((p) => p.id === providerId)) {
+			throw new Error(`未知服务商：${providerId}`);
+		}
+
+		upsertProviderModel(this.modelsPath, providerId, model);
+		// 让 pi 重读 models.json，新模型才会出现在目录里。
+		await this.runtime.refresh({ allowNetwork: false });
 	}
 
 	/** 删除自定义服务商。凭据一并清掉，避免残留在 auth.json 里。 */

@@ -612,3 +612,136 @@ describe("中断终态", () => {
 		expect(view.turn?.cancelled).toBe(true);
 	});
 });
+
+describe("run_retry 重试态", () => {
+	it("start 折叠为重试态：attempt/maxAttempts 透传，retryAt = 打点 + delayMs", () => {
+		const before = Date.now();
+		const view = apply([
+			{ type: "run_started", runId: "r1" },
+			{
+				type: "run_retry",
+				status: "start",
+				attempt: 1,
+				maxAttempts: 3,
+				delayMs: 5000,
+				errorMessage: "Request timed out.",
+			},
+		]);
+		const after = Date.now();
+
+		expect(view.retry?.attempt).toBe(1);
+		expect(view.retry?.maxAttempts).toBe(3);
+		expect(view.retry?.errorMessage).toBe("Request timed out.");
+		// retryAt 由 reducer 打点（两端共用同一份折叠，UI 不自己取时间）。
+		expect(view.retry?.retryAt).toBeGreaterThanOrEqual(before + 5000);
+		expect(view.retry?.retryAt).toBeLessThanOrEqual(after + 5000);
+	});
+
+	it("errorMessage 缺省时键缺席（不造空串）", () => {
+		const view = apply([
+			{ type: "run_retry", status: "start", attempt: 2, maxAttempts: 3, delayMs: 1000 },
+		]);
+		expect(view.retry?.errorMessage).toBeUndefined();
+	});
+
+	it("success 清重试态（回落正常等待行，终态由后续流表达）", () => {
+		const view = apply([
+			{ type: "run_retry", status: "start", attempt: 1, maxAttempts: 3, delayMs: 5000 },
+			{ type: "run_retry", status: "success", attempt: 1, maxAttempts: 3, delayMs: 0 },
+		]);
+		expect(view.retry).toBeUndefined();
+	});
+
+	it("finalError 清重试态（终态错误由随后的 run_error 落错误卡）", () => {
+		const view = apply([
+			{ type: "run_retry", status: "start", attempt: 3, maxAttempts: 3, delayMs: 5000 },
+			{ type: "run_retry", status: "finalError", attempt: 3, maxAttempts: 3, delayMs: 0 },
+			{ type: "run_error", runId: "r1", message: "重试耗尽" },
+		]);
+		expect(view.retry).toBeUndefined();
+		expect(view.entries[0]).toMatchObject({ role: "error", message: "重试耗尽" });
+	});
+
+	it("run_finished / run_error / 新 user_message 都清重试态（不随回合穿越）", () => {
+		const start = {
+			type: "run_retry",
+			status: "start",
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 5000,
+		} as const;
+
+		const finished = apply([start, { type: "run_finished", runId: "r1", outcome: "cancelled" }]);
+		expect(finished.retry).toBeUndefined();
+
+		const errored = apply([start, { type: "run_error", runId: "r1", message: "x" }]);
+		expect(errored.retry).toBeUndefined();
+
+		const newTurn = apply([
+			start,
+			{ type: "user_message", message: { id: "u2", role: "user", text: "追问", at: 2 } },
+		]);
+		expect(newTurn.retry).toBeUndefined();
+	});
+
+	it("连续 start 以后到者为准（多次失败的等待窗口原位刷新）", () => {
+		const view = apply([
+			{ type: "run_retry", status: "start", attempt: 1, maxAttempts: 3, delayMs: 5000 },
+			{ type: "run_retry", status: "start", attempt: 2, maxAttempts: 3, delayMs: 10000 },
+		]);
+		expect(view.retry?.attempt).toBe(2);
+	});
+
+	it("history_reset 清重试态", () => {
+		const dirty = apply([
+			{ type: "run_retry", status: "start", attempt: 1, maxAttempts: 3, delayMs: 5000 },
+		]);
+		expect(dirty.retry).toBeDefined();
+		const view = conversationReducer(dirty, { type: "event", event: { type: "history_reset" } });
+		expect(view.retry).toBeUndefined();
+	});
+
+	it("snapshot 恢复重试态（重挂载后倒计时以 retryAt 为准继续走）", () => {
+		const retry = { attempt: 1, maxAttempts: 3, retryAt: Date.now() + 5000 };
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [],
+			availableScenes: [],
+			availableModes: [],
+			artifacts: [],
+			retry,
+		};
+		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
+		expect(view.retry).toEqual(retry);
+	});
+});
+
+describe("queue_changed 排队计数", () => {
+	it("steering + followUp 计数折叠进视图", () => {
+		const view = apply([
+			{ type: "queue_changed", steering: ["插一句"], followUp: ["排队一", "排队二"] },
+		]);
+		expect(view.queueCount).toBe(3);
+	});
+
+	it("队列清空时回落 undefined（与「没有排队」同口径，徽标消失）", () => {
+		const view = apply([
+			{ type: "queue_changed", steering: ["插一句"], followUp: [] },
+			{ type: "queue_changed", steering: [], followUp: [] },
+		]);
+		expect(view.queueCount).toBeUndefined();
+	});
+
+	it("snapshot 恢复排队计数", () => {
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [],
+			availableScenes: [],
+			availableModes: [],
+			artifacts: [],
+			queueCount: 2,
+		};
+		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
+		expect(view.queueCount).toBe(2);
+	});
+});

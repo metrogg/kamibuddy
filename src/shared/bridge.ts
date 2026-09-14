@@ -19,12 +19,15 @@ import type {
 	PermissionRequest,
 	PermissionResponse,
 	PathStat,
+	PersonalizationInfo,
+	PersonalizationPatch,
 	PickedInputFiles,
 	PromptPreviewRequest,
 	PromptPreviewResult,
 	PromptRequest,
 	QuestionnaireRequest,
 	QuestionnaireResponse,
+	RunLedgerResult,
 	SaveArtifactRequest,
 	SessionSummary,
 	UiRequest,
@@ -36,6 +39,7 @@ import type { ObservabilitySnapshot } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
 import type {
+	CustomModelInput,
 	CustomProviderInput,
 	SettingsSnapshot,
 	SkillsSnapshot,
@@ -157,6 +161,8 @@ export interface KamiBridge {
 	readonly readCustomProvider: (
 		providerId: string,
 	) => Promise<CustomProviderInput | undefined>;
+	/** 往预置服务商追加/替换单个模型（「添加模型」弹层选预置的路径）。 */
+	readonly addProviderModel: (providerId: string, model: CustomModelInput) => Promise<void>;
 	readonly refreshCatalog: () => Promise<void>;
 
 	/* ── 联网搜索 ─────────────────────────────────────────────────── */
@@ -210,6 +216,17 @@ export interface KamiBridge {
 	 */
 	readonly importProfile: () => Promise<{ content: string } | undefined>;
 
+	/* ── 个性化（spec: rework-settings-layout） ──────────────────── */
+
+	/** 读个性化六键（daemon 合并缺省后下发）。 */
+	readonly getPersonalization: () => Promise<PersonalizationInfo>;
+	/** 部分更新个性化（只动传入的键；字符串 trim 空 = 删键）。 */
+	readonly setPersonalization: (patch: PersonalizationPatch) => Promise<void>;
+	/** 读长期记忆全文（MEMORY.md；不存在回空串）。 */
+	readonly getMemory: () => Promise<{ content: string }>;
+	/** 覆盖写长期记忆全文；下一轮对话生效。 */
+	readonly setMemory: (content: string) => Promise<void>;
+
 	/* ── 提示词预览 ─────────────────────────────────────────────── */
 
 	/**
@@ -243,6 +260,11 @@ export interface KamiBridge {
 
 	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
 	readonly statsSnapshot: () => Promise<ObservabilitySnapshot>;
+	/**
+	 * 拉取运行台账条目（诊断页会话时间线的数据源）。
+	 * sessionId 缺省 = 当前活动会话（无活动会话退最新台账）；返回带全部台账会话列表。
+	 */
+	readonly runLedger: (sessionId?: string) => Promise<RunLedgerResult>;
 	/**
 	 * 全局唤起热键的注册状态（main 本地应答；failed = 大概率被别的程序占用）。
 	 * 状态静态（启动时注册一次），诊断页打开时查一次即可。

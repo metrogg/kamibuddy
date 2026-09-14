@@ -133,6 +133,64 @@ describe("preferences", () => {
 		);
 		expect(readPreferences().memoryEnabled).toBeUndefined();
 	});
+
+	it("个性化六字段读写往返（spec: rework-settings-layout）", () => {
+		// 旧偏好文件没有这些键：全部按未配置处理（旧文件兼容）。
+		const fresh = readPreferences();
+		expect(fresh.customInstructions).toBeUndefined();
+		expect(fresh.userNickname).toBeUndefined();
+		expect(fresh.assistantName).toBeUndefined();
+		expect(fresh.personaDescription).toBeUndefined();
+		expect(fresh.welcomeGreeting).toBeUndefined();
+		expect(fresh.showChangeDetails).toBeUndefined();
+
+		writePreferences({
+			activeModelKey: undefined,
+			customInstructions: "回答先给结论再展开",
+			userNickname: "老周",
+			assistantName: "小K",
+			personaDescription: "犀利但靠谱的搭档",
+			welcomeGreeting: false,
+			showChangeDetails: false,
+		});
+		expect(readPreferences()).toEqual({
+			activeModelKey: undefined,
+			customInstructions: "回答先给结论再展开",
+			userNickname: "老周",
+			assistantName: "小K",
+			personaDescription: "犀利但靠谱的搭档",
+			welcomeGreeting: false,
+			showChangeDetails: false,
+		});
+	});
+
+	it("个性化字段：空串与非法类型按未配置处理；读改写不丢其他键", () => {
+		// 字符串空串归一化为 undefined —— 与 styleId 的三态特例不同，
+		// 这里没有「空串 = 关闭」语义，空就是没设（注入端零 token）。
+		writeFileSync(
+			join(dir, "preferences.json"),
+			JSON.stringify({
+				activeModelKey: "smart/glm",
+				customInstructions: "",
+				userNickname: 42,
+				welcomeGreeting: "yes",
+				showChangeDetails: true,
+			}),
+			"utf8",
+		);
+		const prefs = readPreferences();
+		expect(prefs.customInstructions).toBeUndefined();
+		expect(prefs.userNickname).toBeUndefined();
+		expect(prefs.welcomeGreeting).toBeUndefined();
+		expect(prefs.showChangeDetails).toBe(true);
+
+		// 读改写：改个性化字段不丢既有键（daemon setPersonalization 的合并语义靠它）。
+		writePreferences({ ...prefs, personaDescription: "严谨" });
+		const next = readPreferences();
+		expect(next.activeModelKey).toBe("smart/glm");
+		expect(next.showChangeDetails).toBe(true);
+		expect(next.personaDescription).toBe("严谨");
+	});
 });
 
 describe("getEffectiveWorkspaceRoot 分层", () => {

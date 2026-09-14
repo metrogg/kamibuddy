@@ -79,6 +79,8 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.removeApiKey, providerId),
 	saveCustomProvider: (input, apiKey) =>
 		ipcRenderer.invoke(INVOKE.saveCustomProvider, input, apiKey),
+	addProviderModel: (providerId, model) =>
+		ipcRenderer.invoke(INVOKE.addProviderModel, providerId, model),
 	deleteCustomProvider: (providerId) =>
 		ipcRenderer.invoke(INVOKE.deleteCustomProvider, providerId),
 	readCustomProvider: (providerId) =>
@@ -111,6 +113,10 @@ const bridge: KamiBridge = {
 	setProfile: (content) => ipcRenderer.invoke(INVOKE.setProfile, content),
 	resetProfile: () => ipcRenderer.invoke(INVOKE.resetProfile),
 	importProfile: () => ipcRenderer.invoke(INVOKE.importProfile),
+	getPersonalization: () => ipcRenderer.invoke(INVOKE.getPersonalization),
+	setPersonalization: (patch) => ipcRenderer.invoke(INVOKE.setPersonalization, patch),
+	getMemory: () => ipcRenderer.invoke(INVOKE.getMemory),
+	setMemory: (content) => ipcRenderer.invoke(INVOKE.setMemory, content),
 
 	promptPreview: (request) => ipcRenderer.invoke(INVOKE.promptPreview, request),
 
@@ -127,6 +133,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.mcpServerToggle, serverName, enabled),
 
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
+	runLedger: (sessionId) => ipcRenderer.invoke(INVOKE.runLedger, sessionId),
 	globalShortcutStatus: () => ipcRenderer.invoke(INVOKE.globalShortcutStatus),
 	docxEnvStatus: () => ipcRenderer.invoke(INVOKE.docxEnvStatus),
 

@@ -195,6 +195,25 @@ export function validateCustomProvider(input: CustomProviderInput): ValidationRe
 	return { ok: Object.keys(errors).length === 0, errors };
 }
 
+/**
+ * 校验「往已有服务商追加一个模型」的输入（添加模型弹层的预置路径）。
+ *
+ * 返回错误文案列表而不是 ValidationResult：这里没有字段级回显位置
+ * （单条模型行），列表直接拼进禁用提示。放在 shared/ 与
+ * validateCustomProvider 同一考虑 —— 渲染进程即时校验，daemon 落盘前再验防绕过。
+ *
+ * 数值用 `!(x > 0)` 而不是 `x <= 0`：输入框清空时 Number("") 是 0、
+ * 非法输入是 NaN，两者都必须拦下 —— pi 在 compose 时对 ≤0 直接抛错
+ * （provider-composer.modelFromJson），到那时再炸很难定位是哪个字段。
+ */
+export function validateCustomModel(model: CustomModelInput): readonly string[] {
+	const errors: string[] = [];
+	if (model.id.trim() === "") errors.push("请填写模型 ID");
+	if (!(model.contextWindow > 0)) errors.push("上下文窗口需大于 0");
+	if (!(model.maxTokens > 0)) errors.push("单次最大输出需大于 0");
+	return errors;
+}
+
 /* ── 联网搜索 ────────────────────────────────────────────────────── */
 
 /**

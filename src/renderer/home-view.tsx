@@ -3,8 +3,8 @@
  * 大标题 → 模式页签 → 能力入口 → 输入卡 → 工作空间/权限 → 最佳实践案例。
  *
  * 文案是独立撰写的（AGENTS.md §6：机制可学，文字必须自己写）。
- * 案例封面用体裁语义图标 + 统一单色底，不引入位图 —— CSP 的 img-src
- * 不放外部源，远程封面图会被拦掉；图标与案例体裁同义，比渐变更表意。
+ * 案例封面用 CSS 渐变 + 内联图标，不引入位图 —— CSP 的 img-src 不放外部源，
+ * 远程封面图会被拦掉，渐变方案零依赖也够看。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -19,14 +19,12 @@ import { PlusMenu } from "./plus-menu.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
-	IconClipboard,
 	IconClose,
 	IconDoc,
 	IconMic,
 	IconRefresh,
 	IconResearch,
 	IconSlide,
-	IconUser,
 	IconWeb,
 	IconWorkspace,
 } from "./icons.tsx";
@@ -95,17 +93,17 @@ const CAPABILITIES = [
 interface PracticeCase {
 	readonly title: string;
 	readonly prompt: string;
-	/** 封面体裁图标（周报=文档、调研=搜索、看板=图表、幻灯片=演示、纪要=夹板、简历=人）。 */
-	readonly icon: typeof IconDoc;
+	/** 封面渐变，对应 CSS 类 case-cover-N。 */
+	readonly cover: number;
 }
 
 const PRACTICE_CASES: readonly PracticeCase[] = [
-	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", icon: IconDoc },
-	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", icon: IconResearch },
-	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", icon: IconChart },
-	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", icon: IconSlide },
-	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", icon: IconClipboard },
-	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", icon: IconUser },
+	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", cover: 0 },
+	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", cover: 1 },
+	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", cover: 2 },
+	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", cover: 3 },
+	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", cover: 4 },
+	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", cover: 5 },
 ];
 
 const PAGE_SIZE = 4;
@@ -206,7 +204,7 @@ export function HomeView({
 							<Composer
 								ref={composerRef}
 								ready={ready}
-								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令…" : "正在准备…"}
+								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
 								rows={3}
 								cwd={cwd}
 								modelId={modelId}
@@ -266,12 +264,10 @@ export function HomeView({
 							</button>
 						</header>
 						<div className="case-grid">
-							{visibleCases.map(({ title, prompt, icon: CoverIcon }) => (
-								<button key={title} type="button" className="case-card" onClick={() => composerRef.current?.setText(prompt)}>
-									<span className="case-cover">
-										<CoverIcon size={28} />
-									</span>
-									<span className="case-title">{title}</span>
+							{visibleCases.map((c) => (
+								<button key={c.title} type="button" className="case-card" onClick={() => composerRef.current?.setText(c.prompt)}>
+									<span className={`case-cover case-cover-${c.cover}`} />
+									<span className="case-title">{c.title}</span>
 								</button>
 							))}
 						</div>

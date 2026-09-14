@@ -102,14 +102,12 @@ export function SkillsView({ onClose, onTodo, onToast, experts, onUseExpert, onC
 				<button type="button" className="bar-btn" aria-label="返回" onClick={onClose}>
 					<IconBack size={17} />
 				</button>
-				<nav className="skills-tabs" role="tablist">
-				{TABS.map((t) => (
-					<button
-						key={t.id}
-						type="button"
-						role="tab"
-						aria-selected={tab === t.id}
-						className={`skills-tab${tab === t.id ? " active" : ""}`}
+				<nav className="skills-tabs">
+					{TABS.map((t) => (
+						<button
+							key={t.id}
+							type="button"
+							className={`skills-tab${tab === t.id ? " active" : ""}`}
 							onClick={() => {
 								if (!t.ready) {
 									onTodo(`「${t.label}」`);

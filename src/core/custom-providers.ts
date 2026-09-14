@@ -183,6 +183,31 @@ export function upsertCustomProvider(path: string, input: CustomProviderInput): 
 	return next;
 }
 
+/**
+ * 往预置（内置）服务商条目追加/替换单个模型（spec: rework-settings-layout 添加模型弹层）。
+ * 与 upsertCustomProvider 的三点硬差异：
+ * 1. 不写 baseUrl/api —— 写了会遮蔽内置目录里该服务商全部模型的基址（pi 按
+ *    provider 合并，条目级 baseUrl 优先）；
+ * 2. 不打 OWNER_KEY 归属标记 —— 打了会让内置服务商在设置页误显示成「自建」，
+ *    并放行整条目的编辑/删除（可能覆盖用户手写配置）；
+ * 3. 条目已存在时其余手写键原样保留（读改写）。
+ * pi 组装模型目录时按模型 id 把这里与内置目录合并，未写的键继承内置。
+ */
+export function upsertProviderModel(path: string, providerId: string, model: CustomModelInput): ModelsJson {
+	const config = readModelsJson(path);
+	const existing = config.providers[providerId];
+	const existingModels = existing?.models ?? [];
+	// 安全不变量与 upsertCustomProvider 相同：配置文件永不落明文密钥（auth.json/runtime key）。
+	const upserted = toModelsJsonModel(model, existingModels.find((m) => m.id === model.id));
+	const models = existingModels.some((m) => m.id === model.id)
+		? existingModels.map((m) => (m.id === model.id ? upserted : m))
+		: [...existingModels, upserted];
+	const entry: ModelsJsonProvider = existing !== undefined ? { ...existing, models } : { models };
+	const next: ModelsJson = { ...config, providers: { ...config.providers, [providerId]: entry } };
+	writeModelsJson(path, next);
+	return next;
+}
+
 /** 删除一个自定义服务商。用户手写的条目拒绝删除。 */
 export function deleteCustomProvider(path: string, providerId: string): ModelsJson {
 	const config = readModelsJson(path);

@@ -5,27 +5,6 @@
  * 届时文档流水线与应用 UI 的色值统一收口到 token；这里先用 CSS 变量集中管理。
  */
 
-/*
- * MiSans 随包子集（src/renderer/fonts/，来源与子集口径见 resources/fonts/README.md）。
- * 为什么随包：界面大量 font-weight:600 在微软雅黑上只能合成加粗（雅黑无真 600 字重），
- * 笔画发虚，12-14px 小字号更明显；MiSans 有真 Semibold，且对小字号屏显做了优化。
- * 只声明 400/600 两档：界面只用这两档字重，其余字重不随包。
- * vite 会把 CSS url() 相对引用的 woff2 打进 renderer 产物（CSP default-src 'self' 已覆盖）。
- */
-@font-face {
-	font-family: "MiSans";
-	src: url("./fonts/MiSans-Regular.woff2") format("woff2");
-	font-weight: 400;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "MiSans";
-	src: url("./fonts/MiSans-Semibold.woff2") format("woff2");
-	font-weight: 600;
-	font-display: swap;
-}
-
 /* 根部错误边界：渲染异常时的错误卡（白屏无反馈是体验缺陷，ErrorBoundary 是最后防线）。 */
 .error-boundary {
 	display: flex;
@@ -148,11 +127,10 @@ body {
 	margin: 0;
 	background: var(--bg);
 	color: var(--text);
-	/* WorkBuddy 全局字体栈 + 随包 MiSans 插入位（"PingFang SC" 之后、"Segoe UI" 之前）：
-	   macOS 仍命中苹方（MiSans 排在系统栈后、不影响 Mac 观感）；Windows 上前几项
-	   全部缺席，落到随包 MiSans（含真 600 字重），"Microsoft YaHei" 降级为
-	   MiSans 加载失败/缺字时的兜底（@font-face 用 swap，首帧可能先显示雅黑再切换）。 */
-	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "MiSans", "Segoe UI", "Microsoft YaHei", sans-serif;
+	/* WorkBuddy 全局字体栈原值（"PingFang SC" 在 macOS 生效，Windows 落到
+	   Segoe UI；"Microsoft YaHei" 是我们保留的 CJK 兜底，WB 栈里没有，
+	   但没有它 Windows 中文渲染依赖系统隐式回退，不确定性更高）。 */
+	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 button {
@@ -258,11 +236,6 @@ textarea:focus-visible {
 
 .nav-item:hover {
 	background: var(--bg-hover);
-}
-
-/* 未实现的占位导航降灰：占位展示≠可用，视觉要诚实（点击仍给 onTodo 反馈）。 */
-.nav-item-pending {
-	color: var(--text-faint);
 }
 
 .sidebar-section {
@@ -703,8 +676,6 @@ textarea:focus-visible {
 	font-weight: 600;
 	color: var(--primary);
 	letter-spacing: 0;
-	/* 窄窗折行时两行视觉重心均衡（标题是展示文本，balance 不影响布局测量）。 */
-	text-wrap: balance;
 }
 
 .mode-tabs {
@@ -1384,27 +1355,50 @@ textarea:focus-visible {
 	border: 0;
 	background: transparent;
 	text-align: center;
+	transition: transform 0.18s ease;
+}
+
+.case-card:hover {
+	/* WB hover：整卡上浮 2px，阴影只落在封面上（不起整卡阴影）。 */
+	transform: translateY(-2px);
+}
+
+.case-card:hover .case-cover {
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .case-cover {
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	display: block;
 	width: 100%;
 	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 8% 黑描边。 */
 	aspect-ratio: 16 / 9;
 	border: 0.5px solid rgba(0, 0, 0, 0.08);
 	border-radius: var(--radius-lg);
-	/* 体裁图标封面：统一单色底 + 淡色 28px 图标，替掉原 6 组 pastel 渐变 —
-	   渐变只装饰不表意，图标与案例体裁同义（Task 6 审美修正）。 */
-	background: var(--bg-raised);
-	color: var(--text-dim);
-	transition: background-color 0.18s ease;
+	transition: box-shadow 0.18s ease;
 }
 
-.case-card:hover .case-cover {
-	/* hover 反馈只落在封面底色加深一档（原整卡上浮 + 封面投影，随渐变一并退役）。 */
-	background: var(--bg-hover);
+.case-cover-0 {
+	background: linear-gradient(135deg, #dfe9ff, #f6e6ff);
+}
+
+.case-cover-1 {
+	background: linear-gradient(135deg, #dff5e3, #e8f7ff);
+}
+
+.case-cover-2 {
+	background: linear-gradient(135deg, #fff0db, #ffe3e3);
+}
+
+.case-cover-3 {
+	background: linear-gradient(135deg, #e3f0ff, #d8f5f0);
+}
+
+.case-cover-4 {
+	background: linear-gradient(135deg, #f3e8ff, #e0edff);
+}
+
+.case-cover-5 {
+	background: linear-gradient(135deg, #e8ecff, #fff4de);
 }
 
 .case-title {
@@ -4174,13 +4168,6 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	background: var(--bg);
 	text-align: left;
-	/* 「显示全部」几百张卡时跳过屏外卡的渲染。挂逐卡不挂容器：
-	   容器是单个盒，content-visibility 对它只有「整体跳过」一档，
-	   网格轨道尺寸会塌；逐卡跳过才拿得到虚拟化收益。
-	   contain-intrinsic-size 给跳过期的占位尺寸（约 210×62，实测卡高），
-	   防滚动条随滚动跳动。 */
-	content-visibility: auto;
-	contain-intrinsic-size: 210px 62px;
 }
 
 .model-card:hover:not(:disabled) {
@@ -4309,19 +4296,6 @@ textarea:focus-visible {
 	cursor: pointer;
 	/* select 的默认下箭头占位比 input 内边距宽，保持两行控件视觉对齐。 */
 	max-width: 320px;
-}
-
-/* 推理档位/回复风格/搜索服务商的 select 与 .key-input select 同一控件档位：
-   前两者坐在 provider-main 行内，吃不到 .key-input 的后代选择器。 */
-.provider-select {
-	padding: 6px 10px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	background: var(--bg);
-	color: inherit;
-	font: inherit;
-	font-size: 13px;
-	cursor: pointer;
 }
 
 .key-note {
@@ -5075,6 +5049,120 @@ textarea:focus-visible {
 	font-size: 12px;
 	color: var(--text-dim);
 	font-variant-numeric: tabular-nums;
+}
+
+/* ── 会话时间线（运行台账泳道，spec: add-observability-ledger） ──────
+ *
+ * 与 .timeline 同一套行语言（标签/轨道/耗时），外层换成按 run 分块的卡片。
+ * 条目色值全部复用既有调色板（comp-* 四色 + 语义色），不新增颜色。
+ */
+
+/* 会话选择器：与 .preview-field select 同一套控件外观，不另立风格。 */
+.ledger-select {
+	padding: 4px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+	max-width: 240px;
+}
+
+.timeline-run {
+	margin-top: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	padding: 10px 12px;
+}
+
+.timeline-run-head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px 14px;
+	flex-wrap: wrap;
+	margin-bottom: 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+.timeline-run-title {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text);
+}
+
+/* 模型调用行可点（展开上下文拆分），交互反馈与 stat-table-clickable 同口径。 */
+.timeline-row.clickable {
+	cursor: pointer;
+	border-radius: var(--radius-sm);
+}
+
+.timeline-row.clickable:hover {
+	background: var(--bg-hover);
+}
+
+.timeline-row.selected {
+	background: var(--bg-raised);
+	border-radius: var(--radius-sm);
+}
+
+/* 嵌套缩进：工具/重试/压缩/终态挂在模型调用之下，不是平级步骤。 */
+.timeline-row.nested .timeline-label {
+	padding-left: 14px;
+}
+
+.timeline-span.llm {
+	background: #8777d9;
+}
+
+/* 重试标记用琥珀色（spec 钉死），与 running 同色但语义不同——
+ * running 是「正在进行」，retry 是「失败后的退避」，行标签区分。 */
+.timeline-span.retry {
+	background: #ff991f;
+}
+
+.timeline-span.compaction {
+	background: #6b7a90;
+}
+
+/* 终态是零宽时刻标记：默认灰，成功绿，失败/中断红（err 复用语义色）。 */
+.timeline-span.end {
+	background: var(--text-dim);
+}
+
+.timeline-span.end.ok {
+	background: var(--ok);
+}
+
+/* 选中轮详情：计时五要素 + usage 五字段 + 请求快照拆分。 */
+.timeline-detail {
+	margin: 8px 0 4px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
+}
+
+.kv-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 18px;
+	font-size: 12px;
+	color: var(--text-dim);
+	margin-bottom: 8px;
+	font-variant-numeric: tabular-nums;
+}
+
+.kv-grid b {
+	color: var(--text);
+	font-weight: 500;
+}
+
+.snap-detail .comp-bar {
+	margin-top: 4px;
 }
 
 .mode-menu-item.active .mode-menu-tag,
@@ -6037,12 +6125,6 @@ textarea:focus-visible {
 	gap: 14px;
 }
 
-/* 可见关闭钮钉在头行右端、与头像顶对齐（遮罩点击关闭不可发现，给实体出口）。 */
-.ex-modal-close {
-	margin-left: auto;
-	align-self: flex-start;
-}
-
 .ex-detail-avatar {
 	width: 72px;
 	height: 72px;
@@ -6328,8 +6410,6 @@ textarea:focus-visible {
 	max-width: 520px;
 	max-height: 100%;
 	overflow-y: auto;
-	/* 卡内滚动到底不把滚轮事件透传給背后页面（滚动链在弹层里尤其突兀）。 */
-	overscroll-behavior: contain;
 	padding: 18px 20px;
 	background: var(--bg);
 	border: 1px solid var(--border);
@@ -6883,21 +6963,4 @@ textarea:focus-visible {
 	line-height: 1.5;
 	color: var(--warning);
 	background: color-mix(in srgb, var(--warning) 12%, var(--bg));
-}
-
-/*
- * 减少动态偏好的全局兜底：一处收口替代逐区块补丁 —— 新增动画不必
- * 再各自记挂 reduced-motion 变体（0.01ms 近似即时，保留事件时序）。
- * !important 只为压过内联与未来的逐区块规则；既有逐区块规则保留，
- * 与本条不冲突（同值或更细的「退化形态」定义，如扫光退静态文字）。
- */
-@media (prefers-reduced-motion: reduce) {
-
-	*,
-	*::before,
-	*::after {
-		animation-duration: 0.01ms !important;
-		animation-iteration-count: 1 !important;
-		transition-duration: 0.01ms !important;
-	}
 }

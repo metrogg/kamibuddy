@@ -81,8 +81,15 @@ function thinkingOf(content: PiAssistantMessage["content"]): string {
 	return thinking;
 }
 
-/** pi Usage → shared TokenUsage，口径与 session-host.ts 的 assistant_done 一致（cost 取 total）。 */
-function toTokenUsage(usage: PiUsage): TokenUsage {
+/**
+ * pi Usage → shared TokenUsage（全字段：reasoning / cacheWrite1h / cost 分项
+ * 一并透传，可选键缺席语义见 shared/observability.ts 的 TokenUsage 注释）。
+ *
+ * 本函数是 live 路径（session-host 的 assistant_done / 台账 llm_call）与
+ * 恢复路径（本文件重建）的共同出口 —— 两条路径对同一条消息必须给出同一份
+ * usage，否则诊断页会出现「在线看到 reasoning、刷新后没了」的漂移。
+ */
+export function toTokenUsage(usage: NonNullable<PiUsage>): TokenUsage {
 	return {
 		input: usage.input,
 		output: usage.output,
@@ -90,6 +97,14 @@ function toTokenUsage(usage: PiUsage): TokenUsage {
 		cacheWrite: usage.cacheWrite,
 		totalTokens: usage.totalTokens,
 		cost: usage.cost.total,
+		...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
+		...(usage.cacheWrite1h === undefined ? {} : { cacheWrite1h: usage.cacheWrite1h }),
+		costBreakdown: {
+			input: usage.cost.input,
+			output: usage.cost.output,
+			cacheRead: usage.cost.cacheRead,
+			cacheWrite: usage.cost.cacheWrite,
+		},
 	};
 }
 
@@ -242,6 +257,29 @@ export function buildConversationEntries(
 	}
 
 	return out;
+}
+
+/**
+ * 预扫会话 JSONL 统计坏行数（resume 降级打开的提示数据，
+ * spec: add-observability-ledger）。
+ *
+ * pi 的 parseSessionEntries / loadEntriesFromFile 逐行跳过 JSON 解析失败的
+ * 坏行、容错打开，但**不暴露跳过了几行**（session-manager.js 的两个
+ * "Skip malformed lines" 分支）—— 这里与 pi 同口径（非空行里 JSON.parse
+ * 失败的行）自己数一遍。resume 前调用，计数经 session_state.skippedLines
+ * 透给 renderer 提示「会话文件有 N 行损坏已跳过」。
+ */
+export function countSkippedLines(content: string): number {
+	let skipped = 0;
+	for (const line of content.split("\n")) {
+		if (line.trim() === "") continue;
+		try {
+			JSON.parse(line);
+		} catch {
+			skipped += 1;
+		}
+	}
+	return skipped;
 }
 
 /**

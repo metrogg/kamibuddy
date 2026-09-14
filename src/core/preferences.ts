@@ -59,6 +59,24 @@ export interface Preferences {
 	 * getMemoryEnabled / 启动 ensure）。
 	 */
 	readonly memoryEnabled?: boolean;
+	/**
+	 * 个性化六字段（spec: rework-settings-layout）。
+	 * 字符串四键空串归一化为 undefined（与 styleId 三态特例不同：这些键没有
+	 * 「显式关闭」语义，空就是没设）；两个 boolean 缺省 true 的语义收在调用方
+	 * 一处（daemon 的 getPersonalization `?? true` 合并），这里不填默认值。
+	 */
+	/** 自定义指令（compose 注入为独立「用户规则」段，≤1500 字）。 */
+	readonly customInstructions?: string;
+	/** 对用户的称呼（compose 注入一行）。 */
+	readonly userNickname?: string;
+	/** AI 的名字（缺省 = 骨架品牌名，不注入）。 */
+	readonly assistantName?: string;
+	/** 人设/人格描述（WB SOUL 的轻量字段版，不建文件体系）。 */
+	readonly personaDescription?: string;
+	/** 加载欢迎语：会话载入/首轮等待慢时显示一句问候。缺省 true。 */
+	readonly welcomeGreeting?: boolean;
+	/** 展示文件变更过程详情：write/edit 卡「生成中」实时计数显隐。缺省 true。 */
+	readonly showChangeDetails?: boolean;
 }
 
 export interface WebSearchPrefs {
@@ -145,6 +163,25 @@ export function readPreferences(): Preferences {
 		// 非法值（手改文件）按「未配置」处理，同 thinkingLevel 的口径。
 		const memoryEnabled =
 			typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined;
+		/*
+		 * 个性化六字段：字符串空串归一化为 undefined（无三态语义，空=未设），
+		 * 非法类型按未配置；boolean 只验类型，缺省 true 语义在 daemon 合并。
+		 */
+		const rec = record as Record<string, unknown>;
+		const optString = (k: string): string | undefined => {
+			const v = rec[k];
+			return typeof v === "string" && v !== "" ? v : undefined;
+		};
+		const optBoolean = (k: string): boolean | undefined => {
+			const v = rec[k];
+			return typeof v === "boolean" ? v : undefined;
+		};
+		const customInstructions = optString("customInstructions");
+		const userNickname = optString("userNickname");
+		const assistantName = optString("assistantName");
+		const personaDescription = optString("personaDescription");
+		const welcomeGreeting = optBoolean("welcomeGreeting");
+		const showChangeDetails = optBoolean("showChangeDetails");
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -155,6 +192,12 @@ export function readPreferences(): Preferences {
 			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 			...(styleId !== undefined ? { styleId } : {}),
 			...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
+			...(customInstructions !== undefined ? { customInstructions } : {}),
+			...(userNickname !== undefined ? { userNickname } : {}),
+			...(assistantName !== undefined ? { assistantName } : {}),
+			...(personaDescription !== undefined ? { personaDescription } : {}),
+			...(welcomeGreeting !== undefined ? { welcomeGreeting } : {}),
+			...(showChangeDetails !== undefined ? { showChangeDetails } : {}),
 		};
 	} catch {
 		return EMPTY;

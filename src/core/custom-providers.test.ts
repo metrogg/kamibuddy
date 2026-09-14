@@ -13,13 +13,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { CustomProviderInput } from "../shared/settings.ts";
+import type { CustomModelInput, CustomProviderInput } from "../shared/settings.ts";
 import {
 	deleteCustomProvider,
 	listOwnedProviderIds,
 	readCustomProvider,
 	readModelsJson,
 	upsertCustomProvider,
+	upsertProviderModel,
 } from "./custom-providers.ts";
 
 let dir: string;
@@ -242,6 +243,87 @@ describe("删除", () => {
 	it("删除不存在的条目是幂等的，不抛错", () => {
 		upsertCustomProvider(path, input());
 		expect(() => deleteCustomProvider(path, "never-existed")).not.toThrow();
+	});
+});
+
+describe("追加预置服务商模型", () => {
+	function model(overrides: Partial<CustomModelInput> = {}): CustomModelInput {
+		return {
+			id: "glm-4.7",
+			name: "GLM 4.7",
+			contextWindow: 128000,
+			maxTokens: 8192,
+			reasoning: false,
+			vision: false,
+			...overrides,
+		};
+	}
+
+	it("条目不存在时新建，且只含 models —— 不写 baseUrl/api、不打归属标记", () => {
+		// 写 baseUrl 会遮蔽内置目录全部模型的基址；打标记会让内置服务商在设置页
+		// 误显示成「自建」并放行整条目覆盖。两者都是数据级事故，这里钉死。
+		upsertProviderModel(path, "zhipu", model());
+
+		const providers = readRaw()["providers"] as Record<string, Record<string, unknown>>;
+		const entry = providers["zhipu"];
+		expect(entry).toBeDefined();
+		expect(entry).not.toHaveProperty("baseUrl");
+		expect(entry).not.toHaveProperty("api");
+		expect(entry).not.toHaveProperty("x-kamibuddy");
+		expect(entry?.["models"]).toMatchObject([{ id: "glm-4.7", name: "GLM 4.7" }]);
+	});
+
+	it("落盘内容不含 apiKey（与自建条目同一安全不变量）", () => {
+		upsertProviderModel(path, "zhipu", model());
+		expect(readFileSync(path, "utf8")).not.toContain("apiKey");
+	});
+
+	it("新 id 追加、同 id 替换，其余模型与用户手写的键原样保留", () => {
+		// 用户按 pi 文档手写的条目：baseUrl/headers 与另一个模型都不能被动。
+		writeFileSync(
+			path,
+			JSON.stringify({
+				providers: {
+					zhipu: {
+						baseUrl: "https://hand.example/v1",
+						headers: { "x-team": "a" },
+						models: [{ id: "old-one", contextWindow: 64000 }],
+					},
+				},
+			}),
+		);
+
+		upsertProviderModel(path, "zhipu", model());
+		upsertProviderModel(path, "zhipu", model({ name: "改名" }));
+
+		const providers = readRaw()["providers"] as Record<string, Record<string, unknown>>;
+		const entry = providers["zhipu"];
+		expect(entry?.["baseUrl"]).toBe("https://hand.example/v1");
+		expect(entry?.["headers"]).toEqual({ "x-team": "a" });
+		const models = entry?.["models"] as Record<string, unknown>[];
+		expect(models.map((m) => m["id"])).toEqual(["old-one", "glm-4.7"]);
+		expect(models[1]?.["name"]).toBe("改名");
+	});
+
+	it("替换同 id 模型时继承手编的 thinkingLevelMap", () => {
+		upsertProviderModel(path, "zhipu", model({ reasoning: true }));
+		const raw = readRaw();
+		const providers = raw["providers"] as Record<string, Record<string, unknown>>;
+		const models = providers["zhipu"]?.["models"] as Record<string, unknown>[];
+		if (models[0] !== undefined) models[0]["thinkingLevelMap"] = { high: "high" };
+		writeFileSync(path, JSON.stringify(raw));
+
+		upsertProviderModel(path, "zhipu", model({ reasoning: true, contextWindow: 200000 }));
+
+		const after = readRaw()["providers"] as Record<string, Record<string, unknown>>;
+		const afterModels = after["zhipu"]?.["models"] as Record<string, unknown>[];
+		expect(afterModels[0]?.["thinkingLevelMap"]).toEqual({ high: "high" });
+		expect(afterModels[0]?.["contextWindow"]).toBe(200000);
+	});
+
+	it("不影响 listOwnedProviderIds 的归属判定", () => {
+		upsertProviderModel(path, "zhipu", model());
+		expect(listOwnedProviderIds(path)).toEqual([]);
 	});
 });
 

@@ -23,6 +23,7 @@
 import {
 	composePromptWithMeta,
 	formatSkillsSection,
+	type PersonalizationSection,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
 import { resolveStyle, type LoadedResources, type StyleResource } from "../core/resources.ts";
@@ -42,6 +43,12 @@ export interface PromptPreviewEnvironment {
 	 */
 	readonly memorySystemBody?: string;
 	readonly memoryContent?: string;
+	/**
+	 * 个性化字段（daemon 现读偏好的结果）。与真实组装同源：缺了这段，
+	 * 设过自定义指令的用户看到的预览会与实际提示词静默漂移。
+	 * undefined = 四项全空，对应段不出现（与真实组装同一行为）。
+	 */
+	readonly personalization?: PersonalizationSection;
 }
 
 export function buildPromptPreview(
@@ -79,6 +86,7 @@ export function buildPromptPreview(
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
 		...(env.memoryContent === undefined ? {} : { memoryContent: env.memoryContent }),
+		...(env.personalization === undefined ? {} : { personalization: env.personalization }),
 		// expert 人格段与 piContext 的差异点见文件头注释（差异 1 / 2）。
 	});
 

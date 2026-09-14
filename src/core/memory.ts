@@ -16,7 +16,7 @@
  * 残缺必须响亮失败；记忆是用户数据，新用户本来就一条都没有。
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config-paths.ts";
 
@@ -28,6 +28,27 @@ export function userMemoryPath(): string {
 /** L1a 本地画像（内置蒸馏任务维护，模型不手改）。 */
 export function profilePath(): string {
 	return join(getConfigDir(), "PROFILE.md");
+}
+
+/**
+ * 启动时保证两个用户级记忆文件存在（空文件）。不预建的教训（2026-09-14 实测）：
+ * 模型按提示词去 read 这两个固定路径，ENOENT 后向用户误述成「访问不了记忆文件」
+ * —— 其实是文件从未被创建（「记住」没说过、蒸馏任务还没跑过）。
+ * 建空文件而不是带占位列的模板：buildMemorySection 对空白文件按「没有」处理
+ * 不注入，占位文字会污染每次组装的提示词。
+ * 已存在则绝不动（wx 旗标，写入竞态/已有内容都安全跳过）。
+ */
+export function ensureUserMemoryFiles(): void {
+	const dir = getConfigDir();
+	mkdirSync(dir, { recursive: true });
+	for (const path of [userMemoryPath(), profilePath()]) {
+		try {
+			writeFileSync(path, "", { encoding: "utf8", flag: "wx" });
+		} catch {
+			// 已存在（EEXIST）或瞬时写不进都按「有」处理：降级口径同读侧，
+			// 记忆是增强不是门槛，启动不能为建文件失败而炸。
+		}
+	}
 }
 
 /** L3 工作区记忆目录：日志与项目长期笔记都放这里。 */

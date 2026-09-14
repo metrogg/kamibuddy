@@ -32,7 +32,7 @@ import {
 	getWorkspaceDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
-import { buildMemorySection, loadMemorySystemPrompt, profilePath } from "../core/memory.ts";
+import { buildMemorySection, ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
 import {
@@ -52,10 +52,11 @@ import {
 import { PreviewServers } from "../core/preview-server.ts";
 import { buildPromptPreview } from "./prompt-preview.ts";
 import {
-	composePrompt,
+	composePromptWithMeta,
 	formatSkillsSection,
 	requireExpertPersona,
 	type ExpertPersona,
+	type PersonalizationSection,
 	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
@@ -63,7 +64,13 @@ import { DEFAULT_STYLE_ID, loadResources, resolveStyle, toDescriptors } from "..
 import { importSkill, userSkillsDir } from "../core/skill-install.ts";
 import { buildExportPath } from "../core/session-export.ts";
 import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
-import { buildConversationEntries, validateSessionFilePath } from "../core/session-rebuild.ts";
+import {
+	buildConversationEntries,
+	countSkippedLines,
+	validateSessionFilePath,
+} from "../core/session-rebuild.ts";
+import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from "../core/run-ledger.ts";
+import type { SystemSegmentStat } from "../shared/observability.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import {
 	readDisplayNames,
@@ -125,10 +132,12 @@ import {
 	type PermissionResponse,
 	type ArtifactContent,
 	type PathStat,
+	type PersonalizationPatch,
 	type PromptPreviewRequest,
 	type PromptRequest,
 	type QuestionnaireRequest,
 	type QuestionnaireResponse,
+	type RunLedgerResult,
 	type SessionSummary,
 	type WorkspaceGroupMeta,
 } from "../shared/ipc.ts";
@@ -155,7 +164,7 @@ import {
 	type SessionEventEnvelope,
 	type SessionState,
 } from "../shared/session-events.ts";
-import type { CustomProviderInput, SkillInfo } from "../shared/settings.ts";
+import type { CustomModelInput, CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
 import { deriveSessionTitle, searchSessionFiles } from "./conversation-search.ts";
 import { createAutomationRunExecutor } from "./automation-runner.ts";
@@ -257,6 +266,13 @@ let activePermissions: PermissionSettings = readPreferences().permissions ?? DEF
  */
 const PROTECTED_DIRS = defaultProtectedDirs(homedir());
 
+/*
+ * 启动即保证两个用户级记忆文件存在（空文件）：模型按提示词 read 固定路径，
+ * 文件不存在会被它误述成「访问不了记忆」（2026-09-14 实测）。建文件失败
+ * 不炸启动（ensure 内部已降级，见 core/memory.ts）。
+ */
+ensureUserMemoryFiles();
+
 /** 内置技能目录（resources/skills/，随应用分发）。 */
 const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
 
@@ -319,13 +335,35 @@ function getWebSearchConfig(): WebSearchConfig | undefined {
  * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
  * run 会话没有诊断视图、直接丢弃）。
  */
+/**
+ * 个性化注入段单点现读（composeSystemPrompt 与 prompt:preview 共用，
+ * 预览不静默漂移）。只投 4 个注入字段：两个 boolean 是 UI 开关不进提示词
+ * （core/prompt-composer.ts PersonalizationSection 的注释钉住了这条）。
+ * 每轮现读偏好：设置页改完下一轮对话即生效（同技能清单/风格口径）。
+ */
+function readPersonalizationSection(): PersonalizationSection {
+	const prefs = readPreferences();
+	return {
+		...(prefs.customInstructions !== undefined ? { customInstructions: prefs.customInstructions } : {}),
+		...(prefs.userNickname !== undefined ? { userNickname: prefs.userNickname } : {}),
+		...(prefs.assistantName !== undefined ? { assistantName: prefs.assistantName } : {}),
+		...(prefs.personaDescription !== undefined ? { personaDescription: prefs.personaDescription } : {}),
+	};
+}
+
 async function composeSystemPrompt(
 	cwd: string,
 	sceneId: string,
 	interactionId: string,
 	expertId: string | undefined,
 	piContext: PromptContextOptions,
-): Promise<{ prompt: string; systemTokens: number; skillsTokens: number }> {
+): Promise<{
+	prompt: string;
+	systemTokens: number;
+	skillsTokens: number;
+	/** 分段 provenance（source + 字符数），台账 request_snapshot 的 system 部分。 */
+	segments: readonly SystemSegmentStat[];
+}> {
 	const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
 	const mode = RESOURCES.modes.find((m) => m.id === interactionId);
 	if (scene === undefined || mode === undefined) {
@@ -364,7 +402,7 @@ async function composeSystemPrompt(
 	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
 	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
 	const memoryContent = buildMemorySection(cwd);
-	const prompt = composePrompt({
+	const composed = composePromptWithMeta({
 		sceneBody: scene.body,
 		modeBody: mode.body,
 		skillsSection,
@@ -375,13 +413,17 @@ async function composeSystemPrompt(
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
 		...(memoryContent === undefined ? {} : { memoryContent }),
+		personalization: readPersonalizationSection(),
 		...(expert === undefined ? {} : { expert }),
 		piContext,
 	});
 	return {
-		prompt,
-		systemTokens: estimateTokens(prompt),
+		prompt: composed.text,
+		systemTokens: estimateTokens(composed.text),
 		skillsTokens: estimateTokens(skillsSection),
+		// 分段只取 provenance（source + 字符数）：正文不进桶更不进台账
+		//（request_snapshot 不记正文的口径，见 shared/observability.ts）。
+		segments: composed.segments.map((s) => ({ source: s.source, chars: s.text.length })),
 	};
 }
 
@@ -532,14 +574,49 @@ function evictIdleHosts(): void {
  *
  * daemon 没有界面，console 只打到终端，终端一关现场就没了——
  * 这两件是「出问题时唯一的现场证据」（WorkBuddy 把启动即可观测列为 P0）。
- * 聚合口径是进程内累计，不做历史持久化（core/observability.ts 的注释）。
- *
- * 多任务并发后口径不变：**进程级聚合，不按会话分桶**（spec：
- * support-concurrent-tasks E —— 诊断页看的是「daemon 整体花了多少」，
- * 按会话拆桶的收益不抵复杂度，YAGNI）。
+ * 聚合口径是台账全历史累计（启动回放重建，重启不清零，
+ * 见 core/observability.ts 的文件头；spec: add-observability-ledger Task 3）。
  */
 const eventLog = new EventLog(join(getConfigDir(), "logs"));
 const observability = new ObservabilityStore();
+
+/**
+ * 运行台账目录（每会话一份 NDJSON，spec: add-observability-ledger）。
+ * 启动即做中断合成闭合：上次进程死在一个开着的 run 上（含冷会话——
+ * 它们等不到 resume 才补），补一条合成 run_end{reason:"interrupted"}，
+ * 否则投影回放会把那些 run 当成「至今仍在跑」（dsh：中断闭合优于截断）。
+ */
+const runLedgerDir = join(eventLog.dir, "runs");
+RunLedger.sealOrphans(runLedgerDir, (file, message) => {
+	eventLog.append({ kind: "run_ledger_error", file, message });
+});
+// 启动回放重建聚合（重启不清零）。必须在 sealOrphans 之后：中断的 run 先补
+// 合成闭合，回放才不会把它们当成「至今仍在跑」（observability.replayLedgerDir 注释）。
+observability.replayLedgerDir(runLedgerDir, (message) => {
+	eventLog.append({ kind: "run_ledger_error", message });
+});
+
+/**
+ * 诊断页单次下发的台账条目上限（stats:run-ledger）：文件只增不减，
+ * 不设上限全量回读会随会话变长越拉越大；截尾保留最新（时间线看的就是近况）。
+ */
+const RUN_LEDGER_IPC_LIMIT = 500;
+
+/** 台账会话选择器列表（stats:run-ledger）：按文件 mtime 新的在前。 */
+function listLedgerSessionIds(): string[] {
+	return listLedgerFiles(runLedgerDir)
+		.map((path) => {
+			let mtime = 0;
+			try {
+				mtime = statSync(path).mtimeMs;
+			} catch {
+				// 读到一半文件被清走的竞态：mtime 按 0 排尾，不炸整个列表。
+			}
+			return { id: basename(path, ".jsonl"), mtime };
+		})
+		.sort((a, b) => b.mtime - a.mtime)
+		.map((s) => s.id);
+}
 
 /**
  * 产物预览静态服务池：按 cwd 多实例（每 cwd 一个端口，懒建，
@@ -705,13 +782,26 @@ function statArtifactPath(path: string): PathStat {
 }
 
 function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEvent): void {
+	// resume 降级打开的桶：把 skippedLines 并入该桶发出的每个 session_state ——
+	// 宿主侧的 emitState 不知道这回事（它是桶级事实不是会话状态），
+	// 而 state 是整体替换语义，不并入的话下一次 emitState 就把提示抹掉。
+	if (
+		event.type === "session_state" &&
+		bucket.skippedLines !== undefined &&
+		event.state.skippedLines === undefined
+	) {
+		event = {
+			type: "session_state",
+			state: { ...event.state, skippedLines: bucket.skippedLines },
+		};
+	}
 	// 折叠进**该会话**的桶：多任务并发后后台会话的事件不能污染当前视图
 	//（renderer 按信封 sessionId 折叠进各自的缓存，daemon 侧同口径）。
 	bucket.conversation = conversationReducer(bucket.conversation, { type: "event", event });
 	// 运行态以折叠结果为准（reducer 在 run 边界与 session_state 上维护 isStreaming，
 	// 宿主又是从自家 run 记账算的 —— 两条路径同一个真相，取折叠值不另开口径）。
 	bucket.running = bucket.conversation.state.isStreaming;
-	observability.record(event);
+	observability.record(bucket.sessionId, event);
 	eventLog.append({
 		kind: "session_event",
 		sessionId: bucket.sessionId,
@@ -1118,6 +1208,22 @@ async function createHost(
 			: { expertId: bucket.conversation.state.expertId }),
 		emit: (event) => emitSessionEvent(bucket, event),
 		resources: RESOURCES,
+		// 运行台账按真值 sessionId 建（工厂语义见 SessionHostOptions.createLedger）。
+		// 写入失败只进 event-log 不炸 run —— 台账是观测不是业务（run-ledger.ts 文件头）。
+		createLedger: (sessionId) =>
+			new RunLedger(
+				runLedgerDir,
+				sessionId,
+				(message) => {
+					eventLog.append({ kind: "run_ledger_error", sessionId, message });
+				},
+				Date.now,
+				// 增量投影：条目落盘即 fold 进诊断页聚合（会话级统计 / 缓存浪费），
+				// 不必等下次启动回放（observability.foldLedgerEntry 注释）。
+				(entry) => observability.foldLedgerEntry(sessionId, entry),
+			),
+		// request_snapshot 的 system 分段 provenance：prompt-switch 的 compose 现记现取。
+		getSystemPromptSegments: () => bucket.systemPromptSegments,
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -1209,6 +1315,9 @@ async function createHost(
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
 					bucket.systemPromptTokens = composed.systemTokens;
 					bucket.skillsTokens = composed.skillsTokens;
+					// 分段 provenance 同记：台账 request_snapshot 的 system 部分
+					//（transformContext 钩子按轮读取，见 SessionHostOptions.getSystemPromptSegments）。
+					bucket.systemPromptSegments = composed.segments;
 					return composed.prompt;
 				},
 			}),
@@ -1517,6 +1626,19 @@ async function resumeSessionOnce(path: string): Promise<void> {
 
 	/* ── 建宿主前：做完所有可能失败的验证，此刻一切毫发无损 ── */
 
+	/*
+	 * 损坏降级（spec: add-observability-ledger）：会话 JSONL 中间的坏行不再
+	 * 拒绝打开 —— pi 的 loadEntriesFromFile 逐行跳过坏行容错打开（它本就
+	 * 如此，是我们曾把异常上抛给用户）。pi 不暴露跳过计数，这里预扫同口径
+	 * 数一遍（countSkippedLines 注释），经桶的 skippedLines 透给 renderer
+	 * 提示「有 N 行损坏已跳过」。文件本身不可读（ENOENT 等）让它抛 ——
+	 * 与 open 的失败语义一致（响亮），预扫只是多读一遍（会话文件量级 MB，
+	 * resume 不在热路径）。
+	 * 头部损坏 / 全文无有效条目仍是拒绝：没有 header 就没有 sessionId 与
+	 * cwd，不存在「降级打开」的形态（open 的 "not a valid session" 错误）。
+	 */
+	const skippedLines = countSkippedLines(readFileSync(path, "utf8"));
+
 	// open 是同步的（dist 类型：static open(...) : SessionManager），
 	// 文件损坏/不可读在此抛出。
 	const manager = SessionManager.open(path, sessionsDir);
@@ -1557,6 +1679,8 @@ async function resumeSessionOnce(path: string): Promise<void> {
 		),
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
+	// 降级打开的跳过计数进桶：emitSessionEvent 把它并入该桶发出的 session_state。
+	if (skippedLines > 0) bucket.skippedLines = skippedLines;
 
 	// hostPromise 先占位（createHost 的扩展闭包会读它），失败清回 ——
 	// 与 getHost 的缓存语义一致。此处失败：桶未注册、指针未切，会话原样可重试。
@@ -1866,6 +1990,10 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.readCustomProvider]: async ([providerId]) =>
 		(await getCatalog()).readCustomProvider(providerId as string),
 
+	[INVOKE.addProviderModel]: async ([providerId, model]) => {
+		await (await getCatalog()).addProviderModel(providerId as string, model as CustomModelInput);
+	},
+
 	[INVOKE.refreshCatalog]: async () => {
 		await (await getCatalog()).refreshCatalog();
 	},
@@ -1879,6 +2007,39 @@ const handlers: Record<string, Handler> = {
 			contextUsage: currentBucket.conversation.state.contextUsage,
 			logDir: eventLog.dir,
 		}),
+
+	/*
+	 * 台账条目级读取（诊断页会话时间线）。sessionId 缺省 = 当前活动会话；
+	 * pristine 桶（sessionId 还是 ""，宿主未建）或活动会话没记过台账时
+	 * 退最新台账文件 —— 诊断页打开总该有点什么可看。
+	 * renderer 给的 sessionId 经 ledgerFileName 安全化（路径穿越在写侧
+	 * 已断，读侧同一条防线不依赖对端自律）。
+	 */
+	[INVOKE.runLedger]: async ([sessionId]): Promise<RunLedgerResult> => {
+		const sessions = listLedgerSessionIds();
+		const requested =
+			typeof sessionId === "string" && sessionId !== "" ? sessionId : undefined;
+		const target = requested ?? (currentBucket.sessionId || sessions[0]);
+		if (target === undefined || target === "") {
+			return { sessions, sessionId: undefined, entries: [] };
+		}
+		// 读口与投影回放同一条（run-ledger.ts 的读侧容忍：坏行跳过、文件缺失回空），
+		// 这里只加 IPC 截尾。
+		const all = readLedgerEntries(
+			join(runLedgerDir, ledgerFileName(target)),
+			(message) => {
+				eventLog.append({ kind: "run_ledger_error", sessionId: target, message });
+			},
+		);
+		return {
+			sessions,
+			sessionId: target,
+			entries:
+				all.length > RUN_LEDGER_IPC_LIMIT
+					? all.slice(-RUN_LEDGER_IPC_LIMIT)
+					: all,
+		};
+	},
 
 	// docx venv 四态：只探测不安装（诊断页不该有环境副作用，
 	// 见 shared/ipc.ts 该通道注释）。
@@ -2381,6 +2542,55 @@ const handlers: Record<string, Handler> = {
 		writeFileSync(profilePath(), "", "utf8");
 	},
 
+	/* ── 个性化（spec: rework-settings-layout） ──────────────────── */
+
+	// 合并缺省后下发：字符串四键空串 = 未设置（renderer 显示用），两个 boolean
+	// 缺省 true —— 缺省语义收在这一个出口（读偏好处不填默认值，同 memoryEnabled）。
+	[INVOKE.getPersonalization]: async () => {
+		const prefs = readPreferences();
+		return {
+			customInstructions: prefs.customInstructions ?? "",
+			userNickname: prefs.userNickname ?? "",
+			assistantName: prefs.assistantName ?? "",
+			personaDescription: prefs.personaDescription ?? "",
+			welcomeGreeting: prefs.welcomeGreeting ?? true,
+			showChangeDetails: prefs.showChangeDetails ?? true,
+		};
+	},
+
+	// 部分更新合并：只动传入的键（读改写不丢其他键）；字符串 trim 后为空 =
+	// 删该键（空 = 未设置，与读取层的空串归一化口径一致）；非字符串响亮抛错。
+	[INVOKE.setPersonalization]: async ([patch]) => {
+		const input = patch as PersonalizationPatch;
+		const next: Record<string, unknown> = { ...readPreferences() };
+		const stringKeys = ["customInstructions", "userNickname", "assistantName", "personaDescription"] as const;
+		for (const key of stringKeys) {
+			const value = input[key];
+			if (value === undefined) continue;
+			if (typeof value !== "string") throw new Error(`个性化字段 ${key} 应为字符串`);
+			const trimmed = value.trim();
+			if (trimmed === "") delete next[key];
+			else next[key] = value;
+		}
+		if (input.welcomeGreeting !== undefined) next["welcomeGreeting"] = input.welcomeGreeting === true;
+		if (input.showChangeDetails !== undefined) next["showChangeDetails"] = input.showChangeDetails === true;
+		// 逐键操作走 Record（delete 需要）；形状回到 Preferences 由上面的键清单保证。
+		writePreferences(next as unknown as Parameters<typeof writePreferences>[0]);
+	},
+
+	/* ── 长期记忆记录（MEMORY.md，spec: rework-settings-layout） ──── */
+
+	// 不存在回空串：「还没任何长期记忆」是常态不是错误（同 getProfile 口径）。
+	// 写入前确保目录在（新机器上 ~/.kamibuddy 可能还没建过）。
+	[INVOKE.getMemory]: async () => ({
+		content: existsSync(userMemoryPath()) ? readFileSync(userMemoryPath(), "utf8") : "",
+	}),
+
+	[INVOKE.setMemory]: async ([content]) => {
+		mkdirSync(getConfigDir(), { recursive: true });
+		writeFileSync(userMemoryPath(), content as string, "utf8");
+	},
+
 	/* ── 提示词预览（设置页，spec: systematize-prompt-architecture Task 5） ── */
 
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
@@ -2395,10 +2605,11 @@ const handlers: Record<string, Handler> = {
 				filePath: s.filePath,
 			})),
 			preferredStyleId: readPreferences().styleId,
-			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
-			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-			memoryContent: buildMemorySection(currentBucket.cwd),
-		}),
+		// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
+		memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
+		memoryContent: buildMemorySection(currentBucket.cwd),
+		personalization: readPersonalizationSection(),
+	}),
 
 	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
 

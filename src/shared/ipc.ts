@@ -15,10 +15,11 @@
 
 import type { AutomationTask, Schedule } from "./automation.ts";
 import type { ImagePart } from "./image.ts";
-import type { ObservabilitySnapshot } from "./observability.ts";
+import type { ObservabilitySnapshot, RunLedgerEntry } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
 import type {
+	CustomModelInput,
 	CustomProviderInput,
 	SettingsSnapshot,
 	SkillsSnapshot,
@@ -32,6 +33,32 @@ import type {
 /* ────────────────────────────────────────────────────────────────
  * 通道名
  * ──────────────────────────────────────────────────────────────── */
+
+/**
+ * 个性化六键的读取形态（daemon 合并缺省后下发——renderer 不各自兜底）：
+ * 字符串四键空串 = 未设置；两个 boolean 缺省 true（`?? true` 在 daemon 一处合并）。
+ */
+export interface PersonalizationInfo {
+	readonly customInstructions: string;
+	readonly userNickname: string;
+	readonly assistantName: string;
+	readonly personaDescription: string;
+	readonly welcomeGreeting: boolean;
+	readonly showChangeDetails: boolean;
+}
+
+/**
+ * 个性化的部分更新：只更新传入的键（读改写不丢其他键）；
+ * 字符串 trim 后为空 = 删除该键；非字符串响亮抛错。
+ */
+export interface PersonalizationPatch {
+	readonly customInstructions?: string;
+	readonly userNickname?: string;
+	readonly assistantName?: string;
+	readonly personaDescription?: string;
+	readonly welcomeGreeting?: boolean;
+	readonly showChangeDetails?: boolean;
+}
 
 /** renderer → daemon，请求/响应式（ipcRenderer.invoke）。 */
 export const INVOKE = {
@@ -213,6 +240,12 @@ export const INVOKE = {
 	deleteCustomProvider: "settings:delete-custom-provider",
 	/** 读回自定义服务商配置，供编辑表单回填。 */
 	readCustomProvider: "settings:read-custom-provider",
+	/**
+	 * 往预置（内置）服务商追加/替换单个模型（「添加模型」弹层选预置的路径，
+	 * spec: rework-settings-layout）：落 models.json 但不写 baseUrl/api、不打
+	 * 归属标记（core/custom-providers.ts upsertProviderModel 的三点硬差异）。
+	 */
+	addProviderModel: "settings:add-provider-model",
 	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
 	refreshCatalog: "settings:refresh-catalog",
 	/** 读回联网搜索配置（不含 key，只给 provider + 是否已配）。 */
@@ -270,6 +303,17 @@ export const INVOKE = {
 	 * renderer 拿到内容后再调 setProfile 完成导入（两段组合，见设置页）。
 	 */
 	importProfile: "settings:import-profile",
+
+	/* ── 个性化（spec: rework-settings-layout） ──────────────────── */
+
+	/** 读个性化六键（daemon 合并缺省：字符串回空串、两个 boolean `?? true`）。 */
+	getPersonalization: "settings:get-personalization",
+	/** 部分更新个性化（只动传入的键；字符串 trim 后为空 = 删该键）。 */
+	setPersonalization: "settings:set-personalization",
+	/** 读长期记忆全文（~/.kamibuddy/MEMORY.md）。不存在回空串，与 getProfile 同口径。 */
+	getMemory: "settings:get-memory",
+	/** 覆盖写长期记忆全文。下一轮对话生效（compose 时现读）。 */
+	setMemory: "settings:set-memory",
 
 	/* ── 提示词预览 ─────────────────────────────────────────────── */
 
@@ -332,6 +376,16 @@ export const INVOKE = {
 	 * 会话事件本身就是「该刷新了」的信号，多开一条通道只是重复投递。
 	 */
 	statsSnapshot: "stats:snapshot",
+	/**
+	 * 拉取运行台账（run ledger）条目级数据：诊断页「会话时间线」的数据源。
+	 *
+	 * 与 statsSnapshot 的分工：快照是进程级聚合（算好的结果），这里是每会话
+	 * append-only 的原始台账（诊断页自己 fold 成泳道——fold 是渲染的一部分，
+	 * 口径钉在 renderer/run-timeline.ts）。sessionId 缺省 = 当前活动会话
+	 * （无活动会话时 daemon 退最新台账文件）；返回同时带全部台账会话 id
+	 * 列表，会话选择器不用再开一条通道。
+	 */
+	runLedger: "stats:run-ledger",
 	/**
 	 * 查询全局唤起热键的注册状态。由 main 本地应答，不转发 daemon：
 	 * globalShortcut 是 main 进程的独有状态，daemon 不知道也不该知道
@@ -498,6 +552,19 @@ export interface ArtifactContent {
 /** statPath 的返回：路径存在性与类型。missing 是探测结果不是错误（徽章据此保持普通 code 渲染）。 */
 export interface PathStat {
 	readonly kind: "file" | "directory" | "missing";
+}
+
+/** stats:run-ledger 的返回：会话选择器列表 + 选中会话的台账条目。 */
+export interface RunLedgerResult {
+	/** 有台账文件的会话 id（按文件修改时间新的在前——最近活动的会话排上面）。 */
+	readonly sessions: readonly string[];
+	/**
+	 * 实际读取的会话（请求缺省 = 当前活动会话；活动会话还没建宿主/无台账时
+	 * 退最新台账文件）。一个台账都没有时为 undefined，entries 随之是空。
+	 */
+	readonly sessionId: string | undefined;
+	/** 选中会话的台账条目（时间序，旧→新；超出 daemon 上限截尾保留最新）。 */
+	readonly entries: readonly RunLedgerEntry[];
 }
 
 /** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
@@ -706,6 +773,7 @@ export interface InvokeMap {
 	[INVOKE.saveCustomProvider]: { args: [input: CustomProviderInput, apiKey?: string]; result: void };
 	[INVOKE.deleteCustomProvider]: { args: [providerId: string]; result: void };
 	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
+	[INVOKE.addProviderModel]: { args: [providerId: string, model: CustomModelInput]; result: void };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
 	[INVOKE.getWebSearchConfig]: { args: []; result: WebSearchConfigInfo };
 	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
@@ -726,6 +794,10 @@ export interface InvokeMap {
 	[INVOKE.setProfile]: { args: [content: string]; result: void };
 	[INVOKE.resetProfile]: { args: []; result: void };
 	[INVOKE.importProfile]: { args: []; result: { content: string } | undefined };
+	[INVOKE.getPersonalization]: { args: []; result: PersonalizationInfo };
+	[INVOKE.setPersonalization]: { args: [patch: PersonalizationPatch]; result: void };
+	[INVOKE.getMemory]: { args: []; result: { content: string } };
+	[INVOKE.setMemory]: { args: [content: string]; result: void };
 	[INVOKE.promptPreview]: { args: [PromptPreviewRequest]; result: PromptPreviewResult };
 	[INVOKE.getPermissions]: { args: []; result: PermissionInfo };
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
@@ -739,6 +811,7 @@ export interface InvokeMap {
 	[INVOKE.mcpServerToggle]: { args: [serverName: string, enabled: boolean]; result: void };
 
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
+	[INVOKE.runLedger]: { args: [sessionId?: string]; result: RunLedgerResult };
 	/** 尚未注册过（查询早于 whenReady 流程）时为 undefined。 */
 	[INVOKE.globalShortcutStatus]: { args: []; result: GlobalShortcutStatus | undefined };
 	[INVOKE.docxEnvStatus]: { args: []; result: DocxEnvStatus };

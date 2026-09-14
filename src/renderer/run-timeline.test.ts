@@ -1,0 +1,205 @@
+import { describe, expect, it } from "vitest";
+import type {
+	RunLedgerDataMap,
+	RunLedgerEntry,
+	RunLedgerEntryKind,
+} from "@shared/observability.ts";
+import { emptyUsage } from "@shared/observability.ts";
+import { foldRunLedger, indexRequestSnapshots, snapshotKey } from "./run-timeline.ts";
+
+let seq = 0;
+function entry<K extends RunLedgerEntryKind>(
+	at: number,
+	kind: K,
+	data: RunLedgerDataMap[K],
+): RunLedgerEntry {
+	seq += 1;
+	// RunLedgerEntry<K> 可赋给默认泛型形态（kind/data 各自协变），
+	// fold 入口的可判别窄化见 run-timeline.ts 的 LedgerEntryUnion。
+	return { seq, at, kind, data };
+}
+
+describe("foldRunLedger（台账条目 → run 泳道）", () => {
+	it("空条目流折出零个 run", () => {
+		expect(foldRunLedger([])).toEqual([]);
+	});
+
+	it("一个完整 run：边界 / llm / 工具 / 重试 / 压缩各就其位，usage 合计", () => {
+		const usage1 = { ...emptyUsage(), input: 100, output: 20, totalTokens: 120, cost: 0.01 };
+		const usage2 = { ...emptyUsage(), input: 50, cacheRead: 200, output: 10, totalTokens: 260, cost: 0.02 };
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1", modelId: "p/m" }),
+			entry(1100, "llm_call", {
+				turnIndex: 0,
+				startedAt: 1050,
+				endedAt: 1100,
+				ttftMs: 30,
+				stopReason: "toolUse",
+				usage: usage1,
+			}),
+			entry(1300, "tool_call", {
+				toolCallId: "t1",
+				toolName: "read",
+				summary: "a.ts",
+				startedAt: 1200,
+				endedAt: 1300,
+				outcome: "ok",
+			}),
+			entry(1400, "retry", { phase: "start", attempt: 2, maxAttempts: 3, delayMs: 3000, errorMessage: "boom" }),
+			entry(1500, "compaction", { reason: "threshold", tokensBefore: 9000, aborted: false }),
+			entry(1600, "llm_call", {
+				turnIndex: 1,
+				startedAt: 1550,
+				endedAt: 1600,
+				stopReason: "stop",
+				usage: usage2,
+			}),
+			entry(1700, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+
+		expect(runs).toHaveLength(1);
+		const run = runs[0]!;
+		expect(run.runId).toBe("run-1");
+		expect(run.modelId).toBe("p/m");
+		expect(run.startedAt).toBe(1000);
+		expect(run.endedAt).toBe(1700);
+		expect(run.endReason).toBe("completed");
+		expect(run.items.map((i) => i.kind)).toEqual([
+			"llm",
+			"tool",
+			"retry",
+			"compaction",
+			"llm",
+		]);
+		expect(run.usage).toMatchObject({
+			input: 150,
+			output: 30,
+			cacheRead: 200,
+			totalTokens: 380,
+			cost: 0.03,
+		});
+	});
+
+	it("未闭合 run：endedAt/endReason 缺省（合成闭合补上前的中间态）", () => {
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "llm_call", { turnIndex: 0, startedAt: 1050, endedAt: 1100 }),
+		]);
+		expect(runs[0]?.endedAt).toBeUndefined();
+		expect(runs[0]?.endReason).toBeUndefined();
+	});
+
+	it("中断合成闭合：run_end{reason:interrupted} 正常收口", () => {
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(9000, "run_end", { runId: "run-1", reason: "interrupted" }),
+		]);
+		expect(runs[0]?.endReason).toBe("interrupted");
+	});
+
+	it("run 外事件落合成桶不丢（手动压缩），runId 为空串", () => {
+		const runs = foldRunLedger([
+			entry(500, "compaction", { reason: "manual", tokensBefore: 100, aborted: false }),
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1700, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+		expect(runs).toHaveLength(2);
+		expect(runs[0]?.runId).toBe("");
+		expect(runs[0]?.startedAt).toBe(500);
+		expect(runs[0]?.items.map((i) => i.kind)).toEqual(["compaction"]);
+	});
+
+	it("多个 run 顺序折出；跨进程代际撞 runId 也按位置分开", () => {
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1500, "run_end", { runId: "run-1", reason: "completed" }),
+			// daemon 重启后新一轮又从 run-1 计数 —— 位置性归属不看 id。
+			entry(2000, "run_start", { runId: "run-1" }),
+			entry(2500, "run_end", { runId: "run-1", reason: "error", error: "模型报错" }),
+		]);
+		expect(runs).toHaveLength(2);
+		expect(runs[1]?.startedAt).toBe(2000);
+		expect(runs[1]?.endReason).toBe("error");
+		expect(runs[1]?.error).toBe("模型报错");
+	});
+
+	it("没有 usage 的 llm_call 不造出零用量（「没上报」与「是零」两回事）", () => {
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "llm_call", { turnIndex: 0, startedAt: 1050, endedAt: 1100 }),
+			entry(1200, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+		expect(runs[0]?.usage).toBeUndefined();
+	});
+
+	it("截尾后的孤儿 run_end（没有开着的 run）丢弃不炸", () => {
+		const runs = foldRunLedger([
+			entry(1700, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+		expect(runs).toEqual([]);
+	});
+
+	it("queue / request_snapshot 不进泳道行", () => {
+		const runs = foldRunLedger([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1050, "queue", { steering: ["a"], followUp: [] }),
+			entry(1060, "request_snapshot", {
+				runId: "run-1",
+				turnIndex: 0,
+				messages: {
+					user: { count: 1, chars: 10 },
+					assistant: { count: 0, chars: 0 },
+					toolResult: { count: 0, chars: 0 },
+					other: { count: 0, chars: 0 },
+				},
+			}),
+			entry(1200, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+		expect(runs[0]?.items).toEqual([]);
+	});
+});
+
+describe("indexRequestSnapshots（快照检索）", () => {
+	it("按 runId+turnIndex 建索引，缺省段落落空串", () => {
+		expect(snapshotKey("run-1", 2)).toBe("run-1#2");
+		expect(snapshotKey(undefined, undefined)).toBe("#");
+
+		const snap = {
+			runId: "run-1",
+			turnIndex: 0,
+			systemSegments: [{ source: "skeleton", chars: 100 }],
+			messages: {
+				user: { count: 1, chars: 10 },
+				assistant: { count: 2, chars: 200 },
+				toolResult: { count: 3, chars: 3000 },
+				other: { count: 0, chars: 0 },
+			},
+		} as const;
+		const map = indexRequestSnapshots([
+			entry(1000, "request_snapshot", snap),
+			entry(1001, "llm_call", { turnIndex: 0, startedAt: 900, endedAt: 1001 }),
+		]);
+		expect(map.get(snapshotKey("run-1", 0))).toEqual(snap);
+		expect(map.get(snapshotKey("run-1", 1))).toBeUndefined();
+	});
+
+	it("同键后者覆盖前者（同轮重发的快照以最新为准）", () => {
+		const base = {
+			runId: "run-1",
+			turnIndex: 0,
+			messages: {
+				user: { count: 1, chars: 10 },
+				assistant: { count: 0, chars: 0 },
+				toolResult: { count: 0, chars: 0 },
+				other: { count: 0, chars: 0 },
+			},
+		};
+		const map = indexRequestSnapshots([
+			entry(1000, "request_snapshot", base),
+			entry(2000, "request_snapshot", { ...base, systemSegments: [{ source: "skills", chars: 5 }] }),
+		]);
+		expect(map.get(snapshotKey("run-1", 0))?.systemSegments).toEqual([
+			{ source: "skills", chars: 5 },
+		]);
+	});
+});

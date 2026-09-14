@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import pkg from "./package.json";
 
 /**
  * 三个构建目标各自独立：main / preload / renderer。
@@ -55,6 +56,9 @@ export default defineConfig({
 		// renderer 只许 import shared（AGENTS.md §1.3），别名里也就只给这一个。
 		resolve: { alias: { "@shared": alias["@shared"] } },
 		plugins: [react()],
+		// 版本号构建时注入：renderer 没有读应用版本的 IPC 通道，
+		// 设置「关于」页显示同一串，不会与 package.json 漂移。
+		define: { __KAMI_APP_VERSION__: JSON.stringify(pkg.version) },
 		build: {
 			rollupOptions: { input: { index: resolve("src/renderer/index.html") } },
 		},

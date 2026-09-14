@@ -248,7 +248,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L13 | 技能与专家页 | 专家/技能/连接器三 tab（同 MarketPage 三路由）；专家市场：搜索（五字段+debounce+IME）、分类 chips（服务端下发）、卡片网格（头像/职称/两行描述/tags/hover 召唤）、详情弹窗（大头像/介绍/quickPrompts 轮播/召唤）、我的专家（空态+创建跳主页预填 expert-manager 引导）；专家团 tab（Desktop） | `skills-view.tsx` 三 tab 专家为首（spec rework-expert-center-and-chip）：`experts-view.tsx` 市场页（本地搜索/tags 聚合分类/卡片网格/详情弹窗/我的专家空态+创建跳主页预填引导语）；专家团占位；无精选场景（用户明确不要）、无运营排序 | 🟡 页面对齐、无精选场景与运营数据 |
 | L14 | 连接器页 | MCP 配置 + 市场 + 授权 | `connectors-view.tsx`（JSON 编辑 + 表单） | ✅ |
 | L15 | 记忆面板 | `/memory` | 无 | ❌ |
-| L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 诊断页（工具时间线）；无成本 | 🟡 |
+| L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 运行观测体系（spec add-observability-ledger）：每会话运行台账（llm 调用 TTFT/usage 全字段含 cost 分项/重试全程/请求快照）+ 台账 fold 投影（重启不清零）+ 诊断页会话时间线/上下文真实组成/缓存浪费归因 + 运行中重试倒计时与排队徽标；无成本账单页 | ✅ 观测体系反超 |
 | L17 | 诊断自检 | `doctor` 子命令 + self-check 报告 | `diagnostics-view.tsx`（用量 / 缓存命中率 / 工具时间线） | 🟡 |
 | L18 | 问卷弹层 | 多选分页，绑定会话替换输入区 | 单选分页（v3 内联浮层）+ 其他 + 跳过，按 sessionId 绑定会话 | ✅ |
 | L19 | 消息刻度轨 | 无对应 | `turn-rail.tsx` | ✅ 我方领先 |

@@ -77,18 +77,13 @@ interface SidebarProps {
 	readonly onTodo: (feature: string) => void;
 }
 
-/**
- * 导航项。ready 是「已点亮」的唯一事实源：未实现项降灰 + title 说明，
- * 点击统一 onTodo（占位展示≠可用，视觉要诚实——假装可用的死按钮比
- * 明说的占位更伤信任）。
- */
 const NAV_ITEMS = [
-	{ icon: IconAssistant, label: "助理", ready: false },
-	{ icon: IconProject, label: "项目", ready: false },
-	{ icon: IconSkill, label: "专家·技能·连接器", ready: true },
-	{ icon: IconAutomation, label: "自动化", ready: true },
-	{ icon: IconLibrary, label: "资料库", ready: false },
-	{ icon: IconMore, label: "更多", ready: false },
+	{ icon: IconAssistant, label: "助理" },
+	{ icon: IconProject, label: "项目" },
+	{ icon: IconSkill, label: "专家·技能·连接器" },
+	{ icon: IconAutomation, label: "自动化" },
+	{ icon: IconLibrary, label: "资料库" },
+	{ icon: IconMore, label: "更多" },
 ] as const;
 
 /** 任务区默认露出的条数，其余收进「查看更多 (N)」。 */
@@ -179,7 +174,6 @@ export function Sidebar({
 						<input
 							className="task-rename-input"
 							defaultValue={task.name ?? task.title}
-							aria-label="任务名称"
 							// 弹出的唯一输入框，自动聚焦即预期（同 workspace-picker）。
 							autoFocus
 							onKeyDown={(e) => {
@@ -321,7 +315,6 @@ export function Sidebar({
 						<input
 							className="task-rename-input"
 							defaultValue={group.name}
-							aria-label="空间名称"
 							autoFocus
 							onKeyDown={(e) => {
 								if (e.key === "Enter") {
@@ -455,21 +448,16 @@ export function Sidebar({
 			</button>
 
 			<nav className="sidebar-nav">
-				{NAV_ITEMS.map(({ icon: Icon, label, ready }) => (
+				{NAV_ITEMS.map(({ icon: Icon, label }) => (
 					<button
 						key={label}
 						type="button"
-						className={`nav-item${ready ? "" : " nav-item-pending"}`}
-						title={ready ? undefined : "随版本迭代开放"}
+						className="nav-item"
 						onClick={() => {
-							// ready 为点击分发的唯一事实源：未实现项统一 onTodo，
-							// 已点亮的能力走真实入口（同技能入口的先例）。
-							if (!ready) {
-								onTodo(label);
-								return;
-							}
+							// 已点亮的能力走真实入口，其余统一「待做」（同技能入口的先例）。
 							if (label === "专家·技能·连接器") onOpenSkills();
 							else if (label === "自动化") onOpenAutomations();
+							else onTodo(label);
 						}}
 					>
 						<Icon size={16} />
@@ -532,7 +520,7 @@ export function Sidebar({
 				<span className={`link-dot link-dot-${link.kind}`} />
 				<span className="footer-text">
 					{link.kind === "connecting" && "正在启动…"}
-					{link.kind === "ready" && "已就绪"}
+					{link.kind === "ready" && "引擎已就绪"}
 					{link.kind === "down" && `已断开：${link.reason}`}
 				</span>
 				{/* 设置是真能用的入口，不走 onTodo。放在底部与 WorkBuddy 的位置一致。 */}
