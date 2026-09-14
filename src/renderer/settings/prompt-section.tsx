@@ -7,6 +7,7 @@ import type { StyleConfigInfo } from "@shared/settings.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import type { ExpertListItem, PromptPreviewResult } from "@shared/ipc.ts";
 import { IconChevronRight, IconRefresh } from "../icons.tsx";
+import { ErrorState, LoadingState } from "../state-views.tsx";
 import { SelectField } from "./select-field.tsx";
 
 /**
@@ -137,10 +138,10 @@ export function PromptPreviewSection(): React.JSX.Element {
 				</button>
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{axes === undefined || styleConfig === undefined ? (
-				<p className="settings-empty">正在读取提示词资源…</p>
+				<LoadingState text="正在读取提示词资源…" />
 			) : (
 				<>
 					<div className="preview-controls">
@@ -205,7 +206,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 					</div>
 
 					{result === undefined ? (
-						error === undefined && <p className="settings-empty">正在组装提示词…</p>
+						error === undefined && <LoadingState text="正在组装提示词…" />
 					) : fullView ? (
 						<pre className="preview-full">{result.segments.map((s) => s.text).join("")}</pre>
 					) : (

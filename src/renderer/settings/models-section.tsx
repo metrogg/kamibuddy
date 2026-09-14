@@ -26,6 +26,7 @@ import type {
 } from "@shared/settings.ts";
 import { validateCustomModel, validateCustomProvider } from "@shared/settings.ts";
 import { IconCheck, IconChevronDown, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "../icons.tsx";
+import { EmptyState, ErrorState } from "../state-views.tsx";
 
 /** 凭据来源 → 用户能看懂的说明。 */
 function sourceLabel(provider: ProviderInfo): string {
@@ -521,7 +522,7 @@ function ModelPicker({ models, providers, activeModelId, busy, onPick, onRefresh
 			</header>
 
 			{visible.length === 0 ? (
-				<p className="settings-empty">还没有可用模型。点下方「添加模型」，选个服务商填好 Key 就能用。</p>
+				<EmptyState title="还没有可用模型。点下方「添加模型」，选个服务商填好 Key 就能用。" />
 			) : (
 				<div className="model-grid">
 					{visible.map((model) => {
@@ -637,7 +638,7 @@ function ProviderSelect({ providers, target, onPick }: ProviderSelectProps): Rea
 								<span className="provider-meta">{provider.configured ? "已配置" : "未配置 Key"}</span>
 							</button>
 						))}
-						{filtered.length === 0 && <p className="provider-select-empty">没有匹配的供应商</p>}
+						{filtered.length === 0 && <EmptyState title="没有匹配的供应商" />}
 						{/* 「自定义」是动作不是数据，恒钉在末位、不参与过滤。 */}
 						<button
 							type="button"
@@ -780,7 +781,7 @@ function AddModelDialog({ providers, onClose, onSaved }: AddModelDialogProps): R
 					/>
 				</div>
 
-				{saveError !== undefined && <div className="settings-error">{saveError}</div>}
+				{saveError !== undefined && <ErrorState message={saveError} />}
 
 				{target?.kind === "custom" && (
 					<CustomForm
@@ -914,7 +915,7 @@ export function ModelsSection({ snapshot, busy, run }: ModelsSectionProps): Reac
 
 	return (
 		<>
-			{snapshot.error !== undefined && <div className="settings-error">{snapshot.error}</div>}
+			{snapshot.error !== undefined && <ErrorState message={snapshot.error} />}
 
 			<ModelPicker
 				models={snapshot.models}
@@ -949,7 +950,7 @@ export function ModelsSection({ snapshot, busy, run }: ModelsSectionProps): Reac
 				)}
 
 				{managed.length === 0 ? (
-					<p className="settings-empty">还没有配置服务商，点右上角「添加模型」开始。</p>
+					<EmptyState title="还没有配置服务商，点右上角「添加模型」开始。" />
 				) : (
 					<div className="provider-list">
 						{managed.map((provider) => (

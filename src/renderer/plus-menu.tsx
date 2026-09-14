@@ -12,7 +12,7 @@
  * 贴右放会溢出窗口右缘被裁掉。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { IconAssistant, IconCheck, IconDoc, IconPlus, IconSkill, IconWeb, IconWorkspace } from "./icons.tsx";
@@ -56,6 +56,22 @@ export function PlusMenu({
 		setModesOpen(false);
 		setExpertsOpen(false);
 	};
+
+	// Esc 关闭菜单（连同两个子菜单）：菜单没有键盘焦点管理，Esc 是键盘用户唯一的
+	// 关闭路径；与 backdrop 互补（一个管键盘，一个管指针）。同 model-menu /
+	// permission-menu 的既有写法（不抽共享 hook，抽 hook 排后续 spec）。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") {
+				setOpen(false);
+				setModesOpen(false);
+				setExpertsOpen(false);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
 
 	// 模式子菜单只有 ask / craft / plan 三档（专家已不是交互模式，与模式正交绑定，
 	// spec: rework-expert-orthogonal-and-skills）—— 直接平铺 modes；专家走下面的

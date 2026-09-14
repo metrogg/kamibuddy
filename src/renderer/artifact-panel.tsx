@@ -48,6 +48,7 @@ import {
 	type PanelView,
 	type PanelViewState,
 } from "./panel-view.ts";
+import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
 import {
 	collapseFolder,
 	createLazyTreeState,
@@ -308,8 +309,8 @@ function TextPreview({
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <div className="preview-fallback">{failed}</div>;
-	if (text === undefined) return <div className="preview-fallback">加载中…</div>;
+	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (text === undefined) return <LoadingState />;
 	return <pre className="preview-text">{text}</pre>;
 }
 
@@ -336,10 +337,10 @@ function CodeFilePreview({
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <div className="preview-fallback">{failed}</div>;
-	if (text === undefined) return <div className="preview-fallback">加载中…</div>;
+	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (text === undefined) return <LoadingState />;
 	return (
-		<Suspense fallback={<div className="preview-fallback">加载中…</div>}>
+		<Suspense fallback={<LoadingState />}>
 			<CodePreview content={text} language={codeLanguageOf(extOf(path))} />
 		</Suspense>
 	);
@@ -393,8 +394,8 @@ function MarkdownPreview({
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <div className="preview-fallback">{failed}</div>;
-	if (text === undefined) return <div className="preview-fallback">加载中…</div>;
+	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (text === undefined) return <LoadingState />;
 	return (
 		<div className="preview-markdown">
 			<Markdown text={text} resolveImageSrc={resolveImageSrc} />
@@ -561,7 +562,7 @@ function OverviewView({
 	return (
 		<div className="preview-view">
 			<header className="preview-group-title">产物（{artifacts.length}）</header>
-			{artifacts.length === 0 && <div className="preview-group-empty">暂无内容</div>}
+			{artifacts.length === 0 && <EmptyState title="暂无内容" />}
 			{artifacts.map((a) => {
 				const isUrl = /^https?:\/\//i.test(a.path);
 				return (
@@ -604,7 +605,7 @@ function ChangesView({
 	return (
 		<div className="preview-view">
 			{changes.length === 0 ? (
-				<div className="preview-group-empty">本会话还没有变更</div>
+				<EmptyState title="本会话还没有变更" />
 			) : (
 				<>
 					<header className="changes-summary">
@@ -690,9 +691,9 @@ function WorkspaceView({
 	return (
 		<div className="preview-view">
 			{cwd === undefined ? (
-				<div className="preview-group-empty">工作区尚未就绪</div>
+				<EmptyState title="工作区尚未就绪" />
 			) : tree === undefined ? (
-				<div className="preview-group-empty">加载中…</div>
+				<LoadingState />
 			) : (
 				<div className="file-tree">
 					{flattenTree(tree.fullTree, visibleCollapsed(tree)).map(({ node, depth }) =>
@@ -714,7 +715,7 @@ function WorkspaceView({
 								/>
 								<IconFolder size={14} />
 								<span className="file-tree-name">{node.name}</span>
-								{tree.loadingPaths.has(node.path) && <span className="file-tree-spinner" />}
+								{tree.loadingPaths.has(node.path) && <Spinner size={11} />}
 							</button>
 						) : (
 							<button
@@ -948,15 +949,16 @@ export function ArtifactPanel({
 							activeChange?.diff !== undefined ? (
 								<DiffView diff={activeChange.diff} />
 							) : (
-								<div className="preview-fallback">
-									{activeChange === undefined
-										? "该变更记录已不存在"
-										: activeChange.changeType === "created"
-											? "新创建的文件，改动为全文新增"
-											: "文件过大，只统计了增删行数"}
-									{activeChange !== undefined && (
-										<>
-											{"，"}
+								<EmptyState
+									title={
+										activeChange === undefined
+											? "该变更记录已不存在"
+											: activeChange.changeType === "created"
+												? "新创建的文件，改动为全文新增"
+												: "文件过大，只统计了增删行数"
+									}
+									action={
+										activeChange !== undefined ? (
 											<button
 												type="button"
 												className="preview-link"
@@ -964,13 +966,13 @@ export function ArtifactPanel({
 											>
 												查看文件本身
 											</button>
-										</>
-									)}
-								</div>
+										) : undefined
+									}
+								/>
 							)
 						)}
 						{active.kind === "file" && !servable && (
-							<div className="preview-fallback">选择工作空间后可预览文件</div>
+							<EmptyState title="选择工作空间后可预览文件" />
 						)}
 						{active.kind === "file" && servable && kind === "html" && (
 							<iframe

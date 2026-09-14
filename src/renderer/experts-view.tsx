@@ -25,10 +25,16 @@ import {
 	IconResearch,
 	IconUser,
 } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface ExpertsViewProps {
-	/** 全量专家（内置 + 用户级覆盖，App 层 listExperts 缓存）。 */
-	readonly experts: readonly ExpertListItem[];
+	/**
+	 * 全量专家（内置 + 用户级覆盖，App 层 listExperts 缓存）。
+	 * undefined = 还没拉回来（未就绪 / 加载中），与「拉回来但库里是空的」（[]）分开。
+	 */
+	readonly experts: readonly ExpertListItem[] | undefined;
+	/** 专家库拉取失败的原因（undefined = 没失败）。失败不等于「搜不到」。 */
+	readonly error: string | undefined;
 	/**
 	 * 启用专家：选中该专家并进入新任务对话页；prefill 有值时把文本填入
 	 * 输入框待发送（详情弹窗里点 quickPrompt 的路径）。
@@ -47,7 +53,7 @@ function matchKeyword(expert: ExpertListItem, keyword: string): boolean {
 		.some((field) => field.toLowerCase().includes(keyword));
 }
 
-export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsViewProps): React.JSX.Element {
+export function ExpertsView({ experts, error, onUseExpert, onCreateExpert }: ExpertsViewProps): React.JSX.Element {
 	const [searchInput, setSearchInput] = useState("");
 	const [keyword, setKeyword] = useState("");
 	const [selectedTag, setSelectedTag] = useState<string | undefined>(undefined);
@@ -70,11 +76,14 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 	// 卸载清掉在途防抖：组件随 tab 切换卸载后不能再 setState。
 	useEffect(() => () => window.clearTimeout(debounceRef.current), []);
 
+	// 未就绪时按空集算：分类/过滤是纯派生，等库回来（experts 有值）自然重算。
+	const list = experts ?? [];
+
 	/** 分类行数据源：全量专家的 tags 按首次出现顺序聚合去重。 */
 	const allTags = useMemo(() => {
 		const seen = new Set<string>();
 		const ordered: string[] = [];
-		for (const expert of experts) {
+		for (const expert of list) {
 			for (const tag of expert.tags) {
 				if (!seen.has(tag)) {
 					seen.add(tag);
@@ -83,9 +92,9 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 			}
 		}
 		return ordered;
-	}, [experts]);
+	}, [list]);
 
-	const userExperts = useMemo(() => experts.filter((e) => e.source === "user"), [experts]);
+	const userExperts = useMemo(() => list.filter((e) => e.source === "user"), [list]);
 
 	/**
 	 * 过滤链：搜索优先且全局（搜索时分类行隐藏，若仍暗中被选中的 tag 过滤，
@@ -93,10 +102,17 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 	 */
 	const kw = keyword.trim().toLowerCase();
 	const visibleExperts = useMemo(() => {
-		if (kw !== "") return experts.filter((e) => matchKeyword(e, kw));
-		if (selectedTag === undefined) return experts;
-		return experts.filter((e) => e.tags.includes(selectedTag));
-	}, [experts, kw, selectedTag]);
+		if (kw !== "") return list.filter((e) => matchKeyword(e, kw));
+		if (selectedTag === undefined) return list;
+		return list.filter((e) => e.tags.includes(selectedTag));
+	}, [list, kw, selectedTag]);
+
+	/*
+	 * 三态的顺序不能反（两处渲染分支都用它）：库为空或拉取失败原来都会落到
+	 * 「没有找到与「」匹配的专家」—— 把「还没拿到 / 拿不到」说成「搜索无结果」，
+	 * 用户会去改关键词。未就绪 → 加载态；失败 → 就地错误卡；有数据但过滤为空
+	 * → 才是「无匹配」（DESIGN.md §4）。
+	 */
 
 	if (myExperts) {
 		return (
@@ -107,15 +123,21 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 						全部专家
 					</button>
 				</div>
-				{userExperts.length === 0 ? (
-					<div className="ex-empty">
-						<IconGraduationCap size={44} className="ex-empty-icon" />
-						<p className="ex-empty-title">还没有创建任何专家</p>
-						<p className="ex-empty-sub">创建属于你的专家，分享专业知识</p>
-						<button type="button" className="ex-create-btn" onClick={onCreateExpert}>
-							创建专家
-						</button>
-					</div>
+				{error !== undefined ? (
+					<ErrorState message={error} />
+				) : experts === undefined ? (
+					<LoadingState />
+				) : userExperts.length === 0 ? (
+					<EmptyState
+						icon={<IconGraduationCap size={44} />}
+						title="还没有创建任何专家"
+						description="创建属于你的专家，分享专业知识"
+						action={
+							<button type="button" className="ex-create-btn" onClick={onCreateExpert}>
+								创建专家
+							</button>
+						}
+					/>
 				) : (
 					<div className="ex-grid">
 						{userExperts.map((expert) => (
@@ -182,10 +204,7 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 			</div>
 
 			{listTab === "teams" ? (
-				<div className="ex-empty">
-					<IconAssistant size={40} className="ex-empty-icon" />
-					<p className="ex-empty-title">专家团即将上线</p>
-				</div>
+				<EmptyState icon={<IconAssistant size={40} />} title="专家团即将上线" />
 			) : (
 				<>
 					{/* 搜索时分类行隐藏（spec）：关键词是全局面过滤，分类行失去意义。 */}
@@ -210,10 +229,12 @@ export function ExpertsView({ experts, onUseExpert, onCreateExpert }: ExpertsVie
 							))}
 						</div>
 					)}
-					{visibleExperts.length === 0 ? (
-						<div className="ex-empty">
-							<p className="ex-empty-title">没有找到与「{keyword.trim()}」匹配的专家，试试其他关键词</p>
-						</div>
+					{error !== undefined ? (
+						<ErrorState message={error} />
+					) : experts === undefined ? (
+						<LoadingState />
+					) : visibleExperts.length === 0 ? (
+						<EmptyState title={`没有找到与「${keyword.trim()}」匹配的专家，试试其他关键词`} />
 					) : (
 						<div className="ex-grid">
 							{visibleExperts.map((expert) => (

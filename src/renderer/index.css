@@ -1,9 +1,12 @@
 /*
  * 应用 UI 样式（对标 WorkBuddy 的浅色办公风）。
  *
- * D6 产物预览面板落地时会引入 design token 体系（AGENTS.md），
- * 届时文档流水线与应用 UI 的色值统一收口到 token；这里先用 CSS 变量集中管理。
+ * design token 的唯一真源是 src/styles/tokens.css，本文件不再自带 :root 定义
+ * （同名不同值的两份定义会让 var() 结果取决于 import 顺序，属隐性 bug）。
+ * @import 必须位于所有 CSS 规则之前，故紧跟本注释块。
  */
+
+@import "../styles/tokens.css";
 
 /* 根部错误边界：渲染异常时的错误卡（白屏无反馈是体验缺陷，ErrorBoundary 是最后防线）。 */
 .error-boundary {
@@ -16,7 +19,7 @@
 
 .error-boundary-card {
 	max-width: 480px;
-	padding: 32px;
+	padding: var(--space-7);
 	background: var(--bg-raised);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
@@ -24,99 +27,28 @@
 }
 
 .error-boundary-card h2 {
-	margin: 0 0 16px;
-	font-size: 18px;
+	margin: 0 0 var(--space-5);
+	font-size: var(--text-emphasis);
 	color: var(--text);
 }
 
 .error-boundary-message {
-	margin: 0 0 24px;
+	margin: 0 0 var(--space-6);
 	font-size: var(--text-list);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	word-break: break-word;
 }
 
 .error-boundary-card button {
-	padding: 8px 16px;
+	padding: var(--space-3) var(--space-5);
 	background: var(--primary);
 	color: var(--primary-text);
 	border-radius: var(--radius-md);
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .error-boundary-card button:hover {
 	opacity: 0.88;
-}
-
-:root {
-	/* WorkBuddy 浅色主题同款配色（safe-delete-events-vjEg4QyO.css :1749-1917 提取）。
-	   主背景是纯白（bg-primary = white-100），侧栏 gray-3（#F2F2F2），
-	   次级背景 gray-2（#F7F7F7），卡片纯白——「暖」感来自侧栏与卡片的对比，
-	   不是主背景本身偏暖。 */
-	--bg: #ffffff;
-	--bg-sidebar: #f2f2f2;
-	--bg-hover: rgba(0, 0, 0, 0.05);
-	--bg-raised: #f7f7f7;
-	--border: #e6e6e6;
-	--text: #000000;
-	/* WorkBuddy 文字三级色：primary=black-100 / secondary=black-70 / tertiary=black-50
-	   （safe-delete-events …css --wb-color-text-*）。secondary 此前缺 token，
-	   首页 pills/能力 chip/案例标题都吃这一档，补齐。 */
-	--text-secondary: rgba(0, 0, 0, 0.7);
-	--text-dim: rgba(0, 0, 0, 0.5);
-	/* WorkBuddy 文字第四档 faint（black-30，--cb-question-floating-text-faint）：
-	   问卷浮层禁用态圆形按钮的图标色等最弱层级。 */
-	--text-faint: rgba(0, 0, 0, 0.3);
-	--primary: rgba(0, 0, 0, 0.9);
-	--primary-text: #ffffff;
-	/* 黑主色的交互档位（WB --wb-bg-pill-active 体系）：选中/激活态降到 75% 黑，
-	   激活态上 hover 加深到 82% —— 档位比 --primary 浅是有意的：pill 选中要
-	   比主按钮柔和，hover 加深是「回主色方向」的反馈。 */
-	--primary-active: rgba(0, 0, 0, 0.75);
-	--primary-hover: rgba(0, 0, 0, 0.82);
-	--danger: #f64041;
-	--ok: #0cbf5b;
-	/* 链接/勾选项等需要可辨识的场景色（收编路径徽章既有蓝 #1470b4，与 WorkBuddy
-	   同色）。此前 .markdown a 与 .view-switcher-check 已引用本变量但 :root 从未
-	   定义 —— var() 解析失败回退继承色，markdown 链接与正文同色，只有 hover
-	   下划线可辨；补定义即修复。 */
-	--accent: #1470b4;
-	/* 琥珀警示色：toast-warning / mcp-connecting / 待确认 badge 三处独立硬编码
-	   #d9822b 的收口（seg-time 类别色同色相但语义是分类调色板，不收编）。 */
-	--warning: #d9822b;
-	/* 圆角三档（Task 4 全文审计 158 处 border-radius 的收口，逐组决策记此一处）：
-	   - 6px×16 → sm（等值）；7px×12 → sm（表单控件/菜单项，就近 −1）；
-	   - 8px×27 按组件语义分两档：小控件/按钮/行项/chip×19 → sm，
-	     卡片/气泡媒体/pre/代码卡×8 → md；
-	   - 10px×1（toast）→ md（等值）；case-cover 16px → lg（等值）；
-	   - questionnaire-icon-btn 的 16px 是 32×32 之半、语义是「圆」→ 50%（渲染等价）；
-	   - 保留不归档（逐字不同且有语义）：1/2/3px（favicon/小标记）、4/5px（低于 sm 的
-	     微圆角：badge/小按钮/进度 thumb）、12px×6（cases-action 是 24 高之半的胶囊、
-	     entry 气泡卡、ws/permission 浮层大卡、问卷选项行 v3 对齐值，强并会丢语义）、
-	     22/24px（WB 输入卡/槽体系原值）、50%/999px（圆形/胶囊）。 */
-	--radius-sm: 6px;
-	--radius-md: 10px;
-	--radius-lg: 16px;
-	/* 字号五档（Task 4）：核心路径的直写 px 换档，calc/低频边缘处不动。
-	   - meta 12：辅助信息（分组标题/时间戳/折叠小字/等宽小字）
-	   - list 13：列表正文（侧栏任务行/菜单项/toast/表格）
-	   - body 14：正文（助手消息/工具行/pills/按钮，同全局 body 基准）
-	   - emphasis 15：强调正文——用户气泡 15 与助手正文 14 的一档差是有意
-	     区分发言者（WB 同口径），不是漂移；同档还有回合文字行/清单行/md 小标题
-	   - display 30：展示标题（首页 home-title，WB 原值） */
-	--text-meta: 12px;
-	--text-list: 13px;
-	--text-body: 14px;
-	--text-emphasis: 15px;
-	--text-display: 30px;
-	--shadow-card: 0 6px 24px rgb(0 0 0 / 6%);
-	/* WorkBuddy 输入卡阴影（--wb-main-area-box-shadow 原值），比 --shadow-card 轻得多：
-	   大而淡的铺底 + 小而实的贴边。只给输入卡用，弹层仍走 --shadow-card。 */
-	--shadow-input: 0 16px 32px -8px rgba(0, 0, 0, 0.03), 0 2px 4px -4px rgba(0, 0, 0, 0.06);
-	/* WorkBuddy 问卷浮层 v3 卡片阴影（questionFloating 原值）：
-	   比 --shadow-card 更轻 —— 浮层坐在输入区位置，不该有弹层的压迫感。 */
-	--shadow-questionnaire: 0 6px 16px rgba(0, 0, 0, 0.02), 0 1px 4px rgba(0, 0, 0, 0.03);
-	color-scheme: light;
 }
 
 * {
@@ -157,7 +89,7 @@ button:focus-visible,
 select:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-	outline: 2px solid var(--text-dim);
+	outline: 2px solid var(--text-secondary);
 	outline-offset: 2px;
 }
 
@@ -175,8 +107,8 @@ textarea:focus-visible {
 	flex: 0 0 216px;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	padding: 12px;
+	gap: var(--space-1);
+	padding: var(--space-4);
 	background: var(--bg-sidebar);
 	border-right: 1px solid var(--border);
 	/* 滚动职责移交给 .sidebar-scroll（任务+空间区），导航项固定不动。 */
@@ -186,10 +118,11 @@ textarea:focus-visible {
 .sidebar-brand {
 	display: flex;
 	align-items: baseline;
-	gap: 6px;
+	gap: var(--space-2);
 	/* 左内边距让出窗口左上角的侧栏开关（App 层 absolute，28px 宽，
-	   展开时它落在本行左侧）：36 = 28px 开关占位 + 8px gap。 */
-	padding: 4px 8px 10px 36px;
+	   展开时它落在本行左侧）：36 = 28px 开关占位 + 8px gap。
+	   36px 是让位偏移不是间距档值：归 --space-7(32) 会把间隙压到 4px，故保留原值（登记为 token 例外）。 */
+	padding: var(--space-1) var(--space-3) var(--space-3) 36px;
 }
 
 .brand-name {
@@ -198,17 +131,17 @@ textarea:focus-visible {
 }
 
 .brand-version {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .new-task {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	gap: 6px;
-	padding: 8px 0;
-	margin-bottom: 6px;
+	gap: var(--space-2);
+	padding: var(--space-3) 0;
+	margin-bottom: var(--space-2);
 	background: var(--primary);
 	color: var(--primary-text);
 	border-radius: var(--radius-md);
@@ -227,8 +160,8 @@ textarea:focus-visible {
 .nav-item {
 	display: flex;
 	align-items: center;
-	gap: 9px;
-	padding: 7px 8px;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	color: var(--text);
 	text-align: left;
@@ -239,7 +172,7 @@ textarea:focus-visible {
 }
 
 .sidebar-section {
-	margin-top: 10px;
+	margin-top: var(--space-3);
 }
 
 /* 任务+空间滚动容器：导航项固定，只有这个区域滚动（WorkBuddy 同款）。
@@ -250,7 +183,7 @@ textarea:focus-visible {
 	overflow-y: auto;
 	scrollbar-width: thin;
 	scrollbar-color: transparent transparent;
-	transition: scrollbar-color 0.2s ease;
+	transition: scrollbar-color var(--dur-base) ease;
 }
 
 .sidebar-scroll:hover {
@@ -269,7 +202,7 @@ textarea:focus-visible {
 .sidebar-scroll::-webkit-scrollbar-thumb {
 	background: transparent;
 	border-radius: 2px;
-	transition: background 0.2s ease;
+	transition: background var(--dur-base) ease;
 }
 
 .sidebar-scroll:hover::-webkit-scrollbar-thumb {
@@ -279,12 +212,12 @@ textarea:focus-visible {
 .section-title {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 0 8px 4px;
+	gap: var(--space-1);
+	padding: 0 var(--space-3) var(--space-1);
 	font-size: var(--text-meta);
 	/* WorkBuddy 侧栏分组标题（claw-sidebar-drawer__section-title）：12px/600/三级灰。 */
 	font-weight: 600;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .section-title-btn {
@@ -301,18 +234,106 @@ textarea:focus-visible {
 /* 组头折叠箭头：展开朝下，收起旋转 -90°，与空间组内折叠箭头同语言。 */
 .section-chevron {
 	flex: none;
-	transition: transform 0.15s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .section-chevron-collapsed {
 	transform: rotate(-90deg);
 }
 
-.section-empty {
+/* ── 共享状态组件（state-views.tsx）─────────────────────────────────────────
+ * 空 / 加载 / 错误三态与转圈的唯一样式来源。此前空态有 13 种类名、转圈有 5 套
+ * 各自一份 CSS（含各自的 reduced-motion 局部 patch），同一语义写了多遍，
+ * 观感不一致且改一处要改十几处（DESIGN.md §4 / §6）。
+ * 使用范围按 spec §B 分级：数据驱动视图与异步控件；无异步的控件不套。
+ * 加载与空必须分开：数据 undefined = 加载中，[] = 真空（DESIGN.md §6）。
+ */
+.state-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-5) var(--space-4);
+	text-align: center;
+	color: var(--text-secondary);
+	font-size: var(--text-list);
+}
+
+.state-empty-icon {
+	display: inline-flex;
+	color: var(--text-faint);
+}
+
+.state-empty-title {
 	margin: 0;
-	padding: 4px 8px;
+}
+
+.state-empty-desc {
+	margin: 0;
+	max-width: 420px;
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+}
+
+.state-empty-action {
+	margin-top: var(--space-2);
+}
+
+.state-loading {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	color: var(--text-secondary);
+	font-size: var(--text-list);
+}
+
+.state-error {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: 0 0 var(--space-5);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--danger);
+	border-radius: var(--radius-md);
+	background: color-mix(in srgb, var(--danger) 8%, var(--bg));
+	color: var(--danger);
+	font-size: var(--text-list);
+}
+
+.state-error-text {
+	flex: 1 1 auto;
+	/* 错误信息可能很长（如 models.json 的解析错误），保留换行便于阅读。 */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* 转圈只有这一个 class：直径由 <Spinner size> 内联给出（直径不在 DESIGN.md §2
+   的任何档位表里，是各容器既有的排版尺寸）。轨道 --border、弧 --text-secondary：
+   不借状态色 —— 转圈只表「进行中」，语义由相邻文字承担（DESIGN.md §7.6）。 */
+.spinner {
+	display: inline-block;
+	flex: 0 0 auto;
+	border: 2px solid var(--border);
+	border-top-color: var(--text-secondary);
+	border-radius: var(--radius-full);
+	/* 0.8s 是循环动画周期（动画语义，不归档，见 tokens.css §时长）。 */
+	animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* 两处容器给转圈补的排版位 —— 转圈本体不带外边距（flex 容器里自带外边距会把
+   图标顶偏），非 flex 的标题行与「推到行尾」的树行由容器负责。集中在同一处，
+   便于「转圈样式只有一份」这件事被一眼核对。 */
+.task-item-title .spinner {
+	margin-right: var(--space-2);
+}
+
+.file-tree-row .spinner {
+	margin-left: auto;
 }
 
 /* 任务列表：行 = 可点击主体 + hover 浮现的行内操作钮。
@@ -334,9 +355,9 @@ textarea:focus-visible {
 .task-item-body {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	width: 100%;
-	padding: 4px 8px;
+	padding: var(--space-1) var(--space-3);
 	text-align: left;
 }
 
@@ -370,8 +391,8 @@ textarea:focus-visible {
 /* 时间右对齐常驻：与标题同排，不被 hover 操作钮遮住（flex 布局天然让位）。 */
 .task-item-meta {
 	flex: none;
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	white-space: nowrap;
 	/* 比例宽数字随时间推移变位数/字形宽度会抖行宽，等宽数字消除抖动。 */
 	font-variant-numeric: tabular-nums;
@@ -401,19 +422,20 @@ textarea:focus-visible {
 	width: 20px;
 	height: 20px;
 	border-radius: 5px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .task-op-btn:hover {
 	color: var(--text);
-	background: rgb(0 0 0 / 8%);
+	/* 原 8% 黑略重于全站 hover 底；收编到 --bg-hover(5%) 统一 hover 口径。 */
+	background: var(--bg-hover);
 }
 
 /* 行内重命名：input 顶替标题位置，字号随行避免跳动。 */
 .task-rename-input {
 	display: block;
 	width: 100%;
-	padding: 1px 4px;
+	padding: 2px var(--space-1);
 	font: inherit;
 	color: var(--text);
 	background: var(--bg);
@@ -423,27 +445,31 @@ textarea:focus-visible {
 }
 
 .task-rename-input:focus {
-	border-color: var(--text-dim);
+	/* 焦点指示用 --text-secondary，与全局焦点环同色（DESIGN.md §7.1 的
+	   `2px --text-secondary + 2px offset`）。这不是「描边用文字档」的误用，
+	   而是把边框兼作焦点环（input 自身 outline:none）——改成 --accent 会让
+	   键盘焦点出现第三种颜色语言，故保留。 */
+	border-color: var(--text-secondary);
 }
 
 /* 删除确认态：行内二次确认，不弹系统对话框（文件实为移入回收目录，可恢复）。 */
 .task-item-confirm {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 6px 8px;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .task-confirm-actions {
 	display: flex;
-	gap: 4px;
+	gap: var(--space-1);
 	margin-left: auto;
 }
 
 .task-confirm-btn {
-	padding: 1px 8px;
+	padding: 2px var(--space-3);
 	border-radius: var(--radius-sm);
 	font-size: var(--text-meta);
 	background: var(--bg-raised);
@@ -461,10 +487,10 @@ textarea:focus-visible {
 .task-list-more {
 	display: block;
 	width: 100%;
-	padding: 5px 8px;
+	padding: var(--space-1) var(--space-3);
 	border-radius: var(--radius-sm);
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	text-align: left;
 }
 
@@ -491,9 +517,9 @@ textarea:focus-visible {
 	flex: 1;
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	min-width: 0;
-	padding: 5px 6px;
+	padding: var(--space-1) var(--space-2);
 	text-align: left;
 }
 
@@ -505,8 +531,8 @@ textarea:focus-visible {
 /* 折叠箭头：展开朝下，收起旋转 -90°，纯 CSS 过渡。 */
 .space-group-chevron {
 	flex: none;
-	color: var(--text-dim);
-	transition: transform 0.15s ease;
+	color: var(--text-secondary);
+	transition: transform var(--dur-fast) ease;
 }
 
 .space-group-collapsed .space-group-chevron {
@@ -516,7 +542,7 @@ textarea:focus-visible {
 /* 空间组图标：文件夹标识（WorkBuddy 同款），dim 色与 chevron 同调。 */
 .space-group-icon {
 	flex: none;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .space-group-name {
@@ -530,15 +556,15 @@ textarea:focus-visible {
 
 .space-group-count {
 	flex: none;
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 组级操作（+ 与 ⋯）：与任务行同款的 hover 浮现模式。 */
 .space-group-actions {
 	display: flex;
 	gap: 2px;
-	padding-right: 4px;
+	padding-right: var(--space-1);
 	opacity: 0;
 	visibility: hidden;
 }
@@ -553,13 +579,13 @@ textarea:focus-visible {
 .space-menu {
 	top: 100%;
 	right: 4px;
-	z-index: 20;
+	z-index: var(--z-panel);
 	min-width: 140px;
-	padding: 6px;
+	padding: var(--space-2);
 }
 
 .space-menu-item {
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	font-size: var(--text-meta);
 	text-align: left;
@@ -584,36 +610,19 @@ textarea:focus-visible {
 	display: inline-block;
 	width: 8px;
 	height: 8px;
-	margin-right: 6px;
-	border-radius: 50%;
+	margin-right: var(--space-2);
+	border-radius: var(--radius-full);
 	background: var(--ok);
-}
-
-.task-spinner {
-	display: inline-block;
-	width: 11px;
-	height: 11px;
-	margin-right: 6px;
-	border: 2px solid var(--border);
-	border-top-color: var(--text-dim);
-	border-radius: 50%;
-	animation: task-spin 0.8s linear infinite;
-}
-
-@keyframes task-spin {
-	to {
-		transform: rotate(360deg);
-	}
 }
 
 .sidebar-footer {
 	margin-top: auto;
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 8px;
+	gap: var(--space-2);
+	padding: var(--space-3);
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 底部品牌徽标：唯一的彩色元素，撑起左下角的视觉锚点（对标 WorkBuddy）。
@@ -626,8 +635,8 @@ textarea:focus-visible {
 .link-dot {
 	width: 7px;
 	height: 7px;
-	border-radius: 50%;
-	background: var(--text-dim);
+	border-radius: var(--radius-full);
+	background: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
@@ -657,7 +666,7 @@ textarea:focus-visible {
 	   窗口过矮时转为滚动而不是英雄区压案例卡。 */
 	min-height: max(652px, 100%);
 	margin: 0 auto;
-	padding: 0 24px;
+	padding: 0 var(--space-6);
 	display: flex;
 	flex-direction: column;
 }
@@ -677,7 +686,7 @@ textarea:focus-visible {
 
 .home-title {
 	/* WorkBuddy .wb-home-header__title 原值：30px/42px/600/90% 黑（=--primary）/无字距。 */
-	margin: 0 0 16px;
+	margin: 0 0 var(--space-5);
 	font-size: var(--text-display);
 	line-height: 42px;
 	font-weight: 600;
@@ -693,7 +702,7 @@ textarea:focus-visible {
 	height: 36px;
 	padding: 2px;
 	background: var(--bg-raised);
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 	/* WB 场景 pills 与下方 composer 的间距原值 64px。 */
 	margin-bottom: 64px;
 }
@@ -703,13 +712,13 @@ textarea:focus-visible {
 	align-items: center;
 	/* WB .wb-scene-tabs__pill：高 32、padding 0 12、14px/22/500、文字二级色。 */
 	height: 32px;
-	padding: 0 12px;
-	border-radius: 999px;
+	padding: 0 var(--space-4);
+	border-radius: var(--radius-full);
 	font-size: var(--text-body);
 	line-height: 22px;
 	font-weight: 500;
 	color: var(--text-secondary);
-	transition: background-color 0.18s ease, color 0.18s ease;
+	transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
 .mode-tab.active {
@@ -725,8 +734,9 @@ textarea:focus-visible {
 }
 
 .mode-tab:not(.active):hover {
-	/* WB pill hover：#fafafa 浅底 + 一级文字色（原只变色不起底）。 */
-	background: #fafafa;
+	/* WB pill hover 是 #fafafa（2% 黑）；归档到全站唯一 hover 底 --bg-hover(5%)，
+	   与 chip/列表行同口径——不再为 pill 单留一档接近色。 */
+	background: var(--bg-hover);
 	color: var(--text);
 }
 
@@ -740,11 +750,11 @@ textarea:focus-visible {
 	/* WB .wb-home-composer__chips：通栏左对齐（原我们居中），与输入卡同宽。 */
 	justify-content: flex-start;
 	width: 100%;
-	gap: 8px;
+	gap: var(--space-3);
 	align-items: center;
 	min-height: 32px;
 	/* 与输入卡的间距 = WB .wb-home-composer 的 gap 12。 */
-	margin-bottom: 12px;
+	margin-bottom: var(--space-4);
 }
 
 .capability-row::-webkit-scrollbar {
@@ -758,11 +768,11 @@ textarea:focus-visible {
 	flex-shrink: 0;
 	/* WB .quick-actions__item：高 32、padding 0 12、gap 4、14px/400、
 	   文字二级色、白底细边、胶囊圆角 + 一层几乎不可见的投影（原值照抄）。 */
-	gap: 4px;
+	gap: var(--space-1);
 	height: 32px;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 	border: 1px solid var(--border);
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 	font-size: var(--text-body);
 	font-weight: 400;
 	color: var(--text-secondary);
@@ -771,8 +781,9 @@ textarea:focus-visible {
 }
 
 .capability-chip:hover {
-	/* WB hover：#f2f2f2 底 + 一级文字色（原我们只加深边框）。 */
-	background: #f2f2f2;
+	/* WB hover 底 #f2f2f2 与 --bg-hover(5% 黑) 在白底上等值；用 hover 语义变量，
+	   暗色下才是「叠一层浅色」而不是切到侧栏灰。 */
+	background: var(--bg-hover);
 	color: var(--text);
 }
 
@@ -789,7 +800,7 @@ textarea:focus-visible {
 .composer-slot {
 	background: linear-gradient(180deg, #ebebeb 0%, #f5f5f5 100%);
 	border-radius: 24px;
-	padding: 2px 2px 4px;
+	padding: 2px 2px var(--space-1);
 }
 
 /* 槽内白卡圆角 22（WB --cb-input-content-radius 首页值），比槽小 2 贴合。 */
@@ -804,7 +815,7 @@ textarea:focus-visible {
 	border-radius: 24px;
 	box-shadow: var(--shadow-input);
 	/* WB：容器上 padding 12、编辑区左右 16（cr-input-editor-host padding 0 16）。 */
-	padding: 12px 16px;
+	padding: var(--space-4) var(--space-5);
 }
 
 .composer-card textarea {
@@ -812,10 +823,10 @@ textarea:focus-visible {
 	width: 100%;
 	resize: none;
 	border: 0;
-	padding: 2px 0 8px;
+	padding: 2px 0 var(--space-3);
 	/* WB 编辑区原值：15px/1.75（cr-input-editor-host [data-slate-editor]）。 */
 	font-family: inherit;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	line-height: 1.75;
 	color: inherit;
 	background: transparent;
@@ -826,14 +837,15 @@ textarea:focus-visible {
 }
 
 /* textarea 自身 outline:none 的焦点替代做在卡片上（输入卡是视觉整体，环画在
-   textarea 上会切成内嵌小框）。边框加深与 rename-input 的 :focus 同款语言；
+   textarea 上会切成内嵌小框）。边框加深与 rename-input 的 :focus 同款语言
+   （同色 --text-secondary = 全局焦点环色，理由见该处注释）；
    不用 drag-over 的 --primary：那是「拖放目标」的强信号，键盘聚焦是常态。 */
 .composer-card:focus-within {
-	border-color: var(--text-dim);
+	border-color: var(--text-secondary);
 }
 
 .composer-card textarea::placeholder {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* ── 输入框补全下拉（@ 文件 + / 命令） ──────────────────────────── */
@@ -848,22 +860,22 @@ textarea:focus-visible {
 	left: 0;
 	right: 0;
 	bottom: calc(100% + 6px);
-	z-index: 30;
+	z-index: var(--z-overlay);
 	max-height: 240px;
 	overflow-y: auto;
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
-	padding: 4px;
+	box-shadow: var(--shadow-md);
+	padding: var(--space-1);
 }
 
 .ac-item {
 	display: flex;
 	align-items: baseline;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
@@ -881,8 +893,8 @@ textarea:focus-visible {
 .ac-hint {
 	flex: 0 0 auto;
 	margin-left: auto;
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -901,8 +913,8 @@ textarea:focus-visible {
 .cu-ring {
 	display: flex;
 	align-items: center;
-	padding: 4px;
-	border-radius: 50%;
+	padding: var(--space-1);
+	border-radius: var(--radius-full);
 }
 
 .cu-ring:hover {
@@ -917,13 +929,13 @@ textarea:focus-visible {
 
 .cu-fill {
 	fill: none;
-	stroke: var(--text-dim);
+	stroke: var(--text-secondary);
 	stroke-width: 2;
 	stroke-linecap: round;
 	/* 12 点方向起笔：默认 3 点方向，转 -90° 让饱和度从顶部开始爬。 */
 	transform: rotate(-90deg);
 	transform-origin: center;
-	transition: stroke-dashoffset 0.3s ease;
+	transition: stroke-dashoffset var(--dur-slow) ease;
 }
 
 .cu-ring.danger .cu-fill {
@@ -934,20 +946,20 @@ textarea:focus-visible {
 	position: absolute;
 	right: 0;
 	bottom: calc(100% + 8px);
-	z-index: 30;
+	z-index: var(--z-overlay);
 	width: 240px;
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
-	padding: 12px;
+	box-shadow: var(--shadow-md);
+	padding: var(--space-4);
 }
 
 .cu-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin-bottom: 8px;
+	margin-bottom: var(--space-3);
 }
 
 .cu-title {
@@ -955,10 +967,10 @@ textarea:focus-visible {
 }
 
 .cu-close {
-	color: var(--text-dim);
-	font-size: 16px;
+	color: var(--text-secondary);
+	font-size: var(--text-emphasis);
 	line-height: 1;
-	padding: 2px 4px;
+	padding: 2px var(--space-1);
 	border-radius: var(--radius-sm);
 }
 
@@ -970,20 +982,20 @@ textarea:focus-visible {
 .cu-stats {
 	display: flex;
 	align-items: baseline;
-	gap: 8px;
-	margin-bottom: 8px;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
 }
 
 .cu-percent {
-	font-size: 18px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 	/* 余量百分比随消耗刷新，比例宽数字会带着同行小字左右抖。 */
 	font-variant-numeric: tabular-nums;
 }
 
 .cu-used {
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 .cu-bar {
@@ -992,15 +1004,15 @@ textarea:focus-visible {
 	border-radius: 3px;
 	overflow: hidden;
 	background: var(--bg-raised);
-	margin-bottom: 10px;
+	margin-bottom: var(--space-3);
 }
 
 .cu-row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	padding: 2px 0;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .cu-swatch {
@@ -1015,85 +1027,94 @@ textarea:focus-visible {
 }
 
 .cu-row-value {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
-/* 四类成分各一个色相，条段与图例圆点共用（swatch 与 seg 同规则）。 */
+/* 四类成分各一个分类色相（全局 --cat-* 板），条段与图例圆点共用。
+   system 是中性「系统提示词」，走 --text-secondary 灰不占分类槽；
+   skills/tools 与诊断页成分条同名同类同色（--cat-3 / --cat-5）；
+   conversation 与成分条的 assistant 同义（对话内容），共用 --cat-4 青
+   —— 两处都刻意不借红/绿语义色。 */
 .cu-seg-system,
 .cu-swatch-system {
-	background: #4e7bdb;
+	background: var(--text-secondary);
 }
 
 .cu-seg-skills,
 .cu-swatch-skills {
-	background: #7b5bd6;
+	background: var(--cat-3);
 }
 
 .cu-seg-conversation,
 .cu-swatch-conversation {
-	background: #2ea44f;
+	background: var(--cat-4);
 }
 
 .cu-seg-tools,
 .cu-swatch-tools {
-	background: #d98a2b;
+	background: var(--cat-5);
 }
 
 .cu-note {
-	margin-top: 8px;
-	color: var(--text-dim);
-	font-size: 12px;
+	margin-top: var(--space-3);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 .composer-bar {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 .bar-btn {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 6px;
+	gap: var(--space-1);
+	padding: var(--space-2);
 	border-radius: var(--radius-sm);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
-.bar-btn:hover {
+/* :not(:disabled) —— .bar-btn 带 disabled 的调用点不少（pdf 翻页/缩放、产物「外部打开」、
+   转正按钮），CSS 的 :hover 对 disabled 元素照样匹配，不加这个守卫就会出现
+   「置灰了但悬停仍亮」的矛盾反馈（同 .mini-btn / .primary-btn 既有写法）。 */
+.bar-btn:hover:not(:disabled) {
 	background: var(--bg-hover);
 	color: var(--text);
 }
 
 .bar-btn-text {
-	font-size: 13px;
-	padding: 6px 8px;
+	font-size: var(--text-list);
+	padding: var(--space-2) var(--space-3);
 }
 
 /* 右上角产物面板开关（App 层渲染，与 ArtifactPanel 同范围：只在对话视图出现）。
    absolute 脱离 flex 流：面板开合 / sash 拖拽 / 宽度过渡都不推移它；
-   z-index 40 高于面板全屏态（30），全屏时按钮仍可点；低于阻塞审批弹窗（100）。
+   z 与面板全屏态同档（--z-overlay）：二者是 .app 的同级兄弟，按钮在 DOM 里
+   排在面板之后，同档下按树序后绘者在上 —— 全屏时仍浮在面板之上可点。
+   仍低于阻塞审批弹窗（--z-modal）。
    top/right 与 chat-header、preview-head 的 8px/12px 内边距对齐，同排呼吸。 */
 .panel-toggle-btn {
 	position: absolute;
 	top: 8px;
 	right: 12px;
-	z-index: 40;
+	z-index: var(--z-overlay);
 }
 
-/* 面板展开中的激活态：提亮到正文色（bar-btn 默认 --text-dim）。 */
+/* 面板展开中的激活态：提亮到正文色（bar-btn 默认 --text-secondary）。 */
 .panel-toggle-btn.active {
 	color: var(--text);
 }
 
 /* 左上角侧栏开关（App 层常驻，不随侧栏卸载 —— 收起时唯一的展开入口）。
-   与 .panel-toggle-btn 同一按钮语言、同一层级：面板全屏态（z 30）覆盖
-   整个窗口左缘，z-index 40 保证按钮浮在其上仍可点。top/left 与右开关镜像。 */
+   与 .panel-toggle-btn 同一按钮语言、同一层级：面板全屏态覆盖整个窗口左缘，
+   同档 + 按钮在 DOM 里靠后 ⇒ 树序后绘者在面板之上，仍可点。top/left 与右开关镜像。 */
 .sidebar-toggle-btn {
 	position: absolute;
 	top: 8px;
 	left: 12px;
-	z-index: 40;
+	z-index: var(--z-overlay);
 }
 
 /* 侧栏展开中的激活态：提亮到正文色（与右开关同口径）。 */
@@ -1111,7 +1132,7 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 32px;
 	height: 32px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: var(--primary);
 	color: var(--primary-text);
 }
@@ -1122,7 +1143,7 @@ textarea:focus-visible {
 
 .send-btn:disabled {
 	background: var(--border);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	cursor: default;
 	opacity: 1;
 }
@@ -1132,8 +1153,8 @@ textarea:focus-visible {
 /* 横向滚动：一次贴十几张截图也不会把输入卡撑高。 */
 .attachment-strip {
 	display: flex;
-	gap: 8px;
-	margin: 0 2px 8px;
+	gap: var(--space-3);
+	margin: 0 2px var(--space-3);
 	overflow-x: auto;
 }
 
@@ -1155,7 +1176,10 @@ textarea:focus-visible {
 	object-fit: cover;
 }
 
-/* 删除钮收在缩略图右上角：strip 有 overflow-x 裁切，钮若凸出到 thumb 外会被剪掉。 */
+/* 删除钮收在缩略图右上角：strip 有 overflow-x 裁切，钮若凸出到 thumb 外会被剪掉。
+   底色是缩略图上的小 scrim（55% / hover 78%），语义不是模态背板，故不并入
+   --overlay(40%)——归 40% 后白 × 在亮图上会不够清，且 hover 档会与常态撞成同色。
+   登记为 token 例外（见 docs/design-tokens-migration.md）。 */
 .attachment-remove {
 	position: absolute;
 	top: 2px;
@@ -1165,10 +1189,10 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 16px;
 	height: 16px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: rgba(0, 0, 0, 0.55);
-	color: #fff;
-	font-size: 12px;
+	color: var(--primary-text);
+	font-size: var(--text-meta);
 	line-height: 1;
 }
 
@@ -1182,20 +1206,20 @@ textarea:focus-visible {
 .document-ref-strip {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
-	margin: 0 2px 8px;
+	gap: var(--space-2);
+	margin: 0 2px var(--space-3);
 }
 
 .document-ref-chip {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	max-width: 240px;
-	padding: 4px 6px;
+	padding: var(--space-1) var(--space-2);
 	border-radius: var(--radius-sm);
 	border: 1px solid var(--border);
 	background: var(--bg-raised);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	line-height: 1;
 }
 
@@ -1259,9 +1283,9 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 16px;
 	height: 16px;
-	border-radius: 50%;
-	color: var(--text-dim);
-	font-size: 13px;
+	border-radius: var(--radius-full);
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 	line-height: 1;
 	opacity: 0;
 }
@@ -1280,9 +1304,9 @@ textarea:focus-visible {
    以占位文本代替 —— 让用户发送前心里有数，而不是收不到图后才发现）。 */
 .vision-hint {
 	/* -4px 上收：紧贴缩略图条（其自带 8px 下边距），视觉上属于它。 */
-	margin: -4px 2px 8px;
-	font-size: 12px;
-	color: var(--text-dim);
+	margin: -4px 2px var(--space-3);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 拖拽悬停高亮：边框与一圈主色描边双提示（对标常见拖放目标反馈）。 */
@@ -1298,29 +1322,32 @@ textarea:focus-visible {
 .context-row {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	height: 32px;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 }
 
 /* WB workspace-picker / permission-setting chip 原值：高 32、padding 0 8、
-   胶囊圆角、透明底、三级灰 14/20；hover 只加深字色 + 字重 500，不起灰底。 */
+   胶囊圆角、透明底、三级灰 14/20。
+   偏离 WB 的一处（有意）：原实现 hover「加深字色 + 字重 500」，字重过渡每帧触发布局
+   与文字重排（DESIGN.md §5.1 禁止过渡布局属性），且 500↔400 的字宽变化会推挤同排
+   的相邻 chip。改成只过渡 color：--text-secondary(.5) → --text(纯黑) 本身已是明显的
+   加重信号，不需要字重参与（WB 的 500 在 14px 下与 400 的差别肉眼几乎不可辨）。 */
 .context-chip {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	height: 32px;
-	padding: 0 8px;
-	border-radius: 999px;
-	font-size: 14px;
+	padding: 0 var(--space-3);
+	border-radius: var(--radius-full);
+	font-size: var(--text-body);
 	line-height: 20px;
-	color: var(--text-dim);
-	transition: color 0.15s ease, font-weight 0.15s ease;
+	color: var(--text-secondary);
+	transition: color var(--dur-fast) ease;
 }
 
 .context-chip:hover {
 	color: var(--text);
-	font-weight: 500;
 }
 
 /* ── 案例卡片 ─────────────────────────────────────────────────── */
@@ -1332,17 +1359,17 @@ textarea:focus-visible {
 	left: 0;
 	right: 0;
 	bottom: 56px;
-	padding: 0 24px;
+	padding: 0 var(--space-6);
 }
 
 .cases-header {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--space-3);
 	/* WB playbooks 容器 gap 12（标题行与卡片行之间）。 */
-	margin-bottom: 12px;
+	margin-bottom: var(--space-4);
 	/* WB __title：14px/22、二级色（原为 13px 三级色）。 */
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	color: var(--text-secondary);
 }
@@ -1354,13 +1381,13 @@ textarea:focus-visible {
 .cases-action {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	/* WB __refresh/__view-more：高 24、padding 0 8、14px、圆角 12、二级色。 */
 	height: 24px;
-	padding: 0 8px;
-	font-size: 14px;
+	padding: 0 var(--space-3);
+	font-size: var(--text-body);
 	color: var(--text-secondary);
-	border-radius: 12px;
+	border-radius: var(--radius-full);
 }
 
 .cases-action:hover {
@@ -1373,7 +1400,7 @@ textarea:focus-visible {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
 	/* WB __row：4 列 gap 8（原我们 12）。 */
-	gap: 8px;
+	gap: var(--space-3);
 	justify-content: start;
 }
 
@@ -1381,11 +1408,11 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。 */
-	gap: 8px;
+	gap: var(--space-3);
 	border: 0;
 	background: transparent;
 	text-align: center;
-	transition: transform 0.18s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .case-cover {
@@ -1393,15 +1420,16 @@ textarea:focus-visible {
 	align-items: center;
 	justify-content: center;
 	width: 100%;
-	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 8% 黑描边。 */
+	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 描边。
+	   描边色由 WB 的 8% 黑收编到 --border（10% 黑，肉眼无差，且暗色下可用）。 */
 	aspect-ratio: 16 / 9;
-	border: 0.5px solid rgba(0, 0, 0, 0.08);
+	border: 0.5px solid var(--border);
 	border-radius: var(--radius-lg);
 	/* 封面 = 体裁语义图标 + 统一单色底：颜色不编码信息（旧 6 组随机 pastel
 	   135° 渐变是全站唯一的 AI slop 特征，已删除），内容类型由图标编码。 */
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	transition: background 0.18s ease;
+	color: var(--text-secondary);
+	transition: background var(--dur-fast) ease;
 }
 
 /* hover 无上浮无阴影（与 task-item 等全站卡片 hover 语言一致）：封面底色加深一档。 */
@@ -1412,7 +1440,7 @@ textarea:focus-visible {
 .case-title {
 	/* WB __card-title：14/22、400、二级色、居中省略（原 13px 左对齐带 padding）。 */
 	padding: 0;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	font-weight: 400;
 	color: var(--text-secondary);
@@ -1432,7 +1460,7 @@ textarea:focus-visible {
  * 文字基色走 --shimmer-color（默认三级灰），套用方按需覆盖变量。
  */
 .text-shimmer {
-	--shimmer-color: var(--text-dim);
+	--shimmer-color: var(--text-secondary);
 	background-image: linear-gradient(110deg,
 			color-mix(in srgb, var(--shimmer-color) 26%, transparent) 40%,
 			color-mix(in srgb, var(--shimmer-color) 55%, transparent) 50%,
@@ -1475,18 +1503,18 @@ textarea:focus-visible {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	/* 左右内边距让出窗口两角：App 层的侧栏开关（左）与产物面板开关（右）
 	   钉在那里，行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区
 	   （48 = 40px 开关占位 + 8px gap）。 */
-	padding: 8px 48px;
+	padding: var(--space-3) 48px;
 	border-bottom: 1px solid var(--border);
 }
 
 /* 侧栏展开时左上角开关落在侧栏 brand 行内（brand 已让位），不压 header，
    恢复常规左内边距 —— 只有侧栏收起（无 .sidebar 兄弟）才需要让位。 */
 .sidebar~.chat .chat-header {
-	padding-left: 12px;
+	padding-left: var(--space-4);
 }
 
 .chat-title {
@@ -1510,19 +1538,21 @@ textarea:focus-visible {
 .stream {
 	flex: 1 1 auto;
 	overflow-y: auto;
-	padding: 20px 24px;
+	padding: var(--space-5) var(--space-6);
 	/* 普通块流而非 flex 纵向：flex 子项的 min-height:auto 对 overflow:hidden
 	   元素（工具卡）计算为 0，长输出被压到 0px 整卡裁没 —— 「工具调用挤没」
 	   的根因。WorkBuddy 消息流同为块流；间距改由各元素自管 margin
 	   （用户 32 / 回合头 12 / 助手 8 / 工具 4），统一 gap 表达不了这套节奏。 */
 	display: block;
 	/* 整列 hydration reveal（对标 WorkBuddy __content--hydrating → --revealed：
-	   0.32s cubic-bezier(0.34,1.56,0.64,1) 带回弹）。.stream 不随消息更新重建，
+	   cubic-bezier(0.34,1.56,0.64,1) 带回弹）。.stream 不随消息更新重建，
 	   动画天然只在挂载时跑一次。fill-mode 用 backwards 而非 both：both 会让终帧
 	   translateY(0) 常驻，常驻 transform 使 .stream 成为 fixed 后代的包含块，
 	   图片放大预览（.image-preview-overlay，position:fixed）就被压回消息流盒内；
-	   backwards 只补起始帧，动画结束元素回归无 transform。 */
-	animation: stream-reveal 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+	   backwards 只补起始帧，动画结束元素回归无 transform。
+	   时长归档为 --dur-slow(280ms)；缓动是带回弹的第三档缓动（DESIGN.md §2.8 只列
+	   两个），去掉回弹会变成普通淡入，故保留原曲线、登记为 token 例外。 */
+	animation: stream-reveal var(--dur-slow) cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 }
 
 @keyframes stream-reveal {
@@ -1549,7 +1579,7 @@ textarea:focus-visible {
    叠加层钉在 .stream-wrap 底部（absolute，不随内容滚动），pointer-events:none
    不挡点击与选字，滚动条触底区只是视觉软收边。与「回到底部」按钮同一可见
    条件：在底部时内容自然收进 padding，无需渐隐。
-   层级：无 z-index，靠 DOM 序压在静态的 .stream 之上、让 z-index:1 的
+   层级：无 z-index，靠 DOM 序压在静态的 .stream 之上、让 --z-base 的
    .jump-to-bottom 浮在自己之上。 */
 .stream-fade {
 	position: absolute;
@@ -1560,7 +1590,7 @@ textarea:focus-visible {
 	background: linear-gradient(to bottom, transparent, var(--bg));
 	pointer-events: none;
 	opacity: 0;
-	transition: opacity 0.2s ease;
+	transition: opacity var(--dur-base) ease;
 }
 
 .stream-fade[data-visible="true"] {
@@ -1573,19 +1603,19 @@ textarea:focus-visible {
 	position: absolute;
 	left: 50%;
 	bottom: 20px;
-	z-index: 1;
+	z-index: var(--z-base);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	width: 32px;
 	height: 32px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	border: 1px solid var(--border);
 	background: var(--bg);
-	box-shadow: var(--shadow-card);
-	color: var(--text-dim);
+	box-shadow: var(--shadow-md);
+	color: var(--text-secondary);
 	transform: translateX(-50%);
-	animation: jump-to-bottom-in 0.16s ease-out;
+	animation: jump-to-bottom-in var(--dur-fast) ease-out;
 }
 
 .jump-to-bottom:hover {
@@ -1609,7 +1639,7 @@ textarea:focus-visible {
    每条 user 消息一个刻度，位置 = 消息顶端在 scrollHeight 中的比例。
    刻度宽 12px 落在 .stream 的 24px 左 padding 区内，不遮消息文字，
    内容区布局不动。容器 pointer-events:none 让左缘选字/滚动条不受干扰，
-   只有刻度本身可点。z-index 与 jump-to-bottom 同级（1），低于各弹层。 */
+   只有刻度本身可点。z-index 与 jump-to-bottom 同级（--z-base），低于各弹层。 */
 .turn-rail {
 	position: absolute;
 	left: 0;
@@ -1617,7 +1647,7 @@ textarea:focus-visible {
 	bottom: 0;
 	width: 14px;
 	pointer-events: none;
-	z-index: 1;
+	z-index: var(--z-base);
 }
 
 .turn-rail-tick {
@@ -1631,7 +1661,7 @@ textarea:focus-visible {
 	width: 12px;
 	height: 2px;
 	border-radius: 1px;
-	background: var(--text-dim);
+	background: var(--text-secondary);
 	opacity: 0.45;
 	/* top 按刻度中心给（ratio 是消息顶端），横杠自身高 2px 要上收一半。 */
 	transform: translateY(-50%);
@@ -1684,8 +1714,8 @@ textarea:focus-visible {
 .entry {
 	/* 浮动操作条（.entry-toolbar）的定位锚点。 */
 	position: relative;
-	padding: 10px 14px;
-	border-radius: 12px;
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--radius-md);
 	/* pre-wrap 只留给纯文本消息（用户气泡、错误）。
 	   助手消息走 .markdown 渲染，换行由 markdown 自己控制（normal）。 */
 	white-space: pre-wrap;
@@ -1700,11 +1730,11 @@ textarea:focus-visible {
 .turn-header {
 	display: flex;
 	align-items: flex-start;
-	gap: 10px;
+	gap: var(--space-3);
 	/* 垂直节奏自管（.stream 已无父级 gap），原来的 -4px 反吃 gap hack 同步删除；
 	   水平保持 0，贴齐消息正文左缘（entry 有 14px 内边距）。 */
-	margin: 12px 0;
-	padding-bottom: 4px;
+	margin: var(--space-4) 0;
+	padding-bottom: var(--space-1);
 }
 
 .turn-avatar {
@@ -1714,10 +1744,10 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 24px;
 	height: 24px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: var(--bg-raised);
 	border: 1px solid var(--border);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 	margin-top: 2px;
 }
@@ -1735,13 +1765,13 @@ textarea:focus-visible {
 
 .turn-duration {
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	/* 进行中的回合时长每秒刷新，比例宽数字每秒抖行宽（尾部 chevron 跟着跳）。 */
 	font-variant-numeric: tabular-nums;
 	/* chevron 挂在时长行尾（轮折叠开关）：图标与文字基线对齐靠 inline-flex。 */
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 }
 
 /* 可点击的回合头部（完成/取消轮的折叠开关）：宽度随内容收拢（通栏按钮
@@ -1762,7 +1792,7 @@ textarea:focus-visible {
 .turn-caret {
 	flex: 0 0 auto;
 	transform: rotate(-90deg);
-	transition: transform 0.15s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .turn-caret.open {
@@ -1772,9 +1802,9 @@ textarea:focus-visible {
 /* 「用户已取消」指示行：中断在消息流里留下的唯一痕迹（机制对标 WorkBuddy
    的取消终态），所以用最低调的三级灰单行，不做成卡片也不加图标。 */
 .user-cancelled {
-	padding: 4px 14px;
+	padding: var(--space-1) var(--space-4);
 	font-size: var(--text-emphasis);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* MetaFold 过程折叠行：回合结束后连续工具卡折成的一行摘要（机制对标
@@ -1784,19 +1814,19 @@ textarea:focus-visible {
 .metafold {
 	/* 消息流节奏：上下 8px。内部不用 flex gap —— 展开的工具卡已自带 4px
 	   上下 margin（与回合内工具行同节奏），父级 gap 会叠出双份间距。 */
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 }
 
 .metafold-row {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	/* 纯文字行：宽度随内容收拢，无卡片底。通栏矩形会和真正的内容卡
 	   抢视觉层级 —— 折叠行是过程的注脚，不是内容。 */
 	width: fit-content;
 	font-size: var(--text-emphasis);
 	line-height: 1.75;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	text-align: left;
 }
 
@@ -1823,8 +1853,8 @@ textarea:focus-visible {
 	opacity: 0;
 	transform: rotate(-90deg);
 	transition:
-		opacity 0.15s ease,
-		transform 0.15s ease;
+		opacity var(--dur-fast) ease,
+		transform var(--dur-fast) ease;
 }
 
 .metafold-row:hover .metafold-caret,
@@ -1848,10 +1878,10 @@ textarea:focus-visible {
 	visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		grid-template-rows 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+		grid-template-rows var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
 }
 
 .metafold-body.open {
@@ -1878,7 +1908,7 @@ textarea:focus-visible {
 	padding: 0;
 	/* WorkBuddy 用户消息的呼吸感（_userMessage 同口径）：上下 32px，
 	   与回合内的紧凑节奏拉开层级。 */
-	margin: 32px 0;
+	margin: var(--space-7) 0;
 }
 
 .user-bubble {
@@ -1887,7 +1917,7 @@ textarea:focus-visible {
 	max-width: 70%;
 	/* WorkBuddy 气泡自身（_userMessageBubble）是紧凑排版：padding 仅 8px 12px；
 	   上下 32px 的呼吸感在外层消息行（.entry.user 的 margin），不在气泡内边距。 */
-	padding: 8px 12px;
+	padding: var(--space-3) var(--space-4);
 	font-size: var(--text-emphasis);
 	line-height: 1.6;
 	border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
@@ -1903,8 +1933,8 @@ textarea:focus-visible {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: flex-end;
-	gap: 6px;
-	margin-top: 8px;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
 }
 
 /* 缩略图的可点外壳：button 复位走全局 button 规则，这里只接回原 img 上的
@@ -1930,14 +1960,14 @@ textarea:focus-visible {
 	position: absolute;
 	left: 50%;
 	bottom: -14px;
-	z-index: 20;
+	z-index: var(--z-panel);
 	transform: translateX(-50%);
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	height: 32px;
 	opacity: 0;
-	transition: opacity 0.2s ease;
+	transition: opacity var(--dur-base) ease;
 	pointer-events: none;
 }
 
@@ -1969,13 +1999,13 @@ textarea:focus-visible {
 	display: inline-flex;
 	align-items: center;
 	height: 32px;
-	padding: 0 10px;
-	font-size: 11px;
-	color: var(--text-dim);
+	padding: 0 var(--space-3);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: 999px;
-	box-shadow: var(--shadow-card);
+	border-radius: var(--radius-full);
+	box-shadow: var(--shadow-md);
 }
 
 .entry-icon-btn {
@@ -1985,11 +2015,11 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 32px;
 	height: 32px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: var(--bg);
 	border: 1px solid var(--border);
-	box-shadow: var(--shadow-card);
-	color: var(--text-dim);
+	box-shadow: var(--shadow-md);
+	color: var(--text-secondary);
 	padding: 2px;
 	pointer-events: auto;
 }
@@ -2000,16 +2030,18 @@ textarea:focus-visible {
 }
 
 /* 图片放大预览（点击气泡缩略图打开）：全屏遮罩 + 居中大图，点击任意处关闭。
-   层级压在权限弹窗（.modal-backdrop，100）之下 —— 审批是阻塞链路，
-   daemon 侧正 await 在应答上，必须始终可点。 */
+   层级压在权限弹窗（.modal-backdrop，--z-modal）之下 —— 审批是阻塞链路，
+   daemon 侧正 await 在应答上，必须始终可点。
+   遮罩保留 72%（不并 --overlay 40%）：这是沉浸式看图，背板太浅时聊天区会
+   与照片抢注意力；登记为 token 例外。 */
 .image-preview-overlay {
 	position: fixed;
 	inset: 0;
-	z-index: 90;
+	z-index: var(--z-overlay);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 24px;
+	padding: var(--space-6);
 	background: rgb(0 0 0 / 72%);
 	cursor: zoom-out;
 }
@@ -2026,16 +2058,16 @@ textarea:focus-visible {
 	   padding/border-radius，让正文与 turn-header 左缘对齐。 */
 	background: transparent;
 	border-radius: 0;
-	padding: 0 14px;
+	padding: 0 var(--space-4);
 	font-size: var(--text-body);
 	line-height: 20px;
 	/* 消息流节奏：上下 8px。 */
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 }
 
 /* 助手侧：左对齐贴正文 —— assistant 消息在左，与用户气泡的右对齐相反。 */
 .entry-toolbar-left {
-	margin-top: 4px;
+	margin-top: var(--space-1);
 }
 
 /*
@@ -2049,11 +2081,11 @@ textarea:focus-visible {
 	align-items: center;
 	justify-content: center;
 	height: 32px;
-	padding: 0 12px;
-	border-radius: 999px;
+	padding: 0 var(--space-4);
+	border-radius: var(--radius-full);
 	background: var(--bg);
 	border: 1px solid var(--border);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 	color: var(--text);
 	font-size: var(--text-meta);
 	line-height: 1;
@@ -2073,9 +2105,9 @@ textarea:focus-visible {
 	width: fit-content;
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 	max-width: calc(100% - 32px);
-	padding: 12px 14px;
+	padding: var(--space-4) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
@@ -2084,7 +2116,7 @@ textarea:focus-visible {
 .error-card-head {
 	display: flex;
 	align-items: flex-start;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 .error-card-icon {
@@ -2104,10 +2136,10 @@ textarea:focus-visible {
 .error-card-meta {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	margin-left: 24px;
+	gap: var(--space-2);
+	margin-left: var(--space-6);
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .error-card-runid {
@@ -2119,7 +2151,7 @@ textarea:focus-visible {
 	align-items: center;
 	padding: 2px;
 	border-radius: 4px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .error-card-copy:hover {
@@ -2130,8 +2162,8 @@ textarea:focus-visible {
 /* 重试：实心深色底白字圆角按钮，与 .send-btn 同一设计语言。 */
 .error-card-retry {
 	align-self: flex-start;
-	margin-left: 24px;
-	padding: 6px 14px;
+	margin-left: var(--space-6);
+	padding: var(--space-2) var(--space-4);
 	border-radius: var(--radius-sm);
 	font-size: var(--text-list);
 	font-weight: 500;
@@ -2149,19 +2181,19 @@ textarea:focus-visible {
 	/* 无矩形外框（对齐 WorkBuddy：整块就是文字流里的一段，只有「深度思考」
 	   标题行可交互）。曾经的 border+radius+bg 框，其背景其实是渐隐文字
 	   background-clip: text hack 的陪衬——渐隐改纯色后框就没有存在理由了。 */
-	margin: 0 0 8px;
+	margin: 0 0 var(--space-3);
 	padding: 2px 0;
 }
 
 .thinking-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	width: 100%;
 	padding: 2px 0;
 	font-size: var(--text-meta);
-	color: var(--text-dim);
-	transition: color 0.16s ease;
+	color: var(--text-secondary);
+	transition: color var(--dur-fast) ease;
 }
 
 .thinking-head:hover {
@@ -2172,7 +2204,7 @@ textarea:focus-visible {
 .thinking-caret {
 	/* 折叠朝右、展开朝下（WorkBuddy/VSCode 同款约定）。 */
 	transform: rotate(-90deg);
-	transition: transform 0.15s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .thinking-caret.open {
@@ -2182,7 +2214,7 @@ textarea:focus-visible {
 .thinking-body {
 	margin: 0;
 	/* WorkBuddy 实测值：上 2px、左 12px 内边距 + 4px 左边条标识「推导过程」。 */
-	padding: 2px 0 0 12px;
+	padding: 2px 0 0 var(--space-4);
 	border-left: 4px solid var(--border);
 	font-size: var(--text-meta);
 	white-space: pre-wrap;
@@ -2192,7 +2224,7 @@ textarea:focus-visible {
 	overflow-y: auto;
 	/* 纯色三级灰（WorkBuddy 完成态为纯色文字，渐隐是流式 shimmer 的事，
 	   而 shimmer 已在标题行表达）。 */
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* Markdown 渲染区：模型输出的结构化排版。 */
@@ -2206,45 +2238,46 @@ textarea:focus-visible {
 .markdown h1,
 .markdown h2,
 .markdown h3 {
-	margin: 14px 0 6px;
+	margin: var(--space-4) 0 var(--space-2);
 	font-size: var(--text-emphasis);
 	font-weight: 600;
 	line-height: 1.4;
 }
 
 .markdown p {
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 }
 
 .markdown ul,
 .markdown ol {
-	margin: 8px 0;
-	padding-left: 22px;
+	margin: var(--space-3) 0;
+	padding-left: var(--space-6);
 }
 
 .markdown li {
-	margin: 3px 0;
+	margin: 2px 0;
 }
 
 .markdown blockquote {
-	margin: 8px 0;
-	padding: 4px 12px;
+	margin: var(--space-3) 0;
+	padding: var(--space-1) var(--space-4);
 	border-left: 3px solid var(--border);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .markdown code {
-	padding: 1px 5px;
-	background: rgb(0 0 0 / 5%);
+	padding: 2px var(--space-1);
+	/* 5% 黑与 --bg-hover 等值（白底上即 #f2f2f2）；走变量后暗色下自动变浅色叠层。 */
+	background: var(--bg-hover);
 	border-radius: 4px;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	font-size: var(--text-meta);
 }
 
 .markdown pre {
-	margin: 8px 0;
-	padding: 10px 12px;
-	background: rgb(0 0 0 / 5%);
+	margin: var(--space-3) 0;
+	padding: var(--space-3) var(--space-4);
+	background: var(--bg-hover);
 	border-radius: var(--radius-md);
 	overflow-x: auto;
 }
@@ -2257,16 +2290,19 @@ textarea:focus-visible {
 
 /* 行内 code 路径徽章（markdown.tsx InlineCode，对标 WorkBuddy cb-clickable-path
    浅色主题：#1470B4 字 / #E9EEF2 底）。截断在文本层做，不靠 max-width ——
-   box-decoration-break: clone 保证折行时两段各自成徽章、不断裂。 */
+   box-decoration-break: clone 保证折行时两段各自成徽章、不断裂。
+   字色收编为 --accent；两档底色（常态 #e9eef2 / hover #dde6ee）是 WB 原值的
+   accent 浅色调，与 --accent 不同轨（不是与 token 等值的硬编码），保留原值并
+   登记为 token 例外，避免为它另造第 7 档分类色。 */
 .markdown code.clickable-path {
-	padding: 1px 6px;
+	padding: 2px var(--space-2);
 	line-height: 1.5;
 	background: #e9eef2;
 	border-radius: 4px;
-	color: #1470b4;
+	color: var(--accent);
 	cursor: pointer;
 	opacity: 0.85;
-	transition: opacity 0.2s ease, background-color 0.2s ease;
+	transition: opacity var(--dur-base) ease, background-color var(--dur-base) ease;
 	box-decoration-break: clone;
 	-webkit-box-decoration-break: clone;
 }
@@ -2283,7 +2319,7 @@ textarea:focus-visible {
 .markdown .clickable-path-icon {
 	display: inline-block;
 	vertical-align: -0.18em;
-	margin-right: 4px;
+	margin-right: var(--space-1);
 	color: inherit;
 }
 
@@ -2291,25 +2327,26 @@ textarea:focus-visible {
    原 .markdown pre 的 margin/border-radius 在卡片内归零 —— 两条规则同权重，
    靠书写顺序覆盖，所以本区块必须排在 .markdown pre 之后。 */
 .code-block {
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	overflow: hidden;
-	background: rgb(0 0 0 / 5%);
+	/* 5% 黑与 --bg-hover 等值；比 code-block-head 的 --bg-raised 深一档，层次保留。 */
+	background: var(--bg-hover);
 }
 
 .code-block-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 4px 8px 4px 12px;
+	padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
 	background: var(--bg-raised);
 	border-bottom: 1px solid var(--border);
 }
 
 .code-block-lang {
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 与 .entry-icon-btn 同一风格的图标按钮：三级灰，hover 加深。 */
@@ -2318,7 +2355,7 @@ textarea:focus-visible {
 	align-items: center;
 	padding: 2px;
 	border-radius: 4px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .code-block-copy:hover {
@@ -2334,14 +2371,14 @@ textarea:focus-visible {
 }
 
 .markdown table {
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 	border-collapse: collapse;
 	font-size: var(--text-list);
 }
 
 .markdown th,
 .markdown td {
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	text-align: left;
 }
@@ -2362,7 +2399,7 @@ textarea:focus-visible {
 }
 
 .markdown hr {
-	margin: 12px 0;
+	margin: var(--space-4) 0;
 	border: 0;
 	border-top: 1px solid var(--border);
 }
@@ -2377,18 +2414,18 @@ textarea:focus-visible {
 	   .stream 虽已改块流根治，此卡仍可能被嵌进 flex 纵向上下文，防线保留。 */
 	flex-shrink: 0;
 	/* 回合内工具行节奏：上下 4px，紧凑（WorkBuddy 回合内同口径）。 */
-	margin: 4px 0;
+	margin: var(--space-1) 0;
 	padding: 0;
 	font-size: var(--text-body);
 	line-height: 1.75;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	white-space: normal;
 }
 
 .tool-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
 	text-align: left;
 }
@@ -2401,12 +2438,12 @@ textarea:focus-visible {
 .tool-dot {
 	width: 6px;
 	height: 6px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	flex: 0 0 auto;
 }
 
 .tool-dot.running {
-	background: var(--text-dim);
+	background: var(--text-secondary);
 	/* 执行中用呼吸动画，静态点看不出「还在跑」。 */
 	animation: tool-pulse 1.1s ease-in-out infinite;
 }
@@ -2428,7 +2465,7 @@ textarea:focus-visible {
 /* 工具图标：完成态常驻，执行中由 tsx 摘走（状态全靠呼吸点 + 扫光字）。 */
 .tool-icon {
 	flex: 0 0 auto;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 失败状态图标与状态点同红（tool-dot.bad），不再保持哑色。 */
@@ -2448,7 +2485,7 @@ textarea:focus-visible {
 
 .tool-summary {
 	flex: 1 1 auto;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2459,10 +2496,10 @@ textarea:focus-visible {
 
 .tool-caret {
 	flex: 0 0 auto;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	transition:
-		transform 0.15s ease,
-		opacity 0.15s ease;
+		transform var(--dur-fast) ease,
+		opacity var(--dur-fast) ease;
 }
 
 .tool-caret.open {
@@ -2489,7 +2526,7 @@ textarea:focus-visible {
    max-height:0 也会留下 ~38px 空壳，所以垂直方向全部归零并参与过渡。 */
 .tool-detail-box {
 	margin: 0;
-	padding: 0 16px;
+	padding: 0 var(--space-5);
 	border: 0 solid var(--border);
 	border-radius: var(--radius-lg);
 	background: var(--bg-raised);
@@ -2500,16 +2537,16 @@ textarea:focus-visible {
 	visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		max-height 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		padding-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		padding-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		margin-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		margin-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		border-width 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
-	color: var(--text-dim);
+		max-height var(--dur-slow) var(--ease-out),
+		padding-top var(--dur-slow) var(--ease-out),
+		padding-bottom var(--dur-slow) var(--ease-out),
+		margin-top var(--dur-slow) var(--ease-out),
+		margin-bottom var(--dur-slow) var(--ease-out),
+		border-width var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
+	color: var(--text-secondary);
 	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
@@ -2517,8 +2554,8 @@ textarea:focus-visible {
 }
 
 .tool-detail-box.open {
-	margin: 4px 0 8px;
-	padding: 12px 16px;
+	margin: var(--space-1) 0 var(--space-3);
+	padding: var(--space-4) var(--space-5);
 	border-width: 1px;
 	/* 工具输出可能很长（读文件、搜索结果），限高避免把对话冲掉。 */
 	max-height: 300px;
@@ -2549,13 +2586,13 @@ textarea:focus-visible {
 .todo-list {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: var(--space-1);
 }
 
 .todo-row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	min-width: 0;
 }
 
@@ -2571,28 +2608,13 @@ textarea:focus-visible {
 	color: var(--text-faint);
 }
 
-/* in_progress 的绿色 spinner（#0cbf5b = --ok）：浅绿轨道 + 实绿弧，旋转。 */
-.todo-spinner {
-	width: 14px;
-	height: 14px;
-	border: 1.5px solid rgba(12, 191, 91, 0.25);
-	border-top-color: var(--ok);
-	border-radius: 50%;
-	animation: todo-spin 2s linear infinite;
-}
-
-@keyframes todo-spin {
-	to {
-		transform: rotate(360deg);
-	}
-}
-
-/* pending 的空心圆环。 */
+/* pending 的空心圆环。描边用 --text-secondary：这是图标/图形笔画（和
+   currentColor 图标同一色族），不是盒子边框，不并入 --border。 */
 .todo-ring {
 	width: 12px;
 	height: 12px;
-	border: 1px solid var(--text-dim);
-	border-radius: 50%;
+	border: 1px solid var(--text-secondary);
+	border-radius: var(--radius-full);
 }
 
 .todo-text {
@@ -2615,12 +2637,6 @@ textarea:focus-visible {
 	font-weight: 600;
 }
 
-/* 接收中/已清空的一行占位（灰字，无 glyph）。 */
-.todo-placeholder {
-	color: var(--text-dim);
-	line-height: 1.75;
-}
-
 /* ── 子代理活动卡（task 工具，spec: add-subagent-live-activity） ──────────
    开合机制整个复用 .tool-detail-box（同 todo-list-box 手法），这里只覆盖
    排版与底色：分组行是文本行而不是等宽输出；底色与清单卡同档（gray-3）。 */
@@ -2635,14 +2651,14 @@ textarea:focus-visible {
 .task-agent-list {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 /* 分组行：glyph 列 + 主列（标题行 + 动作行）。done 带输出时整行是按钮。 */
 .task-agent-row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
 	min-width: 0;
 	text-align: left;
@@ -2662,7 +2678,7 @@ textarea:focus-visible {
 .task-agent-title {
 	display: flex;
 	align-items: baseline;
-	gap: 8px;
+	gap: var(--space-3);
 	min-width: 0;
 	line-height: 1.75;
 }
@@ -2681,12 +2697,12 @@ textarea:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 动作行：运行中是最新动作（扫光在 tsx 摘挂），失败时是诊断文本（可换行）。 */
 .task-agent-action {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	font-size: var(--text-body);
 	line-height: 1.6;
 	white-space: pre-wrap;
@@ -2708,11 +2724,11 @@ textarea:focus-visible {
 
 /* done 组的可展开输出盒：等宽小字，缩进与主列对齐（glyph 16 + gap 8）。 */
 .task-agent-output {
-	margin: 2px 0 4px 24px;
-	padding: 8px 12px;
+	margin: 2px 0 var(--space-1) var(--space-6);
+	padding: var(--space-3) var(--space-4);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
@@ -2721,21 +2737,13 @@ textarea:focus-visible {
 	overflow: auto;
 }
 
-/* 投影未到达窗口期的一行占位（与 todo-placeholder 同语言）。 */
-.task-agent-placeholder {
-	color: var(--text-dim);
-	line-height: 1.75;
-}
-
-/* 减少动态偏好：呼吸点与 spinner 停转（静态点/静态环仍表达状态），
-   折叠展开过渡退化为瞬时切换。扫光、preview-panel、file-tree-chevron
-   的覆盖在各自区块。 */
+/* 减少动态偏好：呼吸点停摆（静态点仍表达状态），折叠展开过渡退化为瞬时切换。
+   扫光、preview-panel、file-tree-chevron 的覆盖在各自区块。
+   转圈（.spinner）不在这里列 —— Task 3 的全局 reduced-motion 兜底已经把
+   animation 的时长与迭代数压掉，再逐个点名是重复维护。 */
 @media (prefers-reduced-motion: reduce) {
 
-	.tool-dot.running,
-	.task-spinner,
-	.file-tree-spinner,
-	.todo-spinner {
+	.tool-dot.running {
 		animation: none;
 	}
 
@@ -2749,7 +2757,7 @@ textarea:focus-visible {
 /* write/edit 成功后的增删行徽章（+n / -n）。 */
 .tool-change {
 	display: flex;
-	gap: 6px;
+	gap: var(--space-2);
 	flex: 0 0 auto;
 	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -2769,7 +2777,7 @@ textarea:focus-visible {
    header 次级底色 + 分隔线。圆角/描边/底色全走既有 token，不另起色值。 */
 .widget-card {
 	width: 100%;
-	margin: 8px 0;
+	margin: var(--space-3) 0;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	background: var(--bg);
@@ -2781,8 +2789,8 @@ textarea:focus-visible {
 .widget-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 8px 12px;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4);
 	background: var(--bg-raised);
 	border-bottom: 1px solid var(--border);
 }
@@ -2802,12 +2810,7 @@ textarea:focus-visible {
 }
 
 .widget-status.dim {
-	color: var(--text-dim);
-}
-
-/* 进行中的 spinner 复用 .task-spinner，去掉它的右 margin（头部有 gap）。 */
-.widget-head .widget-status.task-spinner {
-	margin-right: 0;
+	color: var(--text-secondary);
 }
 
 .widget-title {
@@ -2831,9 +2834,9 @@ textarea:focus-visible {
 .widget-action {
 	display: flex;
 	align-items: center;
-	padding: 3px;
+	padding: 2px;
 	border-radius: 4px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .widget-action:hover:not(:disabled) {
@@ -2847,7 +2850,7 @@ textarea:focus-visible {
 }
 
 .widget-body {
-	padding: 8px 12px;
+	padding: var(--space-3) var(--space-4);
 }
 
 .widget-frame {
@@ -2856,54 +2859,54 @@ textarea:focus-visible {
 	border: none;
 	background: transparent;
 	/* 高度由 TSX 内联 style 驱动（RO 上报 + clamp + 防抖），过渡让微增长平滑。 */
-	transition: height 0.15s ease;
+	transition: height var(--dur-fast) ease;
 }
 
 .widget-loading {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 20px 4px;
-	color: var(--text-dim);
-	font-size: 13px;
+	gap: var(--space-1);
+	padding: var(--space-5) var(--space-1);
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 }
 
 .widget-error {
 	display: flex;
 	align-items: flex-start;
-	gap: 8px;
-	padding: 12px 4px;
+	gap: var(--space-3);
+	padding: var(--space-4) var(--space-1);
 	color: var(--danger);
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .widget-missing {
-	padding: 12px 4px;
-	color: var(--text-dim);
-	font-size: 13px;
+	padding: var(--space-4) var(--space-1);
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 }
 
 /* ── 产物卡片区（run 结束后，消息流底部） ─────────────────────── */
 
 .artifacts {
-	margin-top: 4px;
+	margin-top: var(--space-1);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
-	padding: 10px 12px;
+	padding: var(--space-3) var(--space-4);
 }
 
 .artifacts-header {
-	color: var(--text-dim);
-	font-size: 12px;
-	margin-bottom: 6px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	margin-bottom: var(--space-2);
 }
 
 /* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。 */
 .artifacts-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 .artifacts-grid:has(> :only-child) {
@@ -2917,7 +2920,8 @@ textarea:focus-visible {
 }
 
 /* 预览钮浮在卡上不再占 flex 位，右缘补出它的位置（10+22+8=40，与原
-   嵌套布局的间距一致），文件名/大小不钻到按钮底下。 */
+   嵌套布局的间距一致），文件名/大小不钻到按钮底下。
+   40px 是让位偏移不是间距档值：归 --space-7(32) 会让文件名贴到预览钮，故保留原值（登记为 token 例外）。 */
 .artifact-card-wrap:has(.artifact-preview-btn) .artifact-card {
 	padding-right: 40px;
 }
@@ -2926,12 +2930,12 @@ textarea:focus-visible {
 	position: relative;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .artifact-card:hover {
@@ -2959,7 +2963,7 @@ textarea:focus-visible {
 	width: 22px;
 	height: 22px;
 	border-radius: var(--radius-sm);
-	font-size: 13px;
+	font-size: var(--text-list);
 	line-height: 1;
 	flex-shrink: 0;
 }
@@ -2971,15 +2975,15 @@ textarea:focus-visible {
 /* 聚合入口：卡区下方两个文字按钮（三级灰 12px、右箭头）。 */
 .artifacts-footer {
 	display: flex;
-	gap: 16px;
-	margin-top: 8px;
-	padding-top: 8px;
+	gap: var(--space-5);
+	margin-top: var(--space-3);
+	padding-top: var(--space-3);
 	border-top: 1px solid var(--border);
 }
 
 .artifacts-more {
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	padding: 0;
 }
 
@@ -2993,9 +2997,9 @@ textarea:focus-visible {
 .sources-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	color: var(--text-dim);
-	font-size: 12px;
+	gap: var(--space-2);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	padding: 0;
 }
 
@@ -3020,7 +3024,7 @@ textarea:focus-visible {
 .source-favicon {
 	width: 16px;
 	height: 16px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	border: 1.5px solid var(--bg);
 	background: var(--bg-raised);
 	object-fit: cover;
@@ -3033,7 +3037,7 @@ textarea:focus-visible {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 来源面板：骨架复用 preview-panel/preview-head/preview-view，这里只补
@@ -3041,7 +3045,7 @@ textarea:focus-visible {
 .sources-title {
 	flex: 1 1 auto;
 	min-width: 0;
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 600;
 	color: var(--text);
 }
@@ -3056,9 +3060,9 @@ textarea:focus-visible {
 .source-item {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: var(--space-1);
 	width: 100%;
-	padding: 10px 12px;
+	padding: var(--space-3) var(--space-4);
 	border-radius: var(--radius-lg);
 	text-align: left;
 }
@@ -3070,10 +3074,10 @@ textarea:focus-visible {
 .source-item-meta {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	min-width: 0;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .source-item-site {
@@ -3086,7 +3090,7 @@ textarea:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 	color: var(--text);
 }
@@ -3096,8 +3100,8 @@ textarea:focus-visible {
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 2;
 	overflow: hidden;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* ── web_search 工具卡来源列表（spec: add-source-favicons） ─────────── */
@@ -3106,10 +3110,10 @@ textarea:focus-visible {
 .tool-sources {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	min-width: 0;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 开合机制镜像 .tool-detail-box（常驻 DOM + 类切换，理由见该处注释）：
@@ -3126,16 +3130,16 @@ textarea:focus-visible {
 	visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		max-height 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		margin-top 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		margin-bottom 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		opacity 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-		visibility 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+		max-height var(--dur-slow) var(--ease-out),
+		margin-top var(--dur-slow) var(--ease-out),
+		margin-bottom var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
 }
 
 .tool-source-list.open {
-	margin: 4px 0 8px;
+	margin: var(--space-1) 0 var(--space-3);
 	/* 来源可能很多（一次搜索十几条），限高与详情盒同口径。 */
 	max-height: 300px;
 	overflow: auto;
@@ -3149,9 +3153,9 @@ textarea:focus-visible {
 .tool-source-item {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 6px 8px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-lg);
 	text-align: left;
 }
@@ -3171,7 +3175,7 @@ textarea:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 13px;
+	font-size: var(--text-list);
 	color: var(--text);
 }
 
@@ -3184,8 +3188,8 @@ textarea:focus-visible {
 	flex-shrink: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg);
-	/* 宽度过渡：sash 拖拽与全屏切换共用（WorkBuddy 240ms ease 同参数）。 */
-	transition: width 0.24s ease;
+	/* 宽度过渡：sash 拖拽与全屏切换共用（WorkBuddy 240ms 同参数，归档 --dur-base）。 */
+	transition: width var(--dur-base) ease;
 }
 
 /* 全屏：absolute 覆盖主内容区，宽由定位撑满（非 width，避免与 transition 打架）。 */
@@ -3195,7 +3199,7 @@ textarea:focus-visible {
 	right: 0;
 	bottom: 0;
 	left: 0;
-	z-index: 30;
+	z-index: var(--z-overlay);
 	border-left: 0;
 	box-shadow: -8px 0 24px rgb(0 0 0 / 6%);
 	transition: none;
@@ -3215,7 +3219,7 @@ textarea:focus-visible {
 	bottom: 0;
 	width: 4px;
 	cursor: col-resize;
-	z-index: 1;
+	z-index: var(--z-base);
 }
 
 .preview-sash:hover,
@@ -3226,10 +3230,11 @@ textarea:focus-visible {
 .preview-head {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	/* 右内边距让出窗口右上角：App 层的面板开关（含面板全屏态）钉在那里，
-	   行尾的「全屏/外部打开」不能被它盖住（44 = 40px 开关占位 + 4px gap）。 */
-	padding: 8px 44px 8px 12px;
+	   行尾的「全屏/外部打开」不能被它盖住（44 = 40px 开关占位 + 4px gap）。
+	   44px 是让位偏移不是间距档值：归 --space-7(32) 会被开关盖住，故保留原值（登记为 token 例外）。 */
+	padding: var(--space-3) 44px var(--space-3) var(--space-4);
 	border-bottom: 1px solid var(--border);
 }
 
@@ -3243,11 +3248,11 @@ textarea:focus-visible {
 	position: absolute;
 	top: calc(100% + 4px);
 	left: 0;
-	z-index: 30;
+	z-index: var(--z-overlay);
 	width: 300px;
 	max-height: 60vh;
 	overflow-y: auto;
-	padding: 6px;
+	padding: var(--space-2);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
@@ -3268,34 +3273,28 @@ textarea:focus-visible {
 .preview-view {
 	flex: 1 1 auto;
 	overflow-y: auto;
-	padding: 6px;
+	padding: var(--space-2);
 }
 
 .preview-group-title {
-	padding: 4px 8px;
-	font-size: 12px;
+	padding: var(--space-1) var(--space-3);
+	font-size: var(--text-meta);
 	/* 组头是列表的标题层级，跟条目同用主文字色（WorkBuddy 的「任务 (74)」
-	   就是黑字）；只有 .preview-group-empty 这类「没有内容」的提示才留在 dim。 */
+	   就是黑字）；「没有内容」的提示走共享空态（.state-empty），落在 dim。 */
 	color: var(--text);
-}
-
-.preview-group-empty {
-	padding: 4px 8px 8px;
-	font-size: 12px;
-	color: var(--text-dim);
 }
 
 /* 变更视图汇总头「文件变更 +N -M」：增删色与工具卡（.tool-change）同口径。 */
 .changes-summary {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 4px 8px 8px;
-	font-size: 12px;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3) var(--space-3);
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	border-bottom: 1px solid var(--border);
-	margin-bottom: 4px;
+	margin-bottom: var(--space-1);
 }
 
 .changes-summary-label {
@@ -3314,12 +3313,12 @@ textarea:focus-visible {
 .preview-item {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	width: 100%;
-	padding: 5px 8px;
+	padding: var(--space-1) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
-	font-size: 13px;
+	font-size: var(--text-list);
 	/* 条目名走主文字色（原来整行 dim，比 WorkBuddy 的黑色条目弱一档）；
 	   右侧的 meta（大小/增删）另外降回 dim，层级靠那一处保持。 */
 	color: var(--text);
@@ -3340,9 +3339,9 @@ textarea:focus-visible {
 	margin-left: auto;
 	flex: 0 0 auto;
 	display: flex;
-	gap: 6px;
-	font-size: 12px;
-	color: var(--text-dim);
+	gap: var(--space-2);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
@@ -3359,12 +3358,12 @@ textarea:focus-visible {
 .file-tree-row {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	width: 100%;
-	padding: 4px 8px;
+	padding: var(--space-1) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
-	font-size: 13px;
+	font-size: var(--text-list);
 	/* 与 .preview-item 同口径：文件名走主文字色，图标自带分色，层级靠色而非灰度。 */
 	color: var(--text);
 }
@@ -3388,8 +3387,8 @@ textarea:focus-visible {
    颜色单独压回 dim：行文字已转主文字色，折叠箭头是控件不是内容，跟着变黑偏重。 */
 .file-tree-chevron {
 	transform: rotate(-90deg);
-	transition: transform 0.15s ease;
-	color: var(--text-dim);
+	transition: transform var(--dur-fast) ease;
+	color: var(--text-secondary);
 }
 
 .file-tree-chevron.expanded {
@@ -3408,18 +3407,6 @@ textarea:focus-visible {
 	white-space: nowrap;
 }
 
-/* 文件夹「加载中」转圈：复用 task-spin keyframes，不另写一份（§4 防重复）。 */
-.file-tree-spinner {
-	flex: 0 0 auto;
-	margin-left: auto;
-	width: 11px;
-	height: 11px;
-	border: 2px solid var(--border);
-	border-top-color: var(--text-dim);
-	border-radius: 50%;
-	animation: task-spin 0.8s linear infinite;
-}
-
 /* 单击预览的暂态 tab 标题斜体（VSCode 语义，WorkBuddy 同款）；双击固定后转正。 */
 .preview-tab-item.preview .preview-tab-label {
 	font-style: italic;
@@ -3429,7 +3416,7 @@ textarea:focus-visible {
 .preview-tabs-strip {
 	flex: 1 1 auto;
 	display: flex;
-	gap: 4px;
+	gap: var(--space-1);
 	overflow-x: auto;
 	min-width: 0;
 }
@@ -3439,8 +3426,8 @@ textarea:focus-visible {
 	align-items: center;
 	flex: 0 0 auto;
 	border-radius: var(--radius-sm);
-	color: var(--text-dim);
-	font-size: 13px;
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 }
 
 .preview-tab-item:hover {
@@ -3453,7 +3440,7 @@ textarea:focus-visible {
 }
 
 .preview-tab-label {
-	padding: 5px 4px 5px 10px;
+	padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
 	max-width: 180px;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -3463,8 +3450,8 @@ textarea:focus-visible {
 .preview-tab-close {
 	display: flex;
 	align-items: center;
-	padding: 5px 6px 5px 2px;
-	color: var(--text-dim);
+	padding: var(--space-1) var(--space-2) var(--space-1) 2px;
+	color: var(--text-secondary);
 	border-radius: var(--radius-sm);
 }
 
@@ -3482,7 +3469,8 @@ textarea:focus-visible {
 .preview-frame {
 	flex: 1 1 auto;
 	border: 0;
-	background: #fff;
+	/* iframe 底必须是纯白（宿主 --bg），否则透明 iframe 会透出面板灰。 */
+	background: var(--bg);
 }
 
 .preview-image {
@@ -3491,7 +3479,8 @@ textarea:focus-visible {
 	background: var(--bg-raised);
 }
 
-/* 视频：与 .preview-image 同款撑满 + object-fit 信箱；黑底是视频信箱的通用底色。 */
+/* 视频：与 .preview-image 同款撑满 + object-fit 信箱；黑底是视频信箱的通用底色
+   （字母箱要纯黑，不能跟主题走，故保留 #000 不入 token）。 */
 .preview-video {
 	flex: 1 1 auto;
 	object-fit: contain;
@@ -3513,29 +3502,29 @@ textarea:focus-visible {
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 12px;
-	padding: 24px;
-	color: var(--text-dim);
+	gap: var(--space-4);
+	padding: var(--space-6);
+	color: var(--text-secondary);
 }
 
 .preview-placeholder-message {
 	margin: 0;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .preview-actions {
 	display: flex;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 /* 占位里的操作按钮/链接同款：描边胶囊，button 与 a 视觉对齐。 */
 .preview-action {
-	padding: 6px 14px;
+	padding: var(--space-2) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: var(--text);
-	font-size: 13px;
+	font-size: var(--text-list);
 	text-decoration: none;
 }
 
@@ -3546,9 +3535,9 @@ textarea:focus-visible {
 .preview-text {
 	flex: 1 1 auto;
 	margin: 0;
-	padding: 12px 16px;
+	padding: var(--space-4) var(--space-5);
 	overflow: auto;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -3565,7 +3554,7 @@ textarea:focus-visible {
 /* markdown 预览：富文本渲染容器，排版样式在 .markdown，这里只管布局。 */
 .preview-markdown {
 	flex: 1 1 auto;
-	padding: 12px 16px;
+	padding: var(--space-4) var(--space-5);
 	overflow: auto;
 }
 
@@ -3578,15 +3567,15 @@ textarea:focus-visible {
 .preview-diff {
 	flex: 1 1 auto;
 	margin: 0;
-	padding: 12px 0;
+	padding: var(--space-4) 0;
 	overflow: auto;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	line-height: 1.6;
 }
 
 .preview-diff>div {
-	padding: 0 16px;
+	padding: 0 var(--space-5);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -3602,7 +3591,7 @@ textarea:focus-visible {
 }
 
 .diff-hunk {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /*
@@ -3619,11 +3608,11 @@ textarea:focus-visible {
 .preview-pdf-toolbar {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 6px 12px;
+	gap: var(--space-1);
+	padding: var(--space-2) var(--space-4);
 	border-bottom: 1px solid var(--border);
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .preview-pdf-pages {
@@ -3634,10 +3623,10 @@ textarea:focus-visible {
 
 .preview-pdf-page-input {
 	width: 3em;
-	padding: 2px 4px;
+	padding: 2px var(--space-1);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	text-align: center;
 	color: var(--text);
 }
@@ -3645,7 +3634,7 @@ textarea:focus-visible {
 .preview-pdf-sep {
 	width: 1px;
 	height: 16px;
-	margin: 0 4px;
+	margin: 0 var(--space-1);
 	background: var(--border);
 }
 
@@ -3657,15 +3646,17 @@ textarea:focus-visible {
 .preview-pdf-body {
 	flex: 1 1 auto;
 	overflow: auto;
-	padding: 16px;
+	padding: var(--space-5);
 	background: var(--bg-raised);
 }
 
-/* 单页白纸居中；react-pdf 的 canvas 与文本层都由它定位。 */
+/* 单页白纸居中；react-pdf 的 canvas 与文本层都由它定位。
+   「纸」必须是纯白，走 --bg（亮色即 #fff）；阴影是纸张抬升，档外，见下方注释。 */
 .preview-pdf-body .react-pdf__Page {
 	margin: 0 auto;
+	/* 纸张阴影（1px/4px 15%）是档外的场景值，与输入卡阴影同理保留原值。 */
 	box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
-	background: #fff;
+	background: var(--bg);
 }
 
 /*
@@ -3682,11 +3673,11 @@ textarea:focus-visible {
 .preview-office-bar {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 6px 12px;
+	gap: var(--space-1);
+	padding: var(--space-2) var(--space-4);
 	border-bottom: 1px solid var(--border);
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 文件名占满剩余宽度并省略号截断，把操作按钮挤到最右。 */
@@ -3717,13 +3708,14 @@ textarea:focus-visible {
 .office-docx .docx-wrapper {
 	display: block;
 	background: transparent;
-	padding: 16px;
+	padding: var(--space-5);
 }
 
 .office-docx .docx-wrapper>section.docx {
-	background: #fff;
+	/* docx「纸」纯白，同 pdf 页：走 --bg；纸张阴影档外保留原值。 */
+	background: var(--bg);
 	box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
-	margin: 0 auto 16px;
+	margin: 0 auto var(--space-5);
 }
 
 /* xlsx：fortune-sheet 根节点是 100%×100%，容器给死尺寸并禁滚动（表格内部自己滚）。 */
@@ -3746,35 +3738,24 @@ textarea:focus-visible {
 .office-overlay {
 	position: absolute;
 	inset: 0;
-	z-index: 1;
+	z-index: var(--z-base);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 24px;
+	padding: var(--space-6);
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 13px;
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 	text-align: center;
 }
 
 .office-pptx {
-	padding: 16px 0;
+	padding: var(--space-5) 0;
 }
 
 /* 库的 wrapper 默认黑底（放映场景的语言），嵌进预览面板要透明底（WorkBuddy 同款覆盖）。 */
 .office-pptx .pptx-preview-wrapper {
 	background: transparent !important;
-}
-
-.preview-fallback {
-	flex: 1 1 auto;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	color: var(--text-dim);
-	font-size: 13px;
-	padding: 24px;
-	text-align: center;
 }
 
 .preview-link {
@@ -3785,9 +3766,9 @@ textarea:focus-visible {
 .stream-pending {
 	display: flex;
 	align-items: baseline;
-	gap: 8px;
-	color: var(--text-dim);
-	font-size: 13px;
+	gap: var(--space-3);
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 }
 
 /*
@@ -3798,7 +3779,7 @@ textarea:focus-visible {
 .pending-tip {
 	display: inline-flex;
 	align-items: baseline;
-	gap: 6px;
+	gap: var(--space-2);
 	min-width: 0;
 	overflow: hidden;
 	white-space: nowrap;
@@ -3815,8 +3796,8 @@ textarea:focus-visible {
 	padding: 0 2px;
 	border: none;
 	background: none;
-	color: var(--text-dim);
-	font-size: 13px;
+	color: var(--text-secondary);
+	font-size: var(--text-list);
 	line-height: 1;
 	cursor: pointer;
 }
@@ -3827,7 +3808,7 @@ textarea:focus-visible {
 
 .chat-composer {
 	flex: 0 0 auto;
-	padding: 12px 24px 16px;
+	padding: var(--space-4) var(--space-6) var(--space-5);
 }
 
 /* 输入区与消息流同一内容宽口径（动态列宽居中）：宽屏下输入框不甩开消息列。 */
@@ -3846,11 +3827,11 @@ textarea:focus-visible {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: baseline;
-	gap: 6px;
-	margin-top: 6px;
-	padding-inline: 16px;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	padding-inline: var(--space-5);
 	font-size: var(--text-meta);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -3867,8 +3848,8 @@ textarea:focus-visible {
 .quick-prompts {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 8px;
-	margin-bottom: 10px;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
 }
 
 /* pill 语言沿用首页 .capability-chip 那套（白底细边胶囊、hover 浅底），
@@ -3877,16 +3858,17 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	height: 30px;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 	border: 1px solid var(--border);
-	border-radius: 999px;
-	font-size: 13px;
+	border-radius: var(--radius-full);
+	font-size: var(--text-list);
 	color: var(--text-secondary);
 	background: var(--bg);
 }
 
 .quick-prompt-chip:hover {
-	background: #f2f2f2;
+	/* 同 .capability-chip:hover：WB 的 #f2f2f2 归到唯一 hover 底 --bg-hover。 */
+	background: var(--bg-hover);
 	color: var(--text);
 }
 
@@ -3896,10 +3878,14 @@ textarea:focus-visible {
 	position: relative;
 }
 
+/* 透明点外关闭背板：与它服务的弹层同档（--z-panel），靠 DOM 序分层 ——
+   所有调用点都是「先渲染 backdrop、再渲染弹层」（workspace-picker / model-menu /
+   permission-menu / plus-menu / sidebar 的 space-menu），同档下弹层后绘、压在背板之上。
+   若将来有人把 backdrop 放到弹层之后渲染，弹层会被背板挡住点不到。 */
 .ws-backdrop {
 	position: fixed;
 	inset: 0;
-	z-index: 10;
+	z-index: var(--z-panel);
 	cursor: default;
 }
 
@@ -3907,49 +3893,45 @@ textarea:focus-visible {
 	position: absolute;
 	left: 0;
 	bottom: calc(100% + 8px);
-	z-index: 20;
+	z-index: var(--z-panel);
 	width: 300px;
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: 12px;
-	box-shadow: var(--shadow-card);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
 	overflow: hidden;
 }
 
 .ws-list {
 	max-height: 240px;
 	overflow-y: auto;
-	padding: 6px;
-}
-
-.ws-hint {
-	padding: 10px 12px;
-	font-size: 12px;
-	color: var(--text-dim);
+	padding: var(--space-2);
 }
 
 .ws-item {
 	position: relative;
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
+	gap: 2px;
 	width: 100%;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
 
-.ws-item:hover {
+/* busy 时整列禁用（workspace-picker 在切换/创建中禁用全部行与动作），
+   悬停高亮必须跟着禁用走。 */
+.ws-item:hover:not(:disabled) {
 	background: var(--bg-hover);
 }
 
 .ws-item-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .ws-item-path {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -3961,13 +3943,13 @@ textarea:focus-visible {
 	position: absolute;
 	right: 10px;
 	top: 8px;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	color: var(--ok);
 }
 
 .ws-actions {
 	border-top: 1px solid var(--border);
-	padding: 6px;
+	padding: var(--space-2);
 	display: flex;
 	flex-direction: column;
 }
@@ -3975,27 +3957,27 @@ textarea:focus-visible {
 .ws-action {
 	display: flex;
 	align-items: center;
-	gap: 7px;
-	padding: 7px 10px;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
-	font-size: 13px;
+	font-size: var(--text-list);
 	text-align: left;
 }
 
-.ws-action:hover {
+.ws-action:hover:not(:disabled) {
 	background: var(--bg-hover);
 }
 
 .ws-create {
 	display: flex;
-	gap: 6px;
-	padding: 4px;
+	gap: var(--space-2);
+	padding: var(--space-1);
 }
 
 .ws-create input {
 	flex: 1 1 auto;
 	min-width: 0;
-	padding: 6px 9px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	font: inherit;
@@ -4008,11 +3990,11 @@ textarea:focus-visible {
 
 .ws-create button {
 	flex: 0 0 auto;
-	padding: 6px 12px;
+	padding: var(--space-2) var(--space-4);
 	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .ws-create button:last-child {
@@ -4022,15 +4004,8 @@ textarea:focus-visible {
 
 .ws-create button:disabled {
 	background: var(--border);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	cursor: default;
-}
-
-.ws-error {
-	padding: 8px 12px;
-	border-top: 1px solid var(--border);
-	font-size: 12px;
-	color: var(--danger);
 }
 
 /* ── 全局轻提示 ───────────────────────────────────────────────── */
@@ -4043,26 +4018,26 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
-	gap: 8px;
-	/* 盖住一切内容。 */
-	z-index: 100;
+	gap: var(--space-3);
+	/* 盖住一切内容：toast 必须高于模态（--z-modal），否则错误看不见。 */
+	z-index: var(--z-toast);
 	pointer-events: none;
 }
 
 .toast {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	max-width: min(420px, 80vw);
-	padding: 8px 14px;
+	padding: var(--space-3) var(--space-4);
 	background: var(--bg);
 	color: var(--text);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	font-size: var(--text-list);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 	pointer-events: auto;
-	animation: toast-in 0.16s ease-out;
+	animation: toast-in var(--dur-fast) ease-out;
 }
 
 .toast-icon {
@@ -4084,22 +4059,6 @@ textarea:focus-visible {
 	color: var(--warning);
 }
 
-.toast-spinner {
-	width: 12px;
-	height: 12px;
-	border-radius: 50%;
-	border: 2px solid var(--border);
-	border-top-color: var(--text-dim);
-	animation: toast-spin 0.8s linear infinite;
-}
-
-/* 减少动态偏好下停转：spinner 只表「进行中」，静态环同样传达，旋转纯装饰。 */
-@media (prefers-reduced-motion: reduce) {
-	.toast-spinner {
-		animation: none;
-	}
-}
-
 @keyframes toast-in {
 	from {
 		opacity: 0;
@@ -4109,12 +4068,6 @@ textarea:focus-visible {
 	to {
 		opacity: 1;
 		transform: translateY(0);
-	}
-}
-
-@keyframes toast-spin {
-	to {
-		transform: rotate(360deg);
 	}
 }
 
@@ -4134,11 +4087,11 @@ textarea:focus-visible {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--space-3);
 	/* 右内边距让出窗口右上角：面板收起时 App 层的开关钉在那里，
 	   行尾的 mini-btn 不能滑进它的点击区（50 = 40px 开关占位 + 10px gap）。
 	   左内边距同理让出左上角的侧栏开关（侧栏收起时它压住返回按钮）。 */
-	padding: 12px 50px 12px 48px;
+	padding: var(--space-4) 50px var(--space-4) 48px;
 	border-bottom: 1px solid var(--border);
 }
 
@@ -4146,12 +4099,12 @@ textarea:focus-visible {
    diagnostics / skills 视图复用 .settings 骨架，同一条规则覆盖。 */
 .sidebar~.settings .settings-head,
 .sidebar~.skills .skills-head {
-	padding-left: 20px;
+	padding-left: var(--space-5);
 }
 
 .settings-head h1 {
 	margin: 0;
-	font-size: 16px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
@@ -4159,28 +4112,10 @@ textarea:focus-visible {
 .skills-body {
 	flex: 1 1 auto;
 	overflow-y: auto;
-	padding: 20px 24px 40px;
+	padding: var(--space-5) var(--space-6) var(--space-7);
 	max-width: 900px;
 	width: 100%;
 	margin: 0 auto;
-}
-
-.settings-error {
-	margin-bottom: 16px;
-	padding: 10px 12px;
-	border: 1px solid var(--danger);
-	border-radius: var(--radius-md);
-	background: color-mix(in srgb, var(--danger) 8%, var(--bg));
-	color: var(--danger);
-	font-size: 13px;
-	/* 错误信息可能很长（如 models.json 的解析错误），保留换行便于阅读。 */
-	white-space: pre-wrap;
-}
-
-.settings-empty {
-	margin: 0;
-	color: var(--text-dim);
-	font-size: 13px;
 }
 
 /* ── 设置模态卡（WorkBuddy 式：左 nav + 右内容）────────────────── */
@@ -4195,7 +4130,7 @@ textarea:focus-visible {
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 	overflow: hidden;
 }
 
@@ -4203,7 +4138,7 @@ textarea:focus-visible {
 	position: absolute;
 	top: 10px;
 	right: 10px;
-	z-index: 1;
+	z-index: var(--z-base);
 }
 
 .settings-nav {
@@ -4212,18 +4147,18 @@ textarea:focus-visible {
 	gap: 2px;
 	flex: 0 0 auto;
 	min-width: 148px;
-	padding: 20px 12px;
+	padding: var(--space-5) var(--space-4);
 	border-right: 1px solid var(--border);
 	background: var(--bg-raised);
 	overflow-y: auto;
 }
 
 .settings-nav-item {
-	padding: 7px 12px;
+	padding: var(--space-2) var(--space-4);
 	border-radius: var(--radius-sm);
 	font-size: var(--text-list);
 	text-align: left;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .settings-nav-item:hover {
@@ -4241,31 +4176,31 @@ textarea:focus-visible {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	overscroll-behavior: contain;
-	padding: 24px 28px 32px;
+	padding: var(--space-6) var(--space-6) var(--space-7);
 }
 
 .settings-section {
-	margin-bottom: 28px;
+	margin-bottom: var(--space-6);
 }
 
 .settings-section-head {
 	display: flex;
 	align-items: center;
-	gap: 10px;
-	margin-bottom: 10px;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
 }
 
 .settings-section-head h2 {
 	margin: 0;
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 	flex: 1 1 auto;
 }
 
 .settings-foot {
-	margin: 24px 0 0;
-	color: var(--text-dim);
-	font-size: 12px;
+	margin: var(--space-6) 0 0;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	/* 配置目录路径较长，允许在任意位置断行。 */
 	overflow-wrap: anywhere;
 }
@@ -4274,14 +4209,14 @@ textarea:focus-visible {
 
 /* 画像编辑块与上面的开关行拉开距离（它有自己的标题行，不再套 provider-row）。 */
 .profile-block {
-	margin-top: 18px;
+	margin-top: var(--space-5);
 }
 
 .profile-block-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	margin-bottom: 8px;
+	gap: var(--space-2);
+	margin-bottom: var(--space-3);
 }
 
 /* 输入档位与 .field 家族同源（同一份 padding/border/字号），只是块级撑满
@@ -4290,20 +4225,20 @@ textarea:focus-visible {
 	box-sizing: border-box;
 	width: 100%;
 	min-height: 160px;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 	line-height: 1.6;
 	resize: vertical;
 }
 
 .profile-textarea:disabled {
 	background: var(--bg-raised);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* ── 通用小按钮 ───────────────────────────────────────────────── */
@@ -4311,12 +4246,12 @@ textarea:focus-visible {
 .mini-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 5px 10px;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text);
 	flex: 0 0 auto;
 }
@@ -4326,7 +4261,7 @@ textarea:focus-visible {
 }
 
 .mini-btn:disabled {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	cursor: default;
 }
 
@@ -4348,11 +4283,11 @@ textarea:focus-visible {
 }
 
 .primary-btn {
-	padding: 7px 18px;
+	padding: var(--space-2) var(--space-5);
 	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .primary-btn:hover:not(:disabled) {
@@ -4361,7 +4296,7 @@ textarea:focus-visible {
 
 .primary-btn:disabled {
 	background: var(--border);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	cursor: default;
 }
 
@@ -4370,14 +4305,14 @@ textarea:focus-visible {
 .model-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 .model-card {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	padding: 10px 12px;
+	gap: var(--space-1);
+	padding: var(--space-3) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
@@ -4388,7 +4323,10 @@ textarea:focus-visible {
 /* 卡片是 div+role=button（内部有测试按钮，不能再用 button 套 button），
  * 所以禁用态不看 :disabled 而看 .unavailable。 */
 .model-card:not(.unavailable):hover {
-	border-color: var(--text-dim);
+	/* hover 描边加深一档。原用 --text-secondary（次文色 .5）当边框色，是把「文字档」
+	   当描边用；改走 --text-faint(.3)，比基础 --border(#e6e6e6) 明显更深、仍是可见的
+	   hover 反馈（归 --border 会让 hover 与常态同色，反馈消失）。 */
+	border-color: var(--text-faint);
 }
 
 .model-card.active {
@@ -4405,11 +4343,11 @@ textarea:focus-visible {
 .model-card-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 .model-card-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 	flex: 1 1 auto;
 	overflow: hidden;
@@ -4418,8 +4356,8 @@ textarea:focus-visible {
 }
 
 .model-card-meta {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 卡片右上角的「测试」按钮：不拉伸，跟随 head 行右侧排布。 */
@@ -4429,7 +4367,7 @@ textarea:focus-visible {
 
 /* 连通性测试结果行：成功绿 / 失败红，单行小字。 */
 .model-card-probe {
-	font-size: 11px;
+	font-size: var(--text-meta);
 	line-height: 1.4;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -4467,8 +4405,8 @@ textarea:focus-visible {
 .provider-main {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 9px 12px;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4);
 }
 
 .provider-row:hover .provider-main {
@@ -4479,7 +4417,7 @@ textarea:focus-visible {
 .provider-dot {
 	width: 7px;
 	height: 7px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: var(--border);
 	flex: 0 0 auto;
 }
@@ -4489,23 +4427,23 @@ textarea:focus-visible {
 }
 
 .provider-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 	flex: 0 0 auto;
 }
 
 .provider-tag {
-	padding: 1px 6px;
+	padding: 2px var(--space-2);
 	border-radius: 4px;
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 11px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 .provider-meta,
 .provider-hint {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -4514,21 +4452,21 @@ textarea:focus-visible {
 .key-input {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 0 12px 10px;
+	gap: var(--space-3);
+	padding: 0 var(--space-4) var(--space-3);
 	flex-wrap: wrap;
 }
 
 .key-input input,
 .key-input select {
 	flex: 1 1 260px;
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .key-input select {
@@ -4538,8 +4476,8 @@ textarea:focus-visible {
 }
 
 .key-note {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* ── 提示词预览（设置页） ─────────────────────────────────────── */
@@ -4548,31 +4486,31 @@ textarea:focus-visible {
 .preview-controls {
 	display: flex;
 	align-items: flex-end;
-	gap: 10px;
+	gap: var(--space-3);
 	flex-wrap: wrap;
-	margin-bottom: 10px;
+	margin-bottom: var(--space-3);
 }
 
 .preview-field {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: var(--space-1);
 }
 
 .preview-field-label {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* 与 .key-input select 同一套控件外观（边框/圆角/字号），不另立风格。 */
 .preview-field select {
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 	cursor: pointer;
 }
 
@@ -4595,9 +4533,9 @@ textarea:focus-visible {
 .seg-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 8px 12px;
+	padding: var(--space-3) var(--space-4);
 	background: var(--bg);
 	text-align: left;
 }
@@ -4607,18 +4545,19 @@ textarea:focus-visible {
 }
 
 /*
- * 分段来源色块：按类别分色（skeleton 灰 / fragment 蓝 / mode 绿 / style 紫 /
- * skills 黄 / pi-context 青 / time 橙 / expert 粉）。灰绿走既有 token，
- * 其余色相是少量新增常量（同 #d9822b 的先例：color-mix 混到 bg/text 上，
- * 深浅两档由一个 --seg 派生，加新类别只需加一行色值）。
+ * 分段来源色块：按类别分色。色值取全局分类板 --cat-1..6（tokens.css），
+ * 与上下文用量成分条 / 用量浮层共用同一套色板——三处曾是三套互不相同的
+ * 硬编码色，现只此一处真源。灰（skeleton）与绿（mode）走语义色不占分类槽：
+ * 灰=未定中性、绿=模式正常，读法与 .timeline-span.end 一致。
+ * --seg 保留为本组局部中转变量：.seg-tag 靠它做 color-mix 派生深浅两档。
  */
 .seg-tag {
-	--seg: var(--text-dim);
-	padding: 1px 8px;
+	--seg: var(--text-secondary);
+	padding: 2px var(--space-3);
 	border-radius: 4px;
 	background: color-mix(in srgb, var(--seg) 14%, var(--bg));
 	color: color-mix(in srgb, var(--seg) 75%, var(--text));
-	font-size: 11px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	flex: 0 0 auto;
 	/* fragment:delivery-rules 这类名较长，超出省略而不是顶破卡片。 */
@@ -4629,11 +4568,11 @@ textarea:focus-visible {
 }
 
 .seg-skeleton {
-	--seg: var(--text-dim);
+	--seg: var(--text-secondary);
 }
 
 .seg-fragment {
-	--seg: #3b82f6;
+	--seg: var(--cat-1);
 }
 
 .seg-mode {
@@ -4641,36 +4580,36 @@ textarea:focus-visible {
 }
 
 .seg-style {
-	--seg: #8b5cf6;
+	--seg: var(--cat-2);
 }
 
 .seg-skills {
-	--seg: #ca8a04;
+	--seg: var(--cat-3);
 }
 
 .seg-pi-context {
-	--seg: #0891b2;
+	--seg: var(--cat-4);
 }
 
 .seg-time {
-	--seg: #d9822b;
+	--seg: var(--cat-5);
 }
 
 .seg-expert {
-	--seg: #db2777;
+	--seg: var(--cat-6);
 }
 
 .seg-chars {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	flex: 1 1 auto;
 	text-align: right;
 }
 
 .seg-chevron {
 	display: inline-flex;
-	color: var(--text-dim);
-	transition: transform 0.12s ease;
+	color: var(--text-secondary);
+	transition: transform var(--dur-fast) ease;
 }
 
 .seg-chevron.open {
@@ -4681,8 +4620,8 @@ textarea:focus-visible {
 .seg-body,
 .preview-full {
 	margin: 0;
-	padding: 10px 12px;
-	font-size: 12px;
+	padding: var(--space-3) var(--space-4);
+	font-size: var(--text-meta);
 	line-height: 1.6;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
@@ -4707,8 +4646,8 @@ textarea:focus-visible {
 }
 
 .test-result {
-	margin: 0 12px 6px;
-	font-size: 12px;
+	margin: 0 var(--space-4) var(--space-2);
+	font-size: var(--text-meta);
 	color: var(--danger);
 }
 
@@ -4723,8 +4662,8 @@ textarea:focus-visible {
 .preset-item {
 	display: flex;
 	align-items: flex-start;
-	gap: 9px;
-	padding: 10px 12px;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4);
 	text-align: left;
 	border-bottom: 1px solid var(--border);
 }
@@ -4746,8 +4685,8 @@ textarea:focus-visible {
 .preset-dot {
 	width: 7px;
 	height: 7px;
-	margin-top: 6px;
-	border-radius: 50%;
+	margin-top: var(--space-2);
+	border-radius: var(--radius-full);
 	background: var(--border);
 	flex: 0 0 auto;
 }
@@ -4764,13 +4703,13 @@ textarea:focus-visible {
 }
 
 .preset-label {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 }
 
 .preset-desc {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	line-height: 1.5;
 }
 
@@ -4779,9 +4718,9 @@ textarea:focus-visible {
 .custom-form {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
-	margin-bottom: 14px;
-	padding: 16px;
+	gap: var(--space-4);
+	margin-bottom: var(--space-4);
+	padding: var(--space-5);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg-sidebar);
@@ -4790,7 +4729,7 @@ textarea:focus-visible {
 .form-head {
 	display: flex;
 	align-items: center;
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 600;
 }
 
@@ -4801,17 +4740,17 @@ textarea:focus-visible {
 .form-actions {
 	display: flex;
 	justify-content: flex-end;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 .field {
 	display: flex;
 	flex-direction: column;
-	gap: 5px;
+	gap: var(--space-1);
 }
 
 .field-label {
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-weight: 500;
 }
 
@@ -4819,42 +4758,42 @@ textarea:focus-visible {
 .field input[type="password"],
 .field input[type="number"],
 .field input:not([type]) {
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .field input:disabled {
 	background: var(--bg-raised);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .field-hint {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .field-error {
-	font-size: 11px;
+	font-size: var(--text-meta);
 	color: var(--danger);
 }
 
 .check {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	font-size: 12px;
+	gap: var(--space-2);
+	font-size: var(--text-meta);
 	color: var(--text);
 	cursor: pointer;
 }
 
 .check.compact {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
@@ -4865,7 +4804,7 @@ textarea:focus-visible {
 
 .api-options {
 	display: flex;
-	gap: 8px;
+	gap: var(--space-3);
 	flex-wrap: wrap;
 }
 
@@ -4873,17 +4812,18 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 8px 12px;
+	padding: var(--space-3) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	text-align: left;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	flex: 1 1 170px;
 }
 
 .api-option:hover {
-	border-color: var(--text-dim);
+	/* 同 .model-card:hover：描边加深走 --text-faint，不用次文色当边框。 */
+	border-color: var(--text-faint);
 }
 
 .api-option.active {
@@ -4894,18 +4834,18 @@ textarea:focus-visible {
 .model-row {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	flex-wrap: wrap;
 }
 
 .model-row input {
-	padding: 6px 8px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--text-meta);
 }
 
 .model-row .model-id {
@@ -4934,9 +4874,9 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 4px;
+	padding: var(--space-1);
 	border-radius: var(--radius-sm);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
@@ -4956,7 +4896,7 @@ textarea:focus-visible {
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 }
 
 /* 弹层锚点：相对定位建立包含块，自身不随 flex 行拉伸。
@@ -4971,16 +4911,16 @@ textarea:focus-visible {
 .mode-menu {
 	top: calc(100% + 4px);
 	right: 0;
-	z-index: 20;
+	z-index: var(--z-panel);
 	min-width: 220px;
-	padding: 4px;
+	padding: var(--space-1);
 }
 
 .mode-menu-item {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 7px 9px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
@@ -4997,19 +4937,19 @@ textarea:focus-visible {
 .plus-menu-mode-label {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	font-size: 13px;
+	gap: var(--space-2);
+	font-size: var(--text-list);
 	font-weight: 500;
 }
 
 /* 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），用标签说明状态。 */
 .mode-menu-tag,
 .plus-menu-mode-tag {
-	padding: 0 5px;
+	padding: 0 var(--space-1);
 	border-radius: 4px;
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 10px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	font-weight: 400;
 }
 
@@ -5023,15 +4963,16 @@ textarea:focus-visible {
 .mode-menu-sub {
 	right: calc(100% + 4px);
 	top: -4px;
-	z-index: 21;
+	z-index: var(--z-panel);
 	min-width: 220px;
-	padding: 4px;
+	padding: var(--space-1);
 }
 
-/* 子菜单项要给 ✓ 留位（主菜单项没有 ✓，版式不动）。 */
+/* 子菜单项要给 ✓ 留位（主菜单项没有 ✓，版式不动）。原 30px 不在间距档：
+   就近向上取 --space-7(32)；取 --space-6(24) 会让文字贴上 ✓（right:8 + 16px 图标）。 */
 .mode-menu-sub .mode-menu-item {
 	position: relative;
-	padding-right: 30px;
+	padding-right: var(--space-7);
 }
 
 /* ── composer-bar 当前专家 chip ─────────────────────────────────── */
@@ -5043,11 +4984,11 @@ textarea:focus-visible {
 .expert-chip {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	height: 32px;
-	padding: 0 10px;
-	border-radius: 999px;
-	font-size: 13px;
+	padding: 0 var(--space-3);
+	border-radius: var(--radius-full);
+	font-size: var(--text-list);
 	color: var(--text);
 	white-space: nowrap;
 }
@@ -5066,10 +5007,10 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 16px;
 	height: 16px;
-	border-radius: 50%;
-	font-size: 10px;
+	border-radius: var(--radius-full);
+	font-size: var(--text-meta);
 	line-height: 1;
-	color: #fff;
+	color: var(--primary-text);
 }
 
 /* × 与头像同位互替：默认隐藏，hover/focus-within 时它出现、头像让位。 */
@@ -5079,11 +5020,11 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 16px;
 	height: 16px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	padding: 0;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	line-height: 1;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .expert-chip-close:hover {
@@ -5111,30 +5052,30 @@ textarea:focus-visible {
 .stat-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 .stat-card {
-	padding: 12px 14px;
+	padding: var(--space-4) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
 }
 
 .stat-value {
-	font-size: 20px;
+	font-size: var(--text-display);
 	font-weight: 600;
 	font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .stat-hint {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .stat-err {
@@ -5148,21 +5089,21 @@ textarea:focus-visible {
 .stat-table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .stat-table th,
 .stat-table td {
-	padding: 6px 10px 6px 0;
+	padding: var(--space-2) var(--space-3) var(--space-2) 0;
 	text-align: left;
 	border-bottom: 1px solid var(--border);
 	font-variant-numeric: tabular-nums;
 }
 
 .stat-table th {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	font-weight: 500;
-	font-size: 12px;
+	font-size: var(--text-meta);
 }
 
 .stat-table-clickable tbody tr {
@@ -5177,14 +5118,16 @@ textarea:focus-visible {
 	background: var(--bg-raised);
 }
 
-/* 上下文成分条：五段的色值刻意避开语义色（红/绿留给成败）。 */
+/* 上下文成分条：色值走全局分类板 --cat-*（与用量浮层 cu-seg / 分段 seg 同一套）。
+   沿用原注释的意图：五段刻意不借红/绿语义色（红绿留给成败），
+   所以 assistant 由原静绿改到 --cat-4 青，system 用 --text-secondary 中性灰。 */
 .comp-bar {
 	display: flex;
 	height: 14px;
 	border-radius: var(--radius-sm);
 	overflow: hidden;
 	background: var(--bg-raised);
-	margin-bottom: 8px;
+	margin-bottom: var(--space-3);
 }
 
 .comp-seg {
@@ -5192,67 +5135,67 @@ textarea:focus-visible {
 }
 
 .comp-system {
-	background: #6b7a90;
+	background: var(--text-secondary);
 }
 
 .comp-user {
-	background: #4c9aff;
+	background: var(--cat-1);
 }
 
 .comp-assistant {
-	background: #36b37e;
+	background: var(--cat-4);
 }
 
 .comp-thinking {
-	background: #8777d9;
+	background: var(--cat-2);
 }
 
 .comp-tools {
-	background: #ff991f;
+	background: var(--cat-5);
 }
 
 .comp-legend {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px 16px;
-	margin: 0 0 6px;
+	gap: var(--space-2) var(--space-5);
+	margin: 0 0 var(--space-2);
 	padding: 0;
 	list-style: none;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .comp-dot {
 	display: inline-block;
 	width: 8px;
 	height: 8px;
-	border-radius: 50%;
-	margin-right: 5px;
+	border-radius: var(--radius-full);
+	margin-right: var(--space-1);
 }
 
 /* run 时间线（泳道）：左标签、中轨道、右耗时。 */
 .timeline {
-	margin-top: 12px;
+	margin-top: var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	padding: 10px 12px;
+	padding: var(--space-3) var(--space-4);
 }
 
 .timeline-row {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--space-3);
 	height: 26px;
 }
 
 .timeline-row+.timeline-row {
-	margin-top: 4px;
+	margin-top: var(--space-1);
 }
 
 .timeline-label {
 	flex: 0 0 72px;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -5271,7 +5214,7 @@ textarea:focus-visible {
 	top: 0;
 	bottom: 0;
 	border-radius: 5px;
-	background: #4c9aff;
+	background: var(--cat-1);
 }
 
 .timeline-span.err {
@@ -5279,56 +5222,56 @@ textarea:focus-visible {
 }
 
 .timeline-span.running {
-	background: #ff991f;
+	background: var(--cat-5);
 }
 
 .timeline-dur {
 	flex: 0 0 56px;
 	text-align: right;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-variant-numeric: tabular-nums;
 }
 
 /* ── 会话时间线（运行台账泳道，spec: add-observability-ledger） ──────
  *
  * 与 .timeline 同一套行语言（标签/轨道/耗时），外层换成按 run 分块的卡片。
- * 条目色值全部复用既有调色板（comp-* 四色 + 语义色），不新增颜色。
+ * 条目色值全部复用全局分类板（--cat-*）与语义色，不新增颜色。
  */
 
 /* 会话选择器：与 .preview-field select 同一套控件外观，不另立风格。 */
 .ledger-select {
-	padding: 4px 8px;
+	padding: var(--space-1) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	cursor: pointer;
 	max-width: 240px;
 }
 
 .timeline-run {
-	margin-top: 12px;
+	margin-top: var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	padding: 10px 12px;
+	padding: var(--space-3) var(--space-4);
 }
 
 .timeline-run-head {
 	display: flex;
 	align-items: baseline;
-	gap: 6px 14px;
+	gap: var(--space-2) var(--space-4);
 	flex-wrap: wrap;
-	margin-bottom: 8px;
-	font-size: 12px;
-	color: var(--text-dim);
+	margin-bottom: var(--space-3);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-variant-numeric: tabular-nums;
 }
 
 .timeline-run-title {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 	color: var(--text);
 }
@@ -5350,26 +5293,26 @@ textarea:focus-visible {
 
 /* 嵌套缩进：工具/重试/压缩/终态挂在模型调用之下，不是平级步骤。 */
 .timeline-row.nested .timeline-label {
-	padding-left: 14px;
+	padding-left: var(--space-4);
 }
 
 .timeline-span.llm {
-	background: #8777d9;
+	background: var(--cat-2);
 }
 
-/* 重试标记用琥珀色（spec 钉死），与 running 同色但语义不同——
+/* 重试标记与 running 同色但语义不同——
  * running 是「正在进行」，retry 是「失败后的退避」，行标签区分。 */
 .timeline-span.retry {
-	background: #ff991f;
+	background: var(--cat-5);
 }
 
 .timeline-span.compaction {
-	background: #6b7a90;
+	background: var(--text-secondary);
 }
 
 /* 终态是零宽时刻标记：默认灰，成功绿，失败/中断红（err 复用语义色）。 */
 .timeline-span.end {
-	background: var(--text-dim);
+	background: var(--text-secondary);
 }
 
 .timeline-span.end.ok {
@@ -5378,8 +5321,8 @@ textarea:focus-visible {
 
 /* 选中轮详情：计时五要素 + usage 五字段 + 请求快照拆分。 */
 .timeline-detail {
-	margin: 8px 0 4px;
-	padding: 10px 12px;
+	margin: var(--space-3) 0 var(--space-1);
+	padding: var(--space-3) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
@@ -5388,10 +5331,10 @@ textarea:focus-visible {
 .kv-grid {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px 18px;
-	font-size: 12px;
-	color: var(--text-dim);
-	margin-bottom: 8px;
+	gap: var(--space-2) var(--space-5);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+	margin-bottom: var(--space-3);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -5401,7 +5344,7 @@ textarea:focus-visible {
 }
 
 .snap-detail .comp-bar {
-	margin-top: 4px;
+	margin-top: var(--space-1);
 }
 
 .mode-menu-item.active .mode-menu-tag,
@@ -5415,8 +5358,8 @@ textarea:focus-visible {
 	   长句折行会把双行菜单项撑成三行；截断后完整文本走按钮 title tooltip。
 	   max-width 直接钉在 desc 上而非给子菜单加整体上限：短句菜单保持原宽，
 	   只有超长副行被截（专家体系对齐 Task 3.1）。 */
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	max-width: 300px;
 	white-space: nowrap;
 	overflow: hidden;
@@ -5440,10 +5383,10 @@ textarea:focus-visible {
 /* 停止二次确认的待确认态：按钮内容换成 Esc 徽章 —— 同时提示「再按一次 Esc 也行」。 */
 .stop-confirm-kbd {
 	font-family: inherit;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	font-weight: 600;
 	line-height: 1;
-	padding: 3px 5px;
+	padding: 2px var(--space-1);
 	border: 1px solid currentColor;
 	border-radius: 4px;
 }
@@ -5453,29 +5396,30 @@ textarea:focus-visible {
 /*
  * 阻塞式：daemon 侧的工具执行正 await 在这条链路上。
  * 遮罩不可点关闭 —— 误触悬空会让工具永久挂住，只能从按钮或 Esc 作答。
+ * 背板原 32%，收编到唯一的 --overlay(40%)：模态强度全站统一。
  */
 .modal-backdrop {
 	position: fixed;
 	inset: 0;
-	z-index: 100;
+	z-index: var(--z-modal);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 24px;
-	background: rgb(0 0 0 / 32%);
+	padding: var(--space-6);
+	background: var(--overlay);
 }
 
 .permission-card {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 	width: 100%;
 	max-width: 460px;
-	padding: 18px 20px;
+	padding: var(--space-5) var(--space-5);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+	box-shadow: var(--shadow-lg);
 }
 
 /* 高风险时整卡描边警示，避免用户快速点过。 */
@@ -5486,15 +5430,15 @@ textarea:focus-visible {
 .permission-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 .permission-badge {
-	padding: 2px 8px;
+	padding: 2px var(--space-3);
 	border-radius: 5px;
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 11px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 .permission-badge.risk-high {
@@ -5503,24 +5447,24 @@ textarea:focus-visible {
 }
 
 .permission-tool {
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
 .permission-summary {
 	margin: 0;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
 .permission-toggle {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--space-1);
 	align-self: flex-start;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .permission-toggle:hover {
@@ -5530,8 +5474,8 @@ textarea:focus-visible {
 /* 折叠态的一行预览：多数情况一个路径就够判断，不该逼用户多点一次。 */
 .permission-preview {
 	margin: 0;
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -5540,13 +5484,13 @@ textarea:focus-visible {
 
 .permission-details {
 	margin: 0;
-	padding: 10px 12px;
+	padding: var(--space-3) var(--space-4);
 	max-height: 220px;
 	overflow: auto;
 	background: var(--bg-sidebar);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -5554,15 +5498,15 @@ textarea:focus-visible {
 
 .permission-remember {
 	margin-top: 2px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .permission-actions,
 .save-space-actions {
 	display: flex;
 	justify-content: flex-end;
-	gap: 8px;
-	margin-top: 4px;
+	gap: var(--space-3);
+	margin-top: var(--space-1);
 }
 
 /* ── 保存到工作空间（命名弹层） ─────────────────────────────────── */
@@ -5571,34 +5515,34 @@ textarea:focus-visible {
 .save-space-card {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 	width: 100%;
 	max-width: 400px;
-	padding: 18px 20px;
+	padding: var(--space-5) var(--space-5);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+	box-shadow: var(--shadow-lg);
 }
 
 .save-space-title {
 	margin: 0;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
 .save-space-desc {
 	margin: 0;
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	line-height: 1.6;
 }
 
 .save-space-input {
 	display: block;
 	width: 100%;
-	padding: 7px 10px;
-	font-size: 14px;
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--text-body);
 	color: var(--text);
 	background: var(--bg);
 	border: 1px solid var(--border);
@@ -5610,12 +5554,6 @@ textarea:focus-visible {
 	border-color: var(--primary);
 }
 
-.save-space-error {
-	margin: 0;
-	color: var(--danger);
-	font-size: 12px;
-}
-
 /* 操作行与 .permission-actions 逐字相同，规则以选择器并集合并在权限弹窗一节。 */
 
 /* ── 主页模型快捷切换 ─────────────────────────────────────────── */
@@ -5623,27 +5561,21 @@ textarea:focus-visible {
 .model-menu {
 	top: calc(100% + 6px);
 	right: 0;
-	z-index: 30;
+	z-index: var(--z-overlay);
 	min-width: 250px;
 	max-height: 320px;
 	overflow-y: auto;
-	padding: 4px;
-}
-
-.model-menu-empty,
-.permission-menu-empty {
-	margin: 0;
-	padding: 10px 12px;
-	color: var(--text-dim);
-	font-size: 12px;
+	padding: var(--space-1);
 }
 
 .model-menu-item {
 	position: relative;
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
-	padding: 7px 30px 7px 10px;
+	gap: 2px;
+	/* 右内边距给 ✓（.model-menu-check，right:8 + 16px）让位：原 30px 不在间距档，
+	   就近向上取 --space-7(32) —— --space-6(24) 会让文字贴上图标。 */
+	padding: var(--space-2) var(--space-7) var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
@@ -5657,7 +5589,7 @@ textarea:focus-visible {
 }
 
 .model-menu-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -5665,8 +5597,8 @@ textarea:focus-visible {
 }
 
 .model-menu-meta {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .model-menu-check,
@@ -5681,11 +5613,11 @@ textarea:focus-visible {
 
 .model-menu-goto,
 .permission-menu-goto {
-	margin-top: 4px;
-	padding: 8px 10px;
+	margin-top: var(--space-1);
+	padding: var(--space-3) var(--space-3);
 	border-top: 1px solid var(--border);
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	text-align: left;
 }
 
@@ -5704,21 +5636,23 @@ textarea:focus-visible {
 .permission-menu {
 	left: 0;
 	bottom: calc(100% + 8px);
-	z-index: 20;
+	z-index: var(--z-panel);
 	width: 300px;
-	padding: 6px;
+	padding: var(--space-2);
 	/* 圆角比公共卡片大一档（12px vs --radius-md 10px），向上展开的大卡片视觉。 */
-	border-radius: 12px;
+	border-radius: var(--radius-md);
 }
 
-/* empty / goto 与 .model-menu-empty、.model-menu-goto 逐字相同，
-   规则以选择器并集合并在 model-menu 一节，此处不再重复。 */
+/* goto 与 .model-menu-goto 逐字相同，规则以选择器并集合并在 model-menu 一节，
+   此处不再重复（空态已改走共享组件 .state-empty）。 */
 .permission-menu-item {
 	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 8px 30px 8px 10px;
+	/* 右内边距给 ✓（.permission-menu-check，right:10 + 16px）让位：原 30px 不在间距档，
+	   就近向上取 --space-7(32) —— --space-6(24) 会让文字贴上图标。 */
+	padding: var(--space-3) var(--space-7) var(--space-3) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
@@ -5732,15 +5666,15 @@ textarea:focus-visible {
 }
 
 .permission-menu-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 500;
 }
 
 /* 说明文字较长（一句话行为描述），允许换行，不做省略。 */
 .permission-menu-desc {
-	font-size: 11px;
+	font-size: var(--text-meta);
 	line-height: 1.5;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .permission-menu-check {
@@ -5773,19 +5707,19 @@ textarea:focus-visible {
 .plus-menu {
 	left: 0;
 	bottom: calc(100% + 8px);
-	z-index: 30;
+	z-index: var(--z-overlay);
 	min-width: 180px;
-	padding: 4px;
+	padding: var(--space-1);
 }
 
 .plus-menu-item {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
-	font-size: 13px;
+	font-size: var(--text-list);
 	text-align: left;
 	white-space: nowrap;
 }
@@ -5797,7 +5731,7 @@ textarea:focus-visible {
 .plus-menu-caret,
 .mode-menu-caret {
 	margin-left: auto;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* 「模式」项的子菜单：右移挂在该项旁边，底边与该项对齐、向上生长 ——
@@ -5810,15 +5744,15 @@ textarea:focus-visible {
 	position: absolute;
 	left: calc(100% + 4px);
 	bottom: -4px;
-	z-index: 31;
+	z-index: var(--z-overlay);
 	display: flex;
 	flex-direction: column;
 	min-width: 220px;
-	padding: 4px;
+	padding: var(--space-1);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 }
 
 /* 模式项两行布局（label + description），版式参照头部的 .mode-menu-item。 */
@@ -5827,7 +5761,9 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 7px 30px 7px 10px;
+	/* 右内边距给 ✓（.plus-menu-mode-check，right:8 + 16px）让位：原 30px 不在间距档，
+	   就近向上取 --space-7(32) —— --space-6(24) 会让文字贴上图标。 */
+	padding: var(--space-2) var(--space-7) var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
 	text-align: left;
 }
@@ -5848,8 +5784,8 @@ textarea:focus-visible {
  * 不用 tabular-nums 的话每打一个字余量位数/字形宽度都在变，右侧按钮会跟着抖。
  */
 .char-remaining {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -5860,8 +5796,8 @@ textarea:focus-visible {
 /* ── 技能列表（设置页）────────────────────────────────────────── */
 
 .settings-hint {
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-weight: 400;
 }
 
@@ -5883,30 +5819,30 @@ textarea:focus-visible {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: var(--space-4);
 	/* 右内边距让出窗口右上角：面板收起时 App 层的开关钉在那里，
 	   行尾的 mini-btn 不能滑进它的点击区（52 = 40px 开关占位 + 12px gap）。
 	   左内边距同理让出左上角的侧栏开关（侧栏收起时它压住返回按钮）。 */
-	padding: 10px 52px 10px 48px;
+	padding: var(--space-3) 52px var(--space-3) 48px;
 	border-bottom: 1px solid var(--border);
 }
 
 .skills-tabs {
 	display: flex;
 	gap: 2px;
-	padding: 3px;
+	padding: 2px;
 	background: var(--bg-raised);
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 }
 
 .skills-tab {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 5px 16px;
-	border-radius: 999px;
-	font-size: 13px;
-	color: var(--text-dim);
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-5);
+	border-radius: var(--radius-full);
+	font-size: var(--text-list);
+	color: var(--text-secondary);
 }
 
 .skills-tab.active {
@@ -5919,11 +5855,11 @@ textarea:focus-visible {
 }
 
 .skills-tab-tag {
-	padding: 0 5px;
+	padding: 0 var(--space-1);
 	border-radius: 4px;
 	background: var(--bg);
-	color: var(--text-dim);
-	font-size: 10px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	font-weight: 400;
 }
 
@@ -5932,51 +5868,34 @@ textarea:focus-visible {
 	color: var(--primary-text);
 }
 
-.skills-empty {
-	margin-top: 32px;
-	text-align: center;
-}
-
-.skills-empty p {
-	margin: 6px 0;
-	color: var(--text-dim);
-	font-size: 13px;
-}
-
-.skills-empty p:last-child {
-	max-width: 420px;
-	margin-left: auto;
-	margin-right: auto;
-}
-
 .skill-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-	gap: 12px;
+	gap: var(--space-4);
 }
 
 .skill-card {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	padding: 12px 14px;
+	gap: var(--space-2);
+	padding: var(--space-4) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
 }
 
 .skill-card:hover {
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 }
 
 .skill-card-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 .skill-card-name {
-	font-size: 13px;
+	font-size: var(--text-list);
 	font-weight: 600;
 	flex: 1 1 auto;
 	overflow: hidden;
@@ -5986,7 +5905,7 @@ textarea:focus-visible {
 
 .skill-card-desc {
 	margin: 0;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text);
 	line-height: 1.5;
 	/* 描述会长（触发场景穷举），限行保持卡片齐整。 */
@@ -5998,8 +5917,8 @@ textarea:focus-visible {
 
 .skill-card-path {
 	margin: 0;
-	font-size: 10px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -6015,31 +5934,31 @@ textarea:focus-visible {
 .ex {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: var(--space-5);
 }
 
 /* 顶栏：搜索框 + 右侧「我的专家」入口。 */
 .ex-topbar {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: var(--space-4);
 }
 
 .ex-search {
 	flex: 0 1 320px;
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	height: 32px;
-	padding: 0 10px;
+	padding: 0 var(--space-3);
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--bg-raised);
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .ex-search:focus-within {
-	border-color: var(--text-dim);
+	border-color: var(--text-secondary);
 	background: var(--bg);
 }
 
@@ -6053,7 +5972,7 @@ textarea:focus-visible {
 	border: none;
 	outline: none;
 	background: transparent;
-	font-size: 13px;
+	font-size: var(--text-list);
 	color: var(--text);
 }
 
@@ -6065,12 +5984,12 @@ textarea:focus-visible {
 	margin-left: auto;
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	height: 32px;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 	border: 1px solid var(--border);
-	border-radius: 8px;
-	font-size: 13px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
 	color: var(--text);
 }
 
@@ -6082,10 +6001,10 @@ textarea:focus-visible {
 .ex-back {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 5px 10px;
-	border-radius: 8px;
-	font-size: 15px;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-3);
+	border-radius: var(--radius-sm);
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 	color: var(--text);
 }
@@ -6097,16 +6016,16 @@ textarea:focus-visible {
 /* 子 tab 行（专家 | 专家团）：标题式文字 tab，选中态底部 2px 指示条。 */
 .ex-subtabs {
 	display: flex;
-	gap: 20px;
+	gap: var(--space-5);
 	border-bottom: 1px solid var(--border);
 }
 
 .ex-subtab {
 	position: relative;
-	padding: 4px 2px 10px;
-	font-size: 15px;
+	padding: var(--space-1) 2px var(--space-3);
+	font-size: var(--text-emphasis);
 	font-weight: 600;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .ex-subtab:hover {
@@ -6132,7 +6051,7 @@ textarea:focus-visible {
    常驻滚动条会把 28px 的行高压出双轨）。 */
 .ex-cats {
 	display: flex;
-	gap: 8px;
+	gap: var(--space-3);
 	overflow-x: auto;
 	scrollbar-width: none;
 }
@@ -6144,10 +6063,10 @@ textarea:focus-visible {
 .ex-cat {
 	flex: 0 0 auto;
 	height: 28px;
-	padding: 4px 12px;
-	border-radius: 6px;
+	padding: var(--space-1) var(--space-4);
+	border-radius: var(--radius-sm);
 	background: var(--bg-raised);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-secondary);
 	box-sizing: border-box;
 }
@@ -6167,32 +6086,36 @@ textarea:focus-visible {
 .ex-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-	gap: 12px;
+	gap: var(--space-4);
 }
 
 .ex-card {
 	position: relative;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: var(--space-4);
 	min-height: 154px;
-	padding: 16px 20px;
+	padding: var(--space-5) var(--space-5);
 	border: 1px solid var(--border);
-	border-radius: 16px;
+	border-radius: var(--radius-lg);
 	background: var(--bg);
 	cursor: pointer;
-	transition: border-color 0.15s ease, background 0.15s ease;
+	/* transform 参与过渡：按下态（:active scale(.98)，见文件末尾「全局交互基础面」）
+	   要跟着 --dur-fast 走，不写进来按下是瞬跳的。 */
+	transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .ex-card:hover {
-	border-color: var(--text-dim);
+	/* 描边走 --text-faint（同 .model-card:hover）；本卡 hover 另有底色变化，
+	   描边只是加强，不承担唯一反馈。 */
+	border-color: var(--text-faint);
 	background: var(--bg-raised);
 }
 
 .ex-card-head {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 /* 头像尺寸变体：基础样式在 .expert-avatar（chat chip 的 16px），
@@ -6200,7 +6123,7 @@ textarea:focus-visible {
 .ex-card-avatar {
 	width: 36px;
 	height: 36px;
-	font-size: 16px;
+	font-size: var(--text-emphasis);
 	flex: 0 0 auto;
 }
 
@@ -6212,7 +6135,7 @@ textarea:focus-visible {
 }
 
 .ex-card-name {
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -6220,7 +6143,7 @@ textarea:focus-visible {
 }
 
 .ex-card-profession {
-	font-size: 12px;
+	font-size: var(--text-meta);
 	color: var(--text-secondary);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -6230,7 +6153,7 @@ textarea:focus-visible {
 /* 两行截断 + min-height 保两行：卡片高度不因描述长短参差不齐。 */
 .ex-card-desc {
 	margin: 0;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	line-height: 18px;
 	color: var(--text-secondary);
 	display: -webkit-box;
@@ -6242,7 +6165,7 @@ textarea:focus-visible {
 
 .ex-card-tags {
 	display: flex;
-	gap: 6px;
+	gap: var(--space-2);
 	/* 钉底：描述长短不一时 tags 行仍对齐卡片底边。 */
 	margin-top: auto;
 }
@@ -6251,10 +6174,10 @@ textarea:focus-visible {
 	display: inline-flex;
 	align-items: center;
 	height: 20px;
-	padding: 0 8px;
+	padding: 0 var(--space-3);
 	border-radius: 4px;
 	background: var(--bg-hover);
-	font-size: 11px;
+	font-size: var(--text-meta);
 	color: var(--text-secondary);
 }
 
@@ -6265,14 +6188,14 @@ textarea:focus-visible {
 	top: 16px;
 	right: 20px;
 	height: 26px;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 	border: none;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	opacity: 0;
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 
 .ex-card:hover .ex-card-use,
@@ -6284,159 +6207,135 @@ textarea:focus-visible {
 .ex-create-card {
 	align-items: center;
 	justify-content: center;
-	gap: 8px;
+	gap: var(--space-3);
 	border-style: dashed;
-	color: var(--text-dim);
-	font-size: 13px;
-}
-
-/* 空态（搜索无结果 / 专家团占位 / 我的专家为空共用）。 */
-.ex-empty {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 8px;
-	padding: 64px 0;
-	text-align: center;
-}
-
-.ex-empty-icon {
-	color: var(--text-faint);
-}
-
-.ex-empty-title {
-	margin: 0;
-	font-size: 14px;
 	color: var(--text-secondary);
+	font-size: var(--text-list);
 }
 
-.ex-empty-sub {
-	margin: 0;
-	font-size: 12px;
-	color: var(--text-dim);
-}
-
+/* 空态（搜索无结果 / 专家团占位 / 我的专家为空）改走共享组件 .state-empty。 */
 .ex-create-btn {
-	margin-top: 8px;
+	margin-top: var(--space-3);
 	height: 32px;
-	padding: 0 16px;
+	padding: 0 var(--space-5);
 	border: none;
-	border-radius: 8px;
+	border-radius: var(--radius-sm);
 	background: var(--primary);
 	color: var(--primary-text);
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .ex-create-btn:hover {
 	background: var(--primary-hover);
 }
 
-/* 详情弹窗：遮罩 0.4（WorkBuddy ec 弹层档位，比 modal-backdrop 的 0.32 略深），
-   z-index 90 低于阻塞审批弹窗（100）—— 审批是安全闸，必须永远压得住它。 */
+/* 详情弹窗：遮罩原 0.4（WorkBuddy ec 弹层档位），与 --overlay 同值收编；
+   z-index 低于阻塞审批弹窗（--z-modal）—— 审批是安全闸，必须永远压得住它。 */
 .ex-modal-mask {
 	position: fixed;
 	inset: 0;
-	z-index: 90;
+	z-index: var(--z-overlay);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 24px;
-	background: rgba(0, 0, 0, 0.4);
+	padding: var(--space-6);
+	background: var(--overlay);
 }
 
 .ex-modal {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+	gap: var(--space-4);
 	width: 100%;
 	max-width: 520px;
 	max-height: 85vh;
 	overflow-y: auto;
-	padding: 24px;
-	border-radius: 16px;
+	padding: var(--space-6);
+	border-radius: var(--radius-lg);
 	background: var(--bg);
-	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+	box-shadow: var(--shadow-lg);
 }
 
 .ex-modal-head {
 	display: flex;
 	align-items: center;
-	gap: 14px;
+	gap: var(--space-4);
 }
 
 .ex-detail-avatar {
 	width: 72px;
 	height: 72px;
-	font-size: 30px;
+	font-size: var(--text-display);
 	flex: 0 0 auto;
 }
 
 .ex-modal-title {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: var(--space-1);
 	min-width: 0;
 }
 
 .ex-modal-name {
-	font-size: 18px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
 .ex-modal-profession {
-	font-size: 13px;
+	font-size: var(--text-list);
 	color: var(--text-secondary);
 }
 
 .ex-modal-desc {
 	margin: 0;
-	font-size: 13px;
+	font-size: var(--text-list);
 	line-height: 20px;
 	color: var(--text-secondary);
 }
 
 .ex-modal-tags {
 	display: flex;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 /* 「专家帮你做」：quickPrompts 列表，灰底分区与描述拉开层级。 */
 .ex-modal-prompts {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	padding: 12px;
-	border-radius: 10px;
+	gap: var(--space-3);
+	padding: var(--space-4);
+	border-radius: var(--radius-md);
 	background: var(--bg-raised);
 }
 
 .ex-modal-prompts-title {
 	margin: 0;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .ex-modal-prompt {
-	padding: 8px 10px;
+	padding: var(--space-3) var(--space-3);
 	border: 1px solid var(--border);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	background: var(--bg);
-	font-size: 13px;
+	font-size: var(--text-list);
 	color: var(--text);
 	text-align: left;
 }
 
 .ex-modal-prompt:hover {
-	border-color: var(--text-dim);
+	/* 同 .model-card:hover：hover 描边加深走 --text-faint。 */
+	border-color: var(--text-faint);
 }
 
 .ex-modal-use {
 	height: 38px;
 	border: none;
-	border-radius: 10px;
+	border-radius: var(--radius-md);
 	background: var(--primary);
 	color: var(--primary-text);
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 }
 
@@ -6449,36 +6348,18 @@ textarea:focus-visible {
  * 状态徽标、运行记录与表单弹层。视觉全部取既有变量与卡片档位。
  * ──────────────────────────────────────────────────────────────── */
 
-.auto-empty {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 6px;
-	padding: 24px 0;
-	color: var(--text-dim);
-	font-size: 13px;
-}
-
-.auto-empty p {
-	margin: 0;
-}
-
-.auto-empty .primary-btn {
-	margin-top: 8px;
-}
-
 .auto-list,
 .mcp-list {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 /* 任务行卡片：与 skill-card / preset-item 同档位（边框 + --radius-md）。
    连接器（MCP）服务器行同一骨架，选择器并集共用（同 .settings, .skills 先例）。 */
 .auto-row,
 .mcp-row {
-	padding: 12px 14px;
+	padding: var(--space-4) var(--space-4);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg);
@@ -6495,14 +6376,14 @@ textarea:focus-visible {
 .mcp-row-main {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 /* 展开运行记录的 chevron：与空间组折叠箭头同语言（收起 -90°，展开朝下）。 */
 .auto-row-expand {
 	display: flex;
 	align-items: center;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
@@ -6511,7 +6392,7 @@ textarea:focus-visible {
 }
 
 .auto-chevron {
-	transition: transform 0.15s ease;
+	transition: transform var(--dur-fast) ease;
 	transform: rotate(-90deg);
 }
 
@@ -6532,13 +6413,13 @@ textarea:focus-visible {
 .mcp-row-title {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	min-width: 0;
 }
 
 .auto-row-name,
 .mcp-row-name {
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 600;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -6546,27 +6427,27 @@ textarea:focus-visible {
 }
 
 .auto-row-meta {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .auto-row-ops,
 .mcp-row-ops {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--space-2);
 	flex: 0 0 auto;
 }
 
 /* 状态徽标：与 permission-badge 同尺寸语言；色阶用既有 --ok / --danger 的
-   color-mix 档位（同 settings-error / mini-btn.danger 的混色手法）。 */
+   color-mix 档位（同 .state-error / mini-btn.danger 的混色手法）。 */
 .auto-badge,
 .mcp-badge {
-	padding: 2px 8px;
+	padding: 2px var(--space-3);
 	border-radius: 5px;
 	background: var(--bg-raised);
-	color: var(--text-dim);
-	font-size: 11px;
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 	flex: 0 0 auto;
 }
 
@@ -6580,18 +6461,18 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	margin-top: 10px;
-	padding-top: 8px;
+	margin-top: var(--space-3);
+	padding-top: var(--space-3);
 	border-top: 1px solid var(--border);
 }
 
 .auto-run-row {
 	display: flex;
 	align-items: center;
-	gap: 10px;
-	padding: 4px 6px;
+	gap: var(--space-3);
+	padding: var(--space-1) var(--space-2);
 	border-radius: var(--radius-sm);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	text-align: left;
 }
 
@@ -6601,18 +6482,18 @@ textarea:focus-visible {
 
 /* 无会话可跳的记录（装配失败）不给 hover 反馈，避免暗示能点开（同 tool-head）。 */
 .auto-run-static {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 .auto-run-time {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
 .auto-run-badge {
-	padding: 1px 7px;
+	padding: 2px var(--space-2);
 	border-radius: 5px;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	flex: 0 0 auto;
 }
 
@@ -6644,16 +6525,16 @@ textarea:focus-visible {
 .mcp-editor-card {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: var(--space-4);
 	width: 100%;
 	max-width: 520px;
 	max-height: 100%;
 	overflow-y: auto;
-	padding: 18px 20px;
+	padding: var(--space-5) var(--space-5);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+	box-shadow: var(--shadow-lg);
 }
 
 /* JSON 编辑器更宽：mcp.json 行普遍比表单字段长，窄卡会迫使频繁折行。 */
@@ -6666,7 +6547,7 @@ textarea:focus-visible {
 .auto-toggle-row {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	gap: var(--space-2);
 }
 
 .mini-btn.active {
@@ -6682,13 +6563,13 @@ textarea:focus-visible {
 .auto-form-card .field textarea,
 .mcp-form-card .field textarea,
 .mcp-json-editor {
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .auto-form-card .field textarea,
@@ -6706,19 +6587,19 @@ textarea:focus-visible {
 .mcp-panel {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: var(--space-4);
 }
 
 /* 面板工具行：说明文字在左，操作按钮在右（头部操作区属于技能页签，见 skills-view）。 */
 .mcp-toolbar {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 }
 
 .mcp-toolbar-hint {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -6726,8 +6607,8 @@ textarea:focus-visible {
 
 /* 已连接时的工具数：与徽章同行、小字弱化处理——它是佐证信息，不是状态本身。 */
 .mcp-row-tools {
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 	flex: 0 0 auto;
 }
 
@@ -6736,7 +6617,7 @@ textarea:focus-visible {
 .mcp-badge {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
+	gap: var(--space-1);
 	flex: 0 0 auto;
 }
 
@@ -6753,17 +6634,6 @@ textarea:focus-visible {
 .mcp-badge-failed {
 	background: color-mix(in srgb, var(--danger) 12%, var(--bg));
 	color: var(--danger);
-}
-
-/* 连接中的转圈：与 task-spinner 同一手法（border 旋转），缩小进徽章。 */
-.mcp-badge-spinner {
-	display: inline-block;
-	width: 9px;
-	height: 9px;
-	border: 1.5px solid color-mix(in srgb, var(--warning) 30%, var(--bg));
-	border-top-color: var(--warning);
-	border-radius: 50%;
-	animation: task-spin 0.8s linear infinite;
 }
 
 /* 启停开关：原生 checkbox 透明铺满 label（点击区 = 轨道），
@@ -6787,9 +6657,9 @@ textarea:focus-visible {
 .mcp-switch-track {
 	position: absolute;
 	inset: 0;
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 	background: var(--border);
-	transition: background 0.15s ease;
+	transition: background var(--dur-fast) ease;
 	pointer-events: none;
 }
 
@@ -6799,10 +6669,11 @@ textarea:focus-visible {
 	left: 2px;
 	width: 14px;
 	height: 14px;
-	border-radius: 50%;
-	background: #ffffff;
+	border-radius: var(--radius-full);
+	/* 白色滑块 = --bg（亮色即 #fff）；轨道走 --border/--ok。 */
+	background: var(--bg);
 	box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
-	transition: transform 0.15s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .mcp-switch input:checked~.mcp-switch-track {
@@ -6829,14 +6700,14 @@ textarea:focus-visible {
 /* 传输方式 radio 组：原生控件 + 横排（任务规格指定 radio，不用 toggle 按钮组）。 */
 .mcp-radio-row {
 	display: flex;
-	gap: 16px;
+	gap: var(--space-5);
 }
 
 .mcp-radio-row label {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	font-size: 13px;
+	gap: var(--space-2);
+	font-size: var(--text-list);
 	cursor: pointer;
 }
 
@@ -6845,7 +6716,7 @@ textarea:focus-visible {
 	min-height: 320px;
 	resize: vertical;
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-	font-size: 12px;
+	font-size: var(--text-meta);
 	line-height: 1.6;
 	/* 保留原始缩进：JSON 的层级靠空白表达，折行交给横向滚动。 */
 	white-space: pre;
@@ -6870,11 +6741,14 @@ textarea:focus-visible {
 	flex-direction: column;
 	background: var(--bg);
 	border: 1px solid var(--border);
-	border-radius: 24px;
-	box-shadow: var(--shadow-questionnaire);
+	/* 圆角按语义归档到 --radius-lg(16)：DESIGN.md §2.7「模态、问卷卡、案例封面」。
+	   原 24px 是照抄 WB questionFloating 原值，但本卡是内联浮层卡片、不是输入卡/槽体系，
+	   语义表已明确归 lg，故不再列 WB 原值例外。 */
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-sm);
 	max-height: min(60vh, 520px);
 	overflow: hidden;
-	animation: questionnaire-slide-up 0.2s ease-out;
+	animation: questionnaire-slide-up var(--dur-base) ease-out;
 }
 
 @keyframes questionnaire-slide-up {
@@ -6901,13 +6775,13 @@ textarea:focus-visible {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
-	gap: 16px;
-	padding: 20px 24px 8px;
+	gap: var(--space-5);
+	padding: var(--space-5) var(--space-6) var(--space-3);
 }
 
 .questionnaire-title {
 	margin: 0;
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 500;
 	line-height: 24px;
 	color: var(--text);
@@ -6918,7 +6792,7 @@ textarea:focus-visible {
 	flex: none;
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: var(--space-4);
 }
 
 .questionnaire-pager {
@@ -6936,7 +6810,7 @@ textarea:focus-visible {
 	height: 24px;
 	border-radius: var(--radius-sm);
 	color: var(--text-secondary);
-	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+	transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, opacity var(--dur-fast) ease;
 }
 
 .questionnaire-pager-btn:hover:not(:disabled) {
@@ -6950,7 +6824,7 @@ textarea:focus-visible {
 }
 
 .questionnaire-pager-info {
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	min-width: 32px;
 	text-align: center;
@@ -6965,7 +6839,7 @@ textarea:focus-visible {
 	height: 24px;
 	border-radius: var(--radius-sm);
 	color: var(--text-secondary);
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 
 .questionnaire-skip-all:hover {
@@ -6977,7 +6851,7 @@ textarea:focus-visible {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
-	padding: 0 12px;
+	padding: 0 var(--space-4);
 	scrollbar-width: thin;
 }
 
@@ -6992,13 +6866,13 @@ textarea:focus-visible {
 	position: relative;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
 	height: 40px;
-	padding: 8px;
-	border-radius: 12px;
+	padding: var(--space-3);
+	border-radius: var(--radius-md);
 	text-align: left;
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 .questionnaire-option::after,
@@ -7035,10 +6909,10 @@ textarea:focus-visible {
 	border-radius: var(--radius-sm);
 	background: var(--bg-hover);
 	color: var(--text);
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 14px;
 	user-select: none;
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 .questionnaire-option:hover:not(:disabled) .questionnaire-option-number,
@@ -7049,7 +6923,7 @@ textarea:focus-visible {
 .questionnaire-option-text {
 	flex: 1;
 	min-width: 0;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	color: var(--text);
 	overflow: hidden;
@@ -7061,7 +6935,7 @@ textarea:focus-visible {
 	flex: none;
 	color: var(--text-secondary);
 	opacity: 0;
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 
 .questionnaire-option:hover:not(:disabled) .questionnaire-option-arrow,
@@ -7075,12 +6949,12 @@ textarea:focus-visible {
 	position: relative;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	height: 40px;
-	padding: 8px;
-	border-radius: 12px;
+	padding: var(--space-3);
+	border-radius: var(--radius-md);
 	cursor: text;
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 .questionnaire-other-row:hover {
@@ -7097,7 +6971,7 @@ textarea:focus-visible {
 	border-radius: var(--radius-sm);
 	background: var(--bg-hover);
 	color: var(--text);
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 /* hover/已有文字（ready）时图标块反白，与序号块同一语言。 */
@@ -7114,7 +6988,7 @@ textarea:focus-visible {
 	outline: none;
 	background: transparent;
 	font: inherit;
-	font-size: 14px;
+	font-size: var(--text-body);
 	line-height: 22px;
 	color: var(--text);
 }
@@ -7127,11 +7001,13 @@ textarea:focus-visible {
 }
 
 .questionnaire-other-row:focus-within {
-	box-shadow: inset 0 0 0 1px var(--text-dim);
+	/* 焦点环（0 0 0 1px 的 ring 写法，不是阴影档）：色取 --text-secondary，
+	   与全局 focus-visible 环同色，属焦点语言不属阴影尺度。 */
+	box-shadow: inset 0 0 0 1px var(--text-secondary);
 }
 
 .questionnaire-other-input::placeholder {
-	color: var(--text-dim);
+	color: var(--text-secondary);
 }
 
 /* footer：左「跳过」胶囊；右侧 32×32 圆形按钮 —— 中间题前进箭头
@@ -7141,21 +7017,23 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 8px;
+	gap: var(--space-3);
 	min-height: 52px;
-	padding: 12px 20px 20px;
+	padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
 .questionnaire-skip-btn {
 	height: 32px;
-	padding: 0 12px;
-	border-radius: 24px;
+	padding: 0 var(--space-4);
+	/* 32 高之半 ⇒ 渲染即胶囊，按语义归档到 --radius-full（原 24px 是 WB 原值，
+	   但「胶囊」在圆角档里已有 full 一档，没有再留 WB 例外的必要）。 */
+	border-radius: var(--radius-full);
 	background: var(--bg-hover);
 	color: var(--text);
-	font-size: 14px;
+	font-size: var(--text-body);
 	font-weight: 500;
 	line-height: 22px;
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 
 .questionnaire-skip-btn:hover {
@@ -7169,10 +7047,10 @@ textarea:focus-visible {
 	justify-content: center;
 	width: 32px;
 	height: 32px;
-	border-radius: 50%;
+	border-radius: var(--radius-full);
 	background: var(--bg-hover);
 	color: var(--text-faint);
-	transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+	transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, opacity var(--dur-fast) ease;
 }
 
 .questionnaire-icon-btn:disabled {
@@ -7196,9 +7074,9 @@ textarea:focus-visible {
  */
 .task-confirm-badge {
 	flex: none;
-	padding: 1px 6px;
+	padding: 2px var(--space-2);
 	border-radius: 5px;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	line-height: 1.5;
 	color: var(--warning);
 	background: color-mix(in srgb, var(--warning) 12%, var(--bg));
@@ -7220,20 +7098,22 @@ textarea:focus-visible {
 .provider-select-trigger {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 	cursor: pointer;
 }
 
-.provider-select-trigger:hover {
-	border-color: var(--text-dim);
+/* SelectField 的 disabled（表单未加载完时整控件禁点）走同一守卫。 */
+.provider-select-trigger:hover:not(:disabled) {
+	/* 同 .model-card:hover：hover 描边加深走 --text-faint。 */
+	border-color: var(--text-faint);
 }
 
 .provider-select-label {
@@ -7253,31 +7133,31 @@ textarea:focus-visible {
 	top: calc(100% + 4px);
 	left: 0;
 	right: 0;
-	z-index: 1;
+	z-index: var(--z-base);
 	display: flex;
 	flex-direction: column;
 	max-height: 280px;
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 	overflow: hidden;
 }
 
 .provider-select-search {
-	padding: 8px;
+	padding: var(--space-3);
 	border-bottom: 1px solid var(--border);
 }
 
 .provider-select-search input {
 	width: 100%;
-	padding: 6px 10px;
+	padding: var(--space-2) var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 .provider-select-list {
@@ -7287,14 +7167,14 @@ textarea:focus-visible {
 .provider-option {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
 	width: 100%;
-	padding: 8px 12px;
+	padding: var(--space-3) var(--space-4);
 	border: none;
 	background: none;
 	color: inherit;
 	font: inherit;
-	font-size: 13px;
+	font-size: var(--text-list);
 	text-align: left;
 	cursor: pointer;
 }
@@ -7313,14 +7193,7 @@ textarea:focus-visible {
 /* 末位「自定义」与预置清单隔开：它是动作（开自建表单），不是一家服务商。 */
 .provider-option.custom {
 	border-top: 1px solid var(--border);
-	color: var(--text-dim);
-}
-
-.provider-select-empty {
-	margin: 0;
-	padding: 10px 12px;
-	color: var(--text-dim);
-	font-size: 12px;
+	color: var(--text-secondary);
 }
 
 /* SelectField 外壳：trigger/panel/option 视觉与供应商 picker 共用，
@@ -7345,7 +7218,7 @@ textarea:focus-visible {
    SelectField 在设置面板里保持绝对定位浮层。 */
 .add-model-card .provider-select-panel {
 	position: static;
-	margin-top: 4px;
+	margin-top: var(--space-1);
 	max-height: 240px;
 	box-shadow: none;
 }
@@ -7356,7 +7229,7 @@ textarea:focus-visible {
 .add-model-card {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+	gap: var(--space-4);
 	width: 100%;
 	max-width: 560px;
 	/* min-height 兜底：只显示「选供应商」一行时卡片不显得局促；
@@ -7365,23 +7238,23 @@ textarea:focus-visible {
 	max-height: calc(100vh - 64px);
 	overflow-y: auto;
 	overscroll-behavior: contain;
-	padding: 18px 20px;
+	padding: var(--space-5) var(--space-5);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-card);
+	box-shadow: var(--shadow-md);
 }
 
 .add-model-head {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 .add-model-head h2 {
 	margin: 0;
 	flex: 1 1 auto;
-	font-size: 15px;
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
@@ -7401,9 +7274,9 @@ textarea:focus-visible {
 	align-items: center;
 	justify-content: space-between;
 	width: 100%;
-	padding: 7px 10px;
+	padding: var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
-	font-size: 13px;
+	font-size: var(--text-list);
 	text-align: left;
 }
 
@@ -7414,13 +7287,13 @@ textarea:focus-visible {
 .model-menu-thinking-current {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	color: var(--text-dim);
-	font-size: 12px;
+	gap: var(--space-1);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 .model-menu-thinking-caret {
-	font-size: 13px;
+	font-size: var(--text-list);
 }
 
 /* 档位列内联展开（不再飞出）：菜单容器 overflow-y 会裁掉绝对定位的
@@ -7428,8 +7301,8 @@ textarea:focus-visible {
 .model-menu-levels {
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
-	margin: 2px 0 4px;
+	gap: 2px;
+	margin: 2px 0 var(--space-1);
 	padding-top: 2px;
 	border-top: 1px solid var(--border);
 }
@@ -7438,9 +7311,9 @@ textarea:focus-visible {
 	position: relative;
 	display: block;
 	width: 100%;
-	padding: 6px 26px 6px 10px;
+	padding: var(--space-2) var(--space-6) var(--space-2) var(--space-3);
 	border-radius: var(--radius-sm);
-	font-size: 12px;
+	font-size: var(--text-meta);
 	text-align: left;
 	white-space: nowrap;
 }
@@ -7454,7 +7327,7 @@ textarea:focus-visible {
 .identity-fields {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 }
 
 /* 人设/人格描述输入区：比画像（profile-textarea）矮一档——人设是一两句定位，
@@ -7465,9 +7338,9 @@ textarea:focus-visible {
 
 /* 自定义指令的字数计数：右对齐独立行，不叠进输入区（叠进去会压正文）。 */
 .textarea-count {
-	margin-top: 4px;
+	margin-top: var(--space-1);
 	text-align: right;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	color: var(--text-faint);
 }
 
@@ -7483,9 +7356,9 @@ textarea:focus-visible {
 .stream-retry {
 	display: flex;
 	align-items: baseline;
-	gap: 8px;
-	padding: 4px 0;
-	font-size: 13px;
+	gap: var(--space-3);
+	padding: var(--space-1) 0;
+	font-size: var(--text-list);
 	color: var(--warning);
 }
 
@@ -7494,20 +7367,20 @@ textarea:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .stream-queue {
 	display: inline-flex;
 	align-items: center;
 	align-self: flex-start;
-	margin-top: 4px;
-	padding: 2px 10px;
+	margin-top: var(--space-1);
+	padding: 2px var(--space-3);
 	border-radius: var(--radius-sm);
 	background: var(--bg-raised);
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 /* ── 统计页：用量热力图与 token 趋势（spec: add-usage-stats） ───────
@@ -7524,22 +7397,22 @@ textarea:focus-visible {
 .stats-heat-row {
 	display: flex;
 	align-items: center;
-	gap: 3px;
+	gap: 2px;
 }
 
 .stats-heat-gutter {
 	flex: 0 0 16px;
 	width: 16px;
-	font-size: 11px;
-	color: var(--text-dim);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .stats-heat-month {
 	flex: 0 0 11px;
 	width: 11px;
-	font-size: 11px;
+	font-size: var(--text-meta);
 	line-height: 14px;
-	color: var(--text-dim);
+	color: var(--text-secondary);
 	white-space: nowrap;
 	overflow: visible;
 }
@@ -7552,18 +7425,16 @@ textarea:focus-visible {
 	background: var(--bg-raised);
 }
 
+/* 热力档由 --accent 与 --bg-raised 混出深浅三档（原三行硬编码被 color-mix 覆盖，已删）。 */
 .stats-heat-cell.l1 {
-	background: #d7e8f6;
 	background: color-mix(in srgb, var(--accent) 22%, var(--bg-raised));
 }
 
 .stats-heat-cell.l2 {
-	background: #a8cdea;
 	background: color-mix(in srgb, var(--accent) 45%, var(--bg-raised));
 }
 
 .stats-heat-cell.l3 {
-	background: #5b9fd4;
 	background: color-mix(in srgb, var(--accent) 70%, var(--bg-raised));
 }
 
@@ -7579,10 +7450,10 @@ textarea:focus-visible {
 .stats-heat-legend {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	margin-top: 10px;
-	font-size: 12px;
-	color: var(--text-dim);
+	gap: var(--space-1);
+	margin-top: var(--space-3);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .stats-trend {
@@ -7592,7 +7463,7 @@ textarea:focus-visible {
 }
 
 .stats-trend-area {
-	fill: rgba(20, 112, 180, 0.12);
+	/* 原有一行硬编码 fill 被下面的 color-mix 覆盖（死代码），已删。 */
 	fill: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
@@ -7601,4 +7472,250 @@ textarea:focus-visible {
 	stroke: var(--accent);
 	stroke-width: 1.5;
 	stroke-linejoin: round;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ── 全局交互基础面 ──（spec: apply-design-tokens-foundation 的「全局交互基础面」）
+ * 五块：按下态（:active）/ 禁用态补齐 / reduced-motion 全局兜底 /
+ *       嵌套滚动容器的滚动链 / 滚动条基线。
+ *
+ * 为什么整块追加在文件末尾，而不是各自贴回组件规则旁边（有意取舍，勿顺手搬散）：
+ * 1. `:active` 与 `:hover` 的特异性同档（一个类 + 一个伪类），谁在文件里靠后谁赢。
+ *    集中放末尾，一条规则即可稳定压过全文件所有同档 `:hover`（含 `.xxx.active:hover`
+ *    这类多一个类的——那些都不设我要覆盖的属性，不构成竞争，无需跟它比特异性）。
+ *    贴回组件处就得逐个核对「我后面还有没有别的 :hover 会盖住我」。
+ * 2. scripts/design-tokens-allowlist.json 按「文件:行号」匹配，在文件中部插行会让
+ *    白名单条目整体错位。追加在末尾不动既有行号。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 按下态（:active）──────────────────────────────────────────────────────
+ * 只动 transform 与 background-color —— 两者都不触发布局，时长走 --dur-fast。
+ * 分两类，理由不同：
+ *   按钮 / chip / 卡片 → scale。DESIGN.md §3.1：图标按钮 .96、次级按钮 .98；
+ *     §3.3：可点卡片 .98。
+ *   整行可点区域（列表行、菜单项、下拉 trigger）→ 底色加深一档，不缩放。
+ *     整行缩放会把行内绝对定位的操作钮、右对齐的时间一起缩，观感是「整行在抖」；
+ *     而且这些行的可点区域是整片矩形，底色变化比形变更贴切（与它们的 hover 同语言）。
+ * 加深值从 --text 用 color-mix 派生（hover 是 --bg-hover = 5% 黑，按下取 8%）：
+ * 比 hover 再深一档、随主题自适应，且不新增硬编码色值。
+ *
+ * 未覆盖（有意，不是漏）：
+ *   - `.auto-row` / `.mcp-row`：它们是**容器行**，本身不可点（点击目标是行内的
+ *     mini-btn 与 mcp-switch）。:active 会从子元素冒泡到祖先，给容器行加按下态
+ *     等于「按行内任一按钮时整张卡缩一下」，与「卡片是按钮」的错觉叠加。.mcp-row
+ *     连 hover 都没有（见 6480 行注释），更不该只有按下态。行内控件的按下反馈由
+ *     .mini-btn / .mcp-switch 各自承担。
+ *   - `.ac-item`（@ / 补全下拉）：它只有 .active（键盘选中）没有 :hover，
+ *     单独补 :active 会出现「键盘态有底、鼠标按下才有底、悬停没反馈」的三态错位；
+ *     缺 hover 是既有的四态缺口，不在本任务范围（登记在报告里）。
+ */
+
+/* 图标按钮（小控件，DESIGN.md §3.1：active 叠 scale(.96)）。 */
+.bar-btn:active:not(:disabled),
+.entry-icon-btn:active:not(:disabled),
+.task-op-btn:active:not(:disabled),
+.send-btn:active:not(:disabled) {
+	transform: scale(0.96);
+}
+
+/* 常规按钮与 chip / tab 胶囊（DESIGN.md §3.1：active 叠 scale(.98)）。 */
+.mini-btn:active:not(:disabled),
+.primary-btn:active:not(:disabled),
+.cases-action:active,
+.capability-chip:active,
+.quick-prompt-chip:active,
+.skills-tab:active,
+.ex-cat:active {
+	transform: scale(0.98);
+}
+
+/* 可点卡片（DESIGN.md §3.3：active scale(.98)）。
+   .model-card 的 :not(.unavailable) 与它的 hover 守卫同口径——未配 Key 的卡
+   cursor 已是 default、点击无动作（见 4363 行注释），不该有按下反馈。
+   同理不含 .skill-card：它是纯展示卡（无 onClick / 无 role=button），
+   只有 hover 抬阴影，加按下态会暗示它可以点。 */
+.ex-card:active,
+.model-card:not(.unavailable):active {
+	transform: scale(0.98);
+}
+
+/* 列表行 / 菜单项 / 下拉 trigger：按下加深一档底色。 */
+.task-item:active,
+.ws-item:active:not(:disabled),
+.ws-action:active:not(:disabled),
+.settings-nav-item:active,
+.mode-menu-item:active,
+.model-menu-item:active,
+.model-menu-level-item:active,
+.permission-menu-item:active,
+.plus-menu-item:active,
+.plus-menu-mode-item:active,
+.space-menu-item:active,
+.provider-option:active,
+.model-menu-thinking:active,
+.model-menu-goto:active,
+.permission-menu-goto:active,
+.provider-select-trigger:active:not(:disabled) {
+	background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* 走 scale 的那批要过渡，否则形变是「啪」地跳（--dur-fast，DESIGN.md §3）。
+   走底色加深的那批（列表行 / 菜单项）**不加**过渡：它们的 hover 底本来就是瞬时的，
+   按下再叠 150ms 渐显只会让「按下去」显得迟钝。
+   .ex-card 不在这里——它本来就有 transition，已在定义处把 transform 加进那行
+   （不能在这覆盖，否则会把它原有的 border-color / background 过渡顶掉）。 */
+.bar-btn,
+.entry-icon-btn,
+.task-op-btn,
+.send-btn,
+.mini-btn,
+.primary-btn,
+.cases-action,
+.capability-chip,
+.quick-prompt-chip,
+.skills-tab,
+.ex-cat,
+.model-card {
+	transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+/* ── 禁用态视觉补齐 ────────────────────────────────────────────────────────
+ * 对着 `disabled={` 的调用点逐个核过，此前「属性已置灰、视觉毫无变化」的类：
+ *   .bar-btn（pdf 翻页/缩放、「外部打开」、转正按钮）——图标按钮，§3.1 用 opacity .4；
+ *   .ws-item / .ws-action（workspace-picker 切换/创建中整列禁点）——列表行，§3.4 用 .5；
+ *   .provider-select-trigger（表单数据未到时禁点）——控件，.5；
+ *   .composer-card textarea（daemon 未连上时整张输入卡禁用）——此前禁用态与可用态
+ *     完全一样，只有 placeholder 还在 --text-secondary；按 §3.2 降到 --text-faint；
+ *   .save-space-input（保存中禁编辑）——输入框按 §3.2：底 --bg-raised + 字 --text-secondary。
+ * 已有禁用样式的类不在这里重复（核过，共 11 处）：.mini-btn / .primary-btn / .send-btn /
+ * .tool-head / .mcp-switch input / .questionnaire-pager-btn / .questionnaire-option /
+ * .questionnaire-icon-btn / .field input / .profile-textarea / .widget-action。
+ * :hover / :active 对 disabled 元素照样匹配，所以上面的悬停态与按下态都加了
+ * :not(:disabled) 守卫（.bar-btn / .ws-item / .ws-action / .provider-select-trigger 的
+ * hover 规则已就地改写，见各自定义处）。
+ */
+.bar-btn:disabled,
+.entry-icon-btn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.ws-item:disabled,
+.ws-action:disabled,
+.provider-select-trigger:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.composer-card textarea:disabled {
+	color: var(--text-faint);
+	cursor: default;
+}
+
+.composer-card textarea:disabled::placeholder {
+	color: var(--text-faint);
+}
+
+.save-space-input:disabled {
+	background: var(--bg-raised);
+	color: var(--text-secondary);
+	cursor: default;
+}
+
+/* ── 嵌套滚动容器的滚动链 ──────────────────────────────────────────────────
+ * 这些容器嵌在可滚动的父容器里（消息流 / 侧栏 / 面板 / 弹层）。不加 contain 的话，
+ * 滚到它们两端后链动会继续滚动父容器 —— 最糟的表现是「菜单滚到底，背后的消息流
+ * 跟着滚」（DESIGN.md §7.8）。
+ *
+ * 逐个判断（spec 要求写清「不加」的理由）：
+ *   加 contain：.thinking-body（思考块，父=消息流）/ .tool-detail-box.open（工具输出，
+ *     父=消息流）/ .user-bubble（超长用户消息，父=消息流）/ .model-menu（模型列表，
+ *     父=composer 区所在文档流）/ .ws-list（工作空间列表，父=composer 区）/
+ *     .preview-view（产物列表，父=预览面板）/ .ac-menu（补全下拉，父=输入区）/
+ *     .questionnaire-content（问卷选项，父=问卷卡）。
+ *     —— 这 8 个都不存在「长列表自然接力」的语义：它们的父容器要么不滚，要么语义
+ *     完全不同（把菜单的滚动接力给消息流，用户会以为页面在乱跳）。
+ *   不加：.stream / .sidebar-scroll / .skills-body 等**页面级主滚动容器**——它们的父不滚，
+ *     contain 无事可做（.settings-panel 早已有，语义相同，保留）；
+ *     .ex-cats / .capability-row / .stats-heat-wrap 等**只有横向滚动**的条：横向滚动
+ *     不会链动到父容器的纵向滚动（overscroll-behavior 是分轴的，写 contain 会连纵向
+ *     一起禁掉，属多余且会挡住「横向条内滚到底后页面纵向接力」这一正常行为）。
+ */
+.thinking-body,
+.tool-detail-box.open,
+.user-bubble,
+.model-menu,
+.ws-list,
+.preview-view,
+.ac-menu,
+.questionnaire-content {
+	overscroll-behavior: contain;
+}
+
+/* ── reduced-motion 全局兜底 ───────────────────────────────────────────────
+ * 原先只有 7 处局部 @media 覆盖，没覆盖到的 transition/animation 在系统开启
+ * 「减少动态效果」时照跑（spec 要求全局生效）。
+ * 用 0.01ms 而不是 0：0 会让依赖 transitionend 的逻辑收不到事件；0.01ms 视觉上等价于立即。
+ * 局部块保留（它们还做了别的事，如把某个动画整个 animation: none），与本块不冲突：
+ * 这里只兜底时长与迭代次数。
+ * 注意动画迭代数归 1 会让无限 spinner 停住 —— 这是 reduced-motion 的既有代价
+ * （DESIGN.md §7.5 明确要求这一条），不额外豁免。
+ */
+@media (prefers-reduced-motion: reduce) {
+
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* ── 滚动条基线 ────────────────────────────────────────────────────────────
+ * 此前全站只有 .sidebar-scroll 有自定义滚动条，消息流（最常用）/ 预览 / 设置 / 菜单
+ * 全是 Chromium 默认粗条，同一窗口两种风格。
+ * 基线：细条 + 常态柔和的 thumb（10% 黑，白底上约等于 --border 的可见度，不抢内容）
+ * + 悬停加深到 24%。
+ *
+ * 两套写法都写，并且知道各自的实际作用：
+ *   - Electron 44（Chromium ≥121）起 scrollbar-width / scrollbar-color **优先于**
+ *     ::-webkit-scrollbar 伪元素 —— 在本应用里真正生效的是标准属性那两条；
+ *   - webkit 分支留着是为了「thumb 圆角」这类只有它能表达的细节，并保证内核行为
+ *     一旦变化（或将来换容器）不出现风格回退。
+ * 副作用评估：
+ *   - .sidebar-scroll（scrollbar-width/color + webkit 特化）/ .ex-cats / .capability-row
+ *     （scrollbar-width: none）都是类选择器，特异性高于 `*`，既有特化完整保留；
+ *     尤其两个「隐藏滚动条的横向条」本来就写了 scrollbar-width: none，
+ *     不会因为基线变细/显色而露出来（这是本块最需要防的回归，已核对）。
+ *   - overflow: hidden 的容器不产生滚动条，基线对它们无副作用。
+ *   - 唯一的全局观感变化就是「原生滚动条从粗变细、常态更淡」——正是基线要的效果。
+ *   - `*:hover` 只影响被悬停元素自身的滚动条；对不滚动的元素是空操作。
+ *     它不会盖过 .sidebar-scroll:hover（后者多一个类，特异性更高）。
+ */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: color-mix(in srgb, var(--text) 10%, transparent) transparent;
+}
+
+*:hover {
+	scrollbar-color: color-mix(in srgb, var(--text) 24%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: var(--space-2);
+	height: var(--space-2);
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+	background: color-mix(in srgb, var(--text) 14%, transparent);
+	border-radius: var(--radius-full);
+}
+
+*:hover::-webkit-scrollbar-thumb {
+	background: color-mix(in srgb, var(--text) 26%, transparent);
 }

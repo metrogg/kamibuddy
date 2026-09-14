@@ -48,6 +48,7 @@ import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
 import { Markdown } from "./markdown.tsx";
+import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
 import { activePendingAlign, decideScrollAction } from "./send-anchor.ts";
 import { computeChatContentWidth } from "./chat-content-width.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
@@ -581,7 +582,7 @@ function TodoRow({ todo }: { readonly todo: TodoItem }): React.JSX.Element {
 		return (
 			<div className="todo-row running">
 				<span className="todo-glyph">
-					<span className="todo-spinner" />
+					<Spinner size={14} />
 				</span>
 				<span className="todo-text">{todo.activeForm ?? todo.content}</span>
 			</div>
@@ -637,10 +638,10 @@ function TodoListCard({
 			    不是等宽输出）。 */}
 			<div className={open ? "tool-detail-box todo-list-box open" : "tool-detail-box todo-list-box"}>
 				{receiving ? (
-					<div className="todo-placeholder">接收中…</div>
+					<LoadingState text="接收中…" />
 				) : todos === undefined || todos.length === 0 ? (
 					// 收尾清空（todos: []）也是有效全量：灰字一行交代，不留空盒。
-					<div className="todo-placeholder">清单已清空</div>
+					<EmptyState title="清单已清空" />
 				) : (
 					<div className="todo-list">
 						{windowTodos(todos).map((todo, index) => <TodoRow key={index} todo={todo} />)}
@@ -812,7 +813,7 @@ function CompactionPendingLine({ reason }: { readonly reason: CompactionReason }
 	return (
 		<div className="stream-pending">
 			<span className="text-shimmer">正在压缩上下文…</span>
-			{/* 原因后缀走 .stream-pending 继承的 --text-dim，不抢扫光主文案的注意力。 */}
+			{/* 原因后缀走 .stream-pending 继承的 --text-secondary，不抢扫光主文案的注意力。 */}
 			<span>{COMPACTION_REASON_LABEL[reason]}</span>
 		</div>
 	);
@@ -1259,7 +1260,7 @@ function SaveToWorkspaceDialog({
 						submit();
 					}}
 				/>
-				{error !== undefined && <p className="save-space-error">{error}</p>}
+				{error !== undefined && <ErrorState message={error} />}
 				<div className="save-space-actions">
 					<button type="button" className="mini-btn" disabled={submitting} onClick={onClose}>
 						取消

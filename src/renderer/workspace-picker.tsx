@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import type { WorkspaceSnapshot } from "@shared/ipc.ts";
 import { isAutoSessionDirName } from "@shared/workspace.ts";
 import { IconChevronDown, IconPlus, IconWorkspace } from "./icons.tsx";
+import { ErrorState, LoadingState } from "./state-views.tsx";
 
 interface WorkspacePickerProps {
 	/** 当前生效目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态，按临时任务显示。 */
@@ -157,7 +158,7 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
 					<div className="ws-popover">
 						<div className="ws-list">
-							{snapshot === undefined && error === undefined && <div className="ws-hint">加载中…</div>}
+							{snapshot === undefined && error === undefined && <LoadingState />}
 							{snapshot !== undefined && (
 								<>
 									<button type="button" className="ws-item" disabled={busy} onClick={() => switchTo(snapshot.defaultRoot)}>
@@ -217,7 +218,7 @@ export function WorkspacePicker({ cwd, onChanged }: WorkspacePickerProps): React
 							)}
 						</div>
 
-						{error !== undefined && <div className="ws-error">{error}</div>}
+						{error !== undefined && <ErrorState message={error} />}
 					</div>
 				</>
 			)}

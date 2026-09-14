@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolCard } from "@shared/session-events.ts";
 import { useCopyWithTick } from "./copy-tick.ts";
 import { IconAlert, IconCheck, IconCopy, IconDownload } from "./icons.tsx";
+import { Spinner } from "./state-views.tsx";
 
 /* ── 取数：结果 JSON 与部分参数提取 ───────────────────────────── */
 
@@ -197,16 +198,25 @@ export function clampWidgetHeight(height: number): number {
  * 文本三档 / 描边 / 两级表面 / 强调色 + 图表九色系。
  * 明暗两态：:root[data-theme] 由宿主 theme 消息驱动（宿主消息优先），
  * prefers-color-scheme 媒体查询是兜底一路（下载的 .html 独立打开时靠它）。
+ *
+ * 为什么这里是「字面值」而不是 var(--text)：这份字符串经 srcDoc 注入到独立文档，
+ * iframe 里的 var() 解析不到宿主的 :root（跨上下文，宿主样式表不生效）。所以只能
+ * 复制值——但值 SHALL 与 tokens.css 保持一致，改宿主 token 时这里要同步：
+ *   --kw-text ← --text / --kw-text-secondary ← --text-secondary /
+ *   --kw-text-dim ← --text-faint / --kw-border ← --border /
+ *   --kw-surface ← --bg / --kw-surface-raised ← --bg-raised / --kw-accent ← --accent。
+ * 例外：--kw-c1..c9 是 ECharts 图表九色系（生成图表的用色尺度），宿主没有对应 token，
+ * 保持原值——它属于「内容侧色板」不是宿主设计尺度。
  */
 const TOKENS_LIGHT = [
 	"color-scheme: light",
-	"--kw-text: #1a1a1a",
-	"--kw-text-secondary: rgba(0, 0, 0, 0.7)",
-	"--kw-text-dim: rgba(0, 0, 0, 0.5)",
+	"--kw-text: #000000",
+	"--kw-text-secondary: rgba(0, 0, 0, 0.5)",
+	"--kw-text-dim: rgba(0, 0, 0, 0.3)",
 	"--kw-border: #e6e6e6",
 	"--kw-surface: #ffffff",
 	"--kw-surface-raised: #f7f7f7",
-	"--kw-accent: #2f6bff",
+	"--kw-accent: #1470b4",
 	"--kw-c1: #5470c6",
 	"--kw-c2: #91cc75",
 	"--kw-c3: #fac858",
@@ -221,12 +231,12 @@ const TOKENS_LIGHT = [
 const TOKENS_DARK = [
 	"color-scheme: dark",
 	"--kw-text: rgba(255, 255, 255, 0.92)",
-	"--kw-text-secondary: rgba(255, 255, 255, 0.65)",
-	"--kw-text-dim: rgba(255, 255, 255, 0.45)",
-	"--kw-border: rgba(255, 255, 255, 0.14)",
+	"--kw-text-secondary: rgba(255, 255, 255, 0.55)",
+	"--kw-text-dim: rgba(255, 255, 255, 0.35)",
+	"--kw-border: rgba(255, 255, 255, 0.12)",
 	"--kw-surface: #1c1c1e",
-	"--kw-surface-raised: #2c2c2e",
-	"--kw-accent: #6b93ff",
+	"--kw-surface-raised: #26262a",
+	"--kw-accent: #4c9fe0",
 	"--kw-c1: #7c96e0",
 	"--kw-c2: #a8d88f",
 	"--kw-c3: #fbd97a",
@@ -523,7 +533,7 @@ export function WidgetView({ card }: { readonly card: ToolCard }): React.JSX.Ele
 	const statusIcon = failed ? (
 		<IconAlert size={14} className="widget-status bad" />
 	) : streaming ? (
-		<span className="task-spinner widget-status" aria-hidden="true" />
+		<Spinner size={11} />
 	) : card.outcome === "ok" ? (
 		<IconCheck size={14} className="widget-status ok" />
 	) : (
@@ -553,7 +563,7 @@ export function WidgetView({ card }: { readonly card: ToolCard }): React.JSX.Ele
 	} else if (streaming) {
 		body = (
 			<div className="widget-loading">
-				<span className="task-spinner" aria-hidden="true" />
+				<Spinner size={11} />
 				<span>{loadingText}</span>
 			</div>
 		);

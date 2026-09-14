@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { BUILTIN_MEMORY_TASK_ID } from "@shared/automation.ts";
+import { EmptyState, ErrorState, LoadingState } from "../state-views.tsx";
 
 /* ── 记忆 ──────────────────────────────────────────────────── */
 
@@ -120,10 +121,10 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 				<h2>记忆</h2>
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{enabled === undefined || !loaded ? (
-				<p className="settings-empty">正在读取记忆设置…</p>
+				<LoadingState text="正在读取记忆设置…" />
 			) : (
 				<>
 					<div className="provider-row">
@@ -258,10 +259,10 @@ function LongTermMemorySection({ busy }: { readonly busy: boolean }): React.JSX.
 				<h2>长期记忆记录</h2>
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{!loaded ? (
-				<p className="settings-empty">正在读取长期记忆…</p>
+				<LoadingState text="正在读取长期记忆…" />
 			) : (
 				<div className="profile-block">
 					<div className="profile-block-head">
@@ -305,7 +306,7 @@ function LongTermMemorySection({ busy }: { readonly busy: boolean }): React.JSX.
 						/* 查看态复用画像文本框档位：div 挂同一 class，只补 pre-wrap（见 index.css）。 */
 						<div className="profile-textarea profile-view">
 							{savedContent === "" ? (
-								<p className="settings-empty">暂无内容，点击编辑添加</p>
+								<EmptyState title="暂无内容，点击编辑添加" />
 							) : (
 								savedContent
 							)}

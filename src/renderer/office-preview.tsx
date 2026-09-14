@@ -15,6 +15,7 @@
 
 import { Suspense, lazy } from "react";
 import { IconDownload, IconOpenExternal } from "./icons.tsx";
+import { LoadingState } from "./state-views.tsx";
 
 const DocxPreview = lazy(() => import("./office-docx.tsx"));
 const XlsxPreview = lazy(() => import("./office-xlsx.tsx"));
@@ -58,7 +59,7 @@ export function OfficePreview({
 				</button>
 			</div>
 			{/* chunk 加载中的兜底；文件解析中的加载态由子组件自己渲染。 */}
-			<Suspense fallback={<div className="preview-fallback">加载渲染器…</div>}>
+			<Suspense fallback={<LoadingState text="加载渲染器…" />}>
 				{format === "docx" && <DocxPreview url={url} />}
 				{format === "xlsx" && <XlsxPreview url={url} />}
 				{format === "pptx" && <PptxPreview url={url} />}

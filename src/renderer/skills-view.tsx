@@ -20,14 +20,20 @@ import type { ExpertListItem } from "@shared/ipc.ts";
 import { ConnectorsView } from "./connectors-view.tsx";
 import { ExpertsView } from "./experts-view.tsx";
 import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface SkillsViewProps {
 	readonly onClose: () => void;
 	readonly onTodo: (feature: string) => void;
 	/** 导入成功 / 失败都走这个轻提示。 */
 	readonly onToast: (text: string) => void;
-	/** 专家库（App 启动时经 listExperts 拉取，含用户级覆盖与 source 标记）。 */
-	readonly experts: readonly ExpertListItem[];
+	/**
+	 * 专家库（App 启动时经 listExperts 拉取，含用户级覆盖与 source 标记）。
+	 * undefined = 还没拉回来（加载中）—— 与「拉回来但库里是空的」（[]）分开。
+	 */
+	readonly experts: readonly ExpertListItem[] | undefined;
+	/** 专家库拉取失败的原因（undefined = 没失败）。失败不能与「库为空」混为一谈。 */
+	readonly expertsError: string | undefined;
 	/** 启用专家：选中 + 进新任务对话页（App 层组合 newTask/setExpert/路由/预填）。 */
 	readonly onUseExpert: (expertId: string, prefill?: string) => void;
 	/** 创建专家：跳回主页并把引导语填入输入框（App 层组合 prefill + 路由）。 */
@@ -43,7 +49,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function SkillsView({ onClose, onTodo, onToast, experts, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
+export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
 	const [tab, setTab] = useState<TabId>("experts");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
@@ -141,29 +147,35 @@ export function SkillsView({ onClose, onTodo, onToast, experts, onUseExpert, onC
 				{tab === "connectors" ? (
 					<ConnectorsView onToast={onToast} />
 				) : tab === "experts" ? (
-					<ExpertsView experts={experts} onUseExpert={onUseExpert} onCreateExpert={onCreateExpert} />
+					<ExpertsView
+						experts={experts}
+						error={expertsError}
+						onUseExpert={onUseExpert}
+						onCreateExpert={onCreateExpert}
+					/>
 				) : (
-					<>
-						{error !== undefined && <div className="settings-error">{error}</div>}
-
-						{snapshot === undefined ? (
-							<p className="settings-empty">正在读取…</p>
-						) : snapshot.skills.length === 0 ? (
-							<div className="skills-empty">
-								<p>还没有安装任何技能。</p>
-								<p>
-									点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；
-									或把技能文件夹直接放进技能目录。
-								</p>
-							</div>
-						) : (
-							<div className="skill-grid">
-								{snapshot.skills.map((skill) => (
-									<SkillCard key={skill.filePath} skill={skill} />
-								))}
-							</div>
-						)}
-					</>
+					/*
+					 * 三态互斥：失败 → 就地错误卡 + 重试（调 load）；未就绪 → 加载态；
+					 * 数据回来且为空 → 空态。原来 error 条与「正在读取…」并存 ——
+					 * 拉取失败时 snapshot 永远停在 undefined，页面永久卡在「正在读取」，
+					 * 且没有任何重试出口（DESIGN.md §4：失败就地呈现 + 重试动作）。
+					 */
+					error !== undefined ? (
+						<ErrorState message={error} onRetry={() => void load()} />
+					) : snapshot === undefined ? (
+						<LoadingState />
+					) : snapshot.skills.length === 0 ? (
+						<EmptyState
+							title="还没有安装任何技能。"
+							description="点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；或把技能文件夹直接放进技能目录。"
+						/>
+					) : (
+						<div className="skill-grid">
+							{snapshot.skills.map((skill) => (
+								<SkillCard key={skill.filePath} skill={skill} />
+							))}
+						</div>
+					)
 				)}
 			</div>
 		</main>

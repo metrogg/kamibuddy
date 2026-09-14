@@ -1,0 +1,201 @@
+/**
+ * KamiBuddy 设计 Token 单一真源（对应 DESIGN.md §2）。
+ *
+ * 接线状态：已接线——`index.css` 顶部 `@import "../styles/tokens.css"`，
+ * 原 `index.css :root` 的同名变量块已删除，本文件是唯一生效定义。
+ * 删掉那份重复定义不只是去重：同名不同值（如 `--text-secondary` 的 .7 与 .5）
+ * 会让 `var()` 结果取决于 import 顺序，是极难排查的隐性 bug。
+ *
+ * 档位纪律（DESIGN.md §2 的硬约束，违者 CR 打回）：
+ *   间距 7 档 / 字号 5 档 / 文字色 3 级 / 圆角 4 档 / 阴影 3 级 / 时长 3 档。
+ *   不够用时先改 DESIGN.md 并说明理由，不许在组件里加第 8 档。
+ *
+ * 主题：`:root` 为亮色（当前唯一生效主题，对齐 WorkBuddy 浅色）。
+ * `[data-theme="dark"]` 为暗色预留——应用侧尚无暗色开关与持久化，
+ * 变量先定义、不接线，避免半成品主题流出去。
+ */
+
+:root {
+	color-scheme: light;
+
+	/* ── 文字色（3 级，超出即违规）────────────────────────────────────
+	   现状收敛说明：index.css 原有四级（纯黑 / 0.7 / 0.5 / 0.3），WB black-70
+	   那档（首页 pills、案例标题）并入「次文」。迁移时把 var(--text-secondary)
+	   与直写 rgba(0,0,0,0.7) 统一替换为 --text-secondary 新值，不再保留 0.7。
+	   接线前的 --text-secondary 写的是 0.7、--text-dim 写的是 0.5，是「两个名字
+	   各占一档」的重复命名；现按语义收敛为 3 级，--text-dim 名字废弃。 */
+	--text: #000000;                  /* 主文：正文、标题、按钮主文字 */
+	--text-secondary: rgba(0, 0, 0, 0.5); /* 次文：辅助信息、次要按钮、meta 行（吸收原 0.7 档：
+	                                     首页 pills、能力 chip、案例标题这些 0.7 的引用点） */
+	--text-faint: rgba(0, 0, 0, 0.3); /* 弱文：禁用态文字、占位符、最弱图标。
+	                                     WB 文字第四档 faint（black-30，--cb-question-floating-text-faint），
+	                                     原先只为问卷浮层禁用态圆形按钮的图标色而补。 */
+
+	/* ── 表面色 ──────────────────────────────────────────────────────
+	   取值出处：WorkBuddy 浅色主题（safe-delete-events-vjEg4QyO.css :1749-1917）。
+	   主背景是纯白（bg-primary = white-100）、侧栏 gray-3、次级背景 gray-2、卡片纯白——
+	   「暖」感来自侧栏与卡片的对比，不是主背景本身偏暖。 */
+	--bg: #ffffff;                    /* 主背景（WB white-100）：对话区、卡片、弹层 */
+	--bg-sidebar: #f2f2f2;            /* 侧栏背景（WB gray-3） */
+	--bg-raised: #f7f7f7;             /* 抬升面（WB gray-2）：次级卡片、选中底、代码块底 */
+	--bg-hover: rgba(0, 0, 0, 0.05);  /* 唯一 hover 底色：列表行、菜单项、图标按钮 */
+	--border: #e6e6e6;                /* 唯一常规边框（WB gray-5）：卡片、弹层、分隔线 */
+
+	/* ── 主色（黑按钮体系，WB --wb-bg-pill-*）────────────────────────── */
+	--primary: rgba(0, 0, 0, 0.9);        /* 主按钮/主选中底：发送键、主操作 */
+	--primary-hover: rgba(0, 0, 0, 0.82); /* 主色 hover（往浅走，回主色方向的反馈） */
+	--primary-active: rgba(0, 0, 0, 0.75);/* 主色按下/pill 选中（比主色浅是有意的：选中态要柔） */
+	--primary-text: #ffffff;              /* 主色底上的文字/图标 */
+
+	/* ── 状态色（4 个，不加新状态色）───────────────────────────────── */
+	--danger: #f64041;   /* 危险：删除、拒绝、错误（WB red-8） */
+	--ok: #0cbf5b;       /* 成功：完成态、已连接（WB green-8） */
+	--warning: #d9822b;  /* 警示：连接中、待确认、非阻断提醒。收编 toast-warning /
+	                        mcp-connecting / 待确认 badge 三处独立硬编码的同一色值。
+	                        接线前分类调色板（--seg）里有个同值的 #d9822b，与「警示」撞色，
+	                        已换相到 --cat-5（橙红）——分类色不再借用状态色的色相。 */
+	--accent: #1470b4;   /* 可点标识：链接、路径徽章、勾选项（WB 同色，收编路径徽章既有蓝）。
+	                        接线前踩过的坑：`.markdown a` 与 `.view-switcher-check` 已引用本变量，
+	                        但当时的定义块里没有它——`var()` 解析失败回退到继承色，markdown 链接
+	                        与正文同色，只有 hover 下划线可辨。现为唯一真源，不会再出现该现象。 */
+	--brand: #00c29a;    /* 品牌绿：仅状态点/品牌位点缀，不进常规组件 */
+
+	/* ── 遮罩（1 档）────────────────────────────────────────────────── */
+	--overlay: rgba(0, 0, 0, 0.4);    /* 模态背板唯一值。接线前有 32%~78% 五档散在
+	                                     .modal-backdrop(32%) / .ex-modal-mask(40%) /
+	                                     .attachment-remove(55%/78%) / .image-preview-overlay(72%)，
+	                                     现 32% 与 40% 已收编到此；后两者是「控件 scrim」与
+	                                     「全屏看图沉浸遮罩」，语义不是模态背板，保留原值并在
+	                                     index.css 处注释（见 docs/design-tokens-migration.md）。 */
+
+	/* ── 分类调色板（6 色，跨三处共用）─────────────────────────────────
+	   收编对象：提示词分段（.seg-*，原 --seg 六色）／上下文用量成分条（.comp-*，原 5 色）／
+	   上下文用量浮层（.cu-seg-*，原 4 色）——三套互不相同的色板收敛成本组。
+	   基准取 --seg 六色；--cat-5 换色相：原 --seg 的 #d9822b 与 --warning 同值，
+	   分类色借用状态色会读成「出问题了」，改为同族更偏橙红的 #e06c3a（色相 29°→18°），
+	   与 --warning(#d9822b) 及 --danger(#f64041) 都可区分。
+	   注意：本组只承载「无差别的分类」；中性灰（system/compaction 等）仍走
+	   --text-secondary（.timeline-span.end 早有先例），绿色只在真正的语义处
+	   出现（.seg-mode / .timeline-span.end.ok 的 --ok），不占分类槽位——
+	   上下文成分条明确「不借红/绿语义色」，本组不再给它绿色。 */
+	--cat-1: #3b82f6;  /* 蓝：fragment / user / timeline 段 */
+	--cat-2: #8b5cf6;  /* 紫：style / thinking / llm */
+	--cat-3: #ca8a04;  /* 黄（深）：skills */
+	--cat-4: #0891b2;  /* 青：pi-context / 对话内容（assistant、conversation） */
+	--cat-5: #e06c3a;  /* 橙红（换相）：time / tools / running / retry */
+	--cat-6: #db2777;  /* 玫红：expert */
+
+	/* ── 间距（7 档：4 的倍数主轴，6 是桌面紧凑控件特批档）───────────── */
+	--space-1: 4px;   /* 图标与文字间隙、chip 内部、徽章内边距 */
+	--space-2: 6px;   /* 紧凑控件内边距（图标按钮 padding、菜单项 gap） */
+	--space-3: 8px;   /* 控件组间隙、列表行内 gap、表单项间距 */
+	--space-4: 12px;  /* 卡片/浮层内边距、区块内元素间距 */
+	--space-5: 16px;  /* 区块间距、卡片外边距、面板内边距 */
+	--space-6: 24px;  /* 大区块分隔、输入卡内边距、页面内边距 */
+	--space-7: 32px;  /* 模态/大弹层内边距、页面级留白 */
+
+	/* ── 字号（5 档，沿用 index.css 现有五档）──────────────────────────
+	   归档范围只覆盖核心路径的直写 px；`calc()` 派生值与低频边缘处不动。 */
+	--text-meta: 12px;      /* 辅助信息：分组标题、时间戳、等宽小字、次级按钮文字 */
+	--text-list: 13px;      /* 列表正文：侧栏任务行、菜单项、toast、主按钮文字 */
+	--text-body: 14px;      /* 正文基准：助手消息、工具行、pills（同 body 基准） */
+	--text-emphasis: 15px;  /* 强调正文：用户气泡（与助手 14 的一档差是有意区分发言者，
+	                          不是漂移）；同档还有回合文字行、清单行、md 小标题 */
+	--text-display: 30px;   /* 展示标题：仅首页 hero（WB 原值） */
+
+	/* ── 圆角（4 档）────────────────────────────────────────────────── */
+	--radius-sm: 6px;    /* 小控件：按钮、菜单项、chip、列表行、小输入框 */
+	--radius-md: 10px;   /* 卡片：产物卡、弹层、toast、pre/代码块 */
+	--radius-lg: 16px;   /* 大卡：模态、问卷卡、案例封面 */
+	--radius-full: 999px;/* 胶囊/圆形：pill、tab、头像、状态点 */
+	/* 例外（WB 原值，不入档）：输入卡 24px / 首页槽 22px（.composer-card/.composer-slot）；
+	   1-5px 微圆角（favicon、进度 thumb、badge 标记）允许直写但须注释语义。
+	   逐组决策记录（全文审计 158 处 border-radius 的归档依据，在此留存一处以免后续重复判断）：
+	   - 6px×16 → sm（等值）；7px×12 → sm（表单控件/菜单项，就近 −1）；
+	   - 8px×27 按组件语义分两档：小控件/按钮/行项/chip×19 → sm，卡片/气泡媒体/pre/代码卡×8 → md；
+	   - 10px×1（toast）→ md（等值）；case-cover 16px → lg（等值）；
+	   - questionnaire-icon-btn 的 16px 是 32×32 之半、语义是「圆」→ 50%（渲染等价）；
+	   - 12px×6 已并入档（Task 2a 实收）：cases-action（24 高之半的胶囊）→ full；
+	     ws/permission 浮层大卡、entry 气泡卡、问卷选项行 → md。原写法「12px 保留不归档」
+	     与本期 spec 冲突，已按 spec 的 md/full 归档收口；
+	   - 保留不归档（逐字不同且有语义）：1/2/3px（favicon/小标记）、4/5px（低于 sm 的微圆角：
+	     badge/小按钮/进度 thumb）、22/24px（WB 输入卡/槽体系原值）、50%/999px（圆形/胶囊）。 */
+
+	/* ── 阴影（3 档 + 1 个场景例外）──────────────────────────────────── */
+	--shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.02), 0 1px 4px rgba(0, 0, 0, 0.03);
+		/* 轻浮层：问卷卡、内联浮层（不该有弹层压迫感的场合，WB questionFloating 原值；
+		   接线前名为 --shadow-questionnaire，改名不换值）。 */
+	--shadow-md: 0 6px 24px rgb(0 0 0 / 6%);
+		/* 卡片与弹层：pop 菜单、产物卡、dropdown（WB 卡片阴影原值；接线前名为 --shadow-card）。 */
+	--shadow-input: 0 16px 32px -8px rgba(0, 0, 0, 0.03), 0 2px 4px -4px rgba(0, 0, 0, 0.06);
+		/* 场景例外，不并入 --shadow-md：WorkBuddy 输入卡阴影原值（--wb-main-area-box-shadow），
+		   语义归 --shadow-md 档（大而淡铺底 + 小而实贴边，是「内容承载层」不是「浮层」），
+		   但值独立——比 --shadow-md 轻得多。只有 .composer-card 用，弹层仍走 --shadow-md；
+		   拆成独立变量是为了让引用点保留原值，不必在接线时改数值。 */
+	--shadow-lg: 0 12px 40px rgb(0 0 0 / 18%);
+		/* 模态与阻断弹层：审批、确认框（收编现状 4 处相同裸写：index.css 5478/5581/6358/6656） */
+
+	/* ── 时长（3 档）与缓动（2 个）───────────────────────────────────── */
+	--dur-fast: 150ms;  /* 微交互：hover 变色、图标替换、焦点环出现 */
+	--dur-base: 200ms;  /* 常规过渡：弹层入场、开合、位移 */
+	--dur-slow: 280ms;  /* 大容器：折叠展开、面板宽度、模态入场 */
+	--ease-out: cubic-bezier(0.33, 1, 0.68, 1);      /* 默认：入场/常规（WB 同款） */
+	--ease-standard: ease-out;                        /* 变色/透明度等纯视觉反馈 */
+
+	/* ── 层级（5 档，收编现状 1/10/20/30/40/90/100 裸写）─────────────── */
+	--z-base: 1;      /* 页面内抬升：刻度轨、sticky 头、激活描边 */
+	--z-panel: 30;    /* 面板内浮层：预览面板内的菜单、侧栏内弹层 */
+	--z-overlay: 90;  /* 全局弹层：plus/model/permission 菜单、tooltip */
+	--z-modal: 100;   /* 模态：审批弹窗、确认框（最高业务层） */
+	--z-toast: 200;   /* toast：永远在最上（含模态之上，否则错误看不见） */
+
+	/* ── 字体栈（2 个，沿用 index.css 133/2240 现有栈）───────────────── */
+	--font-body: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+	--font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+/* ── 暗色主题（预留，未接线）──────────────────────────────────────────
+   取值原则：保持亮色的「层次方向」不变（侧栏比主背景更深、抬升面更亮），
+   状态色在暗底上提亮保对比度。首次启用暗色时须对照 DESIGN.md §2 复核一遍，
+   并对照 WorkBuddy 暗色截图逐区校验——本块目前没有实测依据，只是合理的初值。 */
+[data-theme="dark"] {
+	color-scheme: dark;
+
+	--text: rgba(255, 255, 255, 0.92);
+	--text-secondary: rgba(255, 255, 255, 0.55);
+	--text-faint: rgba(255, 255, 255, 0.35);
+
+	--bg: #1c1c1e;
+	--bg-sidebar: #141416;
+	--bg-raised: #26262a;
+	--bg-hover: rgba(255, 255, 255, 0.07);
+	--border: rgba(255, 255, 255, 0.12);
+
+	--primary: rgba(255, 255, 255, 0.9);
+	--primary-hover: rgba(255, 255, 255, 0.78);
+	--primary-active: rgba(255, 255, 255, 0.68);
+	--primary-text: #000000;
+
+	--danger: #ff6b6c;
+	--ok: #32d74b;
+	--warning: #e8a13a;
+	--accent: #4c9fe0;
+	--brand: #00c29a;
+
+	--overlay: rgba(0, 0, 0, 0.6);
+
+	/* 分类板暗色版：保持色相不变、提亮饱和度保对比（暗底上原亮色会发闷）。
+	   与亮色同一序号语义，切换主题时分类色不会错位。 */
+	--cat-1: #5b9dff;
+	--cat-2: #a487ff;
+	--cat-3: #d9a83a;
+	--cat-4: #2fb0cc;
+	--cat-5: #ef8358;
+	--cat-6: #ef5f9c;
+
+	--shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+	--shadow-md: 0 6px 24px rgba(0, 0, 0, 0.45);
+	--shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+	/* 间距/字号/圆角/时长/缓动/层级/字体 不随主题变化，继承 :root。 */
+}

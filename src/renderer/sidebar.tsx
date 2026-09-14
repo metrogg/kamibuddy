@@ -10,7 +10,7 @@
  * （推导规则集中才能跑纯函数测试，见 session-groups.ts 头注释）。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SessionSummary } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import type { SessionGroups, SpaceGroup } from "./session-groups.ts";
@@ -32,6 +32,7 @@ import {
 	IconStats,
 	IconTrash,
 } from "./icons.tsx";
+import { EmptyState, LoadingState, Spinner } from "./state-views.tsx";
 
 /** daemon 连接状态，与 App 里的 Link 同构。侧栏底部常驻显示，试用时一眼定位「发不出消息是不是没连上」。 */
 export type LinkState =
@@ -136,6 +137,18 @@ export function Sidebar({
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
 	const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
+	// 空间组 ⋯ 菜单的 Esc 关闭。该菜单只有透明 backdrop（管指针）：纯键盘用户
+	// 展开后既点不到 backdrop，也没有别的退出方式。同 model-menu / permission-menu
+	// 的既有写法（effect 依赖 menuCwd，无弹层时不挂监听）。
+	useEffect(() => {
+		if (menuCwd === undefined) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setMenuCwd(undefined);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [menuCwd]);
+
 	/**
 	 * 会话行渲染：任务区与空间组内共用同一份（标题/meta/当前高亮/hover
 	 * 三操作钮/行内编辑态/删除确认态 + 转圈/未读点），写成闭包而不是两份
@@ -220,7 +233,7 @@ export function Sidebar({
 						{/* 运行中转圈以 SessionSummary.running 为准（daemon 权威，随
 						taskListChanged 推送更新）：多任务并发后同时可有多行在跑，
 						旧的「本地 streaming && 当前行」推导只看得见当前会话，已废。 */}
-						{task.running && <span className="task-spinner" />}
+						{task.running && <Spinner size={11} />}
 						{task.title}
 					</span>
 					{/* 「待确认」压在时间之前（flex:none，与 meta 同排常驻可见）；
@@ -462,10 +475,20 @@ export function Sidebar({
 		);
 	};
 
+	/**
+	 * 任务区数据源。首屏 daemon 还在起（link=connecting）时列表不可知，用 undefined
+	 * 表达「加载中」—— 与「已拿到但确实没有历史任务」（[]）分开。混成一个条件
+	 * （length === 0）会让首屏闪「暂无历史任务」：那不是空，是还没拿到（DESIGN.md §4、§6）。
+	 *
+	 * 只把 connecting 当加载中（不是「非 ready 即加载中」）：daemon 断开时
+	 * taskList 保留着最后一份已知列表，按加载中渲染会把它整片清成转圈，
+	 * 反倒丢掉用户还能看的历史（断开本身由底部状态行如实说明）。
+	 */
+	const tasks = link.kind === "connecting" ? undefined : groups.tasks;
 	const visibleTasks = tasksExpanded
-		? groups.tasks
-		: groups.tasks.slice(0, TASKS_COLLAPSED_COUNT);
-	const hiddenTaskCount = groups.tasks.length - visibleTasks.length;
+		? (tasks ?? [])
+		: (tasks ?? []).slice(0, TASKS_COLLAPSED_COUNT);
+	const hiddenTaskCount = tasks === undefined ? 0 : tasks.length - visibleTasks.length;
 
 	return (
 		<aside className="sidebar">
@@ -520,10 +543,12 @@ export function Sidebar({
 						onClick={() => setTasksCollapsed((prev) => !prev)}
 					>
 						<IconChevronDown size={12} className={tasksCollapsed ? "section-chevron section-chevron-collapsed" : "section-chevron"} />
-						任务 ({groups.tasks.length})
+						任务 ({tasks?.length ?? 0})
 					</button>
-					{!tasksCollapsed && (groups.tasks.length === 0 ? (
-						<p className="section-empty">暂无历史任务</p>
+					{!tasksCollapsed && (tasks === undefined ? (
+						<LoadingState />
+					) : tasks.length === 0 ? (
+						<EmptyState title="暂无历史任务" />
 					) : (
 						<div className="task-list">
 							{visibleTasks.map(renderTaskRow)}

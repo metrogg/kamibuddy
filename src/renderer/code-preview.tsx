@@ -66,6 +66,9 @@ export function CodePreview({
 			readOnly: true,
 			minimap: { enabled: false },
 			wordWrap: "on",
+			// Monaco 的 fontSize 是 number（像素），不是 CSS 值：这里写 var(--text-list)
+			// 会立刻挂类型检查，运行时也算不出行高。值与 --text-list(13) 手动对齐，
+			// 登记为 token 例外（check:tokens 侧）。
 			fontSize: 13,
 			scrollBeyondLastLine: false,
 			// 面板拖拽调宽/全屏靠它跟随容器 resize，不用自己挂 ResizeObserver。

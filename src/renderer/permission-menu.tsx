@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { PermissionInfo, PermissionPreset } from "@shared/permissions.ts";
 import { CUSTOM_PRESET, PERMISSION_PRESETS, findPreset, presetIdFor } from "@shared/permissions.ts";
 import { IconCheck, IconChevronDown } from "./icons.tsx";
+import { ErrorState, LoadingState } from "./state-views.tsx";
 
 interface PermissionMenuProps {
 	readonly onOpenSettings: () => void;
@@ -27,13 +28,20 @@ interface PermissionMenuProps {
 export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [info, setInfo] = useState<PermissionInfo | undefined>(undefined);
+	/**
+	 * 菜单内的局部失败态（同 model-menu）。拉取失败原来只弹 toast，
+	 * 而渲染条件仍是「info === undefined」，于是菜单永久停在「正在读取权限…」——
+	 * 失败就地呈现并给重试出口（DESIGN.md §6）。
+	 */
+	const [error, setError] = useState<string | undefined>(undefined);
 
 	const reload = useCallback(() => {
+		setError(undefined);
 		window.kami
 			.getPermissions()
 			.then(setInfo)
-			.catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)));
-	}, [onError]);
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	}, []);
 
 	// 挂载即拉一次：chip 文案在展开之前就要显示当前档位。
 	// 之后每次展开再重拉 —— 用户可能刚在设置页改过，缓存会显示旧档位。
@@ -114,8 +122,10 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 					{/* 透明 backdrop：点面板外任意处关闭，与同区 WorkspacePicker 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
 					<div className="pop-menu permission-menu" role="menu">
-						{info === undefined ? (
-							<p className="permission-menu-empty">正在读取权限…</p>
+						{error !== undefined ? (
+							<ErrorState message={error} onRetry={reload} />
+						) : info === undefined ? (
+							<LoadingState text="正在读取权限…" />
 						) : (
 							<>
 								{PERMISSION_PRESETS.map((preset) => {

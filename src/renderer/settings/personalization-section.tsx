@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PersonalizationInfo, PersonalizationPatch } from "@shared/ipc.ts";
 import type { StyleConfigInfo } from "@shared/settings.ts";
+import { ErrorState, LoadingState } from "../state-views.tsx";
 import { SelectField } from "./select-field.tsx";
 
 /** 自定义指令上限（与 compose 注入的截断口径一致，输入侧就拦住）。 */
@@ -83,10 +84,10 @@ function StyleSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
 				<h2>回复风格</h2>
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{config === undefined ? (
-				<p className="settings-empty">正在读取回复风格设置…</p>
+				<LoadingState text="正在读取回复风格设置…" />
 			) : (
 				<>
 					<div className="provider-row">
@@ -375,9 +376,9 @@ export function PersonalizationSection({ busy }: { readonly busy: boolean }): Re
 			{info === undefined ? (
 				<section className="settings-section">
 					{error !== undefined ? (
-						<div className="settings-error">{error}</div>
+						<ErrorState message={error} />
 					) : (
-						<p className="settings-empty">正在读取个性化设置…</p>
+						<LoadingState text="正在读取个性化设置…" />
 					)}
 				</section>
 			) : (
@@ -385,7 +386,7 @@ export function PersonalizationSection({ busy }: { readonly busy: boolean }): Re
 					{/* 保存/切换失败的统一透出位：挂在第一组新控件上方。 */}
 					{error !== undefined && (
 						<section className="settings-section">
-							<div className="settings-error">{error}</div>
+							<ErrorState message={error} />
 						</section>
 					)}
 					<CustomInstructionsSection busy={busy} saved={info.customInstructions} onSubmit={submit} />

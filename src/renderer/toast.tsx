@@ -8,6 +8,7 @@
  */
 
 import { IconAlert, IconCheck } from "./icons.tsx";
+import { Spinner } from "./state-views.tsx";
 
 export type ToastType = "success" | "info" | "warning" | "error" | "loading";
 
@@ -29,7 +30,7 @@ export function Toast({ messages }: { readonly messages: readonly ToastMessage[]
 						) : message.type === "error" || message.type === "warning" ? (
 							<IconAlert size={14} />
 						) : message.type === "loading" ? (
-							<span className="toast-spinner" />
+							<Spinner size={12} />
 						) : null}
 					</span>
 					<span className="toast-text">{message.text}</span>

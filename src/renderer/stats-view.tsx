@@ -24,6 +24,7 @@ import {
 	type UsageStats,
 } from "@shared/usage-stats.ts";
 import { IconBack, IconRefresh } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 /* ── 格式化 ──────────────────────────────────────────────────────── */
 
@@ -147,7 +148,7 @@ const TREND_VIEW_HEIGHT = 30;
 
 function TokenTrend({ stats }: { readonly stats: UsageStats }): React.JSX.Element {
 	const points = stats.dailyTokens;
-	if (points.length === 0) return <p className="settings-empty">还没有 token 记录。</p>;
+	if (points.length === 0) return <EmptyState title="还没有 token 记录。" />;
 
 	const max = Math.max(...points.map((p) => p.tokens));
 	const step = points.length === 1 ? 0 : TREND_VIEW_WIDTH / (points.length - 1);
@@ -247,12 +248,12 @@ export function StatsView({ onClose }: { onClose: () => void }): React.JSX.Eleme
 			</header>
 
 			<div className="settings-body">
-				{error !== undefined && <div className="settings-error">{error}</div>}
+				{error !== undefined && <ErrorState message={error} />}
 
 				{stats === undefined ? (
-					<p className="settings-empty">正在读取统计…</p>
+					<LoadingState text="正在读取统计…" />
 				) : empty ? (
-					<p className="settings-empty">还没有任何会话，先用一次再回来看。</p>
+					<EmptyState title="还没有任何会话，先用一次再回来看。" />
 				) : (
 					<>
 						<section className="settings-section">

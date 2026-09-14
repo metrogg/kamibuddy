@@ -14,6 +14,7 @@ import type { ModelInfo, SettingsSnapshot } from "@shared/settings.ts";
 import type { ThinkingLevel } from "@shared/session-events.ts";
 import { THINKING_LEVEL_LABELS } from "@shared/session-events.ts";
 import { IconCheck, IconChevronDown } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface ModelMenuProps {
 	readonly modelId: string | undefined;
@@ -47,6 +48,12 @@ export function ModelMenu({
 }: ModelMenuProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [snapshot, setSnapshot] = useState<SettingsSnapshot | undefined>(undefined);
+	/**
+	 * 菜单内的局部失败态。拉取失败原来只弹 toast，菜单里的条件仍停在
+	 * 「snapshot === undefined」，于是永久显示「正在读取模型…」—— 用户既不知道
+	 * 失败了也没有重试入口。现在失败就地呈现（DESIGN.md §6：可重试的失败不用 toast）。
+	 */
+	const [error, setError] = useState<string | undefined>(undefined);
 	// 档位子菜单的开合独立持有：hover 或点击都可达（触屏没有 hover，同 PlusMenu 约定）。
 	const [levelsOpen, setLevelsOpen] = useState(false);
 
@@ -64,21 +71,24 @@ export function ModelMenu({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [open]);
 
+	/** 重拉模型清单：展开时每次都调（用户可能刚在设置页配了新 Key，缓存会显示旧的可用集）。 */
+	const reload = useCallback(() => {
+		setError(undefined);
+		window.kami
+			.settingsSnapshot()
+			.then(setSnapshot)
+			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	}, []);
+
 	const toggle = useCallback(() => {
 		setOpen((v) => {
 			const next = !v;
-			// 每次展开都重拉：用户可能刚在设置页配了新 Key，缓存会显示旧的可用集。
-			if (next) {
-				window.kami
-					.settingsSnapshot()
-					.then(setSnapshot)
-					.catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)));
-			}
+			if (next) reload();
 			return next;
 		});
 		// 主菜单开合都复位子菜单：下次重开从「推理强度」行开始，而不是残留展开态。
 		setLevelsOpen(false);
-	}, [onError]);
+	}, [reload]);
 
 	const pick = useCallback(
 		(key: string) => {
@@ -155,22 +165,26 @@ export function ModelMenu({
 						}}
 					/>
 					<div className="pop-menu model-menu" role="menu">
-						{snapshot === undefined ? (
-							<p className="model-menu-empty">正在读取模型…</p>
+						{error !== undefined ? (
+							<ErrorState message={error} onRetry={reload} />
+						) : snapshot === undefined ? (
+							<LoadingState text="正在读取模型…" />
 						) : available.length === 0 ? (
-							<>
-								<p className="model-menu-empty">还没有可用模型</p>
-								<button
-									type="button"
-									className="model-menu-goto"
-									onClick={() => {
-										setOpen(false);
-										onOpenSettings();
-									}}
-								>
-									去设置里填 API Key →
-								</button>
-							</>
+							<EmptyState
+								title="还没有可用模型"
+								action={
+									<button
+										type="button"
+										className="mini-btn"
+										onClick={() => {
+											setOpen(false);
+											onOpenSettings();
+										}}
+									>
+										去设置里填 API Key →
+									</button>
+								}
+							/>
 						) : (
 							<>
 								{/*

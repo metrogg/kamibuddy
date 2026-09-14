@@ -139,10 +139,14 @@ export function App(): React.JSX.Element {
 	 * 专家列表（「专家 ▸」子菜单与对话头部的数据源）。App 激活时拉一次存 state：
 	 * 专家库变动低频（内置目录随版本、用户级文件靠手工放置），且 daemon 的
 	 * listExperts 每次现载 —— 用户级新增/覆盖在下次启动（或重新拉取）即生效，
-	 * 不为它建推送通道。拉取失败静默：菜单落回无专家可选，setExpert 时 daemon
-	 * 会响亮报错，不在这里提前打扰。
+	 * 不为它建推送通道。
+	 *
+	 * 初值 undefined = 还没拉回来（未就绪），与「拉回来但库里是空的」（[]）分开 ——
+	 * 否则专家页会把「还没拿到」显示成「搜不到」。失败不再静默：透出到
+	 * expertsError，由专家页就地呈现（失败 ≠ 库为空），子菜单侧按空集降级。
 	 */
-	const [experts, setExperts] = useState<readonly ExpertListItem[]>([]);
+	const [experts, setExperts] = useState<readonly ExpertListItem[] | undefined>(undefined);
+	const [expertsError, setExpertsError] = useState<string | undefined>(undefined);
 	/**
 	 * 待消费的输入框预填文本（创建专家引导语 / 市场页 quickPrompt）。
 	 * 目标视图（home 或 chat）挂载后经 composer 句柄填入并立即回调清空 ——
@@ -202,7 +206,13 @@ export function App(): React.JSX.Element {
 				.catch(fail);
 			// 首屏初拉保留：推送通道只推变更，列表初值要自己拉一次。
 			window.kami.listSessions().then(setTaskList).catch(() => { });
-			window.kami.listExperts().then(setExperts).catch(() => { });
+			window.kami.listExperts()
+				.then((list) => setExperts(list))
+				// 拉取失败透出为状态（不再静默吞掉）：专家页要能区分「库为空」与
+				// 「没拉到」，否则失败会显示成「没有找到匹配的专家」。
+				.catch((error: unknown) => {
+					setExpertsError(error instanceof Error ? error.message : String(error));
+				});
 			refreshGroups();
 			// previewBaseUrl 不在此初始化：快照落地后 state.cwd 就位，
 			// 按 cwd 取 baseUrl 的 effect 会自动触发（见 Task 3.4）。
@@ -1063,7 +1073,7 @@ export function App(): React.JSX.Element {
 					interactions={conversation.availableModes}
 					interactionId={conversation.state.interactionId}
 					onInteractionChange={changeInteraction}
-					experts={experts}
+					experts={experts ?? []}
 					expertId={conversation.state.expertId}
 					onSelectExpert={selectExpert}
 					prefill={pendingPrefill}
@@ -1087,7 +1097,7 @@ export function App(): React.JSX.Element {
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
 					turnFoldCache={turnFoldCacheRef}
-					experts={experts}
+					experts={experts ?? []}
 					onSelectExpert={selectExpert}
 					onOpenExperts={() => setView("skills")}
 					prefill={pendingPrefill}
@@ -1156,6 +1166,7 @@ export function App(): React.JSX.Element {
 					onTodo={showTodo}
 					onToast={showToast}
 					experts={experts}
+					expertsError={expertsError}
 					onUseExpert={useExpert}
 					onCreateExpert={createExpert}
 				/>

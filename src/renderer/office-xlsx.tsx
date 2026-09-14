@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type ComponentRef } from "react";
 import { Workbook } from "@fortune-sheet/react";
 import "@fortune-sheet/react/dist/index.css";
+import { ErrorState, LoadingState } from "./state-views.tsx";
 
 type SheetData = ComponentProps<typeof Workbook>["data"];
 type WorkbookHandle = ComponentRef<typeof Workbook>;
@@ -147,9 +148,9 @@ export default function XlsxPreview({ url }: { readonly url: string }): React.JS
 
 	return (
 		<div ref={hostRef} className="preview-office-content office-sheet-host">
-			{error !== undefined && <div className="preview-fallback">表格解析失败：{error}</div>}
+			{error !== undefined && <ErrorState message={`表格解析失败：${error}`} />}
 			{sheets === undefined && error === undefined && (
-				<div className="preview-fallback">解析表格中…</div>
+				<LoadingState text="解析表格中…" />
 			)}
 			{sheets !== undefined && (
 				<Workbook

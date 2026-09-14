@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SettingsSnapshot } from "@shared/settings.ts";
 import { IconClose } from "../icons.tsx";
+import { ErrorState, LoadingState } from "../state-views.tsx";
 import { GeneralSection } from "./general-section.tsx";
 import { PersonalizationSection } from "./personalization-section.tsx";
 import { MemoryEvolutionSection } from "./memory-section.tsx";
@@ -120,14 +121,14 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 				</nav>
 
 				<div className="settings-panel">
-					{error !== undefined && <div className="settings-error">{error}</div>}
+					{error !== undefined && <ErrorState message={error} />}
 
 					{page === "general" && <GeneralSection busy={busy} />}
 					{page === "personalization" && <PersonalizationSection busy={busy} />}
 					{page === "memory" && <MemoryEvolutionSection busy={busy} />}
 					{page === "models" &&
 						(snapshot === undefined ? (
-							<p className="settings-empty">正在读取配置…</p>
+							<LoadingState text="正在读取配置…" />
 						) : (
 							<ModelsSection snapshot={snapshot} busy={busy} run={run} />
 						))}

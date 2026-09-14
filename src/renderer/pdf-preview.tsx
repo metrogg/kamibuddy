@@ -25,6 +25,7 @@ import {
 	IconMinus,
 	IconPlus,
 } from "./icons.tsx";
+import { ErrorState, LoadingState } from "./state-views.tsx";
 
 /**
  * 懒启动 worker：模块加载即 `new PdfWorker()` 会让 worker 线程常驻，
@@ -173,8 +174,8 @@ export function PdfPreview({ url }: { readonly url: string }): React.JSX.Element
 			<div className="preview-pdf-body" ref={bodyRef}>
 				<Document
 					file={url}
-					loading={<div className="preview-fallback">加载中…</div>}
-					error={<div className="preview-fallback">PDF 加载失败，请外部打开查看</div>}
+					loading={<LoadingState />}
+					error={<ErrorState message="PDF 加载失败，请外部打开查看" />}
 					onLoadSuccess={(pdf) => setNumPages(pdf.numPages)}
 				>
 					{/* fit 模式下宽度未量到之前不渲染 Page：scale=1 先铺一页再

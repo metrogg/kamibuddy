@@ -1,0 +1,220 @@
+{
+  "entries": [
+    {
+      "file": "src/renderer/widget-view.tsx",
+      "rule": "color",
+      "reason": "iframe 内平行 token（--kw-* 及 ECharts --kw-c1..c9，共 32 处）：srcDoc 注入的是独立文档，var() 解析不到宿主 :root，只能复制字面值（spec §A「iframe 内用户内容」豁免，跨上下文注入机制另议）。值已与宿主 token 对齐；--kw-c1..c9 是图表九色系，宿主无对应 token。改宿主 token 时需同步本文件。file 级豁免：该文件通篇是注入字符串，无自有样式。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#5b8ff9",
+      "rule": "color",
+      "reason": "专家首字符头像的身份色板（8 个互异色相，按名称 hash 取色保证同一专家恒同色）。分类板 --cat-1..6 只有 6 槽、语义是「类别」不是「身份」，装不下 8 色；这是身份识别色不是设计尺度，故不归档。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#61ddaa",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#65789b",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#f6bd16",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#7262fd",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#78d3f8",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#9661bc",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/expert-avatar.tsx",
+      "snippet": "#f6903d",
+      "rule": "color",
+      "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/icons.tsx",
+      "snippet": "stopColor=\"#3ecf8e\"",
+      "rule": "color",
+      "reason": "IconBrand 品牌标记的渐变起始色：品牌图形专用色，不在设计尺度 token 覆盖范围（--brand 是状态点/品牌位用色，与此渐变不同轨）。"
+    },
+    {
+      "file": "src/renderer/icons.tsx",
+      "snippet": "stopColor=\"#0ea5a4\"",
+      "rule": "color",
+      "reason": "IconBrand 品牌标记的渐变结束色：同「品牌渐变」条，非设计尺度。"
+    },
+    {
+      "file": "src/renderer/icons.tsx",
+      "snippet": "fill=\"#ffffff\"",
+      "rule": "color",
+      "reason": "IconBrand 星形在图块上的固定白填充：是品牌图形内部色（不跟主题），语义非 --primary-text（主色底文字），不引用 token。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#c94f4f",
+      "rule": "color",
+      "reason": "PDF 文件类型惯例色（用户对「PDF 红」的既定预期）。文件类型分色是按族区分的惯例配色，不是设计尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#4a7bc8",
+      "rule": "color",
+      "reason": "文件类型惯例色：Word 蓝与代码蓝同值（.doc-file-word / .file-icon-code 共用），惯例色非设计尺度。一条 snippet 覆盖两行。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#4b9e6b",
+      "rule": "color",
+      "reason": "文件类型惯例色：Excel 绿与 Markdown 绿同值（.doc-file-excel / .file-icon-markdown），惯例色非设计尺度。一条 snippet 覆盖两行。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#d98a3d",
+      "rule": "color",
+      "reason": "PPT 橙（文件类型惯例色），非设计尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#b7903d",
+      "rule": "color",
+      "reason": "配置文件类型辨识色（.file-icon-config）：惯例色非设计尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#8b6bc8",
+      "rule": "color",
+      "reason": "图片文件类型辨识色（.file-icon-image）：惯例色非设计尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#c85a8f",
+      "rule": "color",
+      "reason": "音视频文件类型辨识色（.file-icon-media）：惯例色非设计尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "linear-gradient(180deg, #ebebeb",
+      "rule": "color",
+      "reason": "WB 首页输入槽渐变原值（.composer-slot，linear-gradient(180deg,#ebebeb,#f5f5f5)）：WB 原值照抄，灰由外层渐变透出、白卡与 chips 坐其上；非 token 等值项，保留原值（DESIGN.md §2.7 WB 原值例外同口径）。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#e9eef2",
+      "rule": "color",
+      "reason": "WB 路径徽章常态底色原值（.markdown code.clickable-path，WB 浅色主题 #E9EEF2）：是 accent 的浅色底，与 --bg-raised(--bg-raised=#f7f7f7) 非等值，保留原值避免另造第 7 档分类色。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#dde6ee",
+      "rule": "color",
+      "reason": "WB 路径徽章 hover 底色原值（#DDE6EE）：同路径徽章常态底条，WB 原值。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "background: #000;",
+      "rule": "color",
+      "reason": "视频信箱（letterbox）底色必须纯黑、不跟主题走：播放器惯例而非设计尺度。不可引用 --text（暗色主题下 --text 是白色，信箱会变成白边）。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "rgba(0, 0, 0, 0.55)",
+      "rule": "color",
+      "reason": "附件缩略图删除钮的 scrim 常态（55% 黑）：是控件小遮罩不是模态背板，语义异于 --overlay(40%)；归 40% 后白 × 在亮图上不够清（Task 2b 已判断并就地注释）。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "rgba(0, 0, 0, 0.78)",
+      "rule": "color",
+      "reason": "附件删除钮 scrim 的 hover 档（78% 黑）：与常态需拉开档差，归 --overlay 会与常态撞成同色。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "rgb(0 0 0 / 72%)",
+      "rule": "color",
+      "reason": "全屏看图沉浸遮罩（72% 黑）：要压掉底图注意力，语义不是模态背板；归 --overlay(40%) 会削弱沉浸感（Task 2b 已判断并就地注释）。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "0 12px 32px -8px rgba(0, 0, 0, 0.02)",
+      "reason": "胶囊能力 chip 的几乎不可见投影（WB quick-actions 原值 0 12px 32px -8px 2%）：WB 原值，几何与透明度都不是 sm/md/lg 的等值，保留原值不擅造第 4 档。本行同时触发「颜色」与「阴影」两类，本条一并覆盖。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "-8px 0 24px rgb(0 0 0 / 6%)",
+      "reason": "预览面板全屏态的定向投影（-8px 0 24px 6%）：x 向偏移是「面板从右侧盖过来」的方向语义；--shadow-md 是 0 6px 24px（无 x 偏移、y 向），非等值，保留原值不擅造第 4 档。本行颜色+阴影两类一并覆盖。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "0 8px 24px rgb(0 0 0 / 18%)",
+      "reason": "预览视图切换下拉的投影（0 8px 24px 18%）：透明度借了 lg 的 18%，但几何是下拉浮层尺度而非 lg(12/40) 的模态尺度，非等值，保留原值。本行颜色+阴影两类一并覆盖。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "0 1px 4px rgb(0 0 0 / 15%)",
+      "reason": "PDF / docx「纸张」抬升阴影（0 1px 4px 15%）：纸张贴在阅读面上的极浅投影，三档阴影之外的场景值，非等值，保留原值不擅造第 4 档。一条 snippet 覆盖 pdf 页与 docx section 两行（各含颜色+阴影两类，共 4 处）。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "0 1px 3px rgb(0 0 0 / 20%)",
+      "reason": "MCP 开关滑块阴影（0 1px 3px 20%）：14px 小滑块压在轨道上的细影，几何不是三档阴影尺度，非等值，保留原值。本行颜色+阴影两类一并覆盖。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "0 0 0 1px var(--primary)",
+      "rule": "shadow",
+      "reason": "拖放目标高亮的描边（box-shadow: var(--shadow-input), 0 0 0 1px var(--primary)）：`0 0 0 1px` 是无模糊无色散的 ring 手法，属描边语言不属阴影尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "inset 0 0 0 1px var(--text-secondary)",
+      "rule": "shadow",
+      "reason": "问卷「其他」输入行的 focus-within 焦点环（inset 0 0 0 1px）：ring 手法，色取 --text-secondary 与全局 focus-visible 环同色，属焦点语言不属阴影尺度。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "var(--space-3) var(--space-3) 36px",
+      "rule": "space",
+      "reason": "让位偏移（Task 2a 实测偏差回退）：.sidebar-brand 左内边距 36px = App 层侧栏开关 28px + 8px 间隙，是「控件宽 + 间隙」而非间距档值；归 --space-7(32) 会把间隙压到 4px。代码处已带注释。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "padding-right: 40px;",
+      "rule": "space",
+      "reason": "让位偏移：.artifact-card 右内边距 40px = 预览钮（right 10px + 22px 宽）+ 8px 间隙；归 --space-7(32) 会让文件名贴到预览钮上。代码处已带注释。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "padding: var(--space-3) 44px var(--space-3) var(--space-4);",
+      "rule": "space",
+      "reason": "让位偏移：.preview-head 右内边距 44px = App 层面板开关 40px + 4px 间隙；归 --space-7(32) 会让开关盖住行尾的「全屏/外部打开」。代码处已带注释。"
+    },
+    {
+      "file": "src/renderer/code-preview.tsx",
+      "snippet": "fontSize: 13",
+      "rule": "font-size",
+      "reason": "Monaco 的 fontSize 是 number 配置项（像素数字，不是 CSS 值）：写 var(--text-list) 会立刻挂 typecheck，运行时也算不出行高。值与 --text-list(13) 手动对齐，改字号档时需同步此处。"
+    }
+  ]
+}

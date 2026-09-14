@@ -52,6 +52,17 @@ export function ContextUsageRing({
 		return () => document.removeEventListener("mousedown", handler);
 	}, [open]);
 
+	// Esc 关闭浮层。上面只挂了 mousedown（外点），键盘用户没有关闭路径 —— 浮层有
+	// 「关闭」按钮但 Tab 到它要穿过整个浮层内容。同 model-menu / permission-menu 写法。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open]);
+
 	const percent = detail.total > 0 ? Math.min(100, Math.max(0, (detail.used / detail.total) * 100)) : 0;
 	const percentText = percent.toFixed(1);
 	const tooltip = `${percentText}% · ${formatTokenCount(detail.used)} / ${formatTokenCount(detail.total)} 上下文已用`;

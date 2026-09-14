@@ -21,6 +21,7 @@ import { WEB_SEARCH_PROVIDERS } from "@shared/settings.ts";
 import type { ThinkingLevel } from "@shared/session-events.ts";
 import { THINKING_LEVEL_LABELS } from "@shared/session-events.ts";
 import type { PermissionInfo } from "@shared/permissions.ts";
+import { ErrorState, LoadingState } from "../state-views.tsx";
 import { SelectField } from "./select-field.tsx";
 import { CUSTOM_PRESET, PERMISSION_PRESETS } from "@shared/permissions.ts";
 
@@ -64,10 +65,10 @@ function ThinkingLevelSection({ busy }: { readonly busy: boolean }): React.JSX.E
 				<h2>默认推理强度</h2>
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{level === undefined ? (
-				<p className="settings-empty">正在读取推理强度设置…</p>
+				<LoadingState text="正在读取推理强度设置…" />
 			) : (
 				<>
 					<div className="provider-row">
@@ -184,7 +185,7 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 				)}
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 			{testResult !== undefined && (
 				<div className={`test-result${testResult.ok ? " ok" : ""}`}>{testResult.message}</div>
 			)}
@@ -316,10 +317,10 @@ function DefaultWorkspaceSection({ busy }: { readonly busy: boolean }): React.JS
 				)}
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{info === undefined ? (
-				<p className="settings-empty">正在读取存储路径…</p>
+				<LoadingState text="正在读取存储路径…" />
 			) : (
 				<>
 					<div className="provider-row">
@@ -383,10 +384,10 @@ function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Elem
 				{current === CUSTOM_PRESET && <span className="provider-tag">自定义</span>}
 			</header>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{info === undefined ? (
-				<p className="settings-empty">正在读取权限设置…</p>
+				<LoadingState text="正在读取权限设置…" />
 			) : (
 				<>
 					<div className="preset-list">

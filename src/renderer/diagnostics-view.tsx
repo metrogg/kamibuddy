@@ -35,6 +35,7 @@ import {
 	type LedgerItem,
 	type LedgerRun,
 } from "./run-timeline.ts";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 /* ── 格式化小工具 ────────────────────────────────────────────────── */
 
@@ -100,13 +101,13 @@ function CompositionBar({
 }): React.JSX.Element {
 	const composition = snapshot.composition;
 	if (composition === undefined)
-		return <p className="settings-empty">还没有会话内容。</p>;
+		return <EmptyState title="还没有会话内容。" />;
 
 	const total = COMPOSITION_PARTS.reduce(
 		(sum, p) => sum + composition[p.key],
 		0,
 	);
-	if (total === 0) return <p className="settings-empty">还没有会话内容。</p>;
+	if (total === 0) return <EmptyState title="还没有会话内容。" />;
 
 	return (
 		<>
@@ -141,7 +142,7 @@ function CompositionBar({
 
 function RunTimeline({ run }: { run: RunRecord }): React.JSX.Element {
 	if (run.toolSpans.length === 0) {
-		return <p className="settings-empty">这个任务没有调用工具。</p>;
+		return <EmptyState title="这个任务没有调用工具。" />;
 	}
 	// 时间轴范围：run 开始到结束（进行中的 run 用最后一个 span 的终点兜底）。
 	const start = run.startedAt;
@@ -444,7 +445,7 @@ function LedgerRunView({
 				{hit !== undefined && <span>缓存 {(hit * 100).toFixed(1)}%</span>}
 			</div>
 			{run.items.length === 0 ? (
-				<p className="settings-empty">这个 run 没有泳道条目。</p>
+				<EmptyState title="这个 run 没有泳道条目。" />
 			) : (
 				run.items.map((item, i) => {
 					const { s, e } = itemBounds(item);
@@ -610,9 +611,7 @@ function SessionStatsSection({
 				<span className="stat-hint">台账全历史口径（含被压缩历史）</span>
 			</header>
 			{sessions.length === 0 ? (
-				<p className="settings-empty">
-					还没有会话统计（台账里跑过任务后可见）。
-				</p>
+				<EmptyState title="还没有会话统计（台账里跑过任务后可见）。" />
 			) : (
 				<table className="stat-table">
 					<thead>
@@ -889,7 +888,7 @@ export function DiagnosticsView({
 			</header>
 
 			<div className="settings-body">
-				{error !== undefined && <div className="settings-error">{error}</div>}
+				{error !== undefined && <ErrorState message={error} />}
 
 				<section className="settings-section">
 					<header className="settings-section-head">
@@ -900,7 +899,7 @@ export function DiagnosticsView({
 				</section>
 
 				{snapshot === undefined ? (
-					<p className="settings-empty">正在读取统计…</p>
+					<LoadingState text="正在读取统计…" />
 				) : (
 					<>
 						<section className="settings-section">
@@ -992,7 +991,7 @@ export function DiagnosticsView({
 								<span className="stat-hint">点击行查看工具时间线</span>
 							</header>
 							{snapshot.runs.length === 0 ? (
-								<p className="settings-empty">还没有跑过任务。</p>
+								<EmptyState title="还没有跑过任务。" />
 							) : (
 								<>
 									<table className="stat-table stat-table-clickable">
@@ -1095,13 +1094,11 @@ export function DiagnosticsView({
 							<span className="stat-hint">点击模型调用行看上下文拆分</span>
 						</header>
 						{ledger === undefined ? (
-							<p className="settings-empty">正在读取台账…</p>
+							<LoadingState text="正在读取台账…" />
 						) : ledger.sessionId === undefined ? (
-							<p className="settings-empty">
-								还没有台账数据（跑过任务后可见）。
-							</p>
+							<EmptyState title="还没有台账数据（跑过任务后可见）。" />
 						) : displayRuns.length === 0 ? (
-							<p className="settings-empty">该会话的台账还没有泳道条目。</p>
+							<EmptyState title="该会话的台账还没有泳道条目。" />
 						) : (
 							<>
 								{displayRuns.map((run, i) => (

@@ -18,8 +18,9 @@
     "smoke:mcp": "tsx scripts/smoke-mcp-connector.ts",
     "smoke:docx": "tsx scripts/smoke-docx.ts",
     "check:deps": "tsx scripts/check-dependency-rules.ts",
+    "check:tokens": "tsx scripts/check-design-tokens.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run check:deps",
+    "check": "npm run typecheck && npm run check:deps && npm run check:tokens",
     "test": "vitest run"
   },
   "dependencies": {

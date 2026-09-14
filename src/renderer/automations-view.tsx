@@ -19,6 +19,7 @@ import { scheduleSummary, validateSchedule } from "@shared/automation.ts";
 import type { AutomationSaveInput } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { IconBack, IconChevronDown, IconPlus } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 import type { ToastType } from "./toast.tsx";
 
 interface AutomationsViewProps {
@@ -276,18 +277,20 @@ export function AutomationsView({
 			</header>
 
 			<div className="settings-body">
-				{error !== undefined && <div className="settings-error">{error}</div>}
+				{error !== undefined && <ErrorState message={error} />}
 
 				{tasks === undefined ? (
-					<p className="settings-empty">正在读取…</p>
+					<LoadingState />
 				) : tasks.length === 0 ? (
-					<div className="auto-empty">
-						<p>还没有定时任务。</p>
-						<p>新建一个任务，让它按调度在对应工作空间里自动运行。</p>
-						<button type="button" className="primary-btn" onClick={openCreate}>
-							新建任务
-						</button>
-					</div>
+					<EmptyState
+						title="还没有定时任务。"
+						description="新建一个任务，让它按调度在对应工作空间里自动运行。"
+						action={
+							<button type="button" className="primary-btn" onClick={openCreate}>
+								新建任务
+							</button>
+						}
+					/>
 				) : (
 					<div className="auto-list">
 						{tasks.map((task) => (
@@ -433,7 +436,7 @@ function AutomationRow({
 			{expanded && (
 				<div className="auto-runs">
 					{runs.length === 0 ? (
-						<p className="settings-empty">还没有运行记录。</p>
+						<EmptyState title="还没有运行记录。" />
 					) : (
 						runs.map((run) =>
 							run.sessionId === "" ? (
@@ -662,7 +665,7 @@ function AutomationForm({
 					<span className="field-hint">任务运行时所在的工作空间目录。</span>
 				</div>
 
-				{error !== undefined && <p className="save-space-error">{error}</p>}
+				{error !== undefined && <ErrorState message={error} />}
 
 				<div className="save-space-actions">
 					<button type="button" className="mini-btn" disabled={saving} onClick={onCancel}>

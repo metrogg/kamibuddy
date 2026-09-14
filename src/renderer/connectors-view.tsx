@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { McpConfigSnapshot, McpServerInfo } from "@shared/ipc.ts";
 import { IconEdit, IconPlus, IconRefresh } from "./icons.tsx";
+import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
 
 interface ConnectorsViewProps {
 	readonly onToast: (text: string) => void;
@@ -223,15 +224,15 @@ export function ConnectorsView({ onToast }: ConnectorsViewProps): React.JSX.Elem
 				</button>
 			</div>
 
-			{error !== undefined && <div className="settings-error">{error}</div>}
+			{error !== undefined && <ErrorState message={error} />}
 
 			{snapshot === undefined ? (
-				error === undefined && <p className="settings-empty">正在读取…</p>
+				error === undefined && <LoadingState />
 			) : snapshot.servers.length === 0 ? (
-				<div className="skills-empty">
-					<p>还没有配置 MCP 服务器。</p>
-					<p>点「添加服务器」接入一个 MCP server；或点「编辑配置」直接编辑 mcp.json。</p>
-				</div>
+				<EmptyState
+					title="还没有配置 MCP 服务器。"
+					description="点「添加服务器」接入一个 MCP server；或点「编辑配置」直接编辑 mcp.json。"
+				/>
 			) : (
 				<div className="mcp-list">
 					{snapshot.servers.map((server) => (
@@ -299,7 +300,7 @@ function ServerRow({
 							title={server.status === "failed" ? server.error : undefined}
 						>
 							{server.status === "connecting" && (
-								<span className="mcp-badge-spinner" />
+								<Spinner size={9} />
 							)}
 							{STATE_LABEL[server.status]}
 						</span>
@@ -487,7 +488,7 @@ function AddServerForm({
 					</div>
 				)}
 
-				{error !== undefined && <p className="save-space-error">{error}</p>}
+				{error !== undefined && <ErrorState message={error} />}
 
 				<div className="save-space-actions">
 					<button type="button" className="mini-btn" disabled={saving} onClick={onCancel}>
@@ -555,7 +556,7 @@ function JsonEditor({
 				<span className="field-hint">
 					直接编辑 mcp.json 原文，需保持 mcpServers 对象结构；保存时前后端各校验一次。
 				</span>
-				{error !== undefined && <p className="save-space-error">{error}</p>}
+				{error !== undefined && <ErrorState message={error} />}
 				<div className="save-space-actions">
 					<button type="button" className="mini-btn" disabled={saving} onClick={onCancel}>
 						取消

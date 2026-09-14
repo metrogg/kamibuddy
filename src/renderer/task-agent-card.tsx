@@ -14,6 +14,7 @@
 import { useState } from "react";
 import type { SubagentStatus, ToolCard } from "@shared/session-events.ts";
 import { IconCheck, IconChevronDown, IconClose } from "./icons.tsx";
+import { LoadingState, Spinner } from "./state-views.tsx";
 
 /**
  * 分组行的展示模型（从 SubagentStatus 派生的纯数据）。
@@ -83,7 +84,7 @@ function AgentGlyph({ status }: { readonly status: SubagentStatus["status"] }): 
 	if (status === "running") {
 		return (
 			<span className="todo-glyph">
-				<span className="todo-spinner" />
+				<Spinner size={14} />
 			</span>
 		);
 	}
@@ -166,7 +167,7 @@ export function TaskAgentCard({ card }: { readonly card: ToolCard }): React.JSX.
 			<div className={open ? "tool-detail-box task-agent-box open" : "tool-detail-box task-agent-box"}>
 				{agents.length === 0 ? (
 					// 投影未到达的窗口期（卡已上屏、首个 subagent_progress 未达）。
-					<div className="task-agent-placeholder">子任务执行中…</div>
+					<LoadingState text="子任务执行中…" />
 				) : (
 					<div className="task-agent-list">
 						{agents.map((agent, index) => <AgentGroup key={`${agent.agent}#${index}`} agent={agent} />)}

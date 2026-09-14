@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { renderAsync } from "docx-preview";
+import { ErrorState, LoadingState } from "./state-views.tsx";
 
 export default function DocxPreview({ url }: { readonly url: string }): React.JSX.Element {
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,8 +73,8 @@ export default function DocxPreview({ url }: { readonly url: string }): React.JS
 
 	return (
 		<div ref={scrollRef} className="preview-office-content office-docx-scroll">
-			{loading && <div className="preview-fallback">解析文档中…</div>}
-			{error !== undefined && <div className="preview-fallback">文档解析失败：{error}</div>}
+			{loading && <LoadingState text="解析文档中…" />}
+			{error !== undefined && <ErrorState message={`文档解析失败：${error}`} />}
 			<div ref={containerRef} className="office-docx" hidden={loading || error !== undefined} />
 		</div>
 	);
