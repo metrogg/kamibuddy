@@ -44,7 +44,7 @@ export interface SkillDescriptor {
 }
 
 /**
- * expert 模式绑定的人格（resources/experts/<name>.md 的展示字段 + 正文全文）。
+ * 会话绑定专家的人格（resources/experts/<name>/expert.md 的展示字段 + 正文全文）。
  * 与 ExpertDefinition 分开定义：compose 只需要注入所需的三块，
  * 不关心 name/description 这些加载层字段。
  */
@@ -65,10 +65,11 @@ export interface ComposePromptInput {
 	/** 模型显示名。骨架未使用 {{model}} 时可省。 */
 	readonly model?: string;
 	/**
-	 * expert 模式绑定的人格。提供时注入前部槽位人格段（骨架之后、模式行为段
-	 * 之前，带 Role Override 声明）+ 末尾 <current-expert> 钉子段（只钉名字，
-	 * 不含人格本体），并抑制风格段（风格让位于人格，见 composePromptWithMeta
-	 * 内注释）。非 expert 模式缺省；expert 模式下由 requireExpertPersona 保证必有值。
+	 * 会话绑定专家的人格。专家与交互模式正交：只按 expertId 是否绑定决定有没有值，
+	 * 与模式无关（见 daemon 的 composeSystemPrompt / resolveSessionExpert）。
+	 * 提供时注入前部槽位人格段（骨架之后、模式行为段之前，带 Role Override 声明）
+	 * + 末尾 <current-expert> 钉子段（只钉名字，不含人格本体），并抑制风格段
+	 * （风格让位于人格，见 composePromptWithMeta 内注释）。未绑定专家时缺省。
 	 */
 	readonly expert?: ExpertPersona;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
@@ -265,9 +266,9 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	 * 「segments 拼接 == text」的等价性论证不需要为风格段单开分支。
 	 * 骨架没有 {{interaction}} 槽位时（用多少槽位是场景作者的自由）没有交互段可锚，
 	 * 落在核心段末尾 —— 此时它仍在 pi-context / time 之前，位序语义不变。
-	 * expert 模式不注入：选定专家后用户自定义风格让位于人格（WorkBuddy
+	 * 绑定专家时不注入：选定专家后用户自定义风格让位于人格（WorkBuddy
 	 * user-context-expert-identity 的精简语义 —— 表达层的唯一权威是人格，
-	 * 风格与人格并存只会冲突）；craft/ask 等模式没有 expert 字段，不受影响。
+	 * 风格与人格并存只会冲突）；未绑定专家的会话没有 expert 字段，不受影响。
 	 */
 	if (input.style !== undefined && input.expert === undefined) {
 		const styleSeg: DraftSegment = {
@@ -511,27 +512,48 @@ function formatStyleSection(body: string): string {
 }
 
 /**
- * expert 模式的人格解析：按 expertId 从专家库取出注入所需的人格段。
+ * 会话绑定的专家解析：按 expertId 从专家库取出**完整定义**。
  *
- * 两个抛错都是「不可达防御」：
- *   - expertId 缺失 —— 模式切换单入口（daemon 的 applyInteraction）已保证
- *     进 expert 模式必带专家，这里炸说明出现了绕过单入口的调用路径；
- *   - 专家不在库中 —— 选择时（setExpert）已校验过存在，但用户级专家文件
- *     可能被手删，恢复会话后 state 与专家库漂移只能在这一刻发现。
- * 没有人格的 expert 提示词是「自称专家却没有人格」的错误身份 —— 响亮失败好过静默上线。
+ * 一轮 compose 里人格注入与私有技能预加载都要用它，只查一次共用，避免两处各自
+ * 查找后漂移（spec: 专家私有技能预加载）。返回 undefined = 本会话未绑定专家。
+ *
+ * expertId 有值但不在库中 → 响亮抛错（不可达防御）：选择时（setExpert）已校验过
+ * 存在，但用户级专家文件可能被手删，恢复会话后 state 与专家库漂移只能在这一刻发现。
+ */
+export function resolveSessionExpert(
+	experts: readonly ExpertDefinition[],
+	expertId: string | undefined,
+): ExpertDefinition | undefined {
+	if (expertId === undefined) return undefined;
+	const found = experts.find((e) => e.name === expertId);
+	if (found === undefined) {
+		throw new Error(`专家「${expertId}」不在专家库中（可能已被删除或改名）`);
+	}
+	return found;
+}
+
+/**
+ * 专家定义 → 注入所需的人格三件套。人格与私有技能目录同源于一次专家查找：
+ * daemon 用 resolveSessionExpert 的结果，人格走本函数、技能目录走其 skillsDir。
+ */
+export function toExpertPersona(expert: ExpertDefinition): ExpertPersona {
+	return { displayName: expert.displayName, profession: expert.profession, body: expert.body };
+}
+
+/**
+ * 必有专家的解析：选择期校验（daemon 的 setExpert）沿用本函数 —— 专家不存在响亮抛错；
+ * expertId 缺失同样是调用方错误（需要「可能未绑定」的语义时用 resolveSessionExpert）。
+ * 没有人格的专家会话是「自称专家却没有人格」的错误身份 —— 响亮失败好过静默上线。
  */
 export function requireExpertPersona(
 	experts: readonly ExpertDefinition[],
 	expertId: string | undefined,
 ): ExpertPersona {
-	if (expertId === undefined) {
-		throw new Error("expert 模式必须绑定专家（expertId 缺失）");
-	}
-	const found = experts.find((e) => e.name === expertId);
+	const found = resolveSessionExpert(experts, expertId);
 	if (found === undefined) {
-		throw new Error(`专家「${expertId}」不在专家库中（可能已被删除或改名）`);
+		throw new Error("会话绑定专家时缺少 expertId（人格解析需要具体专家）");
 	}
-	return { displayName: found.displayName, profession: found.profession, body: found.body };
+	return toExpertPersona(found);
 }
 
 /**
@@ -665,4 +687,29 @@ export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string
 export function formatSkillsSection(skills: readonly SkillDescriptor[]): string {
 	if (skills.length === 0) return "";
 	return formatSkillsForPrompt(skills as never[]).trim();
+}
+
+/**
+ * 会话技能加载路径：内置技能目录在前，绑定的专家私有技能目录在后（未绑定不追加）。
+ * 只决定「喂给 pi loadSkills 哪些根目录」，不读盘 —— 与 daemon 的实际加载分离，
+ * 便于单测（spec: 专家私有技能预加载）。专家的专业技能因此只在该专家被绑定时可见。
+ *
+ * 顺序即优先级：pi loadSkills 对同名技能「先注册者胜出」，全局技能因此天然压过
+ * 专家私有技能（重名本已在 core/experts.ts 加载期响亮拦下，此序只作兜底）。
+ */
+export function sessionSkillPaths(globalSkillsDir: string, expertSkillsDir?: string): string[] {
+	return expertSkillsDir === undefined ? [globalSkillsDir] : [globalSkillsDir, expertSkillsDir];
+}
+
+/**
+ * 会话技能清单段：模式工具白名单里有 read / bash 才注入，否则空串（零 token）。
+ * 无读取工具还注入技能段，等于让模型去调一个并不存在的 read 工具（plan 模式即此坑）。
+ * 与 daemon composeSystemPrompt / prompt-preview.ts 是同一门控规则。
+ */
+export function skillsSectionForMode(
+	modeTools: readonly string[],
+	skills: readonly SkillDescriptor[],
+): string {
+	const hasSkillReader = modeTools.some((t) => t === "read" || t === "bash");
+	return hasSkillReader ? formatSkillsSection(skills) : "";
 }

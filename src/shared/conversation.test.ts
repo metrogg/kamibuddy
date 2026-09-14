@@ -796,3 +796,180 @@ describe("queue_changed 排队计数", () => {
 		expect(view.queueCount).toBe(2);
 	});
 });
+
+describe("回合计时映射（历史轮持久化）", () => {
+	it("连续两轮后，两轮计时都在映射里（第一轮不因第二轮开始而丢失）", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
+			{ type: "run_finished", runId: "r2", outcome: "completed" },
+		]);
+
+		expect(view.turnTimings?.u1).toMatchObject({ startedAt: 1000 });
+		expect(view.turnTimings?.u1?.endedAt).toBeTypeOf("number");
+		expect(view.turnTimings?.u2).toMatchObject({ startedAt: 2000 });
+		expect(view.turnTimings?.u2?.endedAt).toBeTypeOf("number");
+		// 键口径 = 开轮 user 消息 id（与 turn-fold.ts 的 TurnView.turnId 一致）。
+		expect(Object.keys(view.turnTimings ?? {})).toEqual(["u1", "u2"]);
+	});
+
+	it("user_message 落地即录入 startedAt（run 尚未结束也能查到起点）", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+		]);
+		expect(view.turnTimings?.u1).toEqual({ startedAt: 1000 });
+	});
+
+	it("取消的回合在映射里落 cancelled 标记并停表", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "cancelled" },
+		]);
+		expect(view.turnTimings?.u1?.cancelled).toBe(true);
+		expect(view.turnTimings?.u1?.endedAt).toBeTypeOf("number");
+	});
+
+	it("run_error 停表但不落 cancelled 标记", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "hi", at: 1000 } },
+			{ type: "run_error", runId: "r1", message: "中断" },
+		]);
+		expect(view.turnTimings?.u1?.endedAt).toBeTypeOf("number");
+		expect(view.turnTimings?.u1?.cancelled).toBeUndefined();
+	});
+
+	it("没有计时信息的 run（无 user 消息，如压缩）不写入映射", () => {
+		const view = apply([
+			{ type: "run_started", runId: "r1" },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+		]);
+		expect(Object.keys(view.turnTimings ?? {})).toEqual([]);
+	});
+
+	it("已有历史回合不被后续无回合的 run 结束覆盖", () => {
+		const view = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+			// 空闲手动压缩另起一个无 user 消息的 run，结束后不该动 u1。
+			{ type: "run_started", runId: "r2" },
+			{ type: "run_finished", runId: "r2", outcome: "completed" },
+		]);
+		expect(Object.keys(view.turnTimings ?? {})).toEqual(["u1"]);
+		expect(view.turnTimings?.u1?.startedAt).toBe(1000);
+	});
+
+	it("超过上限时丢弃最早的回合（保留最近 100 轮）", () => {
+		let view = initialConversation;
+		for (let i = 1; i <= 101; i += 1) {
+			view = apply(
+				[
+					{ type: "user_message", message: { id: `u${i}`, role: "user", text: `${i}`, at: i } },
+					{ type: "run_finished", runId: `r${i}`, outcome: "completed" },
+				],
+				view,
+			);
+		}
+		const ids = Object.keys(view.turnTimings ?? {});
+		expect(ids).toHaveLength(100);
+		expect(ids).not.toContain("u1");
+		expect(ids[0]).toBe("u2");
+		expect(ids.at(-1)).toBe("u101");
+	});
+
+	it("session_state 重推（恢复历史会话）整体替换 state 但不丢映射", () => {
+		const withTurns = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+			{ type: "user_message", message: { id: "u2", role: "user", text: "二", at: 2000 } },
+			{ type: "run_finished", runId: "r2", outcome: "completed" },
+		]);
+		const view = apply(
+			[{ type: "session_state", state: { ...initialConversation.state, sessionId: "s1" } }],
+			withTurns,
+		);
+		expect(view.state.sessionId).toBe("s1");
+		expect(Object.keys(view.turnTimings ?? {})).toEqual(["u1", "u2"]);
+	});
+
+	it("history_reset 清空映射（与 entries / turn 同步清零）", () => {
+		const dirty = apply([
+			{ type: "user_message", message: { id: "u1", role: "user", text: "一", at: 1000 } },
+			{ type: "run_finished", runId: "r1", outcome: "completed" },
+		]);
+		expect(Object.keys(dirty.turnTimings ?? {})).toEqual(["u1"]);
+
+		const view = conversationReducer(dirty, { type: "event", event: { type: "history_reset" } });
+		expect(view.turnTimings).toEqual({});
+	});
+});
+
+describe("压缩态（compaction_started / compaction_finished）", () => {
+	it("started 设置压缩态（reason + startedAt 事件到达时刻）", () => {
+		const view = apply([{ type: "compaction_started", reason: "threshold" }]);
+		expect(view.compacting?.reason).toBe("threshold");
+		expect(typeof view.compacting?.startedAt).toBe("number");
+	});
+
+	it("finished 清空压缩态", () => {
+		const view = apply([
+			{ type: "compaction_started", reason: "manual" },
+			{ type: "compaction_finished", aborted: false },
+		]);
+		expect(view.compacting).toBeUndefined();
+	});
+
+	it("aborted 的 finished 也清空", () => {
+		const view = apply([
+			{ type: "compaction_started", reason: "threshold" },
+			{ type: "compaction_finished", aborted: true },
+		]);
+		expect(view.compacting).toBeUndefined();
+	});
+
+	it("带 errorMessage 的 finished 也清空（失败细节留给随后的 run_error 卡）", () => {
+		const view = apply([
+			{ type: "compaction_started", reason: "overflow" },
+			{ type: "compaction_finished", aborted: false, errorMessage: "摘要生成失败" },
+		]);
+		expect(view.compacting).toBeUndefined();
+	});
+
+	it("连续 started 以后到者为准（原位刷新 reason）", () => {
+		const view = apply([
+			{ type: "compaction_started", reason: "threshold" },
+			{ type: "compaction_started", reason: "manual" },
+		]);
+		expect(view.compacting?.reason).toBe("manual");
+	});
+
+	it("history_reset 清空压缩态（不残留幽灵状态行）", () => {
+		const dirty = apply([{ type: "compaction_started", reason: "threshold" }]);
+		expect(dirty.compacting).toBeDefined();
+		const view = conversationReducer(dirty, { type: "event", event: { type: "history_reset" } });
+		expect(view.compacting).toBeUndefined();
+	});
+
+	it("session_state 重推不残留压缩态（权威 state 不含压缩，重推即清）", () => {
+		const dirty = apply([{ type: "compaction_started", reason: "threshold" }]);
+		const view = apply(
+			[{ type: "session_state", state: { ...initialConversation.state, sessionId: "s1" } }],
+			dirty,
+		);
+		expect(view.state.sessionId).toBe("s1");
+		expect(view.compacting).toBeUndefined();
+	});
+
+	it("snapshot 恢复不残留压缩态（瞬态字段不随快照恢复）", () => {
+		const dirty = apply([{ type: "compaction_started", reason: "manual" }]);
+		const snapshot: SessionSnapshot = {
+			state: initialConversation.state,
+			entries: [],
+			availableScenes: [],
+			availableModes: [],
+			artifacts: [],
+		};
+		const view = conversationReducer(dirty, { type: "snapshot", snapshot });
+		expect(view.compacting).toBeUndefined();
+	});
+});

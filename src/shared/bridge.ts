@@ -81,11 +81,11 @@ export interface KamiBridge {
 	readonly getFilePath: (file: File) => string;
 	/** 切换场景（work / code / design）。 */
 	readonly setScene: (sceneId: string) => Promise<void>;
-	/** 切换交互模式（ask / craft / plan / expert）。 */
+	/** 切换交互模式（ask / craft / plan）。 */
 	readonly setInteraction: (interactionId: string) => Promise<void>;
 	/**
-	 * 选择专家（选中即进入 expert 模式并绑定人格）；传 undefined 清除专家。
-	 * 专家不存在时 daemon reject 原因。
+	 * 选择专家（绑定人格）；传 undefined 清除专家。专家与交互模式正交 ——
+	 * 不改交互模式。专家不存在时 daemon reject 原因。
 	 */
 	readonly setExpert: (expertId: string | undefined) => Promise<void>;
 	/** 专家列表（「专家 ▸」子菜单与对话头部显示的数据源）。 */

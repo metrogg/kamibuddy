@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { StyleConfigInfo } from "@shared/settings.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
-import type { PromptPreviewResult } from "@shared/ipc.ts";
+import type { ExpertListItem, PromptPreviewResult } from "@shared/ipc.ts";
 import { IconChevronRight, IconRefresh } from "../icons.tsx";
 import { SelectField } from "./select-field.tsx";
 
@@ -26,13 +26,14 @@ function sourceCategory(source: string): string {
 /**
  * 提示词预览（spec: systematize-prompt-architecture Task 5）。
  *
- * 三路数据源：场景/模式清单借会话快照的 availableScenes/availableModes
+ * 四路数据源：场景/模式清单借会话快照的 availableScenes/availableModes
  * （资源清单是全局的，快照是既有透出通道，不为预览单开一条清单契约）；
- * 风格清单与当前值走 getStyle；组装结果走 prompt:preview（daemon 现场组装，
+ * 风格清单与当前值走 getStyle；专家清单走 listExperts（专家与模式正交，
+ * 预览可自由与任一模式组合）；组装结果走 prompt:preview（daemon 现场组装，
  * 不需要活会话）。选择器任一变化自动重新请求；竞态用序号守门，
  * 慢响应落地时不覆盖更新的选择。
  *
- * 预览与真实会话的差异（pi 上下文段、专家人格段不出现）在页脚如实说明，
+ * 预览与真实会话的剩余差异（pi 上下文段不出现）在页脚如实说明，
  * 不让用户对着预览排查「为什么真实提示词多了一段」。
  */
 export function PromptPreviewSection(): React.JSX.Element {
@@ -41,9 +42,12 @@ export function PromptPreviewSection(): React.JSX.Element {
 		readonly modes: readonly ModeDescriptor[];
 	}>();
 	const [styleConfig, setStyleConfig] = useState<StyleConfigInfo | undefined>(undefined);
+	/** 专家清单（专家选择器的数据源）；空串的选择值 = 不选专家。 */
+	const [experts, setExperts] = useState<readonly ExpertListItem[]>([]);
 	const [sceneId, setSceneId] = useState("");
 	const [modeId, setModeId] = useState("");
 	const [styleSel, setStyleSel] = useState(FOLLOW_CURRENT_STYLE);
+	const [expertSel, setExpertSel] = useState("");
 	const [result, setResult] = useState<PromptPreviewResult | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [fullView, setFullView] = useState(false);
@@ -53,16 +57,22 @@ export function PromptPreviewSection(): React.JSX.Element {
 	const requestSeq = useRef(0);
 
 	useEffect(() => {
-		Promise.all([window.kami.snapshot(), window.kami.getStyle()])
-			.then(([snapshot, style]) => {
+		Promise.all([window.kami.snapshot(), window.kami.getStyle(), window.kami.listExperts()])
+			.then(([snapshot, style, expertList]) => {
 				const scenes = snapshot.availableScenes.filter((s) => s.ready);
 				const modes = snapshot.availableModes.filter((m) => m.ready);
 				setAxes({ scenes, modes });
 				setStyleConfig(style);
-				// 初值跟随当前会话的两轴（预览「此刻的提示词」）；
+				setExperts(expertList);
+				// 初值跟随当前会话（预览「此刻的提示词」）；
 				// 会话值不在可选清单里时（如 design 占位）回落到第一项。
 				setSceneId(scenes.some((s) => s.id === snapshot.state.sceneId) ? snapshot.state.sceneId : (scenes[0]?.id ?? ""));
 				setModeId(modes.some((m) => m.id === snapshot.state.interactionId) ? snapshot.state.interactionId : (modes[0]?.id ?? ""));
+				// 专家同理跟随会话，但只在清单里存在时采用（专家被删/未拉回 → 不选专家）。
+				const sessionExpert = snapshot.state.expertId;
+				setExpertSel(
+					sessionExpert !== undefined && expertList.some((e) => e.name === sessionExpert) ? sessionExpert : "",
+				);
 			})
 			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 	}, []);
@@ -72,8 +82,14 @@ export function PromptPreviewSection(): React.JSX.Element {
 		const seq = ++requestSeq.current;
 		// 哨兵值 → 缺省（跟随当前偏好）；「关闭」→ 空串，原样传给 daemon。
 		const styleId = styleSel === FOLLOW_CURRENT_STYLE ? undefined : styleSel;
+		// 空串 = 不选专家 → 缺省（不注入人格段）。
 		window.kami
-			.promptPreview({ sceneId, modeId, ...(styleId === undefined ? {} : { styleId }) })
+			.promptPreview({
+				sceneId,
+				modeId,
+				...(styleId === undefined ? {} : { styleId }),
+				...(expertSel === "" ? {} : { expertId: expertSel }),
+			})
 			.then((preview) => {
 				if (requestSeq.current !== seq) return;
 				setResult(preview);
@@ -86,7 +102,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 				setResult(undefined);
 				setError(e instanceof Error ? e.message : String(e));
 			});
-	}, [sceneId, modeId, styleSel, nonce]);
+	}, [sceneId, modeId, styleSel, expertSel, nonce]);
 
 	const toggleSegment = (index: number): void => {
 		setExpanded((prev) => {
@@ -159,6 +175,18 @@ export function PromptPreviewSection(): React.JSX.Element {
 							onChange={(value) => setStyleSel(value)}
 						/>
 					</div>
+					<div className="preview-field">
+						<span className="preview-field-label">专家</span>
+						<SelectField
+							ariaLabel="预览专家"
+							value={expertSel}
+							options={[
+								{ value: "", label: "不选专家" },
+								...experts.map((expert) => ({ value: expert.name, label: expert.displayName })),
+							]}
+							onChange={(value) => setExpertSel(value)}
+						/>
+					</div>
 						<span className="bar-spacer" />
 						<button
 							type="button"
@@ -198,8 +226,8 @@ export function PromptPreviewSection(): React.JSX.Element {
 					)}
 
 					<p className="settings-foot">
-						预览按所选三轴现场组装，与真实会话同一条组装路径；pi 上下文段（项目指令、工具提示）与
-						expert 模式的专家人格段不在预览中出现，真实会话会额外携带。
+						预览按所选四轴（场景 / 模式 / 风格 / 专家）现场组装，与真实会话同一条组装路径；
+						pi 上下文段（项目指令、工具提示）不在预览中出现，真实会话会额外携带。
 					</p>
 				</>
 			)}

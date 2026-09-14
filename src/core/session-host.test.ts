@@ -19,6 +19,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
+import type { ModeResource } from "./resources.ts";
 import { SessionHost, restoredToolLabel, type SessionHostOptions } from "./session-host.ts";
 
 type SessionStateEvent = Extract<SessionEvent, { type: "session_state" }>;
@@ -55,15 +56,90 @@ function createHost(session: unknown, emit: (event: SessionEvent) => void): Sess
 		options: SessionHostOptions,
 		sceneId: string,
 		interactionId: string,
+		expertId: string | undefined,
 		skills: readonly unknown[],
 	) => SessionHost;
-	return new Ctor(session, options, "work", "craft", []);
+	return new Ctor(session, options, "work", "craft", undefined, []);
 }
 
 /** translate 是私有的；测试经事件入口驱动，而不是戳内部状态。 */
 function translate(host: SessionHost, event: AgentSessionEvent): void {
 	(host as unknown as { translate(e: AgentSessionEvent): void }).translate(event);
 }
+
+/**
+ * 专家与交互模式正交（spec: rework-expert-orthogonal-and-skills）：
+ * setInteraction 只切模式轴、setExpert 只改绑定，二者互不影响。
+ */
+describe("专家与交互模式正交", () => {
+	const MODES: readonly ModeResource[] = [
+		{ id: "ask", label: "问答", description: "", ready: true, tools: ["read"], body: "问答段" },
+		{ id: "craft", label: "执行", description: "", ready: true, tools: ["read", "write"], body: "执行段" },
+		{ id: "plan", label: "计划", description: "", ready: true, tools: ["read"], body: "计划段" },
+	];
+
+	/** 带三模式白名单、可记录 setActiveToolsByName 的宿主（setInteraction 会换工具集）。 */
+	function createAxesHost(
+		interactionId: string,
+		expertId: string | undefined,
+	): SessionHost {
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			thinkingLevel: "off",
+			getAvailableThinkingLevels: () => ["off"],
+			setActiveToolsByName: (_tools: readonly string[]) => {},
+		};
+		const options: SessionHostOptions = {
+			catalog: {} as unknown as ModelCatalog,
+			modelKey: undefined,
+			cwd: "C:\\test",
+			isTempTask: false,
+			sceneId: "work",
+			interactionId,
+			...(expertId === undefined ? {} : { expertId }),
+			emit: () => {},
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map() },
+		};
+		const Ctor = SessionHost as unknown as new (
+			session: unknown,
+			options: SessionHostOptions,
+			sceneId: string,
+			interactionId: string,
+			expertId: string | undefined,
+			skills: readonly unknown[],
+		) => SessionHost;
+		return new Ctor(session, options, "work", interactionId, expertId, []);
+	}
+
+	it("切交互模式不改 expertId", () => {
+		const host = createAxesHost("plan", "work-report");
+		host.setInteraction("ask");
+		expect(host.state.interactionId).toBe("ask");
+		expect(host.state.expertId).toBe("work-report");
+	});
+
+	it("选专家不改 interactionId", () => {
+		const host = createAxesHost("plan", undefined);
+		host.setExpert("work-report");
+		expect(host.state.interactionId).toBe("plan");
+		expect(host.state.expertId).toBe("work-report");
+	});
+
+	it("plan + 专家取消后 interactionId 仍是 plan，expertId 键缺席", () => {
+		const host = createAxesHost("plan", "work-report");
+		host.setExpert(undefined);
+		expect(host.state.interactionId).toBe("plan");
+		expect("expertId" in host.state).toBe(false);
+	});
+
+	it("expert 不再是交互模式：切到它响亮报错（专家改为正交绑定）", () => {
+		const host = createAxesHost("craft", undefined);
+		expect(() => host.setInteraction("expert")).toThrow("未知的交互模式");
+	});
+});
 
 describe("agent_end 后的流式状态", () => {
 	it("agent_end 之后 isStreaming 必须为 false（pi 的 isStreaming 此刻仍是滞后的 true）", () => {
@@ -883,9 +959,10 @@ function createLedgerHost(
 		options: SessionHostOptions,
 		sceneId: string,
 		interactionId: string,
+		expertId: string | undefined,
 		skills: readonly unknown[],
 	) => SessionHost;
-	return new Ctor(session, options, "work", "craft", []);
+	return new Ctor(session, options, "work", "craft", undefined, []);
 }
 
 /** 全字段 usage（reasoning/cacheWrite1h 有值，cost 带分项）。 */
@@ -1142,6 +1219,81 @@ describe("turn 边界 → 台账 llm_call", () => {
 			tokensBefore: 12345,
 			aborted: false,
 		});
+	});
+});
+
+describe("压缩事件转发（会话流尾部状态行）", () => {
+	it("run 内自动压缩：compaction_start → compaction_started；end → compaction_finished，且不发 run_finished", () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		runStarted(host);
+		translate(host, { type: "compaction_start", reason: "threshold" } as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "compaction_end",
+			reason: "threshold",
+			aborted: false,
+			willRetry: true,
+		} as unknown as AgentSessionEvent);
+
+		const started = events.find((e) => e.type === "compaction_started");
+		expect(started).toMatchObject({ reason: "threshold" });
+		const finished = events.find((e) => e.type === "compaction_finished");
+		expect(finished).toMatchObject({ aborted: false });
+		// run 内的流式态归原 run 管，压缩结束不落 run 终态。
+		expect(events.some((e) => e.type === "run_finished")).toBe(false);
+	});
+
+	it("空闲手动压缩：既有 run 记账不回归，且 compaction_started 在 session_state 之后发", () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		// 不先 runStarted：模拟空闲时的手动压缩（pi 的 compact()）。
+		translate(host, { type: "compaction_start", reason: "manual" } as unknown as AgentSessionEvent);
+
+		expect(events.some((e) => e.type === "run_started")).toBe(true);
+		const stateIdx = events.findIndex((e) => e.type === "session_state");
+		const startedIdx = events.findIndex((e) => e.type === "compaction_started");
+		expect(stateIdx).toBeGreaterThanOrEqual(0);
+		// 顺序口径（见 session-host.ts）：started 必须在 session_state 之后，
+		// 否则会被紧随的 state 重推清掉（reducer 对 session_state 清瞬态压缩态）。
+		expect(startedIdx).toBeGreaterThan(stateIdx);
+
+		translate(host, {
+			type: "compaction_end",
+			reason: "manual",
+			aborted: false,
+			willRetry: false,
+		} as unknown as AgentSessionEvent);
+
+		expect(events.some((e) => e.type === "compaction_finished")).toBe(true);
+		expect(events.some((e) => e.type === "run_finished")).toBe(true);
+	});
+
+	it("中断/失败的压缩：compaction_finished 带 aborted / errorMessage，run 落 run_error", () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		translate(host, { type: "compaction_start", reason: "manual" } as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "compaction_end",
+			reason: "manual",
+			aborted: false,
+			errorMessage: "摘要生成失败",
+			willRetry: false,
+		} as unknown as AgentSessionEvent);
+
+		expect(events.find((e) => e.type === "compaction_finished")).toMatchObject({
+			aborted: false,
+			errorMessage: "摘要生成失败",
+		});
+		expect(events.some((e) => e.type === "run_error")).toBe(true);
 	});
 });
 

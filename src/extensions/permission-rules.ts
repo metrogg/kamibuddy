@@ -16,7 +16,14 @@
  * 本模块是纯函数：不读盘、不碰 pi、不碰 IPC，可脱离宿主单测。
  */
 
-import { firstTokenPrefix, parseRulesFile, splitCommand, type PermissionRule } from "../shared/permissions.ts";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+	LOCAL_READ_TOOLS,
+	firstTokenPrefix,
+	parseRulesFile,
+	splitCommand,
+	type PermissionRule,
+} from "../shared/permissions.ts";
 
 export { firstTokenPrefix, parseRulesFile, splitCommand };
 export type { PermissionRule };
@@ -80,30 +87,103 @@ export function evaluateCommand(
 	return allAllowed ? { kind: "allow" } : { kind: "unmatched" };
 }
 
+/*
+ * 与 permission-policy.ts 的 isInside 同款实现。复制而非 import 的原因：
+ * policy 已 import 本模块（evaluateCommand），反向 import 会构成循环依赖。
+ * 边界条件（".." 前缀、同名前缀兄弟目录不算内部、Windows 大小写不敏感靠
+ * path 模块行为）由本文件的测试钉住 —— 两处若将来要改语义必须一起改。
+ */
+function isInsidePath(base: string, target: string): boolean {
+	const rel = relative(resolve(base), resolve(target));
+	// 空串表示就是 base 自身；".." 开头或绝对路径都说明跑到外面去了。
+	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
 /**
- * 批准写回的规则构造（spec: add-permission-rules-engine Task 3）。
+ * 路径前缀规则判定（spec: extend-permission-rules-to-paths）。
+ *
+ * 与 evaluateCommand 的三态语义相同，但匹配维度从「命令前缀」换成「路径归属」：
+ * 只匹配 rule.tool === "read" 的规则 —— "read" 代表整个本地只读家族
+ * （read / read_document / find / grep / ls 语义相同，不逐工具区分，
+ * 家族名单见 shared/permissions.ts 的 LOCAL_READ_TOOLS）。
+ *
+ * 命中语义：target 等于 prefix 或位于 prefix 目录之下。prefix 非绝对路径的
+ * 规则无法做归属判定，忽略不生效（不炸 —— 规则文件是用户数据，与
+ * parseRulesFile「坏行 = 该行不存在」的降级口径一致）。
+ *
+ * 最严获胜：deny 与 allow 同时命中时 deny 立即返回。target 调用方已
+ * resolve，这里仍 resolve 一遍保证独立可用（resolve 幂等）。
+ */
+export function evaluatePathRules(target: string, rules: readonly PermissionRule[]): CommandRuleVerdict {
+	const resolvedTarget = resolve(target);
+	let allowed = false;
+	for (const rule of rules) {
+		if (rule.tool !== "read") continue;
+		if (!isAbsolute(rule.prefix)) continue;
+		if (!isInsidePath(rule.prefix, resolvedTarget)) continue;
+		// deny 与 allow 都命中时 deny 立即获胜 —— 最严，无歧义（与 evaluateCommand 同口径）。
+		if (rule.action === "deny") {
+			return {
+				kind: "deny",
+				reason: `路径「${resolvedTarget}」命中拒绝规则「${rule.tool}: ${rule.prefix}」`,
+			};
+		}
+		allowed = true;
+	}
+	return allowed ? { kind: "allow" } : { kind: "unmatched" };
+}
+
+/**
+ * 批准写回的规则构造（spec: add-permission-rules-engine Task 3；
+ * 路径写回：extend-permission-rules-to-paths Task 2）。
  *
  * 从审批响应里提炼要写回的 allow 规则；任何一种「不该写回」都返回 undefined。
  * 调用方是 daemon 的审批回程 handler（daemon/index.ts）—— **响应来自 IPC，
- * 不信任对端**：渲染层传来的东西不能成为规则文件的注入通道，所以这里把
- * rememberPrefix 当作一条候选命令重新过 firstTokenPrefix 的全套校验，
- * 并要求它与提取出的首词**逐字相等** —— 含空白（"git status"）、含分隔符
- * （"git && rm"）、解释器前缀（"python"、"IEX"）的载荷全部忽略，不炸不拒。
+ * 不信任对端**：渲染层传来的东西不能成为规则文件的注入通道。所以这里按工具
+ * 分流两套校验，把 rememberPrefix 当作候选值重新过一遍全套检查，非法载荷
+ * 一律忽略，不炸不拒。
  *
- * 另外两道闸门：
- *   - 决定必须是 allow —— 拒绝时附着 rememberPrefix 不该写出一条 allow 规则；
- *   - 原始审批必须是 powershell —— v1 规则面只覆盖 powershell，
- *     给 write 审批附一个 prefix 不该产生任何规则。
+ * - **powershell**（命令前缀）：把 rememberPrefix 当作一条候选命令重新过
+ *   firstTokenPrefix 的校验，并要求它与提取出的首词**逐字相等** —— 含空白
+ *   （"git status"）、含分隔符（"git && rm"）、解释器前缀（"python"、"IEX"）
+ *   的载荷全部忽略。
+ * - **read 家族**（路径前缀，写回的规则记 tool: "read"）：rememberPrefix
+ *   必须是绝对路径，且不得落在 guardDirs（凭据/配置目录）之内 —— 那种规则
+ *   是死规则（判定链阶段 1 永远先拒，规则无法越过），写进规则文件只会误导
+ *   用户以为「这里已经免问了」。guardDirs 由 daemon 装配侧注入
+ *   （[configDir, ...protectedDirs]）；**未传时保守不写** —— 没有禁区知识
+ *   就不写路径规则。通过的 prefix 记 resolve 后的规范形，与
+ *   evaluatePathRules 判定 target 前的解析口径一致。
+ *
+ * 两道共同闸门：决定必须是 allow（拒绝时附着 rememberPrefix 不该写出一条
+ * allow 规则）；其余工具（write / bash / …）的审批上附着 prefix 不产生
+ * 任何规则。
  */
 export function rememberRuleFromApproval(
 	toolName: string,
 	response: { readonly decision: "allow" | "deny"; readonly rememberPrefix?: string },
+	guardDirs?: readonly string[],
 ): PermissionRule | undefined {
-	if (toolName !== "powershell") return undefined;
 	if (response.decision !== "allow") return undefined;
 	const prefix: unknown = response.rememberPrefix;
 	// typeof 兜底：IPC 对端可以发任何 JSON，类型声明挡不住运行时载荷。
 	if (typeof prefix !== "string" || prefix === "") return undefined;
-	if (firstTokenPrefix(prefix) !== prefix) return undefined;
-	return { tool: "powershell", prefix, action: "allow" };
+
+	if (toolName === "powershell") {
+		if (firstTokenPrefix(prefix) !== prefix) return undefined;
+		return { tool: "powershell", prefix, action: "allow" };
+	}
+
+	if (LOCAL_READ_TOOLS.has(toolName)) {
+		// 规则匹配按绝对路径做归属判定（evaluatePathRules），相对路径写回去也匹配不到。
+		if (!isAbsolute(prefix)) return undefined;
+		// 没有禁区知识就不写路径规则：漏拦凭据目录比少一次写回糟得多。
+		if (guardDirs === undefined) return undefined;
+		for (const dir of guardDirs) {
+			if (isInsidePath(dir, prefix)) return undefined;
+		}
+		return { tool: "read", prefix: resolve(prefix), action: "allow" };
+	}
+
+	return undefined;
 }

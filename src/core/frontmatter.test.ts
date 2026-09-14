@@ -183,6 +183,153 @@ x`),
 	});
 });
 
+describe("块标量", () => {
+	// 从 WorkBuddy 原样搬入的技能用 `description: |` 写多行（含独立的「触发词：」行），
+	// 值本身有语义，不能被折叠或丢掉换行。
+
+	it("| literal：多行保留换行，末尾保留一个换行（clip）", () => {
+		const doc = parse(`---
+description: |
+  可比公司估值分析工具。
+  触发词：可比估值、comps
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("可比公司估值分析工具。\n触发词：可比估值、comps\n");
+	});
+
+	it("|- literal strip：去掉结尾换行", () => {
+		const doc = parse(`---
+description: |-
+  第一行
+  第二行
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("第一行\n第二行");
+	});
+
+	it("去缩进以块内非空行的最小缩进为基准", () => {
+		// 首行缩进 4、次行缩进 2：基准取 2，首行保留多出的 2 个空格。
+		const doc = parse(`---
+note: |
+    缩进四
+  缩进二
+---
+x`);
+
+		expect(doc.frontmatter["note"]).toBe("  缩进四\n缩进二\n");
+	});
+
+	it("> folded：同一段落的换行折成空格（clip 保留结尾换行）", () => {
+		const doc = parse(`---
+description: >
+  第一行
+  第二行
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("第一行 第二行\n");
+	});
+
+	it(">- folded strip：折叠后去掉结尾换行", () => {
+		const doc = parse(`---
+description: >-
+  第一行
+  第二行
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("第一行 第二行");
+	});
+
+	it("> folded：空行折成一个换行，段落因此分开", () => {
+		const doc = parse(`---
+description: >
+  第一段
+  仍属第一段
+
+  第二段
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("第一段 仍属第一段\n第二段\n");
+	});
+
+	it("| literal：块内空行原样保留", () => {
+		const doc = parse(`---
+note: |
+  第一行
+
+  第三行
+---
+x`);
+
+		expect(doc.frontmatter["note"]).toBe("第一行\n\n第三行\n");
+	});
+
+	it("块结束后的普通字段照常解析（key: value 与 key: [a, b]）", () => {
+		const doc = parse(`---
+name: comps-valuation
+description: |
+  多行
+  描述
+ready: true
+tools: [read, write]
+---
+正文`);
+
+		expect(doc.frontmatter).toEqual({
+			name: "comps-valuation",
+			description: "多行\n描述\n",
+			ready: true,
+			tools: ["read", "write"],
+		});
+		expect(doc.body).toBe("正文");
+	});
+
+	it("块标量的值归为 string", () => {
+		const doc = parse(`---
+note: |
+  内容
+---
+x`);
+
+		expect(typeof doc.frontmatter["note"]).toBe("string");
+	});
+
+	it("key: 后跟缩进列表（无指示符）→ 仍报错，不放行", () => {
+		expect(() =>
+			parse(`---
+tools:
+  - read
+  - write
+---
+x`),
+		).toThrow(/不支持多行值/);
+	});
+
+	it("keep 修饰符 |+ → 报错，不静默当 clip", () => {
+		expect(() =>
+			parse(`---
+description: |+
+  内容
+---
+x`),
+		).toThrow(/keep 修饰符/);
+	});
+
+	it("keep 修饰符 >+ → 报错，不静默当 clip", () => {
+		expect(() =>
+			parse(`---
+description: >+
+  内容
+---
+x`),
+		).toThrow(/keep 修饰符/);
+	});
+});
+
 describe("取值辅助", () => {
 	const doc = parse(`---
 id: craft

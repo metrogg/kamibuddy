@@ -428,3 +428,32 @@ export const IconWrench = (p: IconProps): React.JSX.Element => (
 		<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 8l-6.9 7a2.1 2.1 0 0 1-3-3l7-7a6 6 0 0 1 7.9-8l-3.8 3.8z" />
 	</Svg>
 );
+
+/**
+ * 应用品牌徽标：彩色渐变圆角方块 + 白色星形（对标 WorkBuddy 侧栏底部的彩色标识）。
+ *
+ * 整套图标唯一的填充/渐变式——它承担「品牌标识」而不是「操作提示」，
+ * 用 currentColor 线性风格画不出「彩色」，所以单开一档；其余图标不跟。
+ * 渐变 id 全局唯一，本图标在应用里只渲染一处（侧栏底部）。
+ */
+export const IconBrand = ({ size = 22, className }: IconProps): React.JSX.Element => (
+	<svg
+		width={size}
+		height={size}
+		viewBox="0 0 24 24"
+		className={className}
+		aria-hidden="true"
+	>
+		<defs>
+			<linearGradient id="kami-brand-mark" x1="0" y1="0" x2="1" y2="1">
+				<stop offset="0%" stopColor="#3ecf8e" />
+				<stop offset="100%" stopColor="#0ea5a4" />
+			</linearGradient>
+		</defs>
+		<rect x="1" y="1" width="22" height="22" rx="7" fill="url(#kami-brand-mark)" />
+		<path
+			d="M12 6.4l1.5 3.6 3.6 1.5-3.6 1.5L12 16.6l-1.5-3.6L6.9 11.5l3.6-1.5z"
+			fill="#ffffff"
+		/>
+	</svg>
+);

@@ -616,6 +616,13 @@ textarea:focus-visible {
 	color: var(--text-dim);
 }
 
+/* 底部品牌徽标：唯一的彩色元素，撑起左下角的视觉锚点（对标 WorkBuddy）。
+   不参与压缩，也不吃 footer 的灰字色——颜色写在图标自身的渐变里。 */
+.footer-brand {
+	flex: 0 0 auto;
+	display: block;
+}
+
 .link-dot {
 	width: 7px;
 	height: 7px;
@@ -1212,6 +1219,29 @@ textarea:focus-visible {
 
 .doc-file-icon.doc-file-ppt {
 	color: #d98a3d;
+}
+
+/* 文件类型分色（族名见 renderer/file-type-icon.tsx 的 familyOf）。
+   上色落在图标自身而不是行上：行文字已经转主文字色，图标靠这层 class
+   把「代码/图片/配置」分开——这也是 WorkBuddy 文件树一眼可扫的原因。 */
+.file-icon-markdown {
+	color: #4b9e6b;
+}
+
+.file-icon-code {
+	color: #4a7bc8;
+}
+
+.file-icon-config {
+	color: #b7903d;
+}
+
+.file-icon-image {
+	color: #8b6bc8;
+}
+
+.file-icon-media {
+	color: #c85a8f;
 }
 
 .document-ref-name {
@@ -3229,7 +3259,7 @@ textarea:focus-visible {
 	width: 200px;
 }
 
-/* 当前视图的 ✓ 用主题色，与菜单项正文的 dim 色拉开层级。 */
+/* 当前视图的 ✓ 用主题色，与菜单项正文的主文字色拉开层级。 */
 .view-switcher-check {
 	color: var(--accent);
 }
@@ -3244,7 +3274,9 @@ textarea:focus-visible {
 .preview-group-title {
 	padding: 4px 8px;
 	font-size: 12px;
-	color: var(--text-dim);
+	/* 组头是列表的标题层级，跟条目同用主文字色（WorkBuddy 的「任务 (74)」
+	   就是黑字）；只有 .preview-group-empty 这类「没有内容」的提示才留在 dim。 */
+	color: var(--text);
 }
 
 .preview-group-empty {
@@ -3288,7 +3320,9 @@ textarea:focus-visible {
 	border-radius: var(--radius-sm);
 	text-align: left;
 	font-size: 13px;
-	color: var(--text-dim);
+	/* 条目名走主文字色（原来整行 dim，比 WorkBuddy 的黑色条目弱一档）；
+	   右侧的 meta（大小/增删）另外降回 dim，层级靠那一处保持。 */
+	color: var(--text);
 }
 
 .preview-item:hover {
@@ -3308,6 +3342,7 @@ textarea:focus-visible {
 	display: flex;
 	gap: 6px;
 	font-size: 12px;
+	color: var(--text-dim);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
@@ -3330,7 +3365,8 @@ textarea:focus-visible {
 	border-radius: var(--radius-sm);
 	text-align: left;
 	font-size: 13px;
-	color: var(--text-dim);
+	/* 与 .preview-item 同口径：文件名走主文字色，图标自带分色，层级靠色而非灰度。 */
+	color: var(--text);
 }
 
 .file-tree-row:hover {
@@ -3348,10 +3384,12 @@ textarea:focus-visible {
 	flex: 0 0 auto;
 }
 
-/* chevron 折叠朝右（-90°）、展开朝下，旋转过渡给展开一个可感知的方向变化。 */
+/* chevron 折叠朝右（-90°）、展开朝下，旋转过渡给展开一个可感知的方向变化。
+   颜色单独压回 dim：行文字已转主文字色，折叠箭头是控件不是内容，跟着变黑偏重。 */
 .file-tree-chevron {
 	transform: rotate(-90deg);
 	transition: transform 0.15s ease;
+	color: var(--text-dim);
 }
 
 .file-tree-chevron.expanded {
@@ -3796,6 +3834,29 @@ textarea:focus-visible {
 .chat-composer>* {
 	max-width: var(--chat-content-width, 832px);
 	margin-inline: auto;
+}
+
+/* ── 输入区常驻指标条（本轮用时 / token / 缓存命中） ──────────────── */
+
+/* spec: surface-run-metrics-in-chat Task 4.2。只读辅助读数：低调、紧凑，
+   与 ContextUsageRing / .stream-queue 同一视觉语言（三级灰、小字号）。
+   tabular-nums 防抖动（流式中用时每 500ms 刷新，比例宽数字会抖行宽）；
+   flex-wrap + max-width 自适应窄面板，不写死宽度。左侧缩进对齐输入卡内文案。 */
+.run-metrics {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px;
+	margin-top: 6px;
+	padding-inline: 16px;
+	font-size: var(--text-meta);
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 中点分隔符：比数据本身更弱，避免读成一串并列值压过输入区。 */
+.run-metrics-sep {
+	opacity: 0.6;
 }
 
 /* ── 专家起手 chips（quickPrompts，对话页输入卡上方） ─────────────── */
@@ -4267,6 +4328,14 @@ textarea:focus-visible {
 .mini-btn:disabled {
 	color: var(--text-dim);
 	cursor: default;
+}
+
+/* 保存成功的短暂确认（见 personalization-section 的 useSavedFlash）：
+   此刻按钮已因基线前进而 disabled，用 ok 色盖过 :disabled 的灰字，
+   否则「存上了」这件事只剩一个变灰的文字，用户看不出反应。 */
+.mini-btn.saved:disabled {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
 }
 
 .mini-btn.danger {

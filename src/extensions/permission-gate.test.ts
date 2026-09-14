@@ -517,3 +517,91 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 		expect(asked).toHaveLength(2);
 	});
 });
+
+/* ── 区外读弹窗的路径写回（writeBackPath，spec: extend-permission-rules-to-paths Task 2） ── */
+
+describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
+	it("区外读的低风险询问带 writeBackPath（= 解析后的绝对目标路径）", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+		// 容器目录场景：工作区的父级，正是 spec 要免问的动机。
+		const target = join(HOME, "KamiBuddy-other", "notes");
+
+		await call({ toolName: "ls", input: { path: target } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({
+			toolName: "ls",
+			risk: "low",
+			details: resolve(target),
+			writeBackPath: resolve(target),
+		});
+	});
+
+	it("powershell 询问不带 writeBackPath（命令写回走首词通道，与路径写回互斥）", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		await call({ toolName: "powershell", input: { command: "git status" } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.writeBackPath).toBeUndefined();
+	});
+
+	it("区外写的中风险询问不带 writeBackPath（写工具的路径规则是 spec 明确不做的部分）", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		await call({ toolName: "write", input: { path: join(HOME, "Desktop", "x.txt") } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.writeBackPath).toBeUndefined();
+	});
+
+	it("读凭据/配置目录内的目标走不到弹窗 —— 阶段 1 直拒，禁区内路径永不出现在写回载荷里", async () => {
+		/*
+		 * writeBackPath 的禁区复核（readWriteBackTarget）是纵深防御：真实链路里
+		 * 这类目标在 policy 阶段 1 就已 deny，根本到不了 ask。这里钉住的是
+		 * 链路灯本身 —— 保证「禁区内目标不弹窗」这个前提不被将来改动悄悄破坏。
+		 */
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		const denied = await call({ toolName: "read", input: { path: join(CONFIG, "auth.json") } });
+
+		expect(denied?.block).toBe(true);
+		expect(asked).toHaveLength(0);
+	});
+
+	it("写回链路：勾选并允许后产出 tool:read 规则，同目录树的后续读取（含换家族工具）免弹窗", async () => {
+		/*
+		 * daemon/index.ts 无法直接单测，这里复现其审批回程的同款纯函数链路：
+		 *   弹窗载荷的 writeBackPath → renderer 原样回填 rememberPrefix
+		 *   → rememberRuleFromApproval 带禁区复核构造规则 → appendPermissionRule
+		 *   幂等并入 → 门的 getRules 下一次调用即按新规则判。
+		 * 与 powershell 套件同构；钉的是 Task 2 特有的接缝：ls 上批准的写回
+		 * 产出 tool:"read" 规则，对换用 grep 的同类读取同样免问（家族语义）。
+		 */
+		const target = join(HOME, "KamiBuddy-other", "notes");
+		let writeBack = "";
+		const { call, asked, setRules } = mount({
+			approve: (request) => {
+				writeBack = request.writeBackPath ?? "";
+				return { id: "x", decision: "allow", rememberPrefix: writeBack };
+			},
+		});
+
+		// 第一次：无规则，低风险弹窗；用户勾「以后都允许读取此路径（及子目录）」并允许。
+		const first = await call({ toolName: "ls", input: { path: target } });
+		expect(first).toBeUndefined();
+		expect(asked).toHaveLength(1);
+		expect(writeBack).toBe(resolve(target));
+
+		// daemon 回程同款：禁区校验（configDir 必在其中）→ 构造规则 → 幂等并入内存规则集。
+		const rule = rememberRuleFromApproval("ls", { decision: "allow", rememberPrefix: writeBack }, [CONFIG]);
+		expect(rule).toEqual({ tool: "read", prefix: resolve(target), action: "allow" });
+		if (rule === undefined) throw new Error("应产出规则");
+		setRules(appendPermissionRule(rule, []));
+
+		// 后续读同目录树免弹窗；换家族工具（grep）同样命中 tool:read 规则。
+		expect(await call({ toolName: "read", input: { path: join(target, "a.md") } })).toBeUndefined();
+		expect(await call({ toolName: "grep", input: { path: join(target, "sub") } })).toBeUndefined();
+		expect(asked).toHaveLength(1);
+	});
+});

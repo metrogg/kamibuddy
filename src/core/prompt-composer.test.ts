@@ -6,7 +6,11 @@
  * 残留槽位抛错（防模式正文里误写槽位）、空技能段零残留。
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	composePrompt,
 	composePromptWithMeta,
@@ -14,6 +18,11 @@ import {
 	formatRuntimeTime,
 	formatSkillsSection,
 	requireExpertPersona,
+	resolveSessionExpert,
+	sessionSkillPaths,
+	skillsSectionForMode,
+	toExpertPersona,
+	type SkillDescriptor,
 } from "./prompt-composer.ts";
 import type { ExpertDefinition } from "./experts.ts";
 
@@ -199,6 +208,58 @@ describe("expert 人格注入", () => {
 	});
 });
 
+describe("正交组合：交互模式 × 专家绑定（spec: rework-expert-orthogonal-and-skills）", () => {
+	// 专家与交互模式是两个正交的轴：{ask, craft, plan} × {无专家, 有专家} 六种
+	// 组合都必须可达。这里逐一断言模式行为段按模式出现、人格段与 <current-expert>
+	// 钉子段只在绑专家时出现 —— 覆盖「计划/问答 + 专家」这两条曾经不可达的组合。
+	const MODES = [
+		{ id: "craft", body: "创作模式行为段。" },
+		{ id: "ask", body: "问答模式行为段。" },
+		{ id: "plan", body: "计划模式行为段。" },
+	] as const;
+	const EXPERT = {
+		displayName: "工作周报",
+		profession: "职场汇报写作专家",
+		body: "# 工作汇报写作专家\n\n## 角色定义\n\n你是一位高管教练。",
+	};
+
+	for (const mode of MODES) {
+		for (const bound of [false, true]) {
+			const label = bound ? "绑专家" : "不绑专家";
+			it(`${mode.id} × ${label}：模式行为段按模式出现，人格段/钉子段仅在绑专家时出现`, () => {
+				const { text, segments } = composePromptWithMeta({
+					...BASE,
+					modeBody: mode.body,
+					modeId: mode.id,
+					...(bound ? { expert: EXPERT } : {}),
+					now: new Date("2026-09-09T23:18:30+08:00"),
+				});
+
+				// 模式轴独立生效：本模式行为段在位、其它模式段不混入，provenance 标注本模式。
+				expect(text).toContain(mode.body);
+				for (const other of MODES) {
+					if (other.id !== mode.id) expect(text).not.toContain(other.body);
+				}
+				expect(segments.some((s) => s.source === `mode:${mode.id}`)).toBe(true);
+
+				if (bound) {
+					// 人格段仅在绑专家时出现，且仍在前部槽位（模式行为段之前）。
+					expect(text).toContain("## 当前专家");
+					expect(text).toContain("工作周报（职场汇报写作专家）");
+					expect(text.indexOf("## 当前专家")).toBeLessThan(text.indexOf(mode.body));
+					// 钉子段仅在绑专家时出现，只钉名字、且在提示词最末。
+					expect(text).toContain("<current-expert>工作周报</current-expert>");
+					expect(text.match(/<current-expert>/g)).toHaveLength(1);
+					expect(text.trimEnd().endsWith("请始终以该专家的角色与工作流推进本会话。")).toBe(true);
+				} else {
+					expect(text).not.toContain("## 当前专家");
+					expect(text).not.toContain("<current-expert>");
+				}
+			});
+		}
+	}
+});
+
 describe("回复风格注入（F8）", () => {
 	const STYLE = { id: "socratic", body: "\n苏格拉底式提问，逐步引导。\n" };
 
@@ -254,15 +315,16 @@ describe("回复风格注入（F8）", () => {
 		);
 	});
 
-	it("expert 模式风格让位：不注入风格段；同一份风格在 craft 模式照常注入", () => {
+	it("绑定专家时风格让位：不注入风格段；同一份风格在未绑专家的 craft 模式照常注入", () => {
 		// WorkBuddy user-context-expert-identity 的精简语义：选定专家后表达层
 		// 的唯一权威是人格，用户自定义风格让位（spec: align-expert-system-workbuddy）。
+		// 让位只取决于是否绑定 expert，与交互模式（modeId）无关。
 		const EXPERT = { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" };
-		const expertOut = composePrompt({ ...BASE, modeId: "expert", style: STYLE, expert: EXPERT });
+		const expertOut = composePrompt({ ...BASE, modeId: "craft", style: STYLE, expert: EXPERT });
 		expect(expertOut).not.toContain("## 回复风格");
 		expect(expertOut).not.toContain("风格只影响表达方式");
 		expect(expertOut).toContain("## 当前专家");
-		// craft 对照：让位只发生在 expert 分支，风格段本身不受影响。
+		// 未绑专家对照（同为 craft 模式）：让位只发生在绑专家时，风格段本身不受影响。
 		const craftOut = composePrompt({ ...BASE, modeId: "craft", style: STYLE });
 		expect(craftOut).toContain("## 回复风格");
 	});
@@ -355,12 +417,44 @@ describe("requireExpertPersona", () => {
 		});
 	});
 
-	it("expertId 缺失 → 响亮抛错（expert 模式必须绑定专家）", () => {
-		expect(() => requireExpertPersona(EXPERTS, undefined)).toThrow(/必须绑定专家/);
+	it("expertId 缺失 → 响亮抛错（必有专家的调用点不该传空）", () => {
+		expect(() => requireExpertPersona(EXPERTS, undefined)).toThrow(/缺少 expertId/);
 	});
 
 	it("专家不在库中 → 响亮抛错（文件可能被手删，state 与专家库漂移）", () => {
 		expect(() => requireExpertPersona(EXPERTS, "ghost")).toThrow(/不在专家库中/);
+	});
+});
+
+describe("resolveSessionExpert / toExpertPersona", () => {
+	const EXPERT: ExpertDefinition = {
+		name: "stock-research-report",
+		description: "证券研报",
+		displayName: "证券研报",
+		profession: "证券分析师",
+		displayDescription: "写有据可依的研报",
+		quickPrompts: ["问题一", "问题二", "问题三"],
+		tags: ["标签一", "标签二", "标签三"],
+		source: "builtin",
+		skillsDir: "C:\\experts\\stock-research-report\\skills",
+		body: "人格正文",
+	};
+
+	it("绑定专家 → 返回完整定义（含私有技能目录），供人格与技能目录共用", () => {
+		expect(resolveSessionExpert([EXPERT], "stock-research-report")).toBe(EXPERT);
+		expect(toExpertPersona(EXPERT)).toEqual({
+			displayName: "证券研报",
+			profession: "证券分析师",
+			body: "人格正文",
+		});
+	});
+
+	it("未绑定专家（expertId 缺失）→ undefined，不抛错", () => {
+		expect(resolveSessionExpert([EXPERT], undefined)).toBeUndefined();
+	});
+
+	it("expertId 有值但不在库中 → 响亮抛错（恢复会话后 state 与专家库漂移）", () => {
+		expect(() => resolveSessionExpert([EXPERT], "ghost")).toThrow(/不在专家库中/);
 	});
 });
 
@@ -379,6 +473,71 @@ describe("formatSkillsSection", () => {
 		expect(section).toContain("meeting-notes\\SKILL.md");
 		// 保守检查：不该出现我们自己旧格式的痕迹。
 		expect(section).not.toContain("可用技能：");
+	});
+});
+
+describe("会话技能路径（专家私有技能预加载）", () => {
+	let root: string;
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "kami-session-skills-"));
+	});
+
+	afterEach(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	/** 造一个技能：<dir>/SKILL.md，name 取目录名（够 pi loadSkills 认出来）。 */
+	function writeSkill(dir: string, name: string): void {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} 技能\n---\n正文`);
+	}
+
+	/** 走真实 pi loadSkills（同 daemon listSkills 的加载路径），取清单段可直接用的描述符。 */
+	function loadDescriptors(skillPaths: readonly string[]): SkillDescriptor[] {
+		return loadSkills({ cwd: root, agentDir: root, skillPaths: [...skillPaths], includeDefaults: false }).skills.map(
+			(s) => ({ name: s.name, description: s.description, filePath: s.filePath }),
+		);
+	}
+
+	it("绑定专家：私有技能进清单段；未绑定：不含（全局技能两态都在）", () => {
+		const globalSkillsDir = join(root, "resources-skills");
+		const expertSkillsDir = join(root, "experts", "stock-research-report", "skills");
+		writeSkill(join(globalSkillsDir, "meeting-notes"), "meeting-notes");
+		writeSkill(join(expertSkillsDir, "dcf-model-builder"), "dcf-model-builder");
+
+		const bound = formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir, expertSkillsDir)));
+		expect(bound).toContain("meeting-notes");
+		expect(bound).toContain("dcf-model-builder");
+
+		const unbound = formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir)));
+		expect(unbound).toContain("meeting-notes");
+		expect(unbound).not.toContain("dcf-model-builder");
+	});
+
+	it("路径顺序：全局在前、专家私有在后（pi 先注册者胜出，全局优先）", () => {
+		expect(sessionSkillPaths("/resources/skills", "/experts/x/skills")).toEqual([
+			"/resources/skills",
+			"/experts/x/skills",
+		]);
+		expect(sessionSkillPaths("/resources/skills")).toEqual(["/resources/skills"]);
+	});
+});
+
+describe("skillsSectionForMode（技能段门控）", () => {
+	const SKILLS: readonly SkillDescriptor[] = [
+		{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
+	];
+
+	it("白名单含 read / bash → 注入技能段", () => {
+		expect(skillsSectionForMode(["read", "write"], SKILLS)).toContain("meeting-notes");
+		expect(skillsSectionForMode(["bash"], SKILLS)).toContain("meeting-notes");
+	});
+
+	it("白名单无 read / bash → 不注入（plan 模式：模型调不到 read，注入等于留坑）", () => {
+		expect(skillsSectionForMode(["grep", "write"], SKILLS)).toBe("");
+		// 无技能时同样是空串（零 token），两态不靠字面量区分。
+		expect(skillsSectionForMode(["read"], [])).toBe("");
 	});
 });
 

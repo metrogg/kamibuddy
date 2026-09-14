@@ -10,10 +10,18 @@
  * 于是本文件既不认识 parentPort 也不认识 Electron，可以脱离宿主测试。
  */
 
+import { isAbsolute } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
-import type { PermissionSettings } from "../shared/permissions.ts";
-import { decide, rememberKey, type PolicyPaths, type ToolCallFacts } from "./permission-policy.ts";
+import { LOCAL_READ_TOOLS, type PermissionSettings } from "../shared/permissions.ts";
+import {
+	decide,
+	isPathInside,
+	rememberKey,
+	type PermissionDecision,
+	type PolicyPaths,
+	type ToolCallFacts,
+} from "./permission-policy.ts";
 import type { PermissionRule } from "./permission-rules.ts";
 
 export interface PermissionGateOptions {
@@ -64,6 +72,36 @@ function extractFacts(toolName: string, input: Record<string, unknown>): ToolCal
 		path: pick("path") ?? pick("file_path") ?? pick("filePath") ?? pick("outputPath"),
 		command: pick("command"),
 	};
+}
+
+/**
+ * 区外读弹窗的路径写回资格（spec: extend-permission-rules-to-paths Task 2）。
+ *
+ * 「目标在凭据/配置目录内不显示写回选项」需要禁区路径知识，renderer 拿不到 ——
+ * 由 daemon 侧判定后把可写回的路径放进 PermissionRequest.writeBackPath，
+ * renderer 只做展示、勾选后原样回填。这里复核禁区是纵深防御：判定链阶段 1
+ * 已把禁区内目标直拒（走不到 ask），但 writeBackPath 进了弹窗就是「daemon
+ * 认可这条路径值得写规则」的声明，判定链将来若变动不该让它漏出去。
+ * daemon 回程的 rememberRuleFromApproval 会用同一套禁区再复核一次
+ * （不信任 IPC，两道闸）。
+ *
+ * details 就是 policy 区外读分支解析后的绝对目标路径；risk 限定 low 是与
+ * 「区外读弹窗」特征对齐 —— 别的分支（写工具 medium、shell high）即使将来
+ * 变动撞上前两个条件，也不该长出路径写回选项。
+ */
+function readWriteBackTarget(
+	facts: ToolCallFacts,
+	decision: Extract<PermissionDecision, { readonly kind: "ask" }>,
+	paths: PolicyPaths,
+): string | undefined {
+	if (decision.risk !== "low") return undefined;
+	if (!LOCAL_READ_TOOLS.has(facts.toolName)) return undefined;
+	if (!isAbsolute(decision.details)) return undefined;
+	if (isPathInside(paths.configDir, decision.details)) return undefined;
+	for (const dir of paths.protectedDirs ?? []) {
+		if (isPathInside(dir, decision.details)) return undefined;
+	}
+	return decision.details;
 }
 
 /**
@@ -119,11 +157,13 @@ export function createPermissionGate(options: PermissionGateOptions) {
 			const key = rememberKey(facts, options.cwd);
 			if (remembered.has(key)) return undefined;
 
+			const writeBackPath = readWriteBackTarget(facts, decision, options.paths);
 			const response = await options.requestApproval({
 				toolName: facts.toolName,
 				summary: decision.summary,
 				details: decision.details,
 				risk: decision.risk,
+				...(writeBackPath === undefined ? {} : { writeBackPath }),
 			});
 
 			if (response.decision === "allow") {

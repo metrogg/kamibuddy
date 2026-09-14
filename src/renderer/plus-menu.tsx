@@ -57,10 +57,9 @@ export function PlusMenu({
 		setExpertsOpen(false);
 	};
 
-	// expert 不裸列在模式子菜单里（无专家的 expert 模式不可达，spec: add-expert-mode）
-	// —— 三模式平铺，专家走下面的「专家 ▸」子菜单，选中具体专家即进 expert 模式。
-	const plainModes = modes.filter((m) => m.id !== "expert");
-
+	// 模式子菜单只有 ask / craft / plan 三档（专家已不是交互模式，与模式正交绑定，
+	// spec: rework-expert-orthogonal-and-skills）—— 直接平铺 modes；专家走下面的
+	// 「专家 ▸」子菜单，选中专家只绑人格、不改模式。
 	return (
 		<div className="menu-zone">
 			<button
@@ -108,7 +107,7 @@ export function PlusMenu({
 							</button>
 							{modesOpen && (
 								<div className="plus-menu-sub">
-									{plainModes.map((mode) => (
+									{modes.map((mode) => (
 										<button
 											key={mode.id}
 											type="button"

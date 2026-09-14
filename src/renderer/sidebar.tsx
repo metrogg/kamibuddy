@@ -17,6 +17,7 @@ import type { SessionGroups, SpaceGroup } from "./session-groups.ts";
 import {
 	IconAssistant,
 	IconAutomation,
+	IconBrand,
 	IconChart,
 	IconChevronDown,
 	IconEdit,
@@ -519,6 +520,9 @@ export function Sidebar({
 			</div>
 
 			<div className="sidebar-footer">
+				{/* 品牌徽标：纯装饰的视觉锚点（对标 WorkBuddy 侧栏底部的彩色标识），
+				    不挂交互——点它没有对应动作，做成按钮反而骗点击。 */}
+				<IconBrand size={22} className="footer-brand" />
 				<span className={`link-dot link-dot-${link.kind}`} />
 				<span className="footer-text">
 					{link.kind === "connecting" && "正在启动…"}

@@ -326,10 +326,10 @@ export interface SessionHostOptions {
 	readonly sceneId: string;
 	readonly interactionId: string;
 	/**
-	 * expert 模式绑定的专家 id。仅 interactionId === "expert" 时必有值
-	 * （选专家 = 切 expert 模式 + 绑定人格，daemon 单入口保证，spec:
-	 * add-expert-mode）；三模式下缺省。只随 state 透传 —— 人格正文
-	 * 的解析与注入在 daemon 的 compose 链路（prompt-composer），宿主不读专家库。
+	 * 绑定的专家 id。与 interactionId **正交**（spec:
+	 * rework-expert-orthogonal-and-skills）：只随 state 透传，任何交互模式下
+	 * 都可有值、也可缺省。人格正文的解析与注入在 daemon 的 compose 链路
+	 *（prompt-composer），宿主不读专家库。
 	 */
 	readonly expertId?: string;
 	/**
@@ -543,11 +543,6 @@ export class SessionHost {
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
 		 */
 		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
-		// 不可达防御：expert 模式必须绑定专家（daemon 的 applyInteraction 单入口
-		// 已保证），host 建成「expert 模式但没人格」就是错误身份的会话。
-		if (options.interactionId === "expert" && options.expertId === undefined) {
-			throw new Error("expert 模式必须绑定专家（expertId 缺失）");
-		}
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
@@ -588,7 +583,7 @@ export class SessionHost {
 			options,
 			options.sceneId,
 			options.interactionId,
-			options.interactionId === "expert" ? options.expertId : undefined,
+			options.expertId,
 			skills,
 		);
 		host.sessionCwd = cwd;
@@ -745,21 +740,22 @@ export class SessionHost {
 	}
 
 	/**
-	 * 切换交互模式；expertId 仅在切到 expert 时必传（选专家 = 切 expert 模式 +
-	 * 绑定人格，是同一个状态转移），切到 craft/ask/plan 一律清空。
+	 * 切换交互模式。只切模式轴、换工具集 —— 专家绑定（expertId）与模式正交，
+	 * 不在这里读也不在这里写（spec: rework-expert-orthogonal-and-skills）。
 	 */
-	setInteraction(interactionId: string, expertId?: string): void {
+	setInteraction(interactionId: string): void {
 		const mode = this.options.resources.modes.find(
 			(m) => m.id === interactionId,
 		);
 		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
-		// 不可达防御（同 create）：无专家的 expert 模式不可达。
-		if (interactionId === "expert" && expertId === undefined) {
-			throw new Error("expert 模式必须绑定专家（expertId 缺失）");
-		}
 		this.interactionId = interactionId;
-		this.expertId = interactionId === "expert" ? expertId : undefined;
 		this.session.setActiveToolsByName([...mode.tools]);
+		this.emitState();
+	}
+
+	/** 绑定 / 清除专家。与交互模式正交：只改 expertId，不动模式与工具集。 */
+	setExpert(expertId: string | undefined): void {
+		this.expertId = expertId;
 		this.emitState();
 	}
 
@@ -778,7 +774,7 @@ export class SessionHost {
 			isTempTask: this.options.isTempTask,
 			sceneId: this.sceneId,
 			interactionId: this.interactionId,
-			// 三模式下缺省（不占字段），与 SessionState.expertId 的可选契约一致。
+			// 无专家时缺省（不占字段），与 SessionState.expertId 的可选契约一致。
 			...(this.expertId === undefined ? {} : { expertId: this.expertId }),
 			modelId:
 				model === undefined ? undefined : toModelKey(model.provider, model.id),
@@ -839,8 +835,13 @@ export class SessionHost {
 
 		switch (event.type) {
 			case "compaction_start": {
+				// 无论 run 内自动还是空闲手动，压缩过程都要上屏（会话流尾部状态行）
+				// —— 压缩调模型写摘要，耗时与一轮对话相当，静默等于黑洞。
 				// run 内的自动压缩（threshold/overflow）：流式态由原 run 覆盖，不动记账。
-				if (this.currentRunId !== undefined) return;
+				if (this.currentRunId !== undefined) {
+					emit({ type: "compaction_started", reason: event.reason });
+					return;
+				}
 				// 空闲时的压缩（手动）：压缩要调模型写摘要，复用 run 记账让 UI
 				// 进入流式态（禁输入、出停止键），否则用户以为卡死了。
 				const runId = this.nextId("run");
@@ -849,6 +850,9 @@ export class SessionHost {
 				this.ledger?.append("run_start", { runId, ...this.modelIdForLedger() });
 				emit({ type: "run_started", runId });
 				this.emitState();
+				// 压缩事件在 emitState 之后发：reducer 对 session_state 会清瞬态
+				// 压缩态（口径见 shared/conversation.ts），先发会被紧随的 state 抹掉。
+				emit({ type: "compaction_started", reason: event.reason });
 				return;
 			}
 
@@ -859,6 +863,14 @@ export class SessionHost {
 					...(event.result?.tokensBefore === undefined
 						? {}
 						: { tokensBefore: event.result.tokensBefore }),
+					aborted: event.aborted,
+					...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
+				});
+				// 压缩结束一律清 renderer 的压缩态（无论成功/中断/失败），状态行随之消失。
+				// 先于下面的 run 收尾事件发：reducer 先落定压缩终态，随后的 session_state
+				// 重推不会留下幽灵状态行（口径见 shared/conversation.ts）。
+				emit({
+					type: "compaction_finished",
 					aborted: event.aborted,
 					...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
 				});

@@ -311,3 +311,28 @@ export function validateSessionFilePath(path: string, sessionsDir: string): stri
 	if (!target.toLowerCase().endsWith(".jsonl")) return "会话文件必须是 .jsonl 文件";
 	return undefined;
 }
+
+/**
+ * 历史会话的两轴归一（spec: rework-expert-orthogonal-and-skills）。
+ *
+ * expert 曾经是第 4 个交互模式，现已删除、改为与交互模式**正交**的绑定
+ *（expertId 独立字段）。旧会话落盘的 interactionId 可能是 "expert"，
+ * 直接喂给 requireReady(INTERACTIONS, id) 会因「未知交互模式」抛错 ——
+ * 旧会话就此打不开。这里把模式轴归一为 craft（新会话默认模式），让旧会话
+ * 照常恢复。
+ *
+ * 归一**只动模式轴**：expertId 原样带出，旧会话的专家身份不丢 ——
+ * 正交化后「craft + 专家」本就是合法组合，这正是归一的目的。
+ *
+ * 纯函数，与视图重建同属「历史会话兼容」，放一起便于单测。
+ */
+export function normalizeLegacyInteraction(
+	interactionId: string,
+	expertId: string | undefined,
+): { interactionId: string; expertId: string | undefined } {
+	return {
+		interactionId: interactionId === "expert" ? "craft" : interactionId,
+		expertId,
+	};
+}
+

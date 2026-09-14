@@ -22,6 +22,7 @@ import type {
 import {
 	buildConversationEntries,
 	countSkippedLines,
+	normalizeLegacyInteraction,
 	validateSessionFilePath,
 } from "./session-rebuild.ts";
 import { restoredToolLabel } from "./session-host.ts";
@@ -571,5 +572,32 @@ describe("countSkippedLines（resume 降级打开的坏行计数）", () => {
 	it("完好文件为 0；空文件为 0", () => {
 		expect(countSkippedLines('{"a":1}\n{"b":2}\n')).toBe(0);
 		expect(countSkippedLines("")).toBe(0);
+	});
+});
+
+describe("normalizeLegacyInteraction（旧 expert 模式归一，spec: rework-expert-orthogonal-and-skills）", () => {
+	it("历史 interactionId === 'expert' → craft，且 expertId 原样保留", () => {
+		expect(normalizeLegacyInteraction("expert", "work-report")).toEqual({
+			interactionId: "craft",
+			expertId: "work-report",
+		});
+	});
+
+	it("历史 expert 模式但没记专家：归一为 craft，expertId 仍缺省", () => {
+		expect(normalizeLegacyInteraction("expert", undefined)).toEqual({
+			interactionId: "craft",
+			expertId: undefined,
+		});
+	});
+
+	it("三模式原样透传（含已绑定专家的正交组合）", () => {
+		expect(normalizeLegacyInteraction("plan", "work-report")).toEqual({
+			interactionId: "plan",
+			expertId: "work-report",
+		});
+		expect(normalizeLegacyInteraction("ask", undefined)).toEqual({
+			interactionId: "ask",
+			expertId: undefined,
+		});
 	});
 });

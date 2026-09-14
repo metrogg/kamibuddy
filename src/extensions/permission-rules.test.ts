@@ -5,9 +5,11 @@
  * 「允许了 git status 不能把 git status && rm -rf 放过去」（拆分最严获胜）。
  */
 
+import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	evaluateCommand,
+	evaluatePathRules,
 	firstTokenPrefix,
 	matchesPrefix,
 	parseRulesFile,
@@ -120,6 +122,63 @@ describe("evaluateCommand（三态与最严获胜）", () => {
 	});
 });
 
+describe("evaluatePathRules（路径前缀规则，spec: extend-permission-rules-to-paths）", () => {
+	// 用 resolve 构造平台正确的绝对路径，避免在 Windows 上写死盘符而失真。
+	const BASE = resolve(sep, "data", "docs");
+	const ALLOW_DOCS: PermissionRule = { tool: "read", prefix: BASE, action: "allow" };
+	const DENY_SECRETS: PermissionRule = { tool: "read", prefix: join(BASE, "secrets"), action: "deny" };
+
+	it("子孙路径命中 → allow", () => {
+		expect(evaluatePathRules(join(BASE, "sub", "file.txt"), [ALLOW_DOCS])).toEqual({ kind: "allow" });
+	});
+
+	it("等于 prefix 自身命中（归属语义含目录本身 —— ls 那个目录也该命中）", () => {
+		expect(evaluatePathRules(BASE, [ALLOW_DOCS])).toEqual({ kind: "allow" });
+	});
+
+	it("target 内部先 resolve：带 .. 的等价路径同样命中（函数独立可用）", () => {
+		expect(evaluatePathRules(join(BASE, "sub", "..", "file.txt"), [ALLOW_DOCS])).toEqual({ kind: "allow" });
+	});
+
+	it("同名前缀的平级目录不误命中（foobar 不是 foo）", () => {
+		const rule: PermissionRule = { tool: "read", prefix: join(resolve(sep, "a"), "foo"), action: "allow" };
+		expect(evaluatePathRules(join(resolve(sep, "a"), "foobar", "x.txt"), [rule]).kind).toBe("unmatched");
+	});
+
+	it("Windows 大小写不敏感：小写 prefix 命中大写 target", () => {
+		// 若判定对大小写敏感，换个大小写就是一条现成的绕过路径。
+		const rule: PermissionRule = { tool: "read", prefix: join(resolve(sep, "users"), "someone"), action: "allow" };
+		const upperTarget = join(resolve(sep, "USERS"), "SOMEONE", "x.txt");
+		// 仅在 win32 上断言：POSIX 下大小写本就是不同路径，不命中是正确行为。
+		if (process.platform === "win32") {
+			expect(evaluatePathRules(upperTarget, [rule]).kind).toBe("allow");
+		}
+	});
+
+	it("deny 与 allow 同命中时 deny 获胜（最严，无歧义）", () => {
+		const verdict = evaluatePathRules(join(BASE, "secrets", "key.txt"), [ALLOW_DOCS, DENY_SECRETS]);
+		expect(verdict.kind).toBe("deny");
+		if (verdict.kind !== "deny") throw new Error("应为 deny");
+		expect(verdict.reason).toContain(join(BASE, "secrets", "key.txt"));
+		expect(verdict.reason).toContain(`read: ${DENY_SECRETS.prefix}`);
+	});
+
+	it("非绝对路径 prefix 忽略不生效（规则文件是用户数据，与 parseRulesFile 降级口径一致）", () => {
+		const rule: PermissionRule = { tool: "read", prefix: "docs", action: "allow" };
+		expect(evaluatePathRules(join(BASE, "x.txt"), [rule]).kind).toBe("unmatched");
+	});
+
+	it("tool !== \"read\" 的规则不参与（powershell 的命令规则管不了路径）", () => {
+		const rule: PermissionRule = { tool: "powershell", prefix: BASE, action: "allow" };
+		expect(evaluatePathRules(join(BASE, "x.txt"), [rule]).kind).toBe("unmatched");
+	});
+
+	it("无命中 → unmatched（规则不表态，调用方维持原判定）", () => {
+		expect(evaluatePathRules(join(resolve(sep, "elsewhere"), "x.txt"), [ALLOW_DOCS]).kind).toBe("unmatched");
+		expect(evaluatePathRules(join(BASE, "x.txt"), []).kind).toBe("unmatched");
+	});
+});
+
 describe("parseRulesFile（降级口径：坏文件/坏行 = 该行不存在，不抛错）", () => {
 	it("坏 JSON → []", () => {
 		expect(parseRulesFile("{not json")).toEqual([]);
@@ -227,7 +286,7 @@ describe("rememberRuleFromApproval（批准写回的 IPC 载荷校验，Task 3�
 		).toBeUndefined();
 	});
 
-	it("非 powershell 审批上附着的 prefix 不写回（v1 规则面只覆盖 powershell）", () => {
+	it("覆盖面之外的工具（write / bash）上附着的 prefix 不写回", () => {
 		expect(rememberRuleFromApproval("write", { decision: "allow", rememberPrefix: "git" })).toBeUndefined();
 		expect(rememberRuleFromApproval("bash", { decision: "allow", rememberPrefix: "git" })).toBeUndefined();
 	});
@@ -259,5 +318,105 @@ describe("rememberRuleFromApproval（批准写回的 IPC 载荷校验，Task 3�
 				rememberPrefix: 42 as unknown as string,
 			}),
 		).toBeUndefined();
+	});
+});
+
+describe("rememberRuleFromApproval 的 read 家族分支（路径写回，spec: extend-permission-rules-to-paths Task 2）", () => {
+	/*
+	 * 与 powershell 分支同一道防线（响应来自 IPC，不信任对端），只是校验维度
+	 * 从「命令首词」换成「路径归属」：绝对路径 + 不在凭据/配置目录内才写回。
+	 * 用 resolve 构造平台正确的绝对路径，避免在 Windows 上写死盘符而失真。
+	 */
+	const HOME = resolve(sep, "users", "someone");
+	const GUARD_DIRS = [join(HOME, ".kamibuddy"), join(HOME, ".ssh")];
+	const TRUSTED = join(HOME, "KamiBuddy");
+
+	it("合法绝对路径 → tool:read 的 allow 规则；家族五个工具同样受理", () => {
+		for (const tool of ["read", "read_document", "find", "grep", "ls"]) {
+			expect(rememberRuleFromApproval(tool, { decision: "allow", rememberPrefix: TRUSTED }, GUARD_DIRS)).toEqual(
+				{ tool: "read", prefix: resolve(TRUSTED), action: "allow" },
+			);
+		}
+	});
+
+	it("prefix 记 resolve 后的规范形（与 evaluatePathRules 判定 target 的解析口径一致）", () => {
+		expect(
+			rememberRuleFromApproval(
+				"read",
+				{ decision: "allow", rememberPrefix: join(TRUSTED, "sub", "..") },
+				GUARD_DIRS,
+			),
+		).toEqual({ tool: "read", prefix: resolve(TRUSTED), action: "allow" });
+	});
+
+	it("相对路径不写回 —— 规则匹配按绝对路径做归属判定，写回去也匹配不到", () => {
+		expect(
+			rememberRuleFromApproval("read", { decision: "allow", rememberPrefix: "docs" }, GUARD_DIRS),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval("ls", { decision: "allow", rememberPrefix: join("..", "隔壁") }, GUARD_DIRS),
+		).toBeUndefined();
+	});
+
+	it("guardDirs 内的路径不写回（含子孙、含等于）—— 那种规则是死规则，阶段 1 永远先拒", () => {
+		expect(
+			rememberRuleFromApproval("read", { decision: "allow", rememberPrefix: join(HOME, ".ssh") }, GUARD_DIRS),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval(
+				"grep",
+				{ decision: "allow", rememberPrefix: join(HOME, ".ssh", "id_rsa") },
+				GUARD_DIRS,
+			),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval(
+				"read",
+				{ decision: "allow", rememberPrefix: join(HOME, ".kamibuddy", "auth.json") },
+				GUARD_DIRS,
+			),
+		).toBeUndefined();
+	});
+
+	it("guardDirs 未传时不写回 —— 没有禁区知识就不写路径规则（保守方向）", () => {
+		expect(rememberRuleFromApproval("read", { decision: "allow", rememberPrefix: TRUSTED })).toBeUndefined();
+	});
+
+	it("拒绝决定不写回 —— deny 上附着的路径不该变成 allow 规则", () => {
+		expect(
+			rememberRuleFromApproval("read", { decision: "deny", rememberPrefix: TRUSTED }, GUARD_DIRS),
+		).toBeUndefined();
+	});
+
+	it("read 家族之外的工具附着路径不写回（write / bash / 未知工具）", () => {
+		expect(
+			rememberRuleFromApproval("write", { decision: "allow", rememberPrefix: TRUSTED }, GUARD_DIRS),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval("bash", { decision: "allow", rememberPrefix: TRUSTED }, GUARD_DIRS),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval("mcp__fs__read", { decision: "allow", rememberPrefix: TRUSTED }, GUARD_DIRS),
+		).toBeUndefined();
+	});
+
+	it("缺失 / 空 / 非字符串载荷被忽略，不炸", () => {
+		expect(rememberRuleFromApproval("read", { decision: "allow" }, GUARD_DIRS)).toBeUndefined();
+		expect(
+			rememberRuleFromApproval("read", { decision: "allow", rememberPrefix: "" }, GUARD_DIRS),
+		).toBeUndefined();
+		expect(
+			rememberRuleFromApproval(
+				"read",
+				{ decision: "allow", rememberPrefix: 42 as unknown as string },
+				GUARD_DIRS,
+			),
+		).toBeUndefined();
+	});
+
+	it("powershell 分支不受 guardDirs 影响（命令前缀校验口径不变）", () => {
+		expect(
+			rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "git" }, GUARD_DIRS),
+		).toEqual(GIT_ALLOW);
 	});
 });

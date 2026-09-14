@@ -75,28 +75,34 @@ describe("before_agent_start 接缝", () => {
 		expect(second?.systemPrompt).toBe("work/ask");
 	});
 
-	it("expertId 随两轴一起透传给 compose（专家切换后下一轮生效）", async () => {
+	it("expertId 与交互模式正交：各自独立透传给 compose（模式切换不清专家）", async () => {
 		const axes: { sceneId: string; interactionId: string; expertId?: string } = {
 			sceneId: "work",
-			interactionId: "expert",
+			interactionId: "plan",
 			expertId: "work-report",
 		};
-		const seen: Array<string | undefined> = [];
+		const seen: Array<{ interactionId: string; expertId: string | undefined }> = [];
 		const handler = mount({
 			axes,
-			compose: async (_sceneId, _interactionId, expertId) => {
-				seen.push(expertId);
+			compose: async (_sceneId, interactionId, expertId) => {
+				seen.push({ interactionId, expertId });
 				return "ok";
 			},
 		});
 
 		await handler(EMPTY_EVENT);
-		// 切走三模式：expertId 清空（state 权威在宿主，这里只验证透传不缓存）。
-		axes.interactionId = "craft";
+		// 切模式不清专家：模式改成 ask，expertId 不动（state 权威在宿主，这里只验证透传不缓存）。
+		axes.interactionId = "ask";
+		await handler(EMPTY_EVENT);
+		// 取消专家不改模式：expertId 清空，模式仍是 ask。
 		axes.expertId = undefined;
 		await handler(EMPTY_EVENT);
 
-		expect(seen).toEqual(["work-report", undefined]);
+		expect(seen).toEqual([
+			{ interactionId: "plan", expertId: "work-report" },
+			{ interactionId: "ask", expertId: "work-report" },
+			{ interactionId: "ask", expertId: undefined },
+		]);
 	});
 
 	it("compose 抛错时向上传播，不静默回落到 pi 默认提示词", async () => {

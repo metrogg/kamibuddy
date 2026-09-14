@@ -118,7 +118,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | E2 | 内置技能包 | 19 个：ardot 设计 6 个、wb-finance（46 篇 references + 16 脚本）、library（云盘总线）、sites、expert-manager、skill-creator、路由类 3 个等 | 1 个 | ❌ |
 | E3 | 技能自维护 | 提示词强制循环：积累（8+ 工具调用必沉淀）→ 反思（用过必评估改进）→ 纠错（发现错别字当场修，「NEVER ask, NEVER defer」） | 无 | ❌ |
 | E4 | 技能安装 | `marketplace-skill-installer` + `skill-creator`（init/package/validate 三个脚本） | `core/skill-install.ts` 本地目录导入（同名拒绝不覆盖） | 🟡 无市场、无脚手架 |
-| E5 | 专家体系 | expert 模式 + 人格进系统提示词顶部槽位（Role Override 前缀、剥 frontmatter）+ `<current-expert>` 每轮钉子（不含人格）+ 身份让位（砍 SOUL/tone/style）+ 输入框底栏静态专家 chip（hover 变 × 取消，选择只走「+」菜单）+ `expert-manager`（创建/打包/注册/校验，agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | expert 模式 + 人格顶部槽位注入（override 声明）+ 末尾钉子段 + 风格让位（spec align-expert-system-workbuddy）；预设 9 员（displayDescription/quickPrompts×3/tags×3）；底栏专家 chip（hover × 取消）+ 入口归一（移除头部 chip 与 ModeSwitch 子菜单，spec rework-expert-center-and-chip）；expert-manager CRUD/团队/推荐卡未做（无云端市场前提） | 🟡 机制对齐、管理生命周期未做 |
+| E5 | 专家体系 | expertId 会话级绑定（与交互模式正交，scene mode wins over expertId）+ 人格进系统提示词顶部槽位（Role Override 前缀、剥 frontmatter）+ `<current-expert>` 每轮钉子（不含人格）+ 身份让位（砍 SOUL/tone/style）+ 输入框底栏静态专家 chip（hover 变 × 取消，选择只走「+」菜单）+ 专家包 `agents/ + skills/`（声明 skills 随绑定进 `<available_skills>`）+ `expert-manager`（创建/打包/注册/校验，agent-md/avatar/plugin-json/team 四份 spec）+ 专家团队 | 专家与交互模式正交（expertId 独立会话状态，spec rework-expert-orthogonal-and-skills）+ 人格顶部槽位注入（override 声明）+ 末尾钉子段 + 风格让位（spec align-expert-system-workbuddy）+ 专家目录化（`<name>/expert.md` + 私有 `skills/`，skillsDir 随绑定进技能清单；证券研报已搬入 3 个 WorkBuddy 技能）；预设 9 员（displayDescription/quickPrompts×3/tags×3）；底栏专家 chip（hover × 取消）+ 入口归一（移除头部 chip 与 ModeSwitch 子菜单，spec rework-expert-center-and-chip）；expert-manager CRUD/团队/推荐卡未做（无云端市场前提） | 🟡 机制对齐、管理生命周期未做（remaining：Team 型专家团、expert-manager 生命周期、专家 `rules/` 未搬） |
 | E6 | 推荐引擎 | `recommend-connectors` / `recommend-experts` + `search_plugins` + `suggest_plugin_install`（每次响应至多一次，1–3 张候选卡） | 「专家/技能/连接器」在加号菜单里是占位 | ❌ |
 | E7 | 插件框架 | plugin.json + marketplace.json 两级；注册表 33 条（welcomeMode 3 + interaction 4 + template 1 + skill 19 + mcp-app 1 + builtin-plugin 5）；安装即复制 + 版本化缓存 + 路径遍历封禁；hooks 三条信任通道 | 无插件加载器（用 pi packages + Skills 替代） | ⛔ 见优先级 |
 | E8 | 技能安全扫描 | `SkillSecurityScan` 特性开关 + 安装前审计分级（P0 强烈警告劝退 / P1 警告需确认 / P2 放行），且声明「只审安装、不审使用」控制成本 | 无 | ❌ |
@@ -130,7 +130,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 |---|---|---|---|---|
 | F1 | 组合式模板 | 主骨架 + `{% include %}` 片段；`workMode` 变量分发；条件槽空内容零 token | `core/prompt-composer.ts`：`{{> fragment}}` 引擎（递归/环检测/缺失抛错，不引模板引擎）+ `resources/prompts/fragments/`（交付/工具纪律/Windows/地域，WB 搬用适配）+ **provenance 分段溯源** + 设置页「提示词预览」 | ✅ 另有预览可视化（WB 没有） |
 | F2 | 双面文件 | 一份 `.md` 的 frontmatter 给加载器读工具白名单，正文给模板引擎读提示片段 | modes/*.md 与 agents/*.md 都是双面文件 | ✅ |
-| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 2（work + code，code 骨架搬 welcomemode/code 适配）× 交互 4（expert 已由 add-expert-mode 落地）；design 维持占位（依赖 ardot 设计技能体系，E2 范畴） | 🟡 2×4；design 占位 |
+| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 2（work + code，code 骨架搬 welcomemode/code 适配）× 交互 3（ask/craft/plan）+ 专家正交绑定（expertId 独立会话状态，spec rework-expert-orthogonal-and-skills）；design 维持占位（依赖 ardot 设计技能体系，E2 范畴） | 🟡 2×3 + 专家正交绑定；design 占位 |
 | F4 | 两代架构并存 | 单体 .tpl（9 份）→ 组合式 fragments；灰度迁移保留旧变量名 | 直接上组合式，无历史包袱 | ✅ |
 | F5 | 每轮 hidden context | `composeUserPrompt` 遍历 17 个 section：stage(every_turn/first_turn) × container(user-context/additional_data)，包成 `<system-reminder data-role=...>` 前置到用户消息；压缩时 additional-data 可剥离、user-context 常驻 | 无。systemPrompt 由 `before_agent_start` 整体替换，没有用户消息级动态注入 | ❌ 自评最大差距 |
 | F6 | 三层 reminder | 系统提示常驻条款 → 模式切换 reminder（含「This supersedes any other instructions」覆盖声明）→ 工具结果夹带 `<system-reminder>` 即时纠偏 | 无 | ❌ |
@@ -169,7 +169,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 |---|---|---|---|---|
 | H1 | 权限模式 | 用户可切 7 种（default/acceptEdits/auto/dontAsk/plan/bypassPermissions/delegate）+ 程序化 3 种（fullAccess/work/ignore）；Shift+Tab 循环 | 双旋钮（sandbox: read-only/workspace-write/danger-full-access × approval: ask/never）+ 三档预设 | 🟡 词汇对齐了，模式数少 |
 | H2 | 9 阶判定链 | hooks → deny（永远最强）→ 可信 allow → 命令安全检查 → ask → bypass 短路 → 不可信 allow → 模式基线 → 非交互兜底 | `permission-policy.ts` 有序 5 阶段（凭据目录 → 无路径只读 → 本地只读 → 写与命令 → 审批策略） | 🟡 同思路，层数少 |
-| H3 | 规则语法 | `Tool(spec)`：`Bash(npm:*)`、`Edit(src/**)`、`WebFetch(domain:)`、`mcp__server__tool`；Bash 前缀会解析 `&&`/`\|\|`/`;`/`\|` 逐子命令判定 | 前缀规则引擎（spec add-permission-rules-engine）：`~/.kamibuddy/permissions.rules.json` 三态 allow/deny + 前缀边界匹配（git≠gitx）+ `&&`/`\|\|`/`;` 逐段最严获胜（不切管道）+ 批准写回（弹窗「以后都允许「git」开头的命令」→ 落盘即刻生效，解释器前缀禁写回）；仅 powershell，path 工具仍走路径归属记住 | 🟡 shell 已对齐，无 path/WebFetch 规则与规则编辑 UI |
+| H3 | 规则语法 | `Tool(spec)`：`Bash(npm:*)`、`Edit(src/**)`、`WebFetch(domain:)`、`mcp__server__tool`；Bash 前缀会解析 `&&`/`\|\|`/`;`/`\|` 逐子命令判定 | 前缀规则引擎（spec add-permission-rules-engine）：`~/.kamibuddy/permissions.rules.json` 三态 allow/deny + 前缀边界匹配（git≠gitx）+ `&&`/`\|\|`/`;` 逐段最严获胜（不切管道）+ 批准写回（弹窗「以后都允许「git」开头的命令」→ 落盘即刻生效，解释器前缀禁写回）；read 家族路径规则（spec extend-permission-rules-to-paths）：`{tool:"read", prefix:绝对路径}` 对 read/read_document/find/grep/ls 生效，isInside 子孙命中、deny 先于工作区放行（最严获胜）、allow 免区外询问、不越过凭据禁区，区外读弹窗「以后都允许读取此路径（及子目录）」写回（凭据/配置目录内不提供）；write/edit 仍走路径归属记住 | 🟡 shell + read 家族已对齐，无 write 路径/WebFetch 域名规则与规则编辑 UI |
 | H4 | 可信/不可信 allow | allow 分两层：未信任目录的项目级规则不能越过命令检查（防克隆恶意仓库即提权） | 有 `project-trust.ts`（记住信任、不记住不信任）；无 allow 规则层，故此攻击面本不存在 | 🟡 |
 | H5 | auto 分类器 | LLM 子代理只裁决剩余 ask（allow/deny，无中间态）；fail-closed、连续失败自动降级 default、过宽规则（`Bash(*)`）临时失效、`auto-mode critique` 自检 | 无 | ❌ |
 | H6 | dontAsk | 未预批准直接拒绝不弹框，连 AskUserQuestion/ExitPlanMode 也拒（CI 白名单场景） | `approval: never` 语义相同（确定性拒绝，不静默放行） | ✅ |
@@ -248,7 +248,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L13 | 技能与专家页 | 专家/技能/连接器三 tab（同 MarketPage 三路由）；专家市场：搜索（五字段+debounce+IME）、分类 chips（服务端下发）、卡片网格（头像/职称/两行描述/tags/hover 召唤）、详情弹窗（大头像/介绍/quickPrompts 轮播/召唤）、我的专家（空态+创建跳主页预填 expert-manager 引导）；专家团 tab（Desktop） | `skills-view.tsx` 三 tab 专家为首（spec rework-expert-center-and-chip）：`experts-view.tsx` 市场页（本地搜索/tags 聚合分类/卡片网格/详情弹窗/我的专家空态+创建跳主页预填引导语）；专家团占位；无精选场景（用户明确不要）、无运营排序 | 🟡 页面对齐、无精选场景与运营数据 |
 | L14 | 连接器页 | MCP 配置 + 市场 + 授权 | `connectors-view.tsx`（JSON 编辑 + 表单） | ✅ |
 | L15 | 记忆面板 | `/memory` | 无 | ❌ |
-| L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 运行观测体系（spec add-observability-ledger）：每会话运行台账（llm 调用 TTFT/usage 全字段含 cost 分项/重试全程/请求快照）+ 台账 fold 投影（重启不清零）+ 诊断页会话时间线/上下文真实组成/缓存浪费归因 + 运行中重试倒计时与排队徽标；无成本账单页 | ✅ 观测体系反超 |
+| L16 | 用量与成本 | `/cost` `/context` `/stats` `/insights`（AI 生成使用洞察 HTML 报告） | 用量圆环 + 分类估算 + 运行观测体系（spec add-observability-ledger）：每会话运行台账（llm 调用 TTFT/usage 全字段含 cost 分项/重试全程/请求快照）+ 台账 fold 投影（重启不清零）+ 诊断页会话时间线/上下文真实组成/缓存浪费归因 + 运行中重试倒计时与排队徽标；无成本账单页；会话页常驻指标条（用时/输入输出 token/缓存命中）+ 压缩过程状态行 + 历史回合真实用时（spec surface-run-metrics-in-chat，不新增 IPC，renderer 按回合 fold） | ✅ 观测体系反超；已知缺口（未补）：子代理/定时任务会话不接台账、审批与问卷等待不计时、seq gap 检测未实现、发消息→LLM 调用开始的等待段无计时 |
 | L17 | 诊断自检 | `doctor` 子命令 + self-check 报告 | `diagnostics-view.tsx`（用量 / 缓存命中率 / 工具时间线） | 🟡 |
 | L18 | 问卷弹层 | 多选分页，绑定会话替换输入区 | 单选分页（v3 内联浮层）+ 其他 + 跳过，按 sessionId 绑定会话 | ✅ |
 | L19 | 消息刻度轨 | 无对应 | `turn-rail.tsx` | ✅ 我方领先 |

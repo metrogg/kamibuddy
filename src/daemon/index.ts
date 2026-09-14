@@ -59,9 +59,11 @@ import { PreviewServers } from "../core/preview-server.ts";
 import { buildPromptPreview } from "./prompt-preview.ts";
 import {
 	composePromptWithMeta,
-	formatSkillsSection,
 	requireExpertPersona,
-	type ExpertPersona,
+	resolveSessionExpert,
+	sessionSkillPaths,
+	skillsSectionForMode,
+	toExpertPersona,
 	type PersonalizationSection,
 	type PromptContextOptions,
 	type SkillDescriptor,
@@ -73,6 +75,7 @@ import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
 import {
 	buildConversationEntries,
 	countSkippedLines,
+	normalizeLegacyInteraction,
 	validateSessionFilePath,
 } from "../core/session-rebuild.ts";
 import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from "../core/run-ledger.ts";
@@ -314,15 +317,20 @@ const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
  * 技能清单。技能页展示与提示词组装共用这一个来源，且**每次现读** ——
  * 导入新技能后下一轮对话即生效，无需重启应用。
  *
+ * 可选 expertSkillsDir：会话绑定的专家私有技能目录，追加进加载路径 ——
+ * 专家的专业技能因此只在该专家被绑定时可见（spec: 专家私有技能预加载）。
+ * 技能页（skillsSnapshot）不传它，展示的是全局技能池；全局在前、专家在后，
+ * 顺序即优先级（见 core/prompt-composer.ts sessionSkillPaths）。
+ *
  * 独立于 SessionHost 的加载（宿主懒建，技能页要在第一次发消息前就能看）。
  * 加载失败不抛：页面不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
  */
-function listSkills(): SkillInfo[] {
+function listSkills(expertSkillsDir?: string): SkillInfo[] {
 	try {
 		const { skills } = loadSkills({
 			cwd: getWorkspaceDir(),
 			agentDir: getConfigDir(),
-			skillPaths: [BUILTIN_SKILLS_DIR],
+			skillPaths: sessionSkillPaths(BUILTIN_SKILLS_DIR, expertSkillsDir),
 			includeDefaults: true,
 		});
 		return skills.map((s) => ({
@@ -347,7 +355,8 @@ function listSkills(): SkillInfo[] {
  * 三模式的 compose 不走这条读路径。
  */
 function loadExpertsNow(): readonly ExpertDefinition[] {
-	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"));
+	// 第三个参数是全局技能目录：私有技能与它重名要在加载期拦下（spec: 专家技能重名防护）。
+	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILLS_DIR);
 }
 
 /**
@@ -403,21 +412,24 @@ async function composeSystemPrompt(
 	if (scene === undefined || mode === undefined) {
 		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
 	}
-	// expert 模式才解析人格：expertId 缺失 / 专家不在库中都在这里响亮抛错
-	// （不可达防御的语义见 requireExpertPersona 注释）。三模式不碰专家库。
-	const expert: ExpertPersona | undefined =
-		interactionId === "expert" ? requireExpertPersona(loadExpertsNow(), expertId) : undefined;
-	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
-	const skills: SkillDescriptor[] = listSkills().map((s) => ({
+	// 专家与交互模式正交：只按 expertId 是否绑定决定是否解析专家，与模式无关
+	//（选专家不改模式，切模式不清专家）。一轮组装里人格与私有技能目录都要用它，
+	// 只查一次共用（expertId 有值但不在库中在这里响亮抛错，见 resolveSessionExpert）。
+	// 未绑定专家不走这条读路径：专家库加载从紧（坏文件抛错），三模式会话不该被
+	// 一个坏专家包拖垮（短路求值刻意保留）。
+	const expert = expertId === undefined ? undefined : resolveSessionExpert(loadExpertsNow(), expertId);
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。绑定专家时
+	// 追加其私有技能目录（未绑定时与全局技能池完全一致）。
+	const skills: SkillDescriptor[] = listSkills(expert?.skillsDir).map((s) => ({
 		name: s.name,
 		description: s.description,
 		filePath: s.filePath,
 	}));
 	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
-	// 的工具（read / bash）时，不注入技能段 —— 否则会让模型去调用
-	// 一个并不存在的 read 工具（plan 模式就是这个坑）。
-	const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
-	const skillsSection = hasSkillReader ? formatSkillsSection(skills) : "";
+	// 的工具（read / bash）时，不注入技能段（见 core/prompt-composer.ts
+	// skillsSectionForMode）—— 否则会让模型去调用一个并不存在的 read 工具
+	//（plan 模式就是这个坑）。
+	const skillsSection = skillsSectionForMode(mode.tools, skills);
 	/*
 	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
 	 * 无需重启）。三态：未配置 = 默认专业 / 空串 = 关闭 / 某 id = 指定。
@@ -448,7 +460,7 @@ async function composeSystemPrompt(
 		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
 		...(memoryContent === undefined ? {} : { memoryContent }),
 		personalization: readPersonalizationSection(),
-		...(expert === undefined ? {} : { expert }),
+		...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
 		piContext,
 	});
 	return {
@@ -525,6 +537,9 @@ function freshConversation(
 	interactionId: string,
 	expertId?: string,
 ): ConversationView {
+	// 历史会话归一：旧会话的 interactionId 可能是已删除的 "expert" 模式，
+	// 落到 craft 并用原 expertId 保留专家身份（见 normalizeLegacyInteraction）。
+	const axes = normalizeLegacyInteraction(interactionId, expertId);
 	return {
 		state: {
 			sessionId: "",
@@ -532,9 +547,9 @@ function freshConversation(
 			cwd,
 			isTempTask: isTempCwd(cwd),
 			sceneId,
-			interactionId,
-			// 仅 expert 模式有值（沿用旧会话选择时带过来）；三模式缺省不占字段。
-			...(expertId === undefined ? {} : { expertId }),
+			interactionId: axes.interactionId,
+			// 专家绑定与交互模式正交：无专家时不占字段（可选契约）。
+			...(axes.expertId === undefined ? {} : { expertId: axes.expertId }),
 			modelId: activeModelKey,
 			isStreaming: false,
 		},
@@ -676,8 +691,8 @@ const automationScheduler = new AutomationScheduler({
 		getCatalog,
 		getModelKey: () => activeModelKey,
 		resources: RESOURCES,
-		// 定时任务 run 会话保持 work+craft 不起专家（spec: add-expert-mode ——
-		// 专家选择是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
+		// 定时任务 run 会话保持 work+craft 不起专家（spec: rework-expert-orthogonal-and-skills
+		// —— 专家绑定是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
 		compose: async (cwd, sceneId, interactionId, piContext) =>
 			(await composeSystemPrompt(cwd, sceneId, interactionId, undefined, piContext)).prompt,
 		getPermissions: () => activePermissions,
@@ -960,7 +975,7 @@ const pendingApprovals = new Map<
 	{
 		/**
 		 * 原始审批请求的工具名。批准写回（Task 3）要用它复核：
-		 * rememberPrefix 只有附着在 powershell 审批上才有意义 ——
+		 * rememberPrefix 只有附着在 powershell / read 家族审批上才有意义 ——
 		 * 响应来自 IPC，渲染层给 write 审批附个 prefix 不该产生任何规则。
 		 */
 		readonly toolName: string;
@@ -1244,7 +1259,7 @@ async function createHost(
 		isTempTask: isTempCwd(cwd),
 		sceneId: bucket.conversation.state.sceneId,
 		interactionId: bucket.conversation.state.interactionId,
-		// expert 模式的绑定随两轴一起进宿主（resume/newTask 沿用口径与两轴相同）。
+		// 专家绑定与两轴正交，随会话状态一起进宿主（resume/newTask 沿用口径同两轴）。
 		...(bucket.conversation.state.expertId === undefined
 			? {}
 			: { expertId: bucket.conversation.state.expertId }),
@@ -1712,8 +1727,9 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	}
 
 	// 两轴沿用当前会话的选择（与 newTask 同口径：恢复历史不改用户偏好）。
-	// expert 绑定同属这套沿用口径 —— resume 后专家身份不丢（state.expertId
-	// 随 freshConversation 进新桶，compose 时重新解析人格正文注入）。
+	// 专家绑定同属这套沿用口径 —— resume 后专家身份不丢（state.expertId
+	// 随 freshConversation 进新桶，compose 时按 expertId 重新解析人格注入）。
+	// 历史归一（旧 "expert" 模式 → craft）也在 freshConversation 内完成。
 	const bucket = createBucket<SessionHost>({
 		cwd: nextCwd,
 		conversation: freshConversation(
@@ -1927,7 +1943,7 @@ async function newTask(): Promise<void> {
 			defaultWorkspaceDir,
 			currentBucket.conversation.state.sceneId,
 			currentBucket.conversation.state.interactionId,
-			// expert 绑定与两轴同口径沿用（开新活不是改偏好）。
+			// 专家绑定与两轴正交，同口径沿用（开新活不是改偏好）。
 			currentBucket.conversation.state.expertId,
 		),
 	});
@@ -1962,6 +1978,8 @@ const handlers: Record<string, Handler> = {
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
+	// 技能页口径 = 全局技能池：不传专家技能目录 —— 专家私有技能只在会话组装
+	//（composeSystemPrompt 按绑定专家追加）时进入提示词，不进技能页清单。
 	[INVOKE.skillsSnapshot]: async () => ({ skills: listSkills(), userSkillsDir: userSkillsDir() }),
 
 	[INVOKE.importSkill]: async ([sourcePath]) => importSkill(sourcePath as string),
@@ -2320,25 +2338,26 @@ const handlers: Record<string, Handler> = {
 		applyInteraction(currentBucket, interactionId as string),
 
 	/**
-	 * 选择 / 清除专家（单入口的另一半，applyInteraction 的注释是状态转移语义）。
-	 * 目标 = 当前桶：专家选择是会话级 UI 状态，A 会话的专家不影响 B 会话。
+	 * 选择 / 清除专家。专家是与交互模式**正交**的会话绑定：本通道只读写
+	 * expertId，绝不改 interactionId（目标 = 当前桶，A 会话的专家不影响 B 会话）。
 	 */
 	[INVOKE.setExpert]: async ([expertId]) => {
 		const id = expertId as string | undefined;
-		if (id === undefined) {
-			// 清除专家：本就在三模式时本就没有可清的（no-op）；在 expert 模式
-			// 则必须切走 —— 无专家的 expert 模式不可达。落点取 craft（新会话的默认模式）。
-			if (currentBucket.conversation.state.interactionId === "expert") {
-				await applyInteraction(currentBucket, "craft");
-			}
+		// 选择前校验专家真实存在：renderer 的菜单项可能落后于用户删文件，
+		// 放过去会建成「没有人格」的专家会话（compose 时照样炸，但那时用户
+		// 已经把选择落下了 —— 在选择的这一刻报错）。校验与 compose 期同一条
+		// 专家查找（requireExpertPersona 包着 compose 也用的 resolveSessionExpert）
+		// —— 单一出处，专家被删/改名立刻响亮失败。
+		if (id !== undefined) requireExpertPersona(loadExpertsNow(), id);
+		const bucket = currentBucket;
+		const hostPromise = bucket.hostPromise;
+		if (hostPromise === undefined) {
+			// 清除语义必须显式写 undefined：updateStateLocally 是浅合并，
+			// 不带 expertId 键会把旧值留在 state 里。
+			updateStateLocally(bucket, { expertId: id });
 			return;
 		}
-		// 选择前校验专家真实存在：renderer 的菜单项可能落后于用户删文件，
-		// 放过去会建成「没有人格」的专家会话（compose 时照样炸，但那时
-		// 用户已经把模式切过去了 —— 在选择的这一刻报错，UI 留在原模式）。
-		const expert = loadExpertsNow().find((e) => e.name === id);
-		if (expert === undefined) throw new Error(`未知的专家：${id}`);
-		await applyInteraction(currentBucket, "expert", id);
+		(await hostPromise).setExpert(id);
 	},
 
 	/**
@@ -2686,7 +2705,7 @@ const handlers: Record<string, Handler> = {
 
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
 	// cwd = 当前会话工作区（预览反映「此刻发消息会看到的提示词」），
-	// 技能清单现读（同 composeSystemPrompt 口径），风格偏好现读。
+	// 技能清单 / 专家库 / 风格偏好现读（与 composeSystemPrompt 同一口径）。
 	[INVOKE.promptPreview]: async ([request]) =>
 		buildPromptPreview(RESOURCES, request as PromptPreviewRequest, {
 			cwd: currentBucket.cwd,
@@ -2695,6 +2714,8 @@ const handlers: Record<string, Handler> = {
 				description: s.description,
 				filePath: s.filePath,
 			})),
+			// 预览按请求里的 expertId 解析人格（同一条 requireExpertPersona 路径）。
+			experts: loadExpertsNow(),
 			preferredStyleId: readPreferences().styleId,
 		// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 		memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
@@ -2859,14 +2880,16 @@ const handlers: Record<string, Handler> = {
 		if (pending === undefined) return;
 		pendingApprovals.delete(answer.id);
 		/*
-		 * 批准写回（spec: add-permission-rules-engine Task 3）：
-		 * 用户勾了「以后都允许「{首词}」开头的命令」时，把 allow 规则并入内存
-		 * 规则集并落盘（appendRule 幂等，内存先更新 —— 门经 getRules 读内存，
-		 * 下一次同类命令即免问）。校验全在 rememberRuleFromApproval：
-		 * 不信任 IPC 载荷，非法 prefix（解释器/含分隔符/含空白）与非
-		 * powershell 审批上附着的 prefix 一律忽略，不炸不拒。
+		 * 批准写回（spec: add-permission-rules-engine Task 3 /
+		 * extend-permission-rules-to-paths Task 2）：用户勾了「以后都允许…」时，
+		 * 把 allow 规则并入内存规则集并落盘（appendRule 幂等，内存先更新 ——
+		 * 门经 getRules 读内存，下一次同类调用即免问）。校验全在
+		 * rememberRuleFromApproval：不信任 IPC 载荷 —— powershell 走首词校验
+		 * （解释器/含分隔符/含空白一律忽略），read 家族走「绝对路径且不在
+		 * 凭据/配置目录内」校验（禁区内规则是死规则，判定链阶段 1 永远先拒）；
+		 * 其余工具上附着的 prefix 一律忽略，不炸不拒。
 		 */
-		const rule = rememberRuleFromApproval(pending.toolName, answer);
+		const rule = rememberRuleFromApproval(pending.toolName, answer, [getConfigDir(), ...PROTECTED_DIRS]);
 		if (rule !== undefined) appendRule(rule);
 		// 以用户实际作出选择的位置为准落日志（而非 resolve 包装）：
 		// 审计要的是「用户批了什么」，重复应答与悬空 id 都不算选择。
@@ -2946,38 +2969,26 @@ function updateStateLocally(
 }
 
 /**
- * 交互模式切换的统一入口：setInteraction 通道、setExpert 通道与 /plan
- * 内置命令都走这里。
+ * 交互模式切换的统一入口：setInteraction 通道与 /plan 内置命令都走这里。
  *
- * 选专家 = 切 expert 模式 + 绑定人格，是同一个状态转移（spec: add-expert-mode）：
- * expertId 随切换一并落 state，不存在「expert 模式但没人格」的中间态
- * （无专家的 expert 模式不可达 —— 模式菜单只列具体专家，不裸列「专家」）。
- * 切到 craft/ask/plan 一律清空 expertId。
+ * 只切模式轴 —— 专家绑定（expertId）与模式正交，不在这里读也不在这里写
+ *（spec: rework-expert-orthogonal-and-skills）。
  *
  * 任何切到非 plan 模式的切换都刷新**该会话**的记忆 —— 用户从切换器切走后
  * 再发 /plan，回到的必须是刚切走的那个模式，而不是一条过时记忆。
  * 记忆按桶存：A 会话的 /plan 不该切回 B 会话记下的模式。
- * expert 不入 /plan 记忆：回程需要 expertId，而切走时它已清空，
- * 记下「expert」会让 /plan 回程必然报错 —— 回到上一个三模式是安全回落。
  */
 async function applyInteraction(
 	bucket: SessionBucket<SessionHost>,
 	id: string,
-	expertId?: string,
 ): Promise<void> {
 	const readyId = requireReady(INTERACTIONS, id, "交互模式");
-	if (readyId === "expert" && expertId === undefined) {
-		throw new Error("选择具体专家后才会进入专家模式");
-	}
-	if (readyId !== "plan" && readyId !== "expert") bucket.lastNonPlanInteraction = readyId;
-	const nextExpertId = readyId === "expert" ? expertId : undefined;
+	if (readyId !== "plan") bucket.lastNonPlanInteraction = readyId;
 	if (bucket.hostPromise === undefined) {
-		// 清除语义必须显式写 undefined：updateStateLocally 是浅合并，
-		// 不带 expertId 键会把旧值留在 state 里。
-		updateStateLocally(bucket, { interactionId: readyId, expertId: nextExpertId });
+		updateStateLocally(bucket, { interactionId: readyId });
 		return;
 	}
-	(await bucket.hostPromise).setInteraction(readyId, nextExpertId);
+	(await bucket.hostPromise).setInteraction(readyId);
 }
 
 async function dispatch(request: DaemonRequest): Promise<void> {

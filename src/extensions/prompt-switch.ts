@@ -17,9 +17,9 @@ import type { PromptContextOptions } from "../core/prompt-composer.ts";
 
 export interface PromptSwitchOptions {
 	/**
-	 * 当前两轴 + expert 绑定。权威状态在宿主（SessionHost / daemon 的
-	 * conversation 折叠），经此读取。expertId 仅 expert 模式有值
-	 * （选专家 = 切 expert 模式 + 绑定人格，spec: add-expert-mode）；
+	 * 当前两轴 + 专家绑定。权威状态在宿主（SessionHost / daemon 的
+	 * conversation 折叠），经此读取。expertId 与交互模式**正交**：只反映
+	 * 是否绑定了专家，与 interactionId 无关（spec: rework-expert-orthogonal-and-skills）；
 	 * 子代理 / run 会话不起专家，省略即可。
 	 */
 	readonly getCurrent: () => {

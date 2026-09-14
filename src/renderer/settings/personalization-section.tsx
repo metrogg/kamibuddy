@@ -7,13 +7,44 @@
  * 见 memory-section），另加失焦提交 —— 编辑完点出输入框即存上。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PersonalizationInfo, PersonalizationPatch } from "@shared/ipc.ts";
 import type { StyleConfigInfo } from "@shared/settings.ts";
 import { SelectField } from "./select-field.tsx";
 
 /** 自定义指令上限（与 compose 注入的截断口径一致，输入侧就拦住）。 */
 const CUSTOM_INSTRUCTIONS_MAX = 1500;
+
+/** 保存成功确认的停留时长。 */
+const SAVED_FLASH_MS = 1500;
+
+/**
+ * 保存成功的短暂确认（落在保存按钮的文字上）。
+ *
+ * 为什么必须有：编辑块的失焦会先一步提交 —— 点「保存」的 mousedown 就触发
+ * blur，保存随即完成，按钮在鼠标松开前已因「内容没有变化」变灰，点击落到
+ * 禁用按钮上被吞掉。实测现象就是「输入完点保存毫无反应」，而数据其实已经
+ * 落盘（用户无法分辨）。有这个确认，失焦提交与点击提交两条路径都有反馈。
+ */
+function useSavedFlash(): { readonly saved: boolean; readonly flash: () => void } {
+	const [saved, setSaved] = useState(false);
+	const timerRef = useRef<number | undefined>(undefined);
+
+	useEffect(
+		() => () => {
+			if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+		},
+		[],
+	);
+
+	const flash = (): void => {
+		setSaved(true);
+		if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+		timerRef.current = window.setTimeout(() => setSaved(false), SAVED_FLASH_MS);
+	};
+
+	return { saved, flash };
+}
 
 /* ── 回复风格 ──────────────────────────────────────────────────── */
 
@@ -99,10 +130,11 @@ function CustomInstructionsSection({
 }): React.JSX.Element {
 	const [draft, setDraft] = useState(saved);
 	const dirty = draft !== saved;
+	const { saved: justSaved, flash } = useSavedFlash();
 
 	const save = (): void => {
 		// 失败由父级统一透出错误条；draft 保持脏态，可改可再点保存。
-		void onSubmit({ customInstructions: draft }).catch(() => { });
+		void onSubmit({ customInstructions: draft }).then(flash).catch(() => { });
 	};
 
 	return (
@@ -111,12 +143,12 @@ function CustomInstructionsSection({
 				<h2>自定义指令</h2>
 				<button
 					type="button"
-					className="mini-btn"
+					className={`mini-btn${justSaved ? " saved" : ""}`}
 					disabled={busy || !dirty}
-					title={dirty ? undefined : "内容没有变化"}
+					title={dirty || justSaved ? undefined : "内容没有变化"}
 					onClick={save}
 				>
-					保存
+					{justSaved ? "已保存" : "保存"}
 				</button>
 			</header>
 			<textarea
@@ -164,13 +196,14 @@ function IdentitySection({
 		nickname !== saved.userNickname ||
 		assistantName !== saved.assistantName ||
 		persona !== saved.personaDescription;
+	const { saved: justSaved, flash } = useSavedFlash();
 
 	const save = (): void => {
 		void onSubmit({
 			userNickname: nickname,
 			assistantName,
 			personaDescription: persona,
-		}).catch(() => { });
+		}).then(flash).catch(() => { });
 	};
 
 	/** 失焦提交（与自定义指令同口径）：有改动才发补丁。 */
@@ -184,12 +217,12 @@ function IdentitySection({
 				<h2>称呼与身份</h2>
 				<button
 					type="button"
-					className="mini-btn"
+					className={`mini-btn${justSaved ? " saved" : ""}`}
 					disabled={busy || !dirty}
-					title={dirty ? undefined : "内容没有变化"}
+					title={dirty || justSaved ? undefined : "内容没有变化"}
 					onClick={save}
 				>
-					保存
+					{justSaved ? "已保存" : "保存"}
 				</button>
 			</header>
 			<div className="identity-fields">

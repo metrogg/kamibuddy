@@ -560,10 +560,10 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
-	 * 选择专家（选中即进 expert 模式）；传 undefined = 取消选中（daemon 清 expertId
-	 * 并回落 craft，见 setExpert 通道的清除语义）。与 changeInteraction 同一数据流：
-	 * 不在本地回写，daemon 推 session_state（interactionId + expertId）后
-	 * 菜单勾选与 composer-bar 专家 chip 随之刷新。
+	 * 选择专家；传 undefined = 取消选中。专家与交互模式正交（spec:
+	 * rework-expert-orthogonal-and-skills）：本调用只读写 expertId，不改交互模式。
+	 * 与 changeInteraction 同一数据流 —— 不在本地回写，daemon 推 session_state
+	 * （expertId）后菜单勾选与 composer-bar 专家 chip 随之刷新。
 	 */
 	const selectExpert = useCallback(
 		(expertId: string | undefined) => {
@@ -707,9 +707,9 @@ export function App(): React.JSX.Element {
 	 * → 落新任务对话页；prefill 有值时填入输入框待发送（quickPrompt 路径）。
 	 *
 	 * 顺序不能反：daemon 的 newTask 沿用旧会话的两轴与专家绑定，先 setExpert
-	 * 会把旧会话也翻成 expert 模式（副作用外溢到后台保活的会话）；先 newTask
-	 * 再 setExpert，专家只绑在新的 pristine 会话上（与首页「+」菜单选专家
-	 * 同一条 daemon 路径，pristine 桶可用）。
+	 * 会把旧会话也绑上专家（副作用外溢到后台保活的会话）；先 newTask 再 setExpert，
+	 * 专家只绑在新的 pristine 会话上（与首页「+」菜单选专家同一条 daemon 路径，
+	 * pristine 桶可用）。绑专家不再改交互模式 —— 专家与模式正交。
 	 */
 	const useExpert = useCallback(
 		(expertId: string, prefill?: string) => {

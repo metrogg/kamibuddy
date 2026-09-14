@@ -8,12 +8,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
+import { formatTokenCount } from "@shared/context-usage.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
-import type { ConversationEntry, ModeDescriptor, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import type { CompactionReason, ConversationEntry, ModeDescriptor, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
@@ -62,6 +63,7 @@ import {
 	turnFoldExpanded,
 } from "./turn-fold.ts";
 import type { TurnFoldMap, TurnView } from "./turn-fold.ts";
+import { foldTurnMetrics } from "./turn-metrics.ts";
 import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
@@ -83,7 +85,7 @@ interface ChatViewProps {
 	readonly onInteractionChange: (interactionId: string) => void;
 	/** 专家列表（「+」菜单专家子菜单与 composer-bar 当前专家 chip 的数据源，App 层统一下发）。 */
 	readonly experts: readonly ExpertListItem[];
-	/** 选择专家；传 undefined = 取消选中（daemon setExpert 通道的清除语义，回落 craft）。 */
+	/** 选择专家；传 undefined = 取消选中（daemon setExpert 只清 expertId，不动交互模式）。 */
 	readonly onSelectExpert: (expertId: string | undefined) => void;
 	/** 「+」菜单专家子菜单底部的「更多专家…」入口：跳专家页（App 层路由）。 */
 	readonly onOpenExperts: () => void;
@@ -760,6 +762,29 @@ function RetryPendingLine({ retry }: { readonly retry: RunRetryState }): React.J
 	);
 }
 
+/**
+ * 压缩状态行（spec: surface-run-metrics-in-chat Task 4.4）。
+ *
+ * 压缩要调模型写摘要，耗时与一轮对话相当；这段窗口若不给反馈，用户会以为卡死
+ * （与等待首响应同理）。compaction_finished（含中断/失败）到达即随状态清空。
+ * 原因后缀让用户知道该做什么：阈值/溢出是系统自愈，手动是用户发起。
+ */
+const COMPACTION_REASON_LABEL: Record<CompactionReason, string> = {
+	threshold: "阈值触发",
+	overflow: "上下文溢出",
+	manual: "手动压缩",
+};
+
+function CompactionPendingLine({ reason }: { readonly reason: CompactionReason }): React.JSX.Element {
+	return (
+		<div className="stream-pending">
+			<span className="text-shimmer">正在压缩上下文…</span>
+			{/* 原因后缀走 .stream-pending 继承的 --text-dim，不抢扫光主文案的注意力。 */}
+			<span>{COMPACTION_REASON_LABEL[reason]}</span>
+		</div>
+	);
+}
+
 /* ── 等待首响应：安抚文案 + tips 轮播 ────────────────────────────── */
 
 /** 等待 4s 后出现首条 tip；等待 8s 主文案切换安抚文案；tip 每 10s 轮换。 */
@@ -877,13 +902,13 @@ function formatDuration(ms: number): string {
 /**
  * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」）。
  *
- * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；回合结束或
- * 历史回合显示「已完成」。计时起点是用户消息落库时间，不是首个 token ——
- * 排队/检索的时间也计入，与其口径一致。
+ * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；计时起点是用户消息
+ * 落库时间，不是首个 token —— 排队/检索的时间也计入，与其口径一致。
  *
- * turn 只传给当前回合的头部（历史回合没有计时数据）：被取消的当前回合
- * 定格「已取消 Ns」（endedAt - startedAt），与正常结束的「已完成」区分 ——
- * 中断是用户主动动作，UI 上必须看得出（机制对标 WorkBuddy 的取消终态）。
+ * turn 由调用点按轮解析（spec: surface-run-metrics-in-chat Task 4.3）：活动轮
+ * 传实时计时（已处理 Ns，走表）；历史/已结束轮传从 ConversationView.turnTimings
+ * 按 turnId 查到的真实计时（用时 Ns，取消轮 已取消 Ns）。查不到计时才回落
+ * 「已完成」—— 中断是用户主动动作，UI 上必须看得出（机制对标 WorkBuddy 取消终态）。
  *
  * 轮折叠开关（spec: add-turn-fold-and-anchor）：fold plan 判定本轮有折叠区
  * （hasTurnFold）时整头可点，时长行尾带 chevron，点击切换过程区显隐；
@@ -914,8 +939,11 @@ function TurnHeader({
 	let duration = "已完成";
 	if (active && turn?.startedAt !== undefined) {
 		duration = `已处理 ${formatDuration(now - turn.startedAt)}`;
-	} else if (turn?.cancelled === true && turn.endedAt !== undefined) {
-		duration = `已取消 ${formatDuration(turn.endedAt - turn.startedAt)}`;
+	} else if (turn !== undefined && turn.endedAt !== undefined) {
+		duration =
+			turn.cancelled === true
+				? `已取消 ${formatDuration(turn.endedAt - turn.startedAt)}`
+				: `用时 ${formatDuration(turn.endedAt - turn.startedAt)}`;
 	}
 
 	// 容器用 span 不用 div：可点击时它们要落在 <button> 里，
@@ -948,6 +976,56 @@ function TurnHeader({
 		>
 			{body}
 		</button>
+	);
+}
+
+/* ── 输入区常驻指标条（本轮用时 / token / 缓存命中） ──────────────── */
+
+/**
+ * 输入区下方常驻的只读指标条（spec: surface-run-metrics-in-chat Task 4.1）。
+ *
+ * 数据全部由 UI 层折叠（turn-metrics.ts 的 foldTurnMetrics），不新增 IPC / 事件。
+ * 用时必显，token 与命中率「有数据才显示」—— 缺字段整项省略，不填 0：上游
+ * 没上报与真的没用是两回事，显示 0 会把前者误导成后者。
+ *
+ * 计时只在「当前回合仍在跑」时每 500ms 走表（与回合头部同精度）；历史轮直接
+ * 读 endedAt，不做无谓空转。语义克制：纯读数，不可点、无弹层（详情浮层不在本次范围）。
+ */
+function RunMetricsBar({
+	entries,
+	turn,
+}: {
+	readonly entries: readonly ConversationEntry[];
+	readonly turn: TurnTiming;
+}): React.JSX.Element {
+	const live = turn.endedAt === undefined;
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!live) return;
+		const timer = window.setInterval(() => setNow(Date.now()), 500);
+		return () => window.clearInterval(timer);
+	}, [live]);
+
+	const metrics = foldTurnMetrics(entries, turn, now);
+	const items: string[] = [`用时 ${formatDuration(metrics.elapsedMs)}`];
+	if (metrics.inputTokens !== undefined) items.push(`↑${formatTokenCount(metrics.inputTokens)}`);
+	if (metrics.outputTokens !== undefined) items.push(`↓${formatTokenCount(metrics.outputTokens)}`);
+	if (metrics.hitRate !== undefined) items.push(`命中 ${Math.round(metrics.hitRate * 100)}%`);
+
+	return (
+		<div className="run-metrics">
+			{items.map((text, index) => (
+				// 分隔符是纯装饰（aria-hidden），随项插入 —— 首项前不出中点。
+				<Fragment key={index}>
+					{index > 0 && (
+						<span className="run-metrics-sep" aria-hidden="true">
+							·
+						</span>
+					)}
+					<span>{text}</span>
+				</Fragment>
+			))}
+		</div>
 	);
 }
 
@@ -996,7 +1074,7 @@ function QuickPromptChips({
 /**
  * composer-bar 左区的当前专家 chip（WorkBuddy cr-chip 同款，位置在默认权限旁）：
  * 静态不可点（role=status，不挂点击）；hover/focus-within 时头像原位换成 ×，
- * 点击取消选中 —— onClear 走 setExpert(undefined)，daemon 回落 craft。
+ * 点击取消选中 —— onClear 走 setExpert(undefined)，只清专家、不动交互模式。
  * 两态切换纯 CSS 实现（见 index.css .expert-chip），这里没有状态。
  */
 function ExpertChip({
@@ -1053,11 +1131,10 @@ function ModeSwitch({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [open]);
 
-	// expert 不裸列（无专家的 expert 模式不可达，spec: add-expert-mode）——
-	// 三模式平铺；专家选择入口统一为「+」菜单专家子菜单与专家页
+	// 交互模式切换器只有 ask / craft / plan 三档（专家已不是交互模式，而是与
+	// 模式正交的会话绑定，spec: rework-expert-orthogonal-and-skills）——
+	// 直接平铺 availableModes；专家选择入口统一为「+」菜单专家子菜单与专家页
 	//（spec: rework-expert-center-and-chip，头部不再有专家入口）。
-	const plainModes = interactions.filter((m) => m.id !== "expert");
-
 	return (
 		<div className="menu-zone">
 			<button
@@ -1075,7 +1152,7 @@ function ModeSwitch({
 					{/* 透明 backdrop：点菜单外任意处关闭，与 PlusMenu/PermissionMenu 一致。 */}
 					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
 					<div className="pop-menu mode-menu" role="menu">
-						{plainModes.map((mode) => (
+						{interactions.map((mode) => (
 							<button
 								key={mode.id}
 								type="button"
@@ -1301,9 +1378,9 @@ export function ChatView({
 	}, []);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
-	// 当前专家（仅 expert 模式有值）：composer-bar chip、起手 chips 与「+」菜单
-	// 勾选共用这份查找。expertId 是 session_state 的权威值，列表只是展示映射；
-	// 列表尚未拉回/专家被删时 chip 与起手 chips 不渲染（菜单勾选仍以 expertId 为准）。
+	// 当前专家（绑定专家才有值，与交互模式正交）：composer-bar chip、起手 chips
+	// 与「+」菜单勾选共用这份查找。expertId 是 session_state 的权威值，列表只是
+	// 展示映射；列表尚未拉回/专家被删时 chip 与起手 chips 不渲染（菜单勾选仍以 expertId 为准）。
 	const expertId = conversation.state.expertId;
 	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
@@ -1339,6 +1416,18 @@ export function ChatView({
 	// 起手 chips「发送一条后消失」的判定：entries 里有无 user 消息（权威口径，
 	// 恢复历史会话也正确 —— 有历史的会话 chips 本就不该再出现）。
 	const hasUserMessage = lastUserEntry !== undefined;
+	/*
+		指标条数据源（spec: surface-run-metrics-in-chat Task 4.1）：流式中读当前
+		回合计时（走表）；非流式按最后一条 user 消息 id 查回合计时映射，得到该轮
+		完整计时。两者都是「当前会话最近一轮」，切会话自然跟着换。查不到就不渲染
+		（不给空壳）—— 只读读数宁可缺席，也不该显示没有依据的 0。
+	*/
+	const metricsTurn =
+		streaming && conversation.turn !== undefined
+			? conversation.turn
+			: lastUserId !== undefined
+				? conversation.turnTimings?.[lastUserId]
+				: undefined;
 
 	/*
 		轮折叠开合状态：Map<turnId, expanded>，**缺省 = 折叠** —— run 结束
@@ -1685,11 +1774,23 @@ export function ChatView({
 			*/}
 			{streaming && conversation.retry !== undefined && <RetryPendingLine retry={conversation.retry} />}
 			{/*
+				压缩行位序（spec: surface-run-metrics-in-chat Task 4.4）：重试行（异常态，
+				信息最具体）> 压缩行（当前的进行中动作）> 等待/通用进行中行。三者互斥只出
+				一条，不叠加。压缩期间模型在写摘要、不在「等待响应」，所以压制下面的等待
+				行；重试是异常自愈，优先级更高。压缩行不 gate 在 streaming 上 —— 空闲手动
+				压缩（streaming 为 false）也要可见。
+			*/}
+			{conversation.compacting !== undefined && !(streaming && conversation.retry !== undefined) && (
+				<CompactionPendingLine reason={conversation.compacting.reason} />
+			)}
+			{/*
 				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
 				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
 				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
 			*/}
 			{streaming &&
+				conversation.retry === undefined &&
+				conversation.compacting === undefined &&
 				(awaitingFirstResponse ? (
 					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} welcomeGreeting={personalization.welcomeGreeting} />
 				) : (
@@ -1855,7 +1956,13 @@ export function ChatView({
 								{turnId !== undefined && (
 									<TurnHeader
 										active={streaming && turnId === lastUserId}
-										turn={turnId === lastUserId ? conversation.turn : undefined}
+										// 活动轮用实时计时（走表）；历史/已结束轮从回合计时映射
+										// 按 turnId 取真实计时（Task 4.3，查不到即回落「已完成」）。
+										turn={
+											streaming && turnId === lastUserId
+												? conversation.turn
+												: conversation.turnTimings?.[turnId]
+										}
 										collapsible={view.plan.hasTurnFold}
 										expanded={turnFoldExpanded(turnFolds, turnId)}
 										onToggle={() => toggleTurn(turnId)}
@@ -1970,8 +2077,8 @@ export function ChatView({
 							{/*
 				当前专家 chip（WorkBuddy 底栏左区、默认权限旁的同款位置）：静态展示，
 				hover/focus-within 头像原位变 ×，点击取消选中（setExpert(undefined)
-				回落 craft）。列表里找不到（未拉回/已删除）时不渲染 —— chip 只是
-				展示映射，菜单勾选仍以 session_state 的 expertId 为准。
+				只清专家、不动交互模式）。列表里找不到（未拉回/已删除）时不渲染 —— chip
+				只是展示映射，菜单勾选仍以 session_state 的 expertId 为准。
 			*/}
 							{currentExpert !== undefined && (
 								<ExpertChip expert={currentExpert} onClear={() => onSelectExpert(undefined)} />
@@ -1995,6 +2102,11 @@ export function ChatView({
 							{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
 							{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						</Composer>
+						{/*
+							输入区下方常驻指标条（本轮用时 / token / 缓存命中）：
+							只读辅助读数，不抢输入区的注意力。查不到计时整条不渲染。
+						*/}
+						{metricsTurn !== undefined && <RunMetricsBar entries={entries} turn={metricsTurn} />}
 					</>
 				)}
 			</footer>

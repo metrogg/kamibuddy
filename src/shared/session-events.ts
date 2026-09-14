@@ -263,6 +263,21 @@ export interface RunRetryState {
 	readonly errorMessage?: string;
 }
 
+/** 上下文压缩的触发原因（与 pi compaction_start 的 reason 平行定义，见 agent-session.ts:154）。 */
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
+/**
+ * 一次进行中的上下文压缩（compaction_started 折叠而来，reducer 视图状态）。
+ *
+ * 压缩要调模型写摘要，耗时与一轮对话相当 —— 没有这条状态行，这段窗口在 UI 上
+ * 没有任何反馈，用户以为卡死了。compaction_finished（含中断/失败）到达即清态。
+ */
+export interface CompactionState {
+	readonly reason: CompactionReason;
+	/** 压缩开始时刻（事件到达时刻 epoch ms）——状态行据此显示已压缩时长。 */
+	readonly startedAt: number;
+}
+
 /** 产物交付条目（artifacts_presented 折叠而来，恢复会话时由 custom 条目翻译）。 */
 export interface ArtifactsPresentedEntry {
 	readonly id: MessageId;
@@ -399,6 +414,26 @@ export type SessionEvent =
 		readonly type: "queue_changed";
 		readonly steering: readonly string[];
 		readonly followUp: readonly string[];
+	}
+	/**
+	 * 上下文压缩开始（pi compaction_start 透传）。
+	 *
+	 * 压缩要调模型写摘要，耗时与一轮对话相当 —— 它在 UI 上必须有反馈
+	 *（会话流尾部状态行），否则这段窗口对用户是黑洞。reason 区分手动 / 阈值 / 溢出。
+	 * 不携带 startedAt：daemon 只在收到事件时透传，压缩时长以 reducer 侧事件
+	 * 到达时刻为准（两端折叠同一个事件，时间基准天然一致）。
+	 */
+	| { readonly type: "compaction_started"; readonly reason: CompactionReason }
+	/**
+	 * 上下文压缩结束（pi compaction_end 透传，无论成功 / 中断 / 失败）。
+	 *
+	 * aborted / errorMessage 只用于终态区分语义，renderer 收到即清压缩态 ——
+	 * 状态行在压缩结束后消失，失败细节由随后的 run_error 卡表达（contract 同理）。
+	 */
+	| {
+		readonly type: "compaction_finished";
+		readonly aborted: boolean;
+		readonly errorMessage?: string;
 	};
 
 /**
@@ -422,7 +457,11 @@ export interface SessionEventEnvelope {
  * 模式是**两个正交的轴**，照 WorkBuddy 的结构来（其内置插件目录即证据）：
  *
  *   场景轴 welcomemode/  work / code / design      各带 agents/<name>.md 根代理
- *   交互轴 interactionmode/  ask / craft / plan / expert   各带 fragments/*.md 提示片段
+ *   交互轴 interactionmode/  ask / craft / plan     各带 fragments/*.md 提示片段
+ *
+ * expertId 是**与两轴平行的独立绑定**（正交），不是交互模式之一：选/取消
+ * 专家不改交互模式，切交互模式也不清专家，两种轴可自由组合
+ *（spec: rework-expert-orthogonal-and-skills）。
  *
  * 系统提示词是两轴共同的函数：场景模板 include 交互片段。
  * 所以两者都要存，不能压成一个 modeId —— 否则 D4-5 写提示词时必然返工。
@@ -451,11 +490,11 @@ export interface SessionState {
 	/** 交互模式 id，对应 resources/modes/<id>.md。决定工具白名单与行为片段。 */
 	readonly interactionId: string;
 	/**
-	 * expert 模式绑定的专家 id（resources/experts/<name>.md 的 name）。
+	 * 绑定的专家 id（对应 resources/experts/<name>/ 的目录名）。
 	 *
-	 * 仅 interactionId === "expert" 时有值——选专家 = 切 expert 模式 + 绑定人格，
-	 * 是同一个状态转移（spec: add-expert-mode）；切到 craft/ask/plan 即清空。
-	 * 缺省而非空串：三模式下「无专家」是常态，不占字段。
+	 * 与 interactionId **正交**：选/取消专家只改本字段，切交互模式不动它
+	 *（spec: rework-expert-orthogonal-and-skills）。缺省而非空串：
+	 * 无专家是常态，不占字段。
 	 */
 	readonly expertId?: string;
 	readonly modelId: string | undefined;

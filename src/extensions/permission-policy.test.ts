@@ -897,3 +897,57 @@ describe("powershell 前缀规则（判定链阶段 4 的规则阶段）", () =>
 		).toEqual({ kind: "allow" });
 	});
 });
+
+/* ── read 家族路径前缀规则（spec: extend-permission-rules-to-paths） ── */
+
+describe("read 家族路径前缀规则（判定链阶段 2 接线）", () => {
+	// 工作区外、家目录下的「容器目录」：用户信任整棵树、不想每个会话都点一次的典型场景。
+	const CONTAINER = join(HOME, "shared");
+	const ALLOW_CONTAINER: PermissionRule = { tool: "read", prefix: CONTAINER, action: "allow" };
+
+	it("allow 规则使命中目录树的区外读免询问：read 子孙文件放行", () => {
+		expect(
+			decide(facts({ toolName: "read", path: join(CONTAINER, "proj", "a.md") }), PATHS, CWD, undefined, [
+				ALLOW_CONTAINER,
+			]),
+		).toEqual({ kind: "allow" });
+	});
+
+	it("同一条 read 规则对家族内其他工具同样生效：ls 目录自身放行（家族语义）", () => {
+		// 「read」代表整个只读家族，不逐工具区分 —— ls 那个目录本身也该命中。
+		expect(decide(facts({ toolName: "ls", path: CONTAINER }), PATHS, CWD, undefined, [ALLOW_CONTAINER])).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("无规则时同一路径仍低风险询问（规则是唯一变量）", () => {
+		expect(decide(facts({ toolName: "read", path: join(CONTAINER, "a.md") }), PATHS, CWD)).toMatchObject({
+			kind: "ask",
+			risk: "low",
+		});
+	});
+
+	it("deny 规则先于工作区放行：工作区内被 deny 的目录直接拒（最严获胜）", () => {
+		const SECRETS = join(PATHS.workspaceDir, "secrets");
+		const DENY: PermissionRule = { tool: "read", prefix: SECRETS, action: "deny" };
+		const result = decide(facts({ toolName: "read", path: join(SECRETS, "x.md") }), PATHS, CWD, undefined, [DENY]);
+		expect(result.kind).toBe("deny");
+		if (result.kind !== "deny") throw new Error("应为 deny");
+		expect(result.reason).toContain("拒绝规则");
+	});
+
+	it("凭据目录不可被 allow 规则放行：.ssh 写 allow 也放不进（规则阶段在阶段 1 之后）", () => {
+		const SSH_ALLOW: PermissionRule = { tool: "read", prefix: join(HOME, ".ssh"), action: "allow" };
+		expect(
+			decide(facts({ toolName: "read", path: join(HOME, ".ssh", "id_rsa") }), PATHS, CWD, undefined, [SSH_ALLOW])
+				.kind,
+		).toBe("deny");
+	});
+
+	it("非绝对路径 prefix 的规则不影响判定：区外读维持低风险询问", () => {
+		const RELATIVE: PermissionRule = { tool: "read", prefix: "shared", action: "allow" };
+		expect(
+			decide(facts({ toolName: "read", path: join(CONTAINER, "a.md") }), PATHS, CWD, undefined, [RELATIVE]),
+		).toMatchObject({ kind: "ask", risk: "low" });
+	});
+});

@@ -67,6 +67,15 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 	const writeBackPrefix =
 		request.toolName === "powershell" ? firstTokenPrefix(request.details) : undefined;
 
+	/*
+	 * 区外读的路径写回（spec: extend-permission-rules-to-paths Task 2）：
+	 * 「目标在凭据/配置目录内不显示」需要禁区路径知识，renderer 拿不到 ——
+	 * 由 daemon 侧（权限门）判定资格后才带上 writeBackPath，这里只做展示。
+	 * 勾选允许后把原值回填进 rememberPrefix，daemon 回程会再复核一遍。
+	 * 与上面 powershell 的首词写回天然互斥：同一请求的工具名只会命中一边。
+	 */
+	const writeBackPath = request.writeBackPath;
+
 	return (
 		<div className="modal-backdrop">
 			<div
@@ -122,6 +131,13 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 			</label>
 		)}
 
+			{writeBackPath !== undefined && (
+				<label className="check permission-remember">
+					<input type="checkbox" checked={rememberRule} onChange={(e) => setRememberRule(e.target.checked)} />
+					以后都允许读取此路径（及子目录）
+				</label>
+			)}
+
 			<div className="permission-actions">
 				<button ref={denyRef} type="button" className="mini-btn danger" onClick={() => onDecide("deny", false)}>
 					拒绝
@@ -130,7 +146,10 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 					ref={allowRef}
 					type="button"
 					className="primary-btn"
-					onClick={() => onDecide("allow", remember, rememberRule ? writeBackPrefix : undefined)}
+					onClick={() =>
+						// 两种写回天然互斥（见上方 writeBackPath 注释）：哪个存在就回填哪个。
+						onDecide("allow", remember, rememberRule ? (writeBackPrefix ?? writeBackPath) : undefined)
+					}
 				>
 					允许
 				</button>

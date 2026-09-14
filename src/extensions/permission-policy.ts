@@ -19,8 +19,10 @@
  *   0. 记忆文件白名单（MEMORY.md / PROFILE.md / cwd 的 .kamibuddy/memory/**）
  *      —— 纯数据，文件工具一律放行，任何档位不拦
  *   1. 受保护凭据路径（读或写都拒）—— 任何模式都不能越过
- *   2. 只读工具：无本地路径的一律放行；有路径的在工作区内放行，
- *      区外低风险询问（danger-full-access 不受限）
+ *   2. 只读工具：无本地路径的一律放行；有路径的按
+ *      路径规则 deny → 工作区内放行 → resourcesDir 放行 →
+ *      danger-full-access 放行 → 路径规则 allow → 区外低风险询问
+ *      的顺序判（spec: extend-permission-rules-to-paths）
  *   3. 沙箱模式的范围约束（read-only 拒一切写与命令）
  *   4. 工具种类（shell 任何档都问 —— 但 powershell 先过持久前缀规则：
  *      全段 allow → 放行、任一段 deny → 直拒、无命中维持高风险询问，
@@ -54,11 +56,12 @@
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	DEFAULT_PERMISSIONS,
+	LOCAL_READ_TOOLS,
 	resolveAsk,
 	type PermissionSettings,
 	type SandboxMode,
 } from "../shared/permissions.ts";
-import { evaluateCommand, type PermissionRule } from "./permission-rules.ts";
+import { evaluateCommand, evaluatePathRules, type PermissionRule } from "./permission-rules.ts";
 
 /** 判定结果。ask 时需要弹窗，deny 时直接拒绝并把 reason 回给模型。 */
 export type PermissionDecision =
@@ -166,7 +169,7 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
  * WorkBuddy 对这类无本地副作用的工具不询问）。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
- * （LOCAL_READ，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
+ * （LOCAL_READ_TOOLS，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
  * read_document 与 read 完全同语义（工作区内放行、区外低风险询问、凭据目录禁读）：
  * 它只是换了种解析方式，读的还是本地文件，边界不该因文件格式不同而不同。
  */
@@ -187,9 +190,6 @@ const READ_ONLY = new Set([
 	"todo_write",
 	"task",
 ]);
-
-/** 只读工具里有本地路径概念的子集：要走路径归属判定。 */
-const LOCAL_READ = new Set(["read", "read_document", "find", "grep", "ls"]);
 
 /**
  * 会改文件的内置工具。
@@ -398,14 +398,30 @@ function decideUnderMode(
 	 * 为什么区外读也要问：见文件头【2026-09-09 事故条目】。
 	 */
 	if (READ_ONLY.has(toolName)) {
-		if (!LOCAL_READ.has(toolName)) return { kind: "allow" };
+		if (!LOCAL_READ_TOOLS.has(toolName)) return { kind: "allow" };
 		if (target === undefined) return { kind: "allow" };
+		/*
+		 * 路径前缀规则（spec: extend-permission-rules-to-paths）：判定一次，
+		 * deny 与 allow 在判定链上各就各位 ——
+		 *   deny 先于「工作区内放行」：用户明示禁读的目录，就算在工作区内也拒
+		 *     （最严获胜，与 powershell 规则阶段同口径）；
+		 *   allow 在「区外低风险询问」之前：命中免问（用户信任的容器目录场景）。
+		 * 凭据禁区仍在阶段 1，规则无法越过（.ssh 写 allow 也放不进）。
+		 * 与 powershell 规则阶段的位置差异是有意的：那边排在 danger-full-access
+		 * 放行之后（完全访问就是完全访问），这边 deny 在最前 —— 禁读目录是
+		 * 用户明示的「别碰」，比档位更强。
+		 */
+		const verdict = rules === undefined ? undefined : evaluatePathRules(target, rules);
+		if (verdict !== undefined && verdict.kind === "deny") {
+			return { kind: "deny", reason: verdict.reason };
+		}
 		if (isInside(paths.workspaceDir, target)) return { kind: "allow" };
 		// 应用内置资源（技能/模板/tokens/引擎）只读放行，见 PolicyPaths.resourcesDir。
 		if (paths.resourcesDir !== undefined && isInside(paths.resourcesDir, target)) {
 			return { kind: "allow" };
 		}
 		if (mode === "danger-full-access") return { kind: "allow" };
+		if (verdict !== undefined && verdict.kind === "allow") return { kind: "allow" };
 		return {
 			kind: "ask",
 			risk: "low",

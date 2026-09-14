@@ -218,6 +218,28 @@ export interface PermissionRule {
 }
 
 /**
+ * 有本地路径概念的只读工具家族（spec: extend-permission-rules-to-paths）。
+ *
+ * 这五个工具读的都是本地文件系统，权限语义完全相同（工作区内放行、区外
+ * 低风险询问、凭据目录禁读）：路径规则用一条 `tool: "read"` 统一命中整个
+ * 家族，不逐工具名区分 —— 用户批了「这个目录以后别问」，不该因为模型下次
+ * 换 grep 而不是 read 就再问一遍。
+ *
+ * 住 shared/ 而不在 permission-policy.ts：policy 已 import 规则引擎模块
+ * （permission-rules.ts），反向 import 会构成循环依赖（与本文件收留
+ * firstTokenPrefix 同一条理由）；而批准写回校验（permission-rules.ts）、
+ * 权限门（permission-gate.ts）、判定链（permission-policy.ts）三方都要
+ * 这份名单，shared/ 是唯一各方都能到的位置。
+ */
+export const LOCAL_READ_TOOLS: ReadonlySet<string> = new Set([
+	"read",
+	"read_document",
+	"find",
+	"grep",
+	"ls",
+]);
+
+/**
  * 解析 permissions.rules.json 的正文，返回合法规则行。
  *
  * 全程降级不抛错（与 memory.ts 同口径）：规则文件是用户数据 —— 手改、

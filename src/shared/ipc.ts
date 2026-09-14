@@ -102,15 +102,13 @@ export const INVOKE = {
 	pickInputFiles: "session:pick-input-files",
 	/** 切换场景（work / code / design）。对应 WorkBuddy 的 welcomemode 轴。 */
 	setScene: "session:set-scene",
-	/** 切换交互模式（ask / craft / plan / expert）。对应 interactionmode 轴。 */
+	/** 切换交互模式（ask / craft / plan）。对应 interactionmode 轴。 */
 	setInteraction: "session:set-interaction",
 	/**
-	 * 选择专家（绑定即进入 expert 模式）或清除专家（undefined）。
+	 * 选择专家（绑定人格）或清除专家（undefined）。
 	 *
-	 * 选专家 = 切 expert 模式 + 绑定人格，是同一个状态转移，所以单入口在这里
-	 * 而不是让 renderer 先 setInteraction("expert") 再补 expertId —— 那样会
-	 * 存在「expert 模式但没人格」的中间态（spec: add-expert-mode，
-	 * 无专家的 expert 模式不可达）。
+	 * 专家是与交互模式**正交**的会话绑定（spec: rework-expert-orthogonal-and-skills）：
+	 * 本通道只读写 expertId，不改交互模式；setInteraction 也不清 expertId。
 	 */
 	setExpert: "session:set-expert",
 	/**
@@ -324,9 +322,9 @@ export const INVOKE = {
 	/* ── 提示词预览 ─────────────────────────────────────────────── */
 
 	/**
-	 * 现场组装系统提示词供设置页预览：按 {场景, 模式, 风格} 走
+	 * 现场组装系统提示词供设置页预览：按 {场景, 模式, 风格, 专家} 走
 	 * composePromptWithMeta 同一条组装路径（不需要活会话），
-	 * 返回带来源标注的分段与总字数。scene/mode/style 非法即 reject。
+	 * 返回带来源标注的分段与总字数。scene/mode/style/expert 非法即 reject。
 	 */
 	promptPreview: "prompt:preview",
 
@@ -705,13 +703,16 @@ export type AutomationEvent =
 	};
 
 /**
- * prompt:preview 的入参：预览三轴的选择。
+ * prompt:preview 的入参：预览四个选择器的取值。
  * styleId 三态：某风格 id = 指定风格；空串 = 关闭；缺省 = 跟随当前偏好设置。
+ * expertId 缺省 = 不选专家（专家与交互模式正交，预览可自由与任一模式组合）；
+ * 指定 id 但专家库中不存在时 daemon 响亮报错（预览是调试工具，不静默降级）。
  */
 export interface PromptPreviewRequest {
 	readonly sceneId: string;
 	readonly modeId: string;
 	readonly styleId?: string;
+	readonly expertId?: string;
 }
 
 /**
@@ -744,7 +745,7 @@ export interface InvokeMap {
 	[INVOKE.pickInputFiles]: { args: []; result: PickedInputFiles | undefined };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };
 	[INVOKE.setInteraction]: { args: [interactionId: string]; result: void };
-	/** expertId 为 undefined 表示清除专家（回落三模式，由 daemon 决定落点）。 */
+	/** expertId 为 undefined 表示清除专家；专家与交互模式正交，只改专家绑定。 */
 	[INVOKE.setExpert]: { args: [expertId: string | undefined]; result: void };
 	[INVOKE.listExperts]: { args: []; result: readonly ExpertListItem[] };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
@@ -901,6 +902,17 @@ export interface PermissionRequest {
 	 * high 时默认焦点在「拒绝」，避免用户回车误批。
 	 */
 	readonly risk: "low" | "medium" | "high";
+	/**
+	 * 区外读弹窗的路径写回资格（spec: extend-permission-rules-to-paths Task 2）。
+	 *
+	 * 只有 daemon 侧（权限门）判定「目标是绝对路径、且不在凭据/配置目录内」
+	 * 时才带这个字段 —— 「该不该显示写回选项」需要禁区路径知识，renderer
+	 * 拿不到，所以资格判定全在 daemon，renderer 只做展示：看到字段就显示
+	 * 「以后都允许读取此路径（及子目录）」，勾选允许后把原值回填进
+	 * PermissionResponse.rememberPrefix。daemon 回程仍会经
+	 * rememberRuleFromApproval 全套复核（不信任 IPC 的第二道闸）。
+	 */
+	readonly writeBackPath?: string;
 }
 
 export interface PermissionResponse {
@@ -913,11 +925,13 @@ export interface PermissionResponse {
 	 */
 	readonly remember?: boolean;
 	/**
-	 * 批准写回（spec: add-permission-rules-engine）：powershell 审批弹窗的
-	 * 「以后都允许「{首词}」开头的命令」被勾选并允许时，由 renderer 回填命令首词。
+	 * 批准写回（spec: add-permission-rules-engine / extend-permission-rules-to-paths）：
+	 * 审批弹窗的「以后都允许…」被勾选并允许时，由 renderer 回填候选前缀 ——
+	 * powershell 审批回填命令首词；区外读（read 家族）审批原样回填
+	 * PermissionRequest.writeBackPath。
 	 *
 	 * 与 remember 的区别：remember 是会话级、不落盘；本字段触发 daemon 把
-	 * `{ tool: "powershell", prefix, action: "allow" }` 追加进规则文件，跨会话生效。
+	 * 一条 allow 规则追加进规则文件，跨会话生效。
 	 * daemon 侧必须经 rememberRuleFromApproval 全套校验后才写盘 ——
 	 * 本字段来自渲染进程，只是候选，不是命令。
 	 */

@@ -1,16 +1,24 @@
 /**
  * 专家定义加载器：resources/experts/（内置）+ 用户级 getConfigDir()/experts/。
  *
- * 「能力即数据」（AGENTS.md §3）：加一个专家 = experts/ 下加一个 .md 文件，
+ * 「能力即数据」（AGENTS.md §3）：加一个专家 = experts/ 下加一个 <name>/ 目录，
  * 零行代码改动。与 agents.ts 同族，但专家是**主会话级人格**（spec:
  * add-expert-mode，WorkBuddy PluginAgentPrompt 的等价物），不是子代理——
- * 因此 frontmatter 没有 tools 字段：工具面由模式（expert 模式 = craft 同款
- * 全工具面）统一分配，专家文件只带身份（displayName/profession）与正文人格。
+ * 因此 frontmatter 没有 tools 字段：工具面由交互模式统一分配，专家文件只带
+ * 身份（displayName/profession）与正文人格。
+ *
+ * 目录布局（spec: rework-expert-orthogonal-and-skills）：专家是一个包，
+ * `<name>/expert.md` 是人设，可选的 `<name>/skills/` 装该专家私有的技能——
+ * 对齐 WorkBuddy 专家包 `agents/ + skills/` 的形状，让「估值、建模、研报流程」
+ * 这类专业方法有处安放，且只在绑定该专家时可见。
  *
  * 合并语义：用户级与内置按 name 对齐，同名用户级覆盖内置。项目级专家明确不做。
  *
  * 校验从紧（坏文件抛错而非忽略）：
- *   - frontmatter 的 name 必须与文件名一致（防改名漏改引用，与 agents/modes 同款）
+ *   - frontmatter 的 name 必须与目录名一致（防改名漏改引用，与 agents/modes 同款）
+ *   - 专家根目录出现游离的顶层 .md 文件 → 抛错：那是旧扁平布局（<name>.md）的残留，
+ *     只遍历目录会把它静默漏掉，等于专家凭空消失
+ *   - 专家目录缺 expert.md → 抛错
  *   - name/description/displayName/profession/displayDescription/quickPrompts/tags 缺失 → 抛错
  *     （displayName/profession/displayDescription 是模式菜单与对话头部的展示字段，
  *     quickPrompts 是对话页起手 chips 的数据源，tags 是专家市场页卡片 chips
@@ -19,6 +27,11 @@
  *     少了排不满、多了放不下，宽严都会让 UI 静默变形）
  *   - tags 不是恰好 3 个字符串的数组 → 抛错（与 quickPrompts 同理：
  *     卡片固定排 3 个 tag chip）
+ *   - skills/ 存在但没有任何技能子目录 → 抛错（空目录是打包/放置错误，
+ *     静默跳过会让「专家带了技能」这个承诺失效）
+ *   - 技能子目录缺 SKILL.md，或 SKILL.md 缺 name → 抛错
+ *   - 私有技能名与全局技能（resources/skills/）或其它专家的私有技能重名 → 抛错
+ *     （技能名是模型调用技能的唯一键，重名会让两边互相覆盖）
  *   - 内置目录缺失或为空 → 抛错：没有内置专家是打包错误，静默空跑等于
  *     专家菜单在真实会话里一片空白
  *   - 用户目录不存在 = 空（用户没有自定义是正常状态，不是错误）
@@ -27,6 +40,13 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
+
+/** 专家人设文件名（目录布局：<name>/expert.md）。 */
+const EXPERT_FILE = "expert.md";
+/** 专家私有技能目录名（<name>/skills/）。 */
+const SKILLS_DIR = "skills";
+/** 技能入口文件名（<name>/skills/<skill>/SKILL.md）。 */
+const SKILL_FILE = "SKILL.md";
 
 export interface ExpertDefinition {
 	readonly name: string;
@@ -44,46 +64,151 @@ export interface ExpertDefinition {
 	 * 同名用户级覆盖内置后即为 "user" —— 专家市场页「我的专家」子页靠它筛选。
 	 */
 	readonly source: "builtin" | "user";
+	/**
+	 * 私有技能目录（<name>/skills/）的绝对路径；该专家没有私有技能时为 undefined。
+	 * 会话绑定时 daemon 把它追加进 pi loadSkills 的 skillPaths（spec: 技能预加载）。
+	 */
+	readonly skillsDir?: string;
 	readonly body: string;
 }
 
-function loadExpertFile(file: string, fileName: string): Omit<ExpertDefinition, "source"> {
+/** 一个技能名与它的 SKILL.md 绝对路径——重名报错要指名两边的文件。 */
+interface SkillRef {
+	readonly name: string;
+	readonly file: string;
+}
+
+/** 加载中途的专家：def 连来源，skills 单独留一份供重名校验（不对外暴露）。 */
+interface LoadedExpert {
+	readonly def: Omit<ExpertDefinition, "source">;
+	readonly source: "builtin" | "user";
+	readonly skills: readonly SkillRef[];
+}
+
+/**
+ * 专家根目录 / 专家目录里游离的顶层 .md。README.md 是文档、expert.md 是人设本体，
+ * 都不算游离；只遍历目录（或只看 expert.md）会把这些残留静默漏掉。
+ */
+function strayMarkdown(dir: string, allowed: readonly string[]): readonly string[] {
+	return readdirSync(dir, { withFileTypes: true })
+		.filter(
+			(entry) =>
+				entry.isFile() &&
+				entry.name.endsWith(".md") &&
+				!entry.name.startsWith(".") &&
+				entry.name !== "README.md" &&
+				!allowed.includes(entry.name),
+		)
+		.map((entry) => entry.name)
+		.sort();
+}
+
+/** 读一个技能目录（<skills>/<name>/SKILL.md）的技能名。 */
+function loadSkillRef(skillDir: string): SkillRef {
+	const file = join(skillDir, SKILL_FILE);
+	if (!existsSync(file)) {
+		throw new Error(`${skillDir}: 技能目录缺少 ${SKILL_FILE}`);
+	}
 	const doc = parseFrontmatter(readFileSync(file, "utf8"), file);
-	const name = requireString(doc, "name", file);
-	if (name !== fileName.replace(/\.md$/, "")) {
-		throw new Error(`${file}: frontmatter name「${name}」与文件名不一致`);
+	return { name: requireString(doc, "name", file), file };
+}
+
+/** 收集专家私有技能（<expertDir>/skills/ 下的子目录）；没有 skills/ 目录 → 空。 */
+function loadExpertSkills(expertDir: string): readonly SkillRef[] {
+	const skillsDir = join(expertDir, SKILLS_DIR);
+	if (!existsSync(skillsDir)) return [];
+	const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+		.map((entry) => entry.name)
+		.sort();
+	if (skillDirs.length === 0) {
+		throw new Error(
+			`${skillsDir}: 专家的 skills/ 目录为空。技能必须放在 <技能名>/SKILL.md 下；没有私有技能就删掉该目录`,
+		);
+	}
+	return skillDirs.map((name) => loadSkillRef(join(skillsDir, name)));
+}
+
+/** 加载一个专家目录（<dir>/expert.md + 可选 skills/）。 */
+function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user"): LoadedExpert {
+	const innerStray = strayMarkdown(dir, [EXPERT_FILE]);
+	const stray = innerStray[0];
+	if (stray !== undefined) {
+		throw new Error(
+			`${join(dir, stray)}: 专家已改为目录布局，请把 ${join(dir, stray)} 移到 ${join(dir, EXPERT_FILE)}`,
+		);
+	}
+	const expertFile = join(dir, EXPERT_FILE);
+	if (!existsSync(expertFile)) {
+		throw new Error(`${dir}: 专家目录缺少 ${EXPERT_FILE}`);
+	}
+	const doc = parseFrontmatter(readFileSync(expertFile, "utf8"), expertFile);
+	const name = requireString(doc, "name", expertFile);
+	if (name !== dirName) {
+		throw new Error(`${expertFile}: frontmatter name「${name}」与目录名「${dirName}」不一致`);
 	}
 	// 字段校验按声明顺序逐个进行：坏文件报错时从前往后指，人与测试都好定位。
-	const description = requireString(doc, "description", file);
-	const displayName = requireString(doc, "displayName", file);
-	const profession = requireString(doc, "profession", file);
-	const displayDescription = requireString(doc, "displayDescription", file);
-	const quickPrompts = requireStringArray(doc, "quickPrompts", file);
+	const description = requireString(doc, "description", expertFile);
+	const displayName = requireString(doc, "displayName", expertFile);
+	const profession = requireString(doc, "profession", expertFile);
+	const displayDescription = requireString(doc, "displayDescription", expertFile);
+	const quickPrompts = requireStringArray(doc, "quickPrompts", expertFile);
 	if (quickPrompts.length !== 3) {
-		throw new Error(`${file}: frontmatter「quickPrompts」必须恰好 3 个起手问题，当前 ${quickPrompts.length} 个`);
+		throw new Error(`${expertFile}: frontmatter「quickPrompts」必须恰好 3 个起手问题，当前 ${quickPrompts.length} 个`);
 	}
-	const tags = requireStringArray(doc, "tags", file);
+	const tags = requireStringArray(doc, "tags", expertFile);
 	if (tags.length !== 3) {
-		throw new Error(`${file}: frontmatter「tags」必须恰好 3 个关键词，当前 ${tags.length} 个`);
+		throw new Error(`${expertFile}: frontmatter「tags」必须恰好 3 个关键词，当前 ${tags.length} 个`);
 	}
+	const skills = loadExpertSkills(dir);
 	return {
-		name,
-		description,
-		displayName,
-		profession,
-		displayDescription,
-		quickPrompts,
-		tags,
-		body: doc.body,
+		def: {
+			name,
+			description,
+			displayName,
+			profession,
+			displayDescription,
+			quickPrompts,
+			tags,
+			...(skills.length > 0 ? { skillsDir: join(dir, SKILLS_DIR) } : {}),
+			body: doc.body,
+		},
+		source,
+		skills,
 	};
 }
 
-/** 按文件名序加载一个目录下的全部 .md 定义，并盖上来源章。 */
-function loadExpertsDir(dir: string, source: "builtin" | "user"): ExpertDefinition[] {
-	return readdirSync(dir)
-		.filter((name) => name.endsWith(".md") && !name.startsWith("."))
+/** 按目录名序加载一个专家库目录下的全部专家，并盖上来源章。 */
+function loadExpertsDir(dir: string, source: "builtin" | "user"): LoadedExpert[] {
+	// 根级游离 .md = 旧扁平布局（<name>.md）残留，先响亮报错再遍历目录。
+	const rootStray = strayMarkdown(dir, []);
+	const stray = rootStray[0];
+	if (stray !== undefined) {
+		throw new Error(
+			`${join(dir, stray)}: 专家已改为目录布局，请把 ${join(dir, stray)} 移到 ${join(dir, stray.replace(/\.md$/, ""), EXPERT_FILE)}`,
+		);
+	}
+	return readdirSync(dir, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+		.map((entry) => entry.name)
 		.sort()
-		.map((name) => ({ ...loadExpertFile(join(dir, name), name), source }));
+		.map((name) => loadExpertDir(join(dir, name), name, source));
+}
+
+/**
+ * 全局技能（resources/skills/）的技能名与 SKILL.md 路径，供重名校验。
+ *
+ * 没有 SKILL.md 的子目录跳过——那是技能加载模块的职责，这里不越界报错
+ * （skill 目录里还有 agents/ engines/ 这类非技能子目录）。
+ */
+function loadGlobalSkills(globalSkillsDir: string): readonly SkillRef[] {
+	if (!existsSync(globalSkillsDir)) return [];
+	return readdirSync(globalSkillsDir, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+		.map((entry) => join(globalSkillsDir, entry.name, SKILL_FILE))
+		.filter((file) => existsSync(file))
+		.map((file) => ({ name: requireString(parseFrontmatter(readFileSync(file, "utf8"), file), "name", file), file }))
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /**
@@ -91,8 +216,13 @@ function loadExpertsDir(dir: string, source: "builtin" | "user"): ExpertDefiniti
  *
  * @param resourcesExpertsDir 内置目录（resources/experts），缺失或为空抛错
  * @param userExpertsDir 用户级目录（getConfigDir()/experts），不存在视为空
+ * @param globalSkillsDir 全局技能目录（resources/skills），用于私有技能重名校验
  */
-export function loadExperts(resourcesExpertsDir: string, userExpertsDir: string): readonly ExpertDefinition[] {
+export function loadExperts(
+	resourcesExpertsDir: string,
+	userExpertsDir: string,
+	globalSkillsDir: string,
+): readonly ExpertDefinition[] {
 	if (!existsSync(resourcesExpertsDir)) {
 		throw new Error(`内置专家目录缺失：${resourcesExpertsDir}。这是打包错误——没有内置专家，专家模式无可用人格`);
 	}
@@ -103,10 +233,25 @@ export function loadExperts(resourcesExpertsDir: string, userExpertsDir: string)
 
 	const user = existsSync(userExpertsDir) ? loadExpertsDir(userExpertsDir, "user") : [];
 
-	// Map 保序：内置按文件名序先入，用户级同名覆盖（值替换、位置不变），
-	// 用户独有的追加在后。目录内不会有重名——name 强制等于文件名，文件名本身唯一。
-	const byName = new Map<string, ExpertDefinition>();
-	for (const def of builtin) byName.set(def.name, def);
-	for (const def of user) byName.set(def.name, def);
-	return [...byName.values()];
+	// Map 保序：内置按目录名序先入，用户级同名覆盖（值替换、位置不变），
+	// 用户独有的追加在后。
+	const byName = new Map<string, LoadedExpert>();
+	for (const loaded of builtin) byName.set(loaded.def.name, loaded);
+	for (const loaded of user) byName.set(loaded.def.name, loaded);
+
+	// 重名校验：先占位全局技能，再逐个专家登记私有技能；命中即报错并带两边路径。
+	// 在合并后的最终集合上校验：被用户级覆盖掉的内置专家不参与（它的技能也不生效）。
+	const claimed = new Map<string, string>();
+	for (const ref of loadGlobalSkills(globalSkillsDir)) claimed.set(ref.name, ref.file);
+	for (const loaded of byName.values()) {
+		for (const ref of loaded.skills) {
+			const other = claimed.get(ref.name);
+			if (other !== undefined) {
+				throw new Error(`技能名「${ref.name}」重复：${ref.file} 与 ${other}`);
+			}
+			claimed.set(ref.name, ref.file);
+		}
+	}
+
+	return [...byName.values()].map((loaded) => ({ ...loaded.def, source: loaded.source }));
 }
