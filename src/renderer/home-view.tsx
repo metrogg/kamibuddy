@@ -19,12 +19,14 @@ import { PlusMenu } from "./plus-menu.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
+	IconClipboard,
 	IconClose,
 	IconDoc,
 	IconMic,
 	IconRefresh,
 	IconResearch,
 	IconSlide,
+	IconUser,
 	IconWeb,
 	IconWorkspace,
 } from "./icons.tsx";
@@ -93,17 +95,20 @@ const CAPABILITIES = [
 interface PracticeCase {
 	readonly title: string;
 	readonly prompt: string;
-	/** 封面渐变，对应 CSS 类 case-cover-N。 */
-	readonly cover: number;
+	/**
+	 * 封面图标（体裁语义）：颜色不编码信息（6 组随机 pastel 渐变是全站唯一的
+	 * AI slop 特征，已废弃），内容类型改由图标编码，底色统一 --bg-raised。
+	 */
+	readonly icon: typeof IconDoc;
 }
 
 const PRACTICE_CASES: readonly PracticeCase[] = [
-	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", cover: 0 },
-	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", cover: 1 },
-	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", cover: 2 },
-	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", cover: 3 },
-	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", cover: 4 },
-	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", cover: 5 },
+	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", icon: IconDoc },
+	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", icon: IconResearch },
+	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", icon: IconChart },
+	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", icon: IconSlide },
+	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", icon: IconClipboard },
+	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", icon: IconUser },
 ];
 
 const PAGE_SIZE = 4;
@@ -204,7 +209,7 @@ export function HomeView({
 							<Composer
 								ref={composerRef}
 								ready={ready}
-								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令" : "引擎启动中…"}
+								placeholder={ready ? "今天想做点什么？@ 引用文件，/ 调用技能与指令…" : "正在准备…"}
 								rows={3}
 								cwd={cwd}
 								modelId={modelId}
@@ -266,7 +271,7 @@ export function HomeView({
 						<div className="case-grid">
 							{visibleCases.map((c) => (
 								<button key={c.title} type="button" className="case-card" onClick={() => composerRef.current?.setText(c.prompt)}>
-									<span className={`case-cover case-cover-${c.cover}`} />
+									<span className="case-cover"><c.icon size={28} /></span>
 									<span className="case-title">{c.title}</span>
 								</button>
 							))}

@@ -78,12 +78,12 @@ interface SidebarProps {
 }
 
 const NAV_ITEMS = [
-	{ icon: IconAssistant, label: "助理" },
-	{ icon: IconProject, label: "项目" },
-	{ icon: IconSkill, label: "专家·技能·连接器" },
-	{ icon: IconAutomation, label: "自动化" },
-	{ icon: IconLibrary, label: "资料库" },
-	{ icon: IconMore, label: "更多" },
+	{ icon: IconAssistant, label: "助理", ready: false },
+	{ icon: IconProject, label: "项目", ready: false },
+	{ icon: IconSkill, label: "专家·技能·连接器", ready: true },
+	{ icon: IconAutomation, label: "自动化", ready: true },
+	{ icon: IconLibrary, label: "资料库", ready: false },
+	{ icon: IconMore, label: "更多", ready: false },
 ] as const;
 
 /** 任务区默认露出的条数，其余收进「查看更多 (N)」。 */
@@ -448,16 +448,18 @@ export function Sidebar({
 			</button>
 
 			<nav className="sidebar-nav">
-				{NAV_ITEMS.map(({ icon: Icon, label }) => (
+				{NAV_ITEMS.map(({ icon: Icon, label, ready }) => (
 					<button
 						key={label}
 						type="button"
-						className="nav-item"
+						// 未实现项降灰 + 提示：占位展示≠可用，视觉要诚实（点击仍走 onTodo toast）。
+						className={ready ? "nav-item" : "nav-item nav-item-pending"}
+						title={ready ? undefined : "随版本迭代开放"}
 						onClick={() => {
-							// 已点亮的能力走真实入口，其余统一「待做」（同技能入口的先例）。
-							if (label === "专家·技能·连接器") onOpenSkills();
+							// ready 是点击分发的唯一事实源：点亮走真实入口，其余统一「待做」。
+							if (!ready) onTodo(label);
+							else if (label === "专家·技能·连接器") onOpenSkills();
 							else if (label === "自动化") onOpenAutomations();
-							else onTodo(label);
 						}}
 					>
 						<Icon size={16} />
@@ -520,7 +522,8 @@ export function Sidebar({
 				<span className={`link-dot link-dot-${link.kind}`} />
 				<span className="footer-text">
 					{link.kind === "connecting" && "正在启动…"}
-					{link.kind === "ready" && "引擎已就绪"}
+					{/* 「引擎」是系统构造视角，不搬给用户。 */}
+					{link.kind === "ready" && "已就绪"}
 					{link.kind === "down" && `已断开：${link.reason}`}
 				</span>
 				{/* 设置是真能用的入口，不走 onTodo。放在底部与 WorkBuddy 的位置一致。 */}

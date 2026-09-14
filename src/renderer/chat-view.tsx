@@ -13,7 +13,7 @@ import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
-import type { ConversationEntry, ModeDescriptor, RunId, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import type { ConversationEntry, ModeDescriptor, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
@@ -484,7 +484,7 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 			    生成中是流式实时计数，执行成功后是终值，同一个字段两个口径。
 			    个性化「展示文件变更过程详情」只藏生成中的过程计数（off 时），
 			    完成态终值不受影响 —— 终值是结果信息不是过程详情。 */}
-			{card.change !== undefined && (showChangeDetails || card.generating !== true) && (
+				{card.change !== undefined && (showChangeDetails || card.generating !== true) && (
 					<span className="tool-change">
 						<span className="added">+{card.change.added}</span>
 						<span className="removed">-{card.change.removed}</span>
@@ -728,6 +728,35 @@ function pendingText(entries: readonly ConversationEntry[]): string {
 		if (entry.role === "user") return "等待模型响应…";
 	}
 	return "等待模型响应…";
+}
+
+/**
+ * 重试状态行（auto_retry 全程可见，spec: add-observability-ledger）：
+ * 「响应失败，N 秒后第 X/Y 次重试」。琥珀（--warning）表「出错但在自愈」，
+ * --danger 留给终态错误卡。倒计时以 retryAt 为准（reducer 打点，两端共用
+ * 折叠不受 IPC 延迟影响），500ms tick、clamp 到 0。
+ */
+function RetryPendingLine({ retry }: { readonly retry: RunRetryState }): React.JSX.Element {
+	const [remainMs, setRemainMs] = useState(() => Math.max(0, retry.retryAt - Date.now()));
+	useEffect(() => {
+		const timer = window.setInterval(() => {
+			setRemainMs(Math.max(0, retry.retryAt - Date.now()));
+		}, 500);
+		return () => window.clearInterval(timer);
+	}, [retry.retryAt]);
+	const seconds = Math.ceil(remainMs / 1000);
+	return (
+		<div className="stream-retry" role="status">
+			<span>
+				响应失败，{seconds > 0 ? `${seconds} 秒后` : "即将"}第 {retry.attempt}/{retry.maxAttempts} 次重试
+			</span>
+			{retry.errorMessage !== undefined && (
+				<span className="stream-retry-reason" title={retry.errorMessage}>
+					{retry.errorMessage}
+				</span>
+			)}
+		</div>
+	);
 }
 
 /* ── 等待首响应：安抚文案 + tips 轮播 ────────────────────────────── */
@@ -1645,6 +1674,11 @@ export function ChatView({
 	const streamTail = (
 		<>
 			{/*
+				重试行位序在等待行之上：它是进行中最具体的信息（第几次、何时再来、
+				为什么），欢迎语/tips 是泛化的陪伴。重试清态后自然回落正常等待行。
+			*/}
+			{streaming && conversation.retry !== undefined && <RetryPendingLine retry={conversation.retry} />}
+			{/*
 				状态行只在流式期间存在，主文案恒定扫光（全局唯一「进行中」语言）。
 				等待首响应阶段（最后一条 entry 是 user）升级为 WaitingPendingLine：
 				4s 出 tips、8s 切安抚文案；其余阶段维持单行扫光。
@@ -1657,6 +1691,10 @@ export function ChatView({
 						<span className="text-shimmer">{pendingText(entries)}</span>
 					</div>
 				))}
+			{/* steer/followUp 排队指示（queue_changed 折叠）：只给计数不展示队列内容。 */}
+			{streaming && conversation.queueCount !== undefined && conversation.queueCount > 0 && (
+				<div className="stream-queue">{conversation.queueCount} 条消息排队中</div>
+			)}
 			{/*
 			产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
 			WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
@@ -1889,7 +1927,7 @@ export function ChatView({
 						<Composer
 							ref={composerRef}
 							ready={ready}
-							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "引擎启动中…"}
+							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "正在准备…"}
 							rows={2}
 							cwd={conversation.state.cwd}
 							modelId={conversation.state.modelId}

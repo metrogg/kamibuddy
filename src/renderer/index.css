@@ -1358,47 +1358,25 @@ textarea:focus-visible {
 	transition: transform 0.18s ease;
 }
 
-.case-card:hover {
-	/* WB hover：整卡上浮 2px，阴影只落在封面上（不起整卡阴影）。 */
-	transform: translateY(-2px);
-}
-
-.case-card:hover .case-cover {
-	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
-}
-
 .case-cover {
-	display: block;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	width: 100%;
 	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 8% 黑描边。 */
 	aspect-ratio: 16 / 9;
 	border: 0.5px solid rgba(0, 0, 0, 0.08);
 	border-radius: var(--radius-lg);
-	transition: box-shadow 0.18s ease;
+	/* 封面 = 体裁语义图标 + 统一单色底：颜色不编码信息（旧 6 组随机 pastel
+	   135° 渐变是全站唯一的 AI slop 特征，已删除），内容类型由图标编码。 */
+	background: var(--bg-raised);
+	color: var(--text-dim);
+	transition: background 0.18s ease;
 }
 
-.case-cover-0 {
-	background: linear-gradient(135deg, #dfe9ff, #f6e6ff);
-}
-
-.case-cover-1 {
-	background: linear-gradient(135deg, #dff5e3, #e8f7ff);
-}
-
-.case-cover-2 {
-	background: linear-gradient(135deg, #fff0db, #ffe3e3);
-}
-
-.case-cover-3 {
-	background: linear-gradient(135deg, #e3f0ff, #d8f5f0);
-}
-
-.case-cover-4 {
-	background: linear-gradient(135deg, #f3e8ff, #e0edff);
-}
-
-.case-cover-5 {
-	background: linear-gradient(135deg, #e8ecff, #fff4de);
+/* hover 无上浮无阴影（与 task-item 等全站卡片 hover 语言一致）：封面底色加深一档。 */
+.case-card:hover .case-cover {
+	background: var(--bg-hover);
 }
 
 .case-title {
@@ -4036,6 +4014,67 @@ textarea:focus-visible {
 	margin: 0;
 	color: var(--text-dim);
 	font-size: 13px;
+}
+
+/* ── 设置模态卡（WorkBuddy 式：左 nav + 右内容）────────────────── */
+/* 定高：nav 切换分组时卡片高度不随内容抖动。白底用 var(--bg)，与既有
+   全部模态卡（permission-card / save-space / auto-form）同一口径。 */
+.settings-card {
+	position: relative;
+	display: flex;
+	width: 100%;
+	max-width: 880px;
+	height: min(680px, calc(100vh - 48px));
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
+	overflow: hidden;
+}
+
+.settings-card-close {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	z-index: 1;
+}
+
+.settings-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 0 0 auto;
+	min-width: 148px;
+	padding: 20px 12px;
+	border-right: 1px solid var(--border);
+	background: var(--bg-raised);
+	overflow-y: auto;
+}
+
+.settings-nav-item {
+	padding: 7px 12px;
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
+	text-align: left;
+	color: var(--text-dim);
+}
+
+.settings-nav-item:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.settings-nav-item.active {
+	background: var(--bg-hover);
+	color: var(--text);
+	font-weight: 600;
+}
+
+.settings-panel {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 24px 28px 32px;
 }
 
 .settings-section {
@@ -6963,4 +7002,308 @@ textarea:focus-visible {
 	line-height: 1.5;
 	color: var(--warning);
 	background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+}
+
+/* ── 死导航降灰（spec: polish-ui-a11y-and-aesthetics）────────────── */
+/* 占位展示≠可用，视觉要诚实：图标 currentColor 随文字一起淡。 */
+.nav-item-pending {
+	color: var(--text-faint);
+}
+
+/* ── 设置页通用下拉与供应商 picker（替代原生 select）────────────── */
+/* 原生 select 的展开态是操作系统绘制的（蓝底高亮、粗滚动条），与全站
+   自定义菜单两个画风；这里统一 trigger + 面板 + hover 底 + 选中 ✓。 */
+.provider-select {
+	position: relative;
+}
+
+.provider-select-trigger {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.provider-select-trigger:hover {
+	border-color: var(--text-dim);
+}
+
+.provider-select-label {
+	flex: 1 1 auto;
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.provider-select-trigger.placeholder .provider-select-label {
+	color: var(--text-faint);
+}
+
+.provider-select-panel {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	right: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	max-height: 280px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-card);
+	overflow: hidden;
+}
+
+.provider-select-search {
+	padding: 8px;
+	border-bottom: 1px solid var(--border);
+}
+
+.provider-select-search input {
+	width: 100%;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+}
+
+.provider-select-list {
+	overflow-y: auto;
+}
+
+.provider-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 12px;
+	border: none;
+	background: none;
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.provider-option:hover {
+	background: var(--bg-hover);
+}
+
+.provider-option-name {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 末位「自定义」与预置清单隔开：它是动作（开自建表单），不是一家服务商。 */
+.provider-option.custom {
+	border-top: 1px solid var(--border);
+	color: var(--text-dim);
+}
+
+.provider-select-empty {
+	margin: 0;
+	padding: 10px 12px;
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+/* SelectField 外壳：trigger/panel/option 视觉与供应商 picker 共用，
+   这里只补外壳宽度与选中 ✓ 的位置。 */
+.select-field {
+	position: relative;
+	flex: 0 0 auto;
+	min-width: 160px;
+	max-width: 280px;
+}
+
+.select-field .provider-select-trigger {
+	justify-content: space-between;
+}
+
+.select-field-check {
+	flex: 0 0 auto;
+	color: var(--ok);
+}
+
+/* 弹层在添加模型卡里改静态排布（绝对定位会被卡片 overflow 裁掉），
+   SelectField 在设置面板里保持绝对定位浮层。 */
+.add-model-card .provider-select-panel {
+	position: static;
+	margin-top: 4px;
+	max-height: 240px;
+	box-shadow: none;
+}
+
+/* ── 添加模型弹层（spec: rework-settings-layout）────────────────── */
+/* 嵌在设置卡里的二级弹层：背板直接复用 .modal-backdrop（其 z-index 在设置卡的
+   stacking context 内部生效）。卡片与 permission-card 同尺寸语言。 */
+.add-model-card {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	width: 100%;
+	max-width: 560px;
+	/* min-height 兜底：只显示「选供应商」一行时卡片不显得局促；
+	   max-height 给足高度，供应商面板（静态排布）与字段组不互相挤。 */
+	min-height: 320px;
+	max-height: calc(100vh - 64px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 18px 20px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
+}
+
+.add-model-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.add-model-head h2 {
+	margin: 0;
+	flex: 1 1 auto;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+/* 禁保存原因顶在按钮组左侧，与右对齐的 取消/保存 同行。 */
+.add-model-block {
+	flex: 1 1 auto;
+	align-self: center;
+}
+
+/* ── 模型菜单：推理强度行与档位子菜单 ─────────────────────────── */
+.model-menu-thinking-zone {
+	position: relative;
+}
+
+.model-menu-thinking {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	padding: 7px 10px;
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	text-align: left;
+}
+
+.model-menu-thinking:hover {
+	background: var(--bg-hover);
+}
+
+.model-menu-thinking-current {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-dim);
+	font-size: 12px;
+}
+
+.model-menu-thinking-caret {
+	font-size: 13px;
+}
+
+/* 子菜单向左飞出：模型菜单自身靠右贴边，向右飞会出视口。 */
+.model-menu-levels {
+	top: 0;
+	right: calc(100% + 4px);
+	z-index: 21;
+	min-width: 120px;
+	padding: 4px;
+}
+
+.model-menu-level-item {
+	position: relative;
+	display: block;
+	width: 100%;
+	padding: 6px 26px 6px 10px;
+	border-radius: var(--radius-sm);
+	font-size: 12px;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.model-menu-level-item:hover {
+	background: var(--bg-hover);
+}
+
+/* ── 个性化页控件（spec: rework-settings-layout）────────────────── */
+/* 称呼与身份三行纵向排。 */
+.identity-fields {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+/* 人设/人格描述输入区：比画像（profile-textarea）矮一档——人设是一两句定位，
+   画像是蒸馏出来的长文。 */
+.persona-textarea {
+	min-height: 72px;
+}
+
+/* 自定义指令的字数计数：右对齐独立行，不叠进输入区（叠进去会压正文）。 */
+.textarea-count {
+	margin-top: 4px;
+	text-align: right;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+/* 长期记忆查看态：div 挂 profile-textarea 同档视觉，补 pre-wrap + 框内滚动
+   （div 不像 textarea 天然保留换行）。 */
+.profile-view {
+	white-space: pre-wrap;
+	overflow-y: auto;
+}
+
+/* ── 重试状态行与排队徽标（spec: add-observability-ledger）───────── */
+/* 琥珀（--warning）表「出错但在自愈」，--danger 留给终态错误卡。 */
+.stream-retry {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 4px 0;
+	font-size: 13px;
+	color: var(--warning);
+}
+
+.stream-retry-reason {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.stream-queue {
+	display: inline-flex;
+	align-items: center;
+	align-self: flex-start;
+	margin-top: 4px;
+	padding: 2px 10px;
+	border-radius: var(--radius-sm);
+	background: var(--bg-raised);
+	font-size: 12px;
+	color: var(--text-dim);
 }
