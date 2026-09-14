@@ -35,6 +35,32 @@
 - PowerShell 工具在本会话**不回传 stdout**，别用它取输出。
 - 跑 Electron 必须用 `npm run dev` / `npm start`（包装脚本会剔除
   `ELECTRON_RUN_AS_NODE`），不要 `npx electron .`。
+- **`npx` 在本会话不可靠**（`npx vitest` 会牵扯被安全策略拦的 `wsl.exe`，输出乱码）。
+  一律直呼本地入口：vitest → `node node_modules/vitest/vitest.mjs run [file]`、
+  tsc → `node node_modules/typescript/lib/tsc.js --noEmit`、
+  tsx → `node node_modules/tsx/dist/cli.mjs <script>`、
+  electron-vite → `node node_modules/electron-vite/bin/electron-vite.js build`。
+- **逆向 WorkBuddy 大包（22MB `codebuddy.js`）不要用 grep**：minified 长行会被
+  Grep 工具整个吞成 `[Omitted long matching line]`。写个临时 node 脚本
+  `indexOf` + `slice` 打印上下文，查完删掉。
+
+## 运行时的「两套数据源」（2026-09-14 定）
+
+同一个会话有两份可读记录，**按用途选，别混**：
+
+- **会话 JSONL**（`~/.kamibuddy/sessions/*.jsonl`）：消息正文 + 按条的
+  `model` / `usage` / `timestamp`。**跨会话的历史事实看这里**（覆盖全历史，
+  含早于台账存在的旧会话）。检索、使用统计都读它。
+- **运行台账**（`logs/runs/<sessionId>.jsonl`）：只有 pi 不记的
+  （计时 / TTFT / 重试 / 请求快照 / 队列 / run 边界），**没有**按条的 model 与 usage。
+
+## 使用统计（spec add-usage-stats，2026-09-14）
+
+- 统计页 `renderer/stats-view.tsx` ← `daemon/usage-stats.ts` ← 会话 JSONL；
+  契约与热力图网格纯函数在 `shared/usage-stats.ts`（网格必须单源，两端不许各算一份）。
+- 对标对象 WorkBuddy 的 `/stats` 是 **CLI TUI 面板 + HTTP API**，**桌面端没有这个界面**；
+  逆向证据表在 `.trae/specs/add-usage-stats/spec.md`（别再重查一遍）。
+- 会计口径的关键不对称：子代理会话从会话维度排除，但**它的 token/费用照算**。
 
 ## 完成后必跑
 

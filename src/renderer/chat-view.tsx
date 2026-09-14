@@ -35,7 +35,7 @@ import {
 } from "./icons.tsx";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
-import { ExpertAvatar } from "./expert-avatar.tsx";
+import { ExpertChip } from "./expert-chip.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
@@ -1066,38 +1066,6 @@ function QuickPromptChips({
 				</button>
 			))}
 		</div>
-	);
-}
-
-/* ── 当前专家 chip（composer-bar 左区） ─────────────────────────── */
-
-/**
- * composer-bar 左区的当前专家 chip（WorkBuddy cr-chip 同款，位置在默认权限旁）：
- * 静态不可点（role=status，不挂点击）；hover/focus-within 时头像原位换成 ×，
- * 点击取消选中 —— onClear 走 setExpert(undefined)，只清专家、不动交互模式。
- * 两态切换纯 CSS 实现（见 index.css .expert-chip），这里没有状态。
- */
-function ExpertChip({
-	expert,
-	onClear,
-}: {
-	readonly expert: ExpertListItem;
-	readonly onClear: () => void;
-}): React.JSX.Element {
-	return (
-		<span className="expert-chip" role="status" title={`当前专家：${expert.displayName}`}>
-			<ExpertAvatar displayName={expert.displayName} />
-			<button
-				type="button"
-				className="expert-chip-close"
-				aria-label={`取消选中专家 ${expert.displayName}`}
-				title="取消选中"
-				onClick={onClear}
-			>
-				×
-			</button>
-			<span className="expert-chip-name">{expert.displayName}</span>
-		</span>
 	);
 }
 

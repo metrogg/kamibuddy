@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "../core/agents.ts";
-import { getConfigDir, getResourcesDir } from "../core/config-paths.ts";
+import { getAppDir, getConfigDir, getResourcesDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import { composeSubagentPrompt } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -273,7 +273,7 @@ function buildSubagentExtensions(
 				workspaceDir: cwd,
 				configDir: getConfigDir(),
 				protectedDirs: deps.protectedDirs,
-			appDir: process.cwd(),
+			appDir: getAppDir(),
 			// 内置资源只读放行（技能渐进加载全靠 read 这里）。
 			resourcesDir: getResourcesDir(),
 			},

@@ -18,6 +18,7 @@ import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot, RunLedgerEntry } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
+import type { UsageStats } from "./usage-stats.ts";
 import type {
 	CustomModelInput,
 	CustomProviderInput,
@@ -380,6 +381,16 @@ export const INVOKE = {
 	 * 会话事件本身就是「该刷新了」的信号，多开一条通道只是重复投递。
 	 */
 	statsSnapshot: "stats:snapshot",
+	/**
+	 * 拉取跨会话使用统计（spec: add-usage-stats）：全历史会话数/消息数/用量/
+	 * 连续活跃天数/每日活动与 token/模型与工具排行。统计页的数据源。
+	 *
+	 * 与 statsSnapshot 的分工：statsSnapshot 是「本进程 + 台账全历史」的运行侧
+	 * 聚合（轮次、缓存、时间线），这里读的是**会话文件全历史**的使用侧聚合
+	 * （含早于台账存在的旧会话）。无参数、无时间范围 —— 与 WorkBuddy 的
+	 * `/api/v1/stats` 同口径。
+	 */
+	usageStats: "stats:usage",
 	/**
 	 * 拉取运行台账（run ledger）条目级数据：诊断页「会话时间线」的数据源。
 	 *
@@ -819,6 +830,7 @@ export interface InvokeMap {
 	[INVOKE.mcpServerToggle]: { args: [serverName: string, enabled: boolean]; result: void };
 
 	[INVOKE.statsSnapshot]: { args: []; result: ObservabilitySnapshot };
+	[INVOKE.usageStats]: { args: []; result: UsageStats };
 	[INVOKE.runLedger]: { args: [sessionId?: string]; result: RunLedgerResult };
 	/** 尚未注册过（查询早于 whenReady 流程）时为 undefined。 */
 	[INVOKE.globalShortcutStatus]: { args: []; result: GlobalShortcutStatus | undefined };

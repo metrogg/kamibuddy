@@ -82,6 +82,25 @@ export function getResourcesDir(): string {
 }
 
 /**
+ * 应用自身目录（工作空间守卫要拒的那个「应用目录」）。
+ *
+ * **不能用 process.cwd()**：daemon 是 utilityProcess，cwd 继承 Electron 主进程的
+ * 启动目录 —— dev 下碰巧是项目根，换种启动方式（快捷方式、从别的目录起 electron）
+ * 或打包后就会变成任意目录（System32 都可能）。而这个值是安全边界的输入：
+ * workspace 守卫拿它拒「把应用目录设为工作空间」，值漂了要么误伤一片无关目录、
+ * 要么保护不到真正的安装目录 —— 后者等于边界失效，比误伤更糟。
+ * （同一条教训已写在 getWorkspaceDir 的注释里，resources 定位也因此弃用了 cwd。）
+ *
+ * 所以权威值由主进程在 fork daemon 时用 app.getAppPath() 显式传入
+ * （dev = 项目根，打包 = app.asar）；env 缺席时（tsx 直接跑脚本/测试）
+ * 回落到与 resources 同基准的 import.meta 定位 —— dev 下同样落在项目根。
+ */
+export function getAppDir(): string {
+	const override = process.env["KAMIBUDDY_APP_DIR"];
+	return override !== undefined && override !== "" ? override : resolve(import.meta.dirname, "..", "..");
+}
+
+/**
  * 内置默认工作空间根（~/KamiBuddy）—— AI 读写文件、生成文档产物的地方。
  *
  * 三个候选与取舍：

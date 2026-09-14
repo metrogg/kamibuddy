@@ -134,6 +134,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.mcpServerToggle, serverName, enabled),
 
 	statsSnapshot: () => ipcRenderer.invoke(INVOKE.statsSnapshot),
+	usageStats: () => ipcRenderer.invoke(INVOKE.usageStats),
 	runLedger: (sessionId) => ipcRenderer.invoke(INVOKE.runLedger, sessionId),
 	globalShortcutStatus: () => ipcRenderer.invoke(INVOKE.globalShortcutStatus),
 	docxEnvStatus: () => ipcRenderer.invoke(INVOKE.docxEnvStatus),

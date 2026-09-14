@@ -26,7 +26,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { getConfigDir, getResourcesDir } from "../core/config-paths.ts";
+import { getAppDir, getConfigDir, getResourcesDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -172,7 +172,7 @@ function buildRunExtensions(
 				configDir: getConfigDir(),
 				protectedDirs: deps.protectedDirs,
 				// 写 KamiBuddy 自身目录永远高风险 —— unattended 下即「永远自动拒绝」。
-				appDir: process.cwd(),
+				appDir: getAppDir(),
 				// 内置资源只读放行（技能渐进加载全靠 read 这里）。
 				resourcesDir: getResourcesDir(),
 			},

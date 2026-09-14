@@ -13,6 +13,7 @@ import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor, ThinkingLevel } from "@shared/session-events.ts";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
+import { ExpertChip } from "./expert-chip.tsx";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
@@ -58,7 +59,8 @@ interface HomeViewProps {
 	/** 专家列表与当前专家（「+」菜单的专家子菜单数据源），与对话页同源（App 层统一下发）。 */
 	readonly experts: readonly ExpertListItem[];
 	readonly expertId: string | undefined;
-	readonly onSelectExpert: (expertId: string) => void;
+	/** 取消选中专家传 undefined（与对话页同一 selectExpert 路径）。 */
+	readonly onSelectExpert: (expertId: string | undefined) => void;
 	/**
 	 * 预填文本（创建专家引导语）：App 跳回主页时带入，进输入框后即经
 	 * onPrefillConsumed 消费（留在 App state 会重复填充）。
@@ -139,6 +141,11 @@ export function HomeView({
 	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）；
 	// 案例卡片点击填充提示词也经句柄（setText）—— 草稿状态已内化进 Composer。
 	const composerRef = useRef<ComposerHandle>(null);
+	/*
+	 * 当前专家 chip 的展示映射：expertId 在列表里找不到（专家库未拉回 / 已删除）就不渲染，
+	 * 与对话页 currentExpert 同一口径 —— chip 只做展示，菜单勾选仍以 session_state 为准。
+	 */
+	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
 	/*
 	 * 预填消费（创建专家：引导语进输入框待编辑发送，WorkBuddy
 	 * buildCreateExpertModeBlocks 的 jump home + fill input draft 语义）。
@@ -245,6 +252,14 @@ export function HomeView({
 									onPickFiles={() => void composerRef.current?.pickFiles()}
 									onTodo={onTodo}
 								/>
+								{/*
+							当前专家 chip：与「+」按钮同一行、紧随其后（WorkBuddy 底栏
+							同位置），选中专家后首页即可见。列表里找不到时不渲染 —— 见
+							currentExpert 的展示映射口径。
+						*/}
+								{currentExpert !== undefined && (
+									<ExpertChip expert={currentExpert} onClear={() => onSelectExpert(undefined)} />
+								)}
 							</Composer>
 							{/* 工作空间/权限 chips：WorkBuddy wb-input-footer 同位置（白卡正下方、槽内）。 */}
 							<div className="context-row">

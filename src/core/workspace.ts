@@ -7,8 +7,10 @@
  *
  *   - 配置目录（~/.kamibuddy）：里面有 auth.json 密钥。
  *     其祖先也要拒——设为用户目录等于整个家目录都放行。
- *   - 应用所在目录（daemon 的 process.cwd()）：生产是安装目录（Program Files），
- *     开发是本项目仓库。让 AI 自由改写应用自身，两边都不可接受。
+ *   - 应用所在目录（config-paths.ts 的 getAppDir()：由主进程用 app.getAppPath()
+ *     精准传入，dev 是项目仓库、打包后是 app.asar）。让 AI 自由改写应用自身，
+ *     两边都不可接受。**刻意不读 process.cwd()** —— daemon 的 cwd 是继承来的
+ *     启动目录，值会漂（见 getAppDir 的注释），安全边界不能建在漂移值上。
  *   - 文件系统根 / 相对路径：明显的误操作。
  *
  * 机制参考 WorkBuddy（workspace = 目录路径、默认根下建同名子目录），

@@ -25,6 +25,7 @@ import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi
 import { AutomationStore } from "../core/automation-store.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
 import {
+	getAppDir,
 	getAuthPath,
 	getConfigDir,
 	getResourcesDir,
@@ -181,6 +182,7 @@ import {
 import type { CustomModelInput, CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
 import { deriveSessionTitle, searchSessionFiles } from "./conversation-search.ts";
+import { readUsageStats } from "./usage-stats.ts";
 import { createAutomationRunExecutor } from "./automation-runner.ts";
 import { AutomationScheduler } from "./automation-scheduler.ts";
 import { createSubagentRunner } from "./subagent-runner.ts";
@@ -733,7 +735,7 @@ function saveAutomation(input: AutomationSaveInput): AutomationTask {
 	// 任务 cwd 就是运行时权限门的放行边界，与工作空间同规则把关（配置目录/应用目录拒）。
 	const cwdError = validateWorkspacePath(cwd, {
 		configDir: getConfigDir(),
-		appDir: process.cwd(),
+		appDir: getAppDir(),
 	});
 	if (cwdError !== undefined) throw new Error(cwdError);
 
@@ -1300,8 +1302,9 @@ async function createHost(
 					configDir: getConfigDir(),
 					protectedDirs: PROTECTED_DIRS,
 					// 写 KamiBuddy 自身目录永远高风险询问（policy 判定链里先于工作区放行）。
-					// dev 是项目根，打包后是安装目录 —— 都以 daemon 进程的 cwd 为准。
-					appDir: process.cwd(),
+					// dev 是项目根、打包后是应用目录 —— 由主进程经 KAMIBUDDY_APP_DIR 精准传入，
+					// 不读 daemon 的 cwd（见 config-paths.ts getAppDir 的踩坑注释）。
+					appDir: getAppDir(),
 					// 内置资源只读放行（技能渐进加载全靠 read 这里）。
 					resourcesDir: getResourcesDir(),
 				},
@@ -1488,7 +1491,7 @@ async function applyWorkspace(dir: string): Promise<string> {
 	if (dir !== "") {
 		const error = validateWorkspacePath(next, {
 			configDir: getConfigDir(),
-			appDir: process.cwd(),
+			appDir: getAppDir(),
 		});
 		if (error !== undefined) throw new Error(error);
 	}
@@ -1719,7 +1722,7 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	} else {
 		const wsError = validateWorkspacePath(header.cwd, {
 			configDir: getConfigDir(),
-			appDir: process.cwd(),
+			appDir: getAppDir(),
 		});
 		if (wsError !== undefined) throw new Error(`会话的工作目录不可用：${wsError}`);
 		mkdirSync(header.cwd, { recursive: true });
@@ -2069,6 +2072,17 @@ const handlers: Record<string, Handler> = {
 			systemPromptTokens: currentBucket.systemPromptTokens,
 			contextUsage: currentBucket.conversation.state.contextUsage,
 			logDir: eventLog.dir,
+		}),
+
+	/*
+	 * 跨会话使用统计（统计页）。读会话文件全历史 —— 与 conversation_search 同例：
+	 * daemon 读自己的数据，不经权限门。坏文件跳过并记 event-log，不让统计页整页报错。
+	 * 每次 assistant_done 之类的事件都会触发一次重拉，重读靠 usage-stats 内部的
+	 * mtime 缓存挡住（只重解析改动过的会话文件）。
+	 */
+	[INVOKE.usageStats]: async () =>
+		readUsageStats(getSessionsDir(), (message) => {
+			eventLog.append({ kind: "usage_stats_error", message });
 		}),
 
 	/*
@@ -2706,22 +2720,32 @@ const handlers: Record<string, Handler> = {
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
 	// cwd = 当前会话工作区（预览反映「此刻发消息会看到的提示词」），
 	// 技能清单 / 专家库 / 风格偏好现读（与 composeSystemPrompt 同一口径）。
-	[INVOKE.promptPreview]: async ([request]) =>
-		buildPromptPreview(RESOURCES, request as PromptPreviewRequest, {
+	[INVOKE.promptPreview]: async ([request]) => {
+		const preview = request as PromptPreviewRequest;
+		/*
+		 * 专家库只现载一次：人格（buildPromptPreview 内的 requireExpertPersona 走同一
+		 * experts）与私有技能目录同源于这一次查找（与 composeSystemPrompt 同口径）。
+		 * 绑定专家时把它的 skillsDir 追加进技能加载路径 —— 否则预览会漏掉专家的私有
+		 * 技能，与「此刻发消息看到的提示词」静默漂移；未绑定时与全局技能池完全一致。
+		 */
+		const experts = loadExpertsNow();
+		const expert = resolveSessionExpert(experts, preview.expertId);
+		return buildPromptPreview(RESOURCES, preview, {
 			cwd: currentBucket.cwd,
-			skills: listSkills().map((s) => ({
+			skills: listSkills(expert?.skillsDir).map((s) => ({
 				name: s.name,
 				description: s.description,
 				filePath: s.filePath,
 			})),
 			// 预览按请求里的 expertId 解析人格（同一条 requireExpertPersona 路径）。
-			experts: loadExpertsNow(),
+			experts,
 			preferredStyleId: readPreferences().styleId,
-		// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
-		memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-		memoryContent: buildMemorySection(currentBucket.cwd),
-		personalization: readPersonalizationSection(),
-	}),
+			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
+			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
+			memoryContent: buildMemorySection(currentBucket.cwd),
+			personalization: readPersonalizationSection(),
+		});
+	},
 
 	/* ── 默认存储路径（工作空间根） ────────────────────────────────── */
 

@@ -36,6 +36,7 @@ import type {
 	WorkspaceSnapshot,
 } from "./ipc.ts";
 import type { ObservabilitySnapshot } from "./observability.ts";
+import type { UsageStats } from "./usage-stats.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
 import type {
@@ -263,6 +264,12 @@ export interface KamiBridge {
 
 	/** 可观测性快照（用量、缓存命中率、run 记录、工具统计、上下文成分）。 */
 	readonly statsSnapshot: () => Promise<ObservabilitySnapshot>;
+	/**
+	 * 跨会话使用统计（统计页的数据源）：全历史会话数/消息数/用量/连续活跃天数/
+	 * 每日活动与 token/模型与工具排行。读会话文件全历史，与 statsSnapshot 的
+	 * 运行侧聚合口径不同（见 shared/ipc.ts 的通道注释）。
+	 */
+	readonly usageStats: () => Promise<UsageStats>;
 	/**
 	 * 拉取运行台账条目（诊断页会话时间线的数据源）。
 	 * sessionId 缺省 = 当前活动会话（无活动会话退最新台账）；返回带全部台账会话列表。

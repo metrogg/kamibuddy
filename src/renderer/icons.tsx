@@ -154,6 +154,16 @@ export const IconChart = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+/** 统计页入口：四格网格（沿用 WorkBuddy 用量热力图的方格语义）。 */
+export const IconStats = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<rect x="3" y="3" width="7.5" height="7.5" rx="1.5" />
+		<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" />
+		<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" />
+		<rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" />
+	</Svg>
+);
+
 export const IconSlide = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		<rect x="3" y="4" width="18" height="12" rx="2" />

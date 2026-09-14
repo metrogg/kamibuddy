@@ -7509,3 +7509,96 @@ textarea:focus-visible {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+
+/* ── 统计页：用量热力图与 token 趋势（spec: add-usage-stats） ───────
+ * 热力等级用 color-mix 从 --accent 派生，换主题不必改这里；
+ * 前面那行十六进制是 color-mix 不支持时的兜底（老引擎降级到单色也不崩）。
+ */
+
+.stats-heat-wrap {
+	overflow-x: auto;
+	padding-bottom: 2px;
+}
+
+.stats-heat-months,
+.stats-heat-row {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+
+.stats-heat-gutter {
+	flex: 0 0 16px;
+	width: 16px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.stats-heat-month {
+	flex: 0 0 11px;
+	width: 11px;
+	font-size: 11px;
+	line-height: 14px;
+	color: var(--text-dim);
+	white-space: nowrap;
+	overflow: visible;
+}
+
+.stats-heat-cell {
+	flex: 0 0 11px;
+	width: 11px;
+	height: 11px;
+	border-radius: 2px;
+	background: var(--bg-raised);
+}
+
+.stats-heat-cell.l1 {
+	background: #d7e8f6;
+	background: color-mix(in srgb, var(--accent) 22%, var(--bg-raised));
+}
+
+.stats-heat-cell.l2 {
+	background: #a8cdea;
+	background: color-mix(in srgb, var(--accent) 45%, var(--bg-raised));
+}
+
+.stats-heat-cell.l3 {
+	background: #5b9fd4;
+	background: color-mix(in srgb, var(--accent) 70%, var(--bg-raised));
+}
+
+.stats-heat-cell.l4 {
+	background: var(--accent);
+}
+
+/* 未来日期：透明占位，占着列宽但不谎报活动。 */
+.stats-heat-cell.future {
+	background: transparent;
+}
+
+.stats-heat-legend {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.stats-trend {
+	display: block;
+	width: 100%;
+	height: 90px;
+}
+
+.stats-trend-area {
+	fill: rgba(20, 112, 180, 0.12);
+	fill: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.stats-trend-line {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 1.5;
+	stroke-linejoin: round;
+}

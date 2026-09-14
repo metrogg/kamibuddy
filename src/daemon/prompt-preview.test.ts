@@ -194,6 +194,55 @@ describe("专家人格注入（与真实组装同一条路径）", () => {
 	});
 });
 
+describe("专家私有技能进预览技能段（daemon 需把专家的 skillsDir 传给 listSkills）", () => {
+	/*
+	 * 专家带私有技能目录时，daemon 的 listSkills(expert.skillsDir) 会在全局池后追加
+	 * 该目录（同 core/prompt-composer.ts sessionSkillPaths）。env.skills 是 daemon 现读的
+	 * 受控产物：绑定专家 = 全局 + 私有，未绑定 = 仅全局。这里钉住预览在该输入下的表现
+	 * —— 曾经 daemon 漏传 skillsDir，预览就看不到专家的 3 个私有技能。
+	 */
+	const EXPERT_WITH_SKILLS: readonly ExpertDefinition[] = [
+		{
+			name: "stock-research-report",
+			description: "写证券研报",
+			displayName: "证券研报专家",
+			profession: "证券研究",
+			displayDescription: "从财务数据到估值结论出研报",
+			quickPrompts: ["出一份研报", "做同业对比", "给个估值结论"],
+			tags: ["研报", "估值", "券商"],
+			source: "builtin",
+			// 专家私有技能目录：daemon 绑定该专家时应把它追加进 listSkills 的加载路径。
+			skillsDir: "/experts/stock-research-report/skills",
+			body: "你是证券研报专家，结论必须能追溯到数据。",
+		},
+	];
+	const SKILLS_WITH_PRIVATE: readonly SkillDescriptor[] = [
+		...SKILLS,
+		{ name: "dcf-model-builder", description: "DCF 估值建模", filePath: "/experts/stock-research-report/skills/dcf-model-builder/SKILL.md" },
+	];
+
+	it("绑定专家：技能段含该专家的私有技能（人格段同现）", () => {
+		const result = buildPromptPreview(
+			makeResources(),
+			{ sceneId: "work", modeId: "craft", styleId: "", expertId: "stock-research-report" },
+			makeEnv({ experts: EXPERT_WITH_SKILLS, skills: SKILLS_WITH_PRIVATE }),
+		);
+		const skills = result.segments.find((s) => s.source === "skills");
+		expect(skills?.text).toContain("dcf-model-builder");
+		expect(result.segments.some((s) => s.source === "expert")).toBe(true);
+	});
+
+	it("未绑定专家：技能段不含私有技能（daemon 只现读全局池）", () => {
+		const result = buildPromptPreview(
+			makeResources(),
+			{ sceneId: "work", modeId: "craft", styleId: "" },
+			makeEnv({ experts: EXPERT_WITH_SKILLS, skills: SKILLS }),
+		);
+		const skills = result.segments.find((s) => s.source === "skills");
+		expect(skills?.text).not.toContain("dcf-model-builder");
+	});
+});
+
 describe("非法输入响亮报错", () => {
 	it("未知场景", () => {
 		expect(() =>

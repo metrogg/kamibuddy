@@ -84,6 +84,13 @@ function startDaemon(): void {
 		// pi 会读 stdout/stderr 之外的诊断，转给父进程便于排障。
 		stdio: "pipe",
 		serviceName: "kamibuddy-daemon",
+		/*
+		 * daemon 的 cwd 继承本进程的启动目录、不可靠（换种启动方式就变，打包后更甚）。
+		 * 而应用根是权限边界的输入（workspace 守卫拒「把应用目录设为工作空间」），
+		 * 值漂了会误伤无关目录或让边界失效 —— 所以用 Electron 的权威值显式传给 daemon
+		 * （dev = 项目根，打包 = app.asar）。见 core/config-paths.ts 的 getAppDir。
+		 */
+		env: { ...process.env, KAMIBUDDY_APP_DIR: app.getAppPath() },
 	});
 	daemon = child;
 

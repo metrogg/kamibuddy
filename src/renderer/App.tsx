@@ -39,10 +39,11 @@ import { PermissionDialog } from "./permission-dialog.tsx";
 import { SettingsView } from "./settings/settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
+import { StatsView } from "./stats-view.tsx";
 import { AutomationsView } from "./automations-view.tsx";
 import { Toast, type ToastMessage, type ToastType } from "./toast.tsx";
 
-type View = "home" | "chat" | "settings" | "skills" | "diagnostics" | "automations";
+type View = "home" | "chat" | "settings" | "skills" | "diagnostics" | "stats" | "automations";
 
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
@@ -944,6 +945,12 @@ export function App(): React.JSX.Element {
 		setView("diagnostics");
 	}, [view]);
 
+	/** 统计页同理（跨会话使用统计，spec: add-usage-stats）。 */
+	const openStats = useCallback(() => {
+		setReturnView(view === "chat" ? "chat" : "home");
+		setView("stats");
+	}, [view]);
+
 	/** 定时任务管理页同理：记住来路，关闭后回去。 */
 	const openAutomations = useCallback(() => {
 		setReturnView(view === "chat" ? "chat" : "home");
@@ -1038,6 +1045,7 @@ export function App(): React.JSX.Element {
 					onRevealWorkspace={revealWorkspace}
 					onOpenSettings={openSettings}
 					onOpenDiagnostics={openDiagnostics}
+					onOpenStats={openStats}
 					onOpenSkills={() => setView("skills")}
 					onOpenAutomations={openAutomations}
 					onTodo={showTodo}
@@ -1157,6 +1165,9 @@ export function App(): React.JSX.Element {
 			)}
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />
+			)}
+			{view === "stats" && (
+				<StatsView onClose={() => setView(returnView)} />
 			)}
 			{view === "automations" && (
 				<AutomationsView

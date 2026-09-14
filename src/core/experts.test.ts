@@ -3,13 +3,13 @@
  *
  * 与 agents.test.ts 同款思路：加载器若静默吞错，专家以残缺的人格集运行
  * （甚至一个都没有），每条报错路径都有测试压着。
- * 末尾一组走真实 resources/experts/ 目录，防「内置九员」被重构改坏。
+ * 末尾一组走真实 resources/experts/ 目录，防「内置五员」被重构改坏。
  *
  * 目录布局（spec: rework-expert-orthogonal-and-skills）：专家是 <name>/ 目录，
  * 内含 expert.md 与可选的 skills/（私有技能），故 fixture 也按目录造。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -315,26 +315,58 @@ describe("报错路径", () => {
 });
 
 describe("真实 resources/experts/ 的回归约束", () => {
-	// 走真实目录而不是 mkdtemp 样例：防未来重构改坏内置九员的人格文件
+	// 走真实目录而不是 mkdtemp 样例：防未来重构改坏内置五员的人格文件
 	// （与 agents.test.ts 里内置四员回归测试同款防护）。
 	const realBuiltin = resolve(import.meta.dirname, "..", "..", "resources", "experts");
 	const realSkills = resolve(import.meta.dirname, "..", "..", "resources", "skills");
 	// 用户目录传一个必不存在的路径（root 由 beforeEach 建好，收集期拿不到，故在 it 内求值）。
 	const noUser = () => join(root, "无用户目录");
 
-	it("内置九员齐全（目录布局）", () => {
-		const names = loadExperts(realBuiltin, noUser(), realSkills).map((e) => e.name);
-		expect(names).toEqual([
-			"academic-paper",
-			"business-copy",
-			"general-writer",
-			"legal-contract",
-			"poetry-prose",
-			"science-writing",
-			"stock-research-report",
-			"tech-blog",
-			"work-report",
+	it("内置五员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
+		const experts = loadExperts(realBuiltin, noUser(), realSkills);
+		expect(experts.map((e) => e.name)).toEqual([
+			"equity-research",
+			"gpt-researcher-team",
+			"long-manuscript-expert",
+			"ui-designer",
+			"workspace-builder",
 		]);
+		// displayName/profession 是模式菜单与对话头部的展示字段，逐个钉死：
+		// 少一个专家或错一个名字都要亮红，不用「非空」这类宽松断言。
+		expect(Object.fromEntries(experts.map((e) => [e.name, e.displayName]))).toEqual({
+			"equity-research": "严估深",
+			"gpt-researcher-team": "深度研究团队",
+			"long-manuscript-expert": "福帮手",
+			"ui-designer": "像素君",
+			"workspace-builder": "小台",
+		});
+		expect(Object.fromEntries(experts.map((e) => [e.name, e.profession]))).toEqual({
+			"equity-research": "股票研究专家",
+			"gpt-researcher-team": "多源深度研究报告工坊",
+			"long-manuscript-expert": "长文档写作与改稿专家",
+			"ui-designer": "UI设计师",
+			"workspace-builder": "工作台搭建师",
+		});
+	});
+
+	it("私有技能分布：只有三人带私有技能，数量精确", () => {
+		const experts = loadExperts(realBuiltin, noUser(), realSkills);
+		const counts = Object.fromEntries(
+			experts.map((e) => [
+				e.name,
+				// skillsDir 缺省即无私有技能；有则数 skills/ 下的技能子目录数。
+				e.skillsDir === undefined
+					? 0
+					: readdirSync(e.skillsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length,
+			]),
+		);
+		expect(counts).toEqual({
+			"equity-research": 15,
+			"gpt-researcher-team": 0,
+			"long-manuscript-expert": 9,
+			"ui-designer": 1,
+			"workspace-builder": 0,
+		});
 	});
 
 	it("每员的展示字段与正文人格齐全，且不顺带与全局技能重名", () => {

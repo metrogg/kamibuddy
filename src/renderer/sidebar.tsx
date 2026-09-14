@@ -29,6 +29,7 @@ import {
 	IconProject,
 	IconSettings,
 	IconSkill,
+	IconStats,
 	IconTrash,
 } from "./icons.tsx";
 
@@ -71,6 +72,8 @@ interface SidebarProps {
 	readonly onRevealWorkspace: (cwd: string) => void;
 	readonly onOpenSettings: () => void;
 	readonly onOpenDiagnostics: () => void;
+	/** 统计页（跨会话使用统计）。与诊断页分开：那边是「本次运行」，这里是「这段时间」。 */
+	readonly onOpenStats: () => void;
 	/** 「专家·技能·连接器」是真实页面（技能页已可用），不走 onTodo。 */
 	readonly onOpenSkills: () => void;
 	/** 「自动化」是真实页面（定时任务管理页），不走 onTodo。 */
@@ -106,6 +109,7 @@ export function Sidebar({
 	onRevealWorkspace,
 	onOpenSettings,
 	onOpenDiagnostics,
+	onOpenStats,
 	onOpenSkills,
 	onOpenAutomations,
 	onTodo,
@@ -471,6 +475,11 @@ export function Sidebar({
 				<button type="button" className="nav-item" onClick={onOpenDiagnostics}>
 					<IconChart size={16} />
 					诊断
+				</button>
+				{/* 统计页（跨会话使用统计，spec: add-usage-stats）。 */}
+				<button type="button" className="nav-item" onClick={onOpenStats}>
+					<IconStats size={16} />
+					统计
 				</button>
 			</nav>
 
