@@ -4207,9 +4207,12 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	background: var(--bg);
 	text-align: left;
+	cursor: pointer;
 }
 
-.model-card:hover:not(:disabled) {
+/* 卡片是 div+role=button（内部有测试按钮，不能再用 button 套 button），
+ * 所以禁用态不看 :disabled 而看 .unavailable。 */
+.model-card:not(.unavailable):hover {
 	border-color: var(--text-dim);
 }
 
@@ -4242,6 +4245,28 @@ textarea:focus-visible {
 .model-card-meta {
 	font-size: 11px;
 	color: var(--text-dim);
+}
+
+/* 卡片右上角的「测试」按钮：不拉伸，跟随 head 行右侧排布。 */
+.model-card-test {
+	flex: none;
+}
+
+/* 连通性测试结果行：成功绿 / 失败红，单行小字。 */
+.model-card-probe {
+	font-size: 11px;
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.model-card-probe.ok {
+	color: var(--ok);
+}
+
+.model-card-probe.err {
+	color: var(--danger);
 }
 
 /* ── 服务商列表 ───────────────────────────────────────────────── */
@@ -7223,13 +7248,15 @@ textarea:focus-visible {
 	font-size: 13px;
 }
 
-/* 子菜单向左飞出：模型菜单自身靠右贴边，向右飞会出视口。 */
+/* 档位列内联展开（不再飞出）：菜单容器 overflow-y 会裁掉绝对定位的
+   flyout（展开了但看不见）。与上方「推理强度」行用顶边线分隔。 */
 .model-menu-levels {
-	top: 0;
-	right: calc(100% + 4px);
-	z-index: 21;
-	min-width: 120px;
-	padding: 4px;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	margin: 2px 0 4px;
+	padding-top: 2px;
+	border-top: 1px solid var(--border);
 }
 
 .model-menu-level-item {

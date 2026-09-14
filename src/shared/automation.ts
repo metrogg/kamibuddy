@@ -57,6 +57,13 @@ export interface AutomationTask {
 	builtin?: boolean;
 }
 
+/**
+ * 内置「记忆整理」蒸馏任务的固定 id（spec: add-memory-system）。
+ * 集中在 shared：daemon 的 ensure 用它定位任务，renderer 的「立即整理」
+ * （设置-记忆页）与 runFinished 事件匹配也用同一个值，两处不漂移。
+ */
+export const BUILTIN_MEMORY_TASK_ID = "builtin-memory-distill";
+
 const MINUTE_MS = 60_000;
 
 /** HH:mm（24 小时制，小时必须两位 —— 「9:00」不算，避免与摘要展示格式漂移）。 */

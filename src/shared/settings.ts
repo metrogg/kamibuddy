@@ -264,6 +264,18 @@ export interface WebSearchTestResult {
 	readonly count?: number;
 }
 
+/**
+ * 模型连通性测试的结果（设置-模型页卡片上的「测试」按钮）。
+ * ok=false 时 error 是面向用户的单行文案（不含 stack、不含 key），直接展示。
+ * 实现侧在 core/model-probe.ts；类型放这里是因为 renderer 只能 import shared。
+ */
+export interface ModelProbeResult {
+	readonly ok: boolean;
+	/** 请求往返耗时（仅成功时有意义）。 */
+	readonly latencyMs?: number;
+	readonly error?: string;
+}
+
 /* ── 回复风格 ──────────────────────────────────────────────────── */
 
 /** 回复风格选项（设置页「回复风格」选择器的一项）。正文不经 IPC，组装时 daemon 自取。 */

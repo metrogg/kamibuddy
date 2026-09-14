@@ -75,6 +75,21 @@ export function removeApiKey(path: string, providerId: string): void {
 	save(path, next);
 }
 
+/**
+ * 读回一个 provider 的 API Key（连通性测试用）。只识别我们写入的
+ * api_key 形状；oauth 等其他形状与环境变量配置的 key 返回 undefined
+ * （调用方据此给出「暂不支持测试」的明确提示，而不是拿空 key 去撞 401）。
+ */
+export function readApiKey(path: string, providerId: string): string | undefined {
+	const credential = readAuthFile(path)[providerId];
+	if (typeof credential !== "object" || credential === null) return undefined;
+	const record = credential as { type?: unknown; key?: unknown };
+	if (record.type !== "api_key" || typeof record.key !== "string" || record.key === "") {
+		return undefined;
+	}
+	return record.key;
+}
+
 function save(path: string, data: Record<string, unknown>): void {
 	mkdirSync(dirname(path), { recursive: true });
 	// 缩进 2 空格与 pi 一致（用户可能手工查看/编辑该文件）；0600 是 pi 的约定。

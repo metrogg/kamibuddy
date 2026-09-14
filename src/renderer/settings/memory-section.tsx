@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { BUILTIN_MEMORY_TASK_ID } from "@shared/automation.ts";
 
 /* ── 记忆 ──────────────────────────────────────────────────── */
 
@@ -26,6 +27,8 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 	const [error, setError] = useState<string | undefined>(undefined);
 	/** 「重置」的窗内确认态：第一次点击进入确认，第二次才执行 —— 清空不可逆，防误点。 */
 	const [confirmReset, setConfirmReset] = useState(false);
+	/** 「立即整理」运行中：蒸馏是异步模型调用（约几十秒），不能按 IPC 返回就算完。 */
+	const [distilling, setDistilling] = useState(false);
 
 	useEffect(() => {
 		Promise.all([window.kami.getMemoryEnabled(), window.kami.getProfile()])
@@ -37,6 +40,34 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 			})
 			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 	}, []);
+
+	// 蒸馏完成的精确信号是 runFinished（taskId 匹配内置任务）：成功后重拉画像。
+	useEffect(() => {
+		if (!distilling) return;
+		return window.kami.onAutomationEvent((event) => {
+			if (event.kind !== "runFinished" || event.taskId !== BUILTIN_MEMORY_TASK_ID) return;
+			setDistilling(false);
+			if (!event.success) {
+				setError("记忆整理运行失败，可到「自动化」页查看运行记录");
+				return;
+			}
+			void window.kami
+				.getProfile()
+				.then((result) => {
+					setProfile(result.content);
+					setSavedProfile(result.content);
+				})
+				.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+		});
+	}, [distilling]);
+
+	const distillNow = (): void => {
+		setDistilling(true);
+		void window.kami.runAutomationNow(BUILTIN_MEMORY_TASK_ID).catch((e: unknown) => {
+			setDistilling(false);
+			setError(e instanceof Error ? e.message : String(e));
+		});
+	};
 
 	const toggle = (next: boolean): void => {
 		const prev = enabled;
@@ -100,6 +131,17 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 							<span className="provider-name">生成对话记忆</span>
 							<span className="provider-meta">每晚自动整理对话要点</span>
 							<span className="bar-spacer" />
+							{/* 不等每晚的定时点：手动触发同一条蒸馏任务（run-now 进同一
+							    串行队列）。停用态禁点——任务已暂停，跑了也没有意义。 */}
+							<button
+								type="button"
+								className="mini-btn"
+								disabled={busy || !enabled || distilling}
+								title={enabled ? "现在就从最近的对话整理画像" : "先开启「生成对话记忆」"}
+								onClick={distillNow}
+							>
+								{distilling ? "整理中…" : "立即整理"}
+							</button>
 							{/* 开关复用连接器页的 mcp-switch 档位（同一个开关控件，不另造类）。 */}
 							<label className="mcp-switch" title={enabled ? "点击停用" : "点击启用"}>
 								<input

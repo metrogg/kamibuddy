@@ -21,6 +21,7 @@ import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./ses
 import type {
 	CustomModelInput,
 	CustomProviderInput,
+	ModelProbeResult,
 	SettingsSnapshot,
 	SkillsSnapshot,
 	SkillInfo,
@@ -248,6 +249,11 @@ export const INVOKE = {
 	addProviderModel: "settings:add-provider-model",
 	/** 联网刷新模型目录。启动时不联网，只在用户主动点击时调。 */
 	refreshCatalog: "settings:refresh-catalog",
+	/**
+	 * 测试某个模型的连通性（设置-模型页卡片上的「测试」按钮）：
+	 * 发一个最小非流式请求，回答网络通不通 / Key 认不认 / 模型在不在。
+	 */
+	testModel: "settings:test-model",
 	/** 读回联网搜索配置（不含 key，只给 provider + 是否已配）。 */
 	getWebSearchConfig: "settings:get-web-search-config",
 	/** 保存联网搜索配置（服务商 + API Key，Key 落偏好文件）。 */
@@ -775,6 +781,7 @@ export interface InvokeMap {
 	[INVOKE.readCustomProvider]: { args: [providerId: string]; result: CustomProviderInput | undefined };
 	[INVOKE.addProviderModel]: { args: [providerId: string, model: CustomModelInput]; result: void };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
+	[INVOKE.testModel]: { args: [modelKey: string]; result: ModelProbeResult };
 	[INVOKE.getWebSearchConfig]: { args: []; result: WebSearchConfigInfo };
 	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
 	[INVOKE.clearWebSearchConfig]: { args: []; result: void };

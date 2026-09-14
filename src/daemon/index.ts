@@ -25,6 +25,7 @@ import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi
 import { AutomationStore } from "../core/automation-store.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
 import {
+	getAuthPath,
 	getConfigDir,
 	getResourcesDir,
 	getSessionsDir,
@@ -42,7 +43,7 @@ import {
 	toggleMcpServer,
 	writeMcpConfig,
 } from "../core/mcp-config.ts";
-import { ModelCatalog } from "../core/model-catalog.ts";
+import { ModelCatalog, parseModelKey } from "../core/model-catalog.ts";
 import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
 import {
 	getEffectiveWorkspaceRoot,
@@ -152,10 +153,13 @@ import {
 } from "../documents/docx-env.ts";
 import {
 	isWebSearchProviderId,
+	type ModelProbeResult,
 	type WebSearchConfigInfo,
 	type WebSearchConfigInput,
 	type WebSearchTestResult,
 } from "../shared/settings.ts";
+import { readApiKey } from "../core/api-keys.ts";
+import { probeModel } from "../core/model-probe.ts";
 import { searchWeb } from "../core/web-search.ts";
 import {
 	isThinkingLevel,
@@ -2429,6 +2433,52 @@ const handlers: Record<string, Handler> = {
 				? "（Tavily 等海外服务在国内网络下常无法连接，建议换「博查」）"
 				: "";
 			return { ok: false, message: `${message}${hint}` };
+		}
+	},
+
+	/*
+	 * 模型连通性测试（设置-模型页卡片上的「测试」按钮）。
+	 *
+	 * 不 throw、用返回值表达失败：测试的意义就是把失败原因带回来展示，
+	 * throw 会被 IPC 层裹成通用错误文案，丢掉 probeModel 精心归类的单行原因。
+	 * 凭据获取的三条路径：auth.json（我们自己写的）→ 环境变量（label 是变量名）→
+	 * 订阅/命令注入拿不到明文，明确报不支持；fallback（无凭据，本地服务）直接
+	 * 发无鉴权探测，结果由服务端如实回答。
+	 */
+	[INVOKE.testModel]: async ([modelKey]): Promise<ModelProbeResult> => {
+		const key = modelKey as string;
+		const parsed = parseModelKey(key);
+		const catalog = await getCatalog();
+		const model = parsed === undefined ? undefined : catalog.resolveModel(key);
+		if (parsed === undefined || model === undefined) {
+			return { ok: false, error: "目录里找不到该模型，请刷新模型目录后重试" };
+		}
+
+		const status = catalog.modelRuntime.getProviderAuthStatus(parsed.providerId);
+		let apiKey = readApiKey(getAuthPath(), parsed.providerId);
+		if (apiKey === undefined && status.source === "environment" && status.label !== undefined) {
+			const fromEnv = process.env[status.label];
+			if (fromEnv !== undefined && fromEnv !== "") apiKey = fromEnv;
+		}
+		if (apiKey === undefined && status.configured && status.source !== "fallback") {
+			return { ok: false, error: "该服务商凭据来自订阅登录或命令注入，拿不到明文，暂不支持测试" };
+		}
+
+		// 外层硬超时与 testWebSearch 同因：Windows DNS 解析不可中断，
+		// probeModel 自己的 AbortSignal.timeout 停不掉它，测试按钮必须永远有返回。
+		try {
+			return await withHardTimeout(
+				probeModel({
+					api: model.api,
+					baseUrl: model.baseUrl,
+					modelId: model.id,
+					apiKey,
+					extraHeaders: model.headers,
+				}),
+				15_000,
+			);
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
 	},
 

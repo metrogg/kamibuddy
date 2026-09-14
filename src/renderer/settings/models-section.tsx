@@ -20,6 +20,7 @@ import type {
 	CustomModelInput,
 	CustomProviderInput,
 	ModelInfo,
+	ModelProbeResult,
 	ProviderInfo,
 	SettingsSnapshot,
 } from "@shared/settings.ts";
@@ -398,6 +399,91 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 
 /* ── 模型选择 ────────────────────────────────────────────────────── */
 
+/** 连通性测试的卡片本地状态：结果留在卡片上，不走页面级 banner（出错现场响亮）。 */
+type ProbeState = { kind: "idle" } | { kind: "running" } | { kind: "done"; result: ModelProbeResult };
+
+interface ModelCardProps {
+	readonly model: ModelInfo;
+	readonly providerName: string;
+	readonly active: boolean;
+	readonly busy: boolean;
+	readonly onPick: () => void;
+}
+
+/**
+ * 单个模型卡片：点击 = 选为当前模型；「测试」= 连通性探测（daemon 发最小请求）。
+ * 卡片用 div+role=button 而不是 button：HTML 不允许 button 套 button（测试按钮）。
+ */
+function ModelCard({ model, providerName, active, busy, onPick }: ModelCardProps): React.JSX.Element {
+	const [probe, setProbe] = useState<ProbeState>({ kind: "idle" });
+	const pickable = model.available && !busy;
+
+	const test = async (): Promise<void> => {
+		setProbe({ kind: "running" });
+		try {
+			const result = await window.kami.testModel(`${model.providerId}/${model.id}`);
+			setProbe({ kind: "done", result });
+		} catch (e) {
+			// daemon 用返回值表达业务失败；走到 catch 说明 IPC 层本身断了。
+			setProbe({ kind: "done", result: { ok: false, error: e instanceof Error ? e.message : String(e) } });
+		}
+	};
+
+	return (
+		<div
+			className={`model-card${active ? " active" : ""}${model.available ? "" : " unavailable"}`}
+			role="button"
+			tabIndex={pickable ? 0 : -1}
+			aria-disabled={!pickable}
+			// 未配凭据的模型点了必然报错，直接禁用并说明原因。
+			title={model.available ? undefined : "该服务商尚未配置 API Key"}
+			onClick={() => {
+				if (pickable) onPick();
+			}}
+			onKeyDown={(e) => {
+				if (e.key !== "Enter" && e.key !== " ") return;
+				e.preventDefault();
+				if (pickable) onPick();
+			}}
+		>
+			<span className="model-card-head">
+				<span className="model-card-name">{model.name}</span>
+				{active && <IconCheck size={14} />}
+				{model.available && (
+					<button
+						type="button"
+						className="mini-btn model-card-test"
+						disabled={probe.kind === "running"}
+						title="发一个最小请求，测试网络 / Key / 模型是否可用"
+						onClick={(e) => {
+							e.stopPropagation();
+							void test();
+						}}
+					>
+						{probe.kind === "running" ? "测试中…" : "测试"}
+					</button>
+				)}
+			</span>
+			<span className="model-card-meta">
+				{providerName}
+				{" · "}
+				{Math.round(model.contextWindow / 1000)}K
+				{model.reasoning && " · 思考"}
+				{model.vision && " · 看图"}
+			</span>
+			{probe.kind === "done" && (
+				<span className={`model-card-probe ${probe.result.ok ? "ok" : "err"}`}>
+					{probe.result.ok
+						? `✓ 连通正常${probe.result.latencyMs !== undefined ? ` · ${probe.result.latencyMs}ms` : ""}${
+								probe.result.error !== undefined ? `（${probe.result.error}）` : ""
+							}`
+						: `✗ ${probe.result.error ?? "测试失败"}`}
+				</span>
+			)}
+		</div>
+	);
+}
+
 interface ModelPickerProps {
 	readonly models: readonly ModelInfo[];
 	readonly providers: readonly ProviderInfo[];
@@ -440,29 +526,15 @@ function ModelPicker({ models, providers, activeModelId, busy, onPick, onRefresh
 				<div className="model-grid">
 					{visible.map((model) => {
 						const key = `${model.providerId}/${model.id}`;
-						const active = key === activeModelId;
 						return (
-							<button
+							<ModelCard
 								key={key}
-								type="button"
-								className={`model-card${active ? " active" : ""}${model.available ? "" : " unavailable"}`}
-								// 未配凭据的模型点了必然报错，直接禁用并说明原因。
-								disabled={busy || !model.available}
-								title={model.available ? undefined : "该服务商尚未配置 API Key"}
-								onClick={() => onPick(key)}
-							>
-								<span className="model-card-head">
-									<span className="model-card-name">{model.name}</span>
-									{active && <IconCheck size={14} />}
-								</span>
-								<span className="model-card-meta">
-									{nameOf.get(model.providerId) ?? model.providerId}
-									{" · "}
-									{Math.round(model.contextWindow / 1000)}K
-									{model.reasoning && " · 思考"}
-									{model.vision && " · 看图"}
-								</span>
-							</button>
+								model={model}
+								providerName={nameOf.get(model.providerId) ?? model.providerId}
+								active={key === activeModelId}
+								busy={busy}
+								onPick={() => onPick(key)}
+							/>
 						);
 					})}
 				</div>

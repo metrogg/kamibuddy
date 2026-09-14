@@ -206,43 +206,45 @@ export function ModelMenu({
 								点击/hover 展开档位子菜单。非推理模型整行不渲染（见上）。
 							*/}
 								{thinkingRowVisible && (
-									<div
-										className="model-menu-thinking-zone"
-										onMouseEnter={() => setLevelsOpen(true)}
-										onMouseLeave={() => setLevelsOpen(false)}
+								<div className="model-menu-thinking-zone">
+									<button
+										type="button"
+										className="model-menu-thinking"
+										aria-expanded={levelsOpen}
+										onClick={() => setLevelsOpen((v) => !v)}
 									>
-										<button
-											type="button"
-											className="model-menu-thinking"
-											aria-expanded={levelsOpen}
-											onClick={() => setLevelsOpen((v) => !v)}
-										>
-											<span>推理强度</span>
-											<span className="model-menu-thinking-current">
-												{thinkingLevel !== undefined && THINKING_LEVEL_LABELS[thinkingLevel]}
-												<span className="model-menu-thinking-caret" aria-hidden="true">
-													›
-												</span>
+										<span>推理强度</span>
+										<span className="model-menu-thinking-current">
+											{thinkingLevel !== undefined && THINKING_LEVEL_LABELS[thinkingLevel]}
+											<span className="model-menu-thinking-caret" aria-hidden="true">
+												›
 											</span>
-										</button>
-										{levelsOpen && (
-											<div className="pop-menu model-menu-levels" role="menu">
-												{thinkingOptions.map((level) => (
-													<button
-														key={level}
-														type="button"
-														className={`model-menu-level-item${level === thinkingLevel ? " active" : ""}`}
-														role="menuitem"
-														onClick={() => pickThinkingLevel(level)}
-													>
-														{THINKING_LEVEL_LABELS[level]}
-														{level === thinkingLevel && <IconCheck size={14} className="model-menu-check" />}
-													</button>
-												))}
-											</div>
-										)}
-									</div>
-								)}
+										</span>
+									</button>
+									{/*
+										档位列改内联展开：菜单容器 max-height + overflow-y 会裁掉
+										绝对定位飞出（WB 的右侧 flyout 在我们容器里不可见 = 「点开没反应」），
+										内联在行下方展开由菜单自身滚动容纳。点击切换，不用 hover——
+										内联展开会推移布局，hover 触发会在指针路过时反复跳动。
+									*/}
+									{levelsOpen && (
+										<div className="model-menu-levels" role="menu">
+											{thinkingOptions.map((level) => (
+												<button
+													key={level}
+													type="button"
+													className={`model-menu-level-item${level === thinkingLevel ? " active" : ""}`}
+													role="menuitem"
+													onClick={() => pickThinkingLevel(level)}
+												>
+													{THINKING_LEVEL_LABELS[level]}
+													{level === thinkingLevel && <IconCheck size={14} className="model-menu-check" />}
+												</button>
+											))}
+										</div>
+									)}
+								</div>
+							)}
 								<button
 									type="button"
 									className="model-menu-goto"

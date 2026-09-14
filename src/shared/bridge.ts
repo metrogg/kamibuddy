@@ -41,6 +41,7 @@ import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./ses
 import type {
 	CustomModelInput,
 	CustomProviderInput,
+	ModelProbeResult,
 	SettingsSnapshot,
 	SkillsSnapshot,
 	SkillInfo,
@@ -164,6 +165,8 @@ export interface KamiBridge {
 	/** 往预置服务商追加/替换单个模型（「添加模型」弹层选预置的路径）。 */
 	readonly addProviderModel: (providerId: string, model: CustomModelInput) => Promise<void>;
 	readonly refreshCatalog: () => Promise<void>;
+	/** 测试某个模型（`provider/model`）的连通性，结果直接展示在卡片上。 */
+	readonly testModel: (modelKey: string) => Promise<ModelProbeResult>;
 
 	/* ── 联网搜索 ─────────────────────────────────────────────────── */
 

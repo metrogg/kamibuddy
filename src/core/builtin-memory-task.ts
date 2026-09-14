@@ -13,13 +13,11 @@
 import { getConfigDir, getSessionsDir } from "./config-paths.ts";
 import { profilePath } from "./memory.ts";
 import type { AutomationStore } from "./automation-store.ts";
-import { nextRunAfter } from "../shared/automation.ts";
+import { BUILTIN_MEMORY_TASK_ID, nextRunAfter } from "../shared/automation.ts";
 
-/**
- * 固定 id：ensure 幂等的锚点。用户任务的 id 是 randomUUID，
- * 撞不上这个字面量。
- */
-export const BUILTIN_MEMORY_TASK_ID = "builtin-memory-distill";
+// 单一事实源在 shared/automation.ts（renderer「立即整理」也用同一个值）；
+// 这里 re-export 兼容既有 core/daemon 引用点。
+export { BUILTIN_MEMORY_TASK_ID };
 
 /** 深夜跑：蒸馏是后台家务，不该抢白天的会话（spec：daily 03:00）。 */
 const SCHEDULE = { type: "daily", time: "03:00" } as const;

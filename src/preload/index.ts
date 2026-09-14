@@ -86,6 +86,7 @@ const bridge: KamiBridge = {
 	readCustomProvider: (providerId) =>
 		ipcRenderer.invoke(INVOKE.readCustomProvider, providerId),
 	refreshCatalog: () => ipcRenderer.invoke(INVOKE.refreshCatalog),
+	testModel: (modelKey) => ipcRenderer.invoke(INVOKE.testModel, modelKey),
 
 	getWebSearchConfig: () => ipcRenderer.invoke(INVOKE.getWebSearchConfig),
 	setWebSearchConfig: (input) =>
