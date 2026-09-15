@@ -7,11 +7,49 @@
 > 每个任务一个独立目录。本 spec 的其余结论（playground 语义退役、默认存储路径设置项、
 > 侧栏分桶键、saveToWorkspace 转正、旧会话归类）仍然有效。
 
+> **【2026-09-15 订正 ②：picker 定项与「新建任务」重置】** 本次又核实出四处偏差并已改
+> （证据全部来自解包产物 `docs/WorkBuddy-reference/extracted/renderer/assets/`）：
+> 1. **未选态 chip 文案**：`lib-chat-ui-ChIVprRk.js:45802` 的
+>    `chatInput.workspacePicker.label` = 「选择工作空间」，取值点 `:60754` 是
+>    `selectedOption?.displayLabel || selectedOption?.label || 提示语`，而
+>    `selectedValue = draft.selections.cwd ?? ""`（`:60731`）——**空串走提示语兜底**。
+>    故未选态显示提示语（本 spec 原先写的「picker 默认态 = 临时任务」只对**已分配
+>    自动目录**那一态成立，见 `src/renderer/workspace-picker.tsx` 的 `pickerLabel`）。
+> 2. **列表里没有指向生效根的固定项**：唯一的 options 构造点是
+>    `ui-docs-viewer-C2jT2eXi.js:289204`，全部来自 `wb.workspaces.list()`
+>    （main/server.js:134149-134161：DB 里显式添加的空间 + 「保存到工作空间」的路径）。
+>    我们的「默认工作空间」项已删 —— 于是**下文所有「cwd = 生效根本身只来自用户显式选
+>    picker『默认工作空间』」的表述作废**：该状态现在只来自「打开本地文件夹…」或旧会话
+>    （`isTaskCwd` 的判定不变，见 `src/daemon/workspace-model.ts` 的订正注）。
+> 3. **「不使用工作空间」只在已选态渲染**：`lib-chat-ui-ChIVprRk.js:60851` 的
+>    `selectedOption && (...)`——未选时该项根本不存在（点了也是 no-op）。
+> 4. **「新建任务」重置为未选**：侧栏项 `onClick → handleNewConversation()`
+>    （`ui-docs-viewer-C2jT2eXi.js:201817`）→ `const targetCwd = groupKey || ""`（`:209034`）
+>    → `taskStarterCwd$.next(targetCwd)`（`:209049`）→ home 订阅 `setCwd("")`
+>    （`home-DrgzoIb-.js:937`）。**空间组「+」相反**，传 `groupKey` 落进该空间
+>    （`:210585-210588`）——我们同款：侧栏「新建任务」重置，组头「+」显式带上该 cwd。
+
 ## Why
 
 我们的 playground（不绑定目录、无文件工具）是**我们自己的发明**，不是 WorkBuddy 的设计——
 代码注释里「WorkBuddy cwd=\"\" 同语义」的背书经全面取证**查无实据**，必须修正。
 WorkBuddy 的真实模型（asar 内 `main/server.js` 中文注释与 locale 取证）：
+
+> **【2026-09-15 订正】上一句取证有误**：WorkBuddy **确有**「不使用工作空间」这一项，
+> 当年据此把 picker 里该项移除属于误判，已于同日回退（`src/renderer/workspace-picker.tsx`
+> 恢复该选项，选中即 `setWorkspace("")` 回到待分配态）。证据（解包产物
+> `docs/WorkBuddy-reference/extracted/renderer/assets/`）：
+> - `lib-chat-ui-ChIVprRk.js:45155` / `:45805`：locale `chatInput.workspacePicker.noWorkspace`
+>   = "No workspace" / "不使用工作空间"；
+> - `lib-chat-ui-ChIVprRk.js:60867`：真实渲染分支，点击执行 `store.api.setCwd("")`
+>   —— 这就是当年注释所指的「cwd=\"\" 同语义」，**并非查无实据**；
+> - `ui-docs-viewer-C2jT2eXi.js:270718`：首页 task starter 也有同名项，选中即存 `{ path: "" }`；
+> - `home-DrgzoIb-.js:399`：`isPlayground: isCloudTask ? false : !cwd`（cwd 为空 = playground）。
+>
+> **仍然成立的一半**：WorkBuddy 的 playground 会话工具齐全，没有「不装文件工具」的独立语义
+> ——所以**只恢复这个入口，不复辟旧的 playground（限制工具集）语义**：临时任务的工具集与
+> 权限照常。本 spec 的其余结论（每任务独立临时目录、默认存储路径设置项、侧栏分桶键、
+> saveToWorkspace 转正、旧会话归类）均不受影响。
 
 - 默认工作空间根：设置项 `defaultWorkspacePath`（UI 可改），兜底 `~/WorkBuddy`；
   「新建任务、工作空间时将自动存放在该路径下。修改后不影响已有数据」
@@ -26,11 +64,14 @@ WorkBuddy 的真实模型（asar 内 `main/server.js` 中文注释与 locale 取
 ## What Changes
 
 - **playground 语义退役**（**BREAKING**，同仓库同构建同步改，不留兼容 shim）：
-  「不使用工作空间」选项从 picker 移除；新建任务默认 = **临时任务**，
+  ~~「不使用工作空间」选项从 picker 移除~~（**2026-09-15 撤回**：该选项已恢复并保留，
+  见 Why 下的订正注）；新建任务默认 = **临时任务**，
   cwd = `<默认根>/临时任务`（共享临时目录，对齐 `<root>/Claw`），完整工具集 + 权限门照常装。
   `PLAYGROUND_TOOLS` 与 configDir/playground 占位目录逻辑一并退役。
 - **契约改名**：`SessionState.isPlayground` / `SessionSummary.isPlayground` → `isTempTask`
   （cwd = 临时任务目录或默认根本身即临时；旧 playground 会话恢复时归入临时任务）。
+  **【2026-09-15 订正】** 括注里的「默认根本身即临时」已作废：cwd = 生效根本身现归
+  **空间区**成组（见「明确不做」末尾订正注）；契约改名本身仍然有效。
 - **默认存储路径设置项**：`preferences.json` 加 `defaultWorkspacePath`；
   生效根 = `KAMIBUDDY_WORKSPACE_DIR` env > 设置项 > `~/KamiBuddy`（分层，WorkBuddy 同款）；
   设置页新增「默认存储路径」区块（显示当前值 / 修改（目录选择）/ 还原默认；
@@ -67,7 +108,8 @@ WorkBuddy 的真实模型（asar 内 `main/server.js` 中文注释与 locale 取
 
 系统 SHALL 让未选择工作空间的新任务以 `<生效根>/临时任务` 为会话 cwd（递归创建），
 加载完整工具集并装权限门（工作区=临时目录）。新建任务的默认状态即临时任务，
-picker 不再有「不使用工作空间」选项。
+~~picker 不再有「不使用工作空间」选项~~（**2026-09-15 撤回**：该选项保留，
+选中即回到「未选工作空间」态，见 Why 下的订正注）。
 
 #### Scenario: 默认任务落临时目录
 - **WHEN** 用户不动工作空间选择直接发消息
@@ -104,6 +146,13 @@ dialog 输入空间名称（校验：非空/非法字符/255/同级重名/保留
 - cwd = 默认根本身的会话：归任务区（与临时目录同等待遇——都是「非命名空间」）；
 - cwd = configDir/playground 的会话在列表中同样显示为临时任务（任务区）。
 
+> **【2026-09-15 订正】** 上面第二条已作废：cwd = 生效根本身只可能来自用户**显式**选
+> picker 的「默认工作空间」，现归**空间区**成组，不再与临时目录同等待遇
+>（见「明确不做」末尾订正注）。第一条（旧 playground 会话恢复为临时任务）不变。
+> **【2026-09-15 订正 ②】** 本条里「只可能来自用户显式选 picker 的『默认工作空间』」
+> 已作废 —— 该 picker 固定项已删（文件头订正 ② 第 2 条）；该状态现只来自
+> 「打开本地文件夹…」或旧会话，`isTaskCwd` 的判定不变。
+
 #### Scenario: 旧 playground 会话恢复
 - **WHEN** 用户恢复本次变更前的 playground 会话
 - **THEN** 会话以临时任务身份恢复（cwd 为临时目录），历史完整可见，可继续对话
@@ -116,6 +165,16 @@ dialog 输入空间名称（校验：非空/非法字符/255/同级重名/保留
 新行为：`isTempTask=true`（cwd = 临时任务目录 / 默认根本身 / 旧 playground 占位目录）
 的会话进任务区；其余进空间区。分组、排序、查看更多等规则不变。
 
+> **【2026-09-15 订正】新行为列举里的「默认根本身」已移除**：cwd = 生效根本身现归
+> **空间区**成组（`isTaskCwd` 不再把「cwd === 根」判为任务区），对齐 WorkBuddy 的可证
+> 分组条件 `!isPlayground && cwd && isAbsolute(cwd)` → 按 cwd 成组
+>（`docs/WorkBuddy-reference/extracted/renderer/assets/ui-docs-viewer-C2jT2eXi.js:205329-205347`）。
+> 后果：用户**显式**选过 picker「默认工作空间」的历史会话会从任务区移到空间区，成为
+> 一个名为 `basename(根)`（默认 `KamiBuddy`）的组。详见本文末「明确不做」的订正注与
+> `src/daemon/workspace-model.ts` 的 `isTaskCwd` 注释。
+> **【2026-09-15 订正 ②】** 本条里「用户**显式**选过 picker「默认工作空间」」已作废 ——
+> 该 picker 固定项已删（文件头订正 ② 第 2 条），该状态现只来自「打开本地文件夹…」或旧会话。
+
 ## REMOVED Requirements
 
 ### Requirement: playground（不使用工作空间）模式
@@ -127,6 +186,14 @@ dialog 输入空间名称（校验：非空/非法字符/255/同级重名/保留
 **Migration**：旧 playground 会话恢复时归入临时任务（cwd 映射）；picker 默认态改为临时任务；
 `PLAYGROUND_TOOLS` 与 configDir/playground 占位逻辑随代码一并删除（不做兼容 shim）。
 
+> **【2026-09-15 订正】本节 Reason 的取证结论「playground 是我们自己的发明」不成立**
+> （证据见 Why 下的订正注：WorkBuddy 的 picker 与首页 task starter 都有「不使用工作空间」项，
+> 选中即把 cwd 置空）。因此 **picker 里的「不使用工作空间」选项已恢复**（选中 →
+> `setWorkspace("")`，回到待分配态，见 `src/renderer/workspace-picker.tsx`）。
+> 本节的 **Removal 范围收窄为**「不绑定目录 + 不装文件工具」的 playground 语义：
+> `PLAYGROUND_TOOLS`、configDir/playground 占位目录的退役仍然有效，
+> 上条 Migration（旧会话归临时任务、picker 默认态为临时任务）也不变。
+
 ## 明确不做（本变更范围外）
 
 - **转正时迁移历史文件**：共享临时目录无法干净归属单个任务的文件（WorkBuddy 同结构），
@@ -136,6 +203,19 @@ dialog 输入空间名称（校验：非空/非法字符/255/同级重名/保留
   `isClawRuntimeCwd` 同款局限——改根后旧临时会话不再被识别为临时，归空间区），
   注释写明不另做历史映射。
 - 空间区的「默认根」组特殊化：cwd=根本身的会话归任务区，不在空间区单列「默认根」组。
+
+> **【2026-09-15 订正】上条「明确不做」已作废**：cwd = 生效根本身现**归空间区成组**——
+> `isTaskCwd` 已移除「cwd === 根 → 任务区」的判定。依据是 WorkBuddy 的分组条件可证：
+> root 作为 cwd 非 playground（`isPlayground = isCloudTask ? false : !cwd`）、且非空，
+> 故 `!isPlayground && cwd && isAbsolute(cwd)` 命中，按 cwd 成组
+>（`docs/WorkBuddy-reference/extracted/renderer/assets/ui-docs-viewer-C2jT2eXi.js:205329-205347`）。
+> 当年把根划进任务区的前提是「临时任务 cwd = 根本身」，两者同义；该前提已随 spec
+> `align-per-task-dirs`（不选工作空间 → 待分配 → 首次执行分配时间戳目录）消失，
+> cwd = 根不再有「未选空间」的含义。**不要改回任务区**：那会让 cwd = 根的历史会话
+> 在侧栏跳回任务区。
+> **【2026-09-15 订正 ②】** 本条原写「只可能来自用户**显式**选 picker 里的『默认工作空间』」
+> —— 该 picker 固定项已删（文件头订正 ② 第 2 条）；该状态现只来自「打开本地文件夹…」
+> 或旧会话。判定与结论不变。
 
 ## 附：必须修正的错误背书
 

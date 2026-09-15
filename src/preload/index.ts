@@ -26,7 +26,7 @@ const bridge: KamiBridge = {
 	snapshot: (sessionId) => ipcRenderer.invoke(INVOKE.snapshot, sessionId),
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
-	newTask: () => ipcRenderer.invoke(INVOKE.newTask),
+	newTask: (cwd) => ipcRenderer.invoke(INVOKE.newTask, cwd),
 	completions: () => ipcRenderer.invoke(INVOKE.completions),
 	pickInputFiles: () => ipcRenderer.invoke(INVOKE.pickInputFiles),
 	// File 的路径只能在 preload 取（webUtils 不进 renderer），同步返回。

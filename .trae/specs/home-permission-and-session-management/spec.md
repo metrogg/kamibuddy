@@ -125,6 +125,12 @@ session_info / custom / bashExecution 条目不进入视图（它们属于上下
 「新建任务」按钮行为不变（作废旧会话、保留工作空间），
 新建后当前会话未发消息前不出现在列表（无内容不值得列）。
 
+> **【2026-09-15 订正】** 括注里的「作废旧会话」早已被 `support-concurrent-tasks` 翻转
+>（旧会话后台保活，不再作废）；「保留工作空间」也在今天对齐为**重置为未选**：WorkBuddy
+> 的侧栏「新建任务」走 `handleNewConversation()` → `targetCwd = groupKey || ""` →
+> `taskStarterCwd$.next("")` → `setCwd("")`（`ui-docs-viewer-C2jT2eXi.js:201817/:209034/:209049`
+> + `home-DrgzoIb-.js:937`）。要「就在某个空间里开新活」走空间组「+」（传 groupKey）。
+
 ## REMOVED Requirements
 
 ### Requirement: 首页权限 chip 占位反馈

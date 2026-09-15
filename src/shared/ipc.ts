@@ -627,9 +627,9 @@ export interface SessionSummary {
 	readonly title: string;
 	/** 用户命名（appendSessionInfo）；未命名为 undefined，不要用空串。 */
 	readonly name?: string;
-	/** 会话启动时的工作目录（pi header.cwd）。临时任务会话为该任务的自动目录（历史会话可能是共享临时目录，或生效根本身）。 */
+	/** 会话启动时的工作目录（pi header.cwd）。临时任务会话为该任务的自动目录（历史会话可能是共享临时目录）。 */
 	readonly cwd: string;
-	/** 是否临时任务会话（daemon 按 cwd 目录名形态判定好：自动时间戳目录 / 历史「临时任务」目录 / 生效根本身 / 旧 playground 占位，UI 不推导）。 */
+	/** 是否临时任务会话（daemon 按 cwd 目录名形态判定好：自动时间戳目录 / 历史「临时任务」目录 / 旧 playground 占位；生效根本身归空间区，2026-09-15。UI 不推导）。 */
 	readonly isTempTask: boolean;
 	/** epoch ms。 */
 	readonly createdAt: number;
@@ -752,7 +752,12 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: [sessionId?: string]; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
-	[INVOKE.newTask]: { args: []; result: void };
+	/**
+	 * 新建任务。cwd 缺省 = 空串 = 未选工作空间（待分配，首次执行才分配自动目录）——
+	 * 侧栏「新建任务」走这条，选择被重置（对齐 WorkBuddy 的 taskStarterCwd$("")）。
+	 * 显式传 cwd 只用于空间组「+」（就在这个空间里开新活，对应 WorkBuddy 传 groupKey）。
+	 */
+	[INVOKE.newTask]: { args: [cwd?: string]; result: void };
 	[INVOKE.completions]: { args: []; result: CompletionData };
 	[INVOKE.pickInputFiles]: { args: []; result: PickedInputFiles | undefined };
 	[INVOKE.setScene]: { args: [sceneId: string]; result: void };

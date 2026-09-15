@@ -529,14 +529,18 @@ function docxEnvContext(): EnvContext {
 
 /**
  * 「该 cwd 归任务区（临时任务）」的判定。口径收在 workspace-model.ts 的 isTaskCwd：
- * 待分配空串 / 自动分配目录 / 历史共享临时目录 / 生效根本身 / 旧 playground 占位。
+ * 待分配空串 / 自动分配目录 / 历史共享临时目录 / 旧 playground 占位。
  *
- * **改成形态判定、不再比对生效根**（spec: align-per-task-dirs）：用户改默认存储路径后，
- * 旧任务（cwd 在原根下）依旧归任务区，不再整体漂到空间区。这里只负责现读生效根与
- * 配置目录两个口径（可能因设置变更而变），形态规则本身在纯函数里（可单测）。
+ * 两点口径注意：
+ *   - **不比对生效根**（spec: align-per-task-dirs）：用户改默认存储路径后，旧任务
+ *     （cwd 在原根下）依旧归任务区，不再整体漂到空间区。
+ *   - **生效根本身不算任务区**（2026-09-15）：cwd = 根归空间区成组 —— 对齐 WorkBuddy
+ *     （论证见 isTaskCwd 注释）。【2026-09-15 订正】该状态现在只来自「打开本地文件夹…」
+ *     或旧会话 —— picker 里指向根的固定项已删（WorkBuddy 没有那项）。
+ * 这里只负责现读配置目录（可能因设置变更而变），形态规则本身在纯函数里（可单测）。
  */
 function isTempCwd(cwd: string): boolean {
-	return isTaskCwd(cwd, { root: getEffectiveWorkspaceRoot(), configDir: getConfigDir() });
+	return isTaskCwd(cwd, getConfigDir());
 }
 
 /**
@@ -1554,7 +1558,8 @@ async function listSessions(): Promise<SessionSummary[]> {
 				title: deriveSessionTitle(info.name, info.firstMessage),
 				name: info.name,
 				cwd: info.cwd,
-				// 任务区判定收在 isTempCwd 一处（临时目录 / 生效根本身 / 旧 playground 占位）。
+				// 任务区判定收在 isTempCwd 一处（自动目录 / 历史共享临时目录 / 旧 playground 占位；
+				// 生效根本身归空间区，2026-09-15）。
 				isTempTask: isTempCwd(info.cwd),
 				createdAt: info.created.getTime(),
 				modifiedAt: info.modified.getTime(),
@@ -1621,8 +1626,10 @@ function rewriteSessionHeaderCwd(filePath: string, cwd: string): void {
 /**
  * 空间组集合：非临时任务会话的 cwd 去重，合并显示名覆盖。
  *
- * 临时任务（临时目录、生效根本身、旧 playground 占位）归任务区、不成组 ——
- * 它们不是用户经营的空间。组由会话文件派生（磁盘真相）：没有会话的目录
+ * 临时任务（自动分配目录、历史共享临时目录、旧 playground 占位）归任务区、不成组 ——
+ * 它们不是用户经营的空间。生效根本身反而**会**成组：cwd = 根只来自用户显式选过
+ * 「默认工作空间」，那是一个真实的用户空间（2026-09-15 对齐 WorkBuddy：root 作为 cwd
+ * 非 playground，按 cwd 成组）。组由会话文件派生（磁盘真相）：没有会话的目录
  * 不形成组，被移除的空间若再开任务会自然重现。显示名只是视图层覆盖
  * （workspaces.json），注册表里没有的键不回补。
  * 组顺序无所谓 —— 排序是 renderer 的事（契约注释）。
@@ -1981,26 +1988,51 @@ type Handler = (args: readonly unknown[]) => Promise<unknown>;
  *
  * 不再作废旧会话（spec B：切换语义翻转）—— 旧桶留在注册表里后台保活，
  * 其 run 照跑；新任务开一个 pristine 桶（宿主懒建，首次 prompt 才占资源）。
- * 工作空间选择保留：新任务落在 defaultWorkspaceDir（applyWorkspace 设定的
- * 默认 cwd 来源）—— 未选工作空间时它是空串（待分配），这里**不建任何目录**，
- * 首次执行（建宿主）时才分配独立时间戳目录（见 createHost）；两轴沿用旧会话的
- * 选择（开新活不是改偏好）。
+ *
+ * 工作空间选择**重置为未选**（默认 targetCwd = 空串 = 待分配），对齐 WorkBuddy
+ * 侧栏「新建任务」：其 onClick → handleNewConversation() 不传 groupKey（ui-docs-viewer:201817）
+ * → `const targetCwd = groupKey || ""`（:209034）→ `taskStarterCwd$.next(targetCwd)`（:209049）
+ * → home 订阅 `setCwd("")`（home-DrgzoIb-.js:937）→ chip 落回提示语。
+ * **不要改成「保留上次选择」**：那看着更友好，但会让「回不到未选态」成为暗坑 ——
+ * 用户想开一个不落任何空间的临时任务时，只能先去 picker 手动点「不使用工作空间」。
+ * 「就在某个空间里开新活」由空间组「+」承担（显式传 cwd，见 newTaskInSpace；
+ * WorkBuddy 同款：:210585-210588 的 onClick 传 `groupKey`）。
+ *
+ * 待分配（空串）时这里**不建任何目录**，首次执行（建宿主）时才分配独立时间戳
+ * 目录（见 createHost）；两轴沿用旧会话的选择（开新活不是改偏好）。
  */
-async function newTask(): Promise<void> {
+async function newTask(targetCwd = ""): Promise<void> {
+	/*
+	 * 落点先落定。显式指定 cwd（空间组「+」）时复用 applyWorkspace 把关：它做
+	 * 校验（配置目录 / 应用目录一律拒）+ 建目录 + 起预览服务，并把 defaultWorkspaceDir
+	 * 设成该目录。**为什么必须过这道守**：cwd 一旦进会话，该目录内的写操作就被权限门
+	 * 直接放行（core/workspace.ts 开头），增一个能写 cwd 的入口就得走同一道校验 ——
+	 * 不为新入口抄第二份判定。
+	 *
+	 * 空串 = 未选 / 待分配，不是真实目录，不走守卫也不建目录。
+	 * defaultWorkspaceDir 同步跟着走：它同时是 workspaceSnapshot().current（「下一次
+	 * 新建任务落在哪」的权威值），只改桶不改它会让快照与界面各说各话。
+	 */
+	if (targetCwd === "") defaultWorkspaceDir = "";
+	else await applyWorkspace(targetCwd);
+
 	if (currentBucket.hostPromise === undefined) {
-		// pristine 桶没有可保留的现场（无宿主无历史）：直接换绑到默认空间，
-		// 不另开新桶 —— 否则首开应用连点两次「新建任务」会留下一串空桶。
-		const next = defaultWorkspaceDir;
-		if (currentBucket.cwd !== next) {
-			currentBucket.cwd = next;
-			updateStateLocally(currentBucket, { cwd: next, isTempTask: isTempCwd(next) });
+		// pristine 桶没有可保留的现场（无宿主无历史）：直接换绑，不另开新桶 ——
+		// 否则首开应用连点两次「新建任务」会留下一串空桶。
+		// （显式 cwd 那条路上面已被 applyWorkspace 换绑过，这里通常是 no-op。）
+		if (currentBucket.cwd !== targetCwd) {
+			currentBucket.cwd = targetCwd;
+			updateStateLocally(currentBucket, {
+				cwd: targetCwd,
+				isTempTask: isTempCwd(targetCwd),
+			});
 		}
 		return;
 	}
 	const bucket = createBucket<SessionHost>({
-		cwd: defaultWorkspaceDir,
+		cwd: targetCwd,
 		conversation: freshConversation(
-			defaultWorkspaceDir,
+			targetCwd,
 			currentBucket.conversation.state.sceneId,
 			currentBucket.conversation.state.interactionId,
 			// 专家绑定与两轴正交，同口径沿用（开新活不是改偏好）。
@@ -2271,7 +2303,7 @@ const handlers: Record<string, Handler> = {
 	 * 新建任务：旧会话后台保活（宿主留注册表，run 照跑），开一个全新
 	 * pristine 桶为当前会话（见 newTask）。
 	 */
-	[INVOKE.newTask]: async () => newTask(),
+	[INVOKE.newTask]: async ([cwd]) => newTask(cwd as string | undefined),
 
 	/* ── 历史会话 ─────────────────────────────────────────────────── */
 

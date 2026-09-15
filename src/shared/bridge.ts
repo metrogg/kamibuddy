@@ -65,8 +65,12 @@ export interface KamiBridge {
 	readonly snapshot: (sessionId?: string) => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
-	/** 新建任务：作废旧会话、开一个全新会话（在当前工作空间语义下）。 */
-	readonly newTask: () => Promise<void>;
+	/**
+	 * 新建任务：作废旧会话、开一个全新会话。
+	 * cwd 缺省 = 未选工作空间（待分配，首次执行才分配自动目录）——「新建任务」重置选择；
+	 * 显式传 cwd 用于空间组「+」（就在该空间里开新活）。语义见 ipc.ts 的 INVOKE.newTask。
+	 */
+	readonly newTask: (cwd?: string) => Promise<void>;
 	/** 输入框补全数据源（@ 文件 + / 命令）。 */
 	readonly completions: () => Promise<CompletionData>;
 	/**

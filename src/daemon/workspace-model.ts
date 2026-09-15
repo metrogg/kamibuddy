@@ -25,14 +25,6 @@ import { createSessionDir } from "../core/workspace.ts";
  */
 export const LEGACY_TEMP_TASKS_DIR_NAME = "临时任务";
 
-/** 判定「任务区」所需的路径口径（现读不缓存，由调用方传入）。 */
-export interface TaskCwdRoots {
-	/** 生效根（getEffectiveWorkspaceRoot）。 */
-	readonly root: string;
-	/** 配置目录（getConfigDir），用于识别旧 playground 占位目录。 */
-	readonly configDir: string;
-}
-
 /**
  * 该 cwd 是否是「任务私有 / 共享的任务目录」而非用户经营的工作空间：
  *   - 自动分配目录（`<任意根>/YYYY-MM-DD-HH-mm-ss`）；
@@ -56,15 +48,29 @@ export function isTaskPrivateCwd(cwd: string, configDir: string): boolean {
  *   - `""` 待分配（新建任务尚未首次执行，对齐 WorkBuddy `isPlayground → cwd=""`）；
  *   - 自动分配目录；
  *   - 历史共享临时目录；
- *   - 生效根本身（用户显式选「默认工作空间」，根不成组）；
  *   - 旧 playground 占位目录。
  *
- * **只看形态、不比对生效根**（这是本 spec 要修的漂移）：用户改了「默认存储路径」后，
+ * **不含「生效根本身」**（2026-09-15 起，口径对齐 WorkBuddy）：cwd = 根本身归**空间区**成组。
+ * WorkBuddy 的分组条件是可证的：`!isPlayground && cwd && isAbsolute(cwd)` 即按 cwd
+ * 成组（`docs/WorkBuddy-reference/extracted/renderer/assets/ui-docs-viewer-C2jT2eXi.js:
+ * 205329-205347`），root 作为 cwd 既非 playground 也不为空，因此进「空间」。
+ *
+ * 【2026-09-15 订正】上句原写「cwd = 根本身只可能来自用户显式选 picker 里的『默认工作空间』」
+ * —— 那个固定项已删（WorkBuddy 的 picker 选项全部来自 `wb.workspaces.list()`，没有指向根的
+ * 固定项）。现在该状态只可能来自「打开本地文件夹…」或旧会话，但**判定不变**：根仍然不是
+ * 任务区，理由从「用户刻意选过它」变成「它不是任务私有形态（非空、非自动目录、非临时目录）」。
+ *
+ * 旧模型下「未选工作空间 = 临时任务」的 cwd 就落在根本身，两者同义，才顺手把根也划进
+ * 任务区；新模型（spec: align-per-task-dirs）改走「待分配 → 首次执行分配时间戳目录」，
+ * cwd 不再是根本身，该前提已消失。**别改回任务区**：cwd = 根的历史会话会整体跳回任务区，
+ * 而它本该作为空间在侧栏成组。
+ *
+ * **只看形态、不比对生效根**（这是另一处要修的漂移）：用户改了「默认存储路径」后，
  * 旧任务目录（cwd 仍在原根下）依旧命中，不会因为根变了就被误判成空间组。
  * 历史上用「当前生效根」比对时，改一次根旧任务就整体漂到空间区。
  */
-export function isTaskCwd(cwd: string, roots: TaskCwdRoots): boolean {
-	return cwd === "" || cwd === roots.root || isTaskPrivateCwd(cwd, roots.configDir);
+export function isTaskCwd(cwd: string, configDir: string): boolean {
+	return cwd === "" || isTaskPrivateCwd(cwd, configDir);
 }
 
 /**

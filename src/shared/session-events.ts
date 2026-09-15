@@ -471,18 +471,26 @@ export interface SessionState {
 	/**
 	 * 会话工作目录。临时任务会话（isTempTask=true）的 cwd 为首次执行时分配的
 	 * 每任务独立目录（<生效根>/YYYY-MM-DD-HH-mm-ss，见 spec: align-per-task-dirs），
-	 * 历史会话可能是旧的共享「临时任务」目录；或生效根本身（同为「非命名空间」）。
+	 * 历史会话可能是旧的共享「临时任务」目录。
 	 * 待分配（新建任务尚未首次执行）时为空串。
 	 * undefined 仅出现在会话尚未建立的初始瞬态。
+	 *
+	 * cwd = 生效根本身时**不是**临时任务（2026-09-15）：归空间区成组（对齐 WorkBuddy）。
+	 * 【2026-09-15 订正】原注写「那只会来自用户显式选 picker 的『默认工作空间』」—— 该固定
+	 * 项已删（WorkBuddy 的 picker 没有指向根的固定项），现在只来自「打开本地文件夹…」或旧会话。
 	 */
 	readonly cwd: string | undefined;
 	/**
 	 * 是否为临时任务会话（未绑定命名工作空间）。
 	 *
 	 * 每次新建任务默认即临时任务：首次执行时分配独立时间戳目录、加载完整工具集、
-	 * 权限门照常 —— 不再存在「不绑定目录、无文件工具」的 playground 模式（经全面取证，
-	 * 那是我们自己的发明，WorkBuddy 并无 cwd="" 语义；其真实模型见 asar
-	 * main/server.js 的 createDefaultCwd/formatDefaultCwdTimestamp，即每任务独立时间戳目录）。
+	 * 权限门照常 —— 不再存在「不绑定目录、无文件工具」的 playground 模式（那套「限制工具集」
+	 * 是我们自己加的，WorkBuddy 的 playground 会话工具齐全）。
+	 *
+	 * 【2026-09-15 订正】WorkBuddy **确有** cwd="" 语义，之前「查无实据」的结论是错的：
+	 * picker 的 `chatInput.workspacePicker.noWorkspace` 一项点击即 `store.api.setCwd("")`
+	 *（lib-chat-ui-*.js:60867）。其新建任务的落点见 asar main/server.js 的
+	 * createDefaultCwd/formatDefaultCwdTimestamp，即每任务独立时间戳目录。
 	 */
 	readonly isTempTask: boolean;
 	/** 场景 id，对应 resources/scenes/<id>/。决定根代理与可用能力面。 */

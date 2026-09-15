@@ -6,6 +6,7 @@
  * 抽法），所以这些规则抽在 workspace-model.ts 里测。钉住：
  *   - 待分配（""）首次执行才落盘时间戳目录；换了工作空间 / 已分配目录则不落盘；
  *   - 归属判定只看形态、不比对生效根（改根后旧任务不漂移 —— 关键回归）；
+ *     生效根本身归空间区（cwd = 根只来自用户显式选「默认工作空间」，对齐 WorkBuddy）；
  *   - 转正：独占自动目录整体 rename（产物随目录走），共享临时目录走回退、不被动；
  *   - reveal 白名单：任务时间戳目录通过，未知绝对路径仍拒。
  *
@@ -43,43 +44,45 @@ afterEach(() => {
 });
 
 describe("isTaskCwd（归属判定只看形态，不比对生效根）", () => {
-	const roots = { root: ROOT, configDir: CONFIG_DIR };
-
 	it("待分配空串归任务区", () => {
-		expect(isTaskCwd("", roots)).toBe(true);
+		expect(isTaskCwd("", CONFIG_DIR)).toBe(true);
 	});
 
 	it("自动分配目录归任务区", () => {
-		expect(isTaskCwd(join(ROOT, "2026-09-14-17-30-45"), roots)).toBe(true);
+		expect(isTaskCwd(join(ROOT, "2026-09-14-17-30-45"), CONFIG_DIR)).toBe(true);
 	});
 
 	it("历史共享临时目录归任务区", () => {
-		expect(isTaskCwd(join(ROOT, LEGACY_TEMP_TASKS_DIR_NAME), roots)).toBe(true);
+		expect(isTaskCwd(join(ROOT, LEGACY_TEMP_TASKS_DIR_NAME), CONFIG_DIR)).toBe(true);
 	});
 
-	it("生效根本身归任务区（根不成组）", () => {
-		expect(isTaskCwd(ROOT, roots)).toBe(true);
+	it("生效根本身归空间区（按 cwd 成组）", () => {
+		// 2026-09-15 口径对齐 WorkBuddy：root 作为 cwd 非 playground，按 cwd 归空间区成组。
+		// 【2026-09-15 订正】原注写「用户显式选『默认工作空间』」—— 该 picker 固定项已删，
+		// 现在 root 作 cwd 只来自「打开本地文件夹…」或旧会话；判定不变。
+		// 别改回任务区 —— 那会让 cwd = 根的历史会话在侧栏从空间区跳回任务区。
+		expect(isTaskCwd(ROOT, CONFIG_DIR)).toBe(false);
+		expect(isTaskCwd(NEW_ROOT, CONFIG_DIR)).toBe(false);
 	});
 
 	it("旧 playground 占位目录归任务区", () => {
-		expect(isTaskCwd(join(CONFIG_DIR, "playground"), roots)).toBe(true);
+		expect(isTaskCwd(join(CONFIG_DIR, "playground"), CONFIG_DIR)).toBe(true);
 	});
 
 	it("普通工作空间目录归空间区", () => {
-		expect(isTaskCwd(join(ROOT, "季度汇报"), roots)).toBe(false);
+		expect(isTaskCwd(join(ROOT, "季度汇报"), CONFIG_DIR)).toBe(false);
 	});
 
 	it("形态近似的非自动目录不误判", () => {
-		expect(isTaskCwd(join(ROOT, "automation-2026-09-14-17-30-45"), roots)).toBe(false);
-		expect(isTaskCwd(join(ROOT, "2026-9-1-1-1-1"), roots)).toBe(false);
+		expect(isTaskCwd(join(ROOT, "automation-2026-09-14-17-30-45"), CONFIG_DIR)).toBe(false);
+		expect(isTaskCwd(join(ROOT, "2026-9-1-1-1-1"), CONFIG_DIR)).toBe(false);
 	});
 
-	it("改存储根后旧时间戳目录仍归任务区（关键回归）", () => {
-		// 生效根换成 NEW_ROOT，但 cwd 仍在旧 ROOT 下：形态判定必须仍命中，
+	it("改存储根后旧时间戳目录仍归任务区（关键回归：判定不比对生效根）", () => {
+		// 生效根已换成 NEW_ROOT，而判定根本不接收根 —— 形态命中必须与根无关，
 		// 否则改一次「默认存储路径」旧任务就整体漂到空间区。
-		const changed = { root: NEW_ROOT, configDir: CONFIG_DIR };
-		expect(isTaskCwd(join(ROOT, "2026-09-14-17-30-45"), changed)).toBe(true);
-		expect(isTaskCwd(join(ROOT, LEGACY_TEMP_TASKS_DIR_NAME), changed)).toBe(true);
+		expect(isTaskCwd(join(ROOT, "2026-09-14-17-30-45"), CONFIG_DIR)).toBe(true);
+		expect(isTaskCwd(join(ROOT, LEGACY_TEMP_TASKS_DIR_NAME), CONFIG_DIR)).toBe(true);
 	});
 });
 

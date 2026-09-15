@@ -829,27 +829,39 @@ export function App(): React.JSX.Element {
 	/**
 	 * 新建任务：daemon 开全新会话并切当前，旧会话后台保活（run 不中止，
 	 * 多任务并发见 spec）。列表经 taskListChanged 推送更新，这里只按
-	 * 权威快照换指针。工作空间选择保留（在哪个空间就在哪个空间开新任务）。
+	 * 权威快照换指针。
+	 *
+	 * 工作空间选择**重置为未选**（cwd 缺省 → daemon 收到空串 = 待分配），对齐
+	 * WorkBuddy 侧栏「新建任务」（取证链条见 daemon newTask 注释）。想「就在某个
+	 * 空间里开新活」走空间组「+」（newTaskInSpace 显式传 cwd）——别把重置改回
+	 * 「保留上次选择」，那会堵死「开一个未选空间的临时任务」这条路。
 	 *
 	 * 旧会话的未读点保留：未读属于「那个会话完成了但你没看」的事实，
 	 * 当前会话换了并不消灭这个事实 —— 点回那行时才清。
 	 */
-	const newTask = useCallback(() => {
-		if (link.kind !== "ready") {
-			setView("home");
-			return;
-		}
-		window.kami
-			.newTask()
-			.then(() => {
-				resyncSnapshot();
+	const runNewTask = useCallback(
+		(cwd?: string) => {
+			if (link.kind !== "ready") {
 				setView("home");
-			})
-			.catch((error: unknown) => {
-				showToast(error instanceof Error ? error.message : String(error));
-			});
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [link.kind, resyncSnapshot]);
+				return;
+			}
+			window.kami
+				.newTask(cwd)
+				.then(() => {
+					resyncSnapshot();
+					setView("home");
+				})
+				.catch((error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+				});
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		},
+		[link.kind, resyncSnapshot],
+	);
+
+	// 侧栏「新建任务」的直连入口。**不能再带参数**：它被当作 onClick 传下去
+	// （sidebar 的 `onClick={onNewTask}`），React 会把事件对象塞进第一个形参。
+	const newTask = useCallback(() => runNewTask(), [runNewTask]);
 
 	/**
 	 * 从专家市场页启用专家（WorkBuddy「使用专家」同款）：开新任务 → 绑定专家
@@ -1000,21 +1012,15 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
-	 * 空间组「+」：先把工作空间切到该 cwd，再复用 newTask 开新会话。
-	 * 顺序不能反 —— newTask 在当前 cwd 建会话，先建再切就会落错空间。
-	 * 切空间失败则不新建：否则任务落在原空间，与用户在界面上点选的位置不符。
+	 * 空间组「+」：在**该空间**里开新任务（WorkBuddy 同款：组头的 + 把 groupKey 交给
+	 * handleNewConversation）。daemon 收到显式 cwd 会先走 applyWorkspace 的同一道守卫
+	 * （校验 + 建目录 + 起预览），再建会话 —— 等价于 setWorkspace + newTask，但合成
+	 * 一次 IPC：省掉一轮重复校验，也不给「先建再切」留写反的机会。
+	 * 校验/预览起不来时整条调用失败，任务不会落在错的空间。
 	 */
 	const newTaskInSpace = useCallback(
-		(cwd: string) => {
-			window.kami
-				.setWorkspace(cwd)
-				.then(() => newTask())
-				.catch((error: unknown) => {
-					showToast(error instanceof Error ? error.message : String(error));
-				});
-		},
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[newTask],
+		(cwd: string) => runNewTask(cwd),
+		[runNewTask],
 	);
 
 	/** 重命名空间：仅改显示名覆盖（workspaces.json），成功重拉 metas（会话列表不经这里变）。 */

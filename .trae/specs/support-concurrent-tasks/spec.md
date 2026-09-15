@@ -123,6 +123,11 @@ WorkBuddy 的成熟模型是「运行不设硬上限、空闲 LRU 回收、切�
 **新**：applyWorkspace 不再拒绝也不作废旧会话；它只决定**后续新建任务**的默认 cwd
 （既有会话 cwd 终身绑定不变，WorkBuddy 同模型）。
 
+> **【2026-09-15 订正】** 上句仍成立，但要补一层：「新建任务」会把该默认 cwd **重置为
+> 未选**（对齐 WorkBuddy 的 `taskStarterCwd$.next("")`），所以「切了空间就一直是那个空间」
+> 不再成立 —— 想让新任务落进某空间，要么切完直接发消息（pristine 桶已换绑），要么走
+> 空间组「+」（显式把 cwd 传给 `newTask`）。语义与取证见 `src/daemon/index.ts` 的 `newTask`。
+
 ### Requirement: 预览服务
 
 **原**：PreviewServer 单例单根，setRoot 先关旧服务。

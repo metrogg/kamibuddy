@@ -343,9 +343,10 @@ export interface SessionHostOptions {
 	 */
 	readonly expertId?: string;
 	/**
-	 * 是否临时任务会话（cwd 落在任务区：临时目录 / 生效根本身 / 旧 playground 占位）。
-	 * 判定规则的唯一来源在 daemon（isTempCwd）——生效根分层合成、旧占位目录
-	 * 归类都是 daemon 的知识，本文件只负责透传，不在此处回推，免得两处规则漂移。
+	 * 是否临时任务会话（cwd 落在任务区：自动分配目录 / 历史共享临时目录 / 旧 playground
+	 * 占位；生效根本身归空间区，2026-09-15）。
+	 * 判定规则的唯一来源在 daemon（isTempCwd）——配置目录与旧占位目录的归类都是 daemon
+	 * 的知识，本文件只负责透传，不在此处回推，免得两处规则漂移。
 	 */
 	readonly isTempTask: boolean;
 	/** 领域事件出口。 */
