@@ -32,7 +32,7 @@ import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, clampPanelWidth, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
-import { IconChart } from "./icons.tsx";
+import { IconActivity } from "./icons.tsx";
 import { SourcesPanel } from "./sources-panel.tsx";
 import { TaskDiagnosticsPanel } from "./task-diagnostics-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
@@ -1460,7 +1460,7 @@ export function App(): React.JSX.Element {
 							setPanelOpen(next);
 						}}
 					>
-						<IconChart size={16} />
+						<IconActivity size={16} />
 					</button>
 					<button
 						type="button"

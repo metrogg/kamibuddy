@@ -1257,23 +1257,30 @@ textarea:focus-visible {
 	padding: var(--space-2) var(--space-3);
 }
 
-/* 右上角产物面板开关（App 层渲染，与 ArtifactPanel 同范围：只在对话视图出现）。
-   absolute 脱离 flex 流：面板开合 / sash 拖拽 / 宽度过渡都不推移它；
+/* 右上角的面板开关组（App 层渲染，只在对话视图出现；成员：任务诊断 + 产物面板）。
+
+   为什么是「组 + 容器定位」：这两个按钮是 .app 的直接子节点、absolute 脱离 flex 流
+   —— 面板开合 / sash 拖拽 / 宽度过渡都不推移它们（放 header 行尾会被推着走）。
+   原先只有一个按钮，定位就写在按钮自己身上；加第二个后两个都 absolute 会**完全重叠**
+   （同 top/right），所以定位上移到容器，按钮退化成组内的横排子项。
+
+   尺寸口径（**对齐 chat-header，这是「同排呼吸」的算法**）：
+   - top 8px = chat-header 的 padding-top；按钮高 28（padding 6 + icon 16），
+     垂直中线因此与 header 里的按钮齐平。
+   - gap 用 --space-3（8px），**与 chat-header 的 gap 同值** —— 组内间距必须等于
+     header 内的按钮间距，否则两块并排时疏密不匀（这是上一版看着不协调的直接原因）。
+   - 组的右让位见 .chat-header / .preview-head 的 padding-right（两处同值 84px）。
+
    z 与面板全屏态同档（--z-overlay）：二者是 .app 的同级兄弟，按钮在 DOM 里
-   排在面板之后，同档下按树序后绘者在上 —— 全屏时仍浮在面板之上可点。
-   仍低于阻塞审批弹窗（--z-modal）。
-   top/right 与 chat-header、preview-head 的 8px/12px 内边距对齐，同排呼吸。 */
-/* 右上角的开关组：**容器承担定位**（原先挂在单个按钮上）。
-   加了第二个开关（任务诊断）后，两个按钮若各自 absolute 会完全重叠
-   （同 top/right）—— 所以定位上移到容器，按钮退化成组内的横排子项。
-   组必须在面板组件之外：面板收起时要靠它再展开；z 高于面板全屏态。 */
+   排在面板之后，同档下按树序后绘者在上 —— 全屏时仍浮在面板之上可点；
+   仍低于阻塞审批弹窗（--z-modal）。 */
 .panel-toggle-group {
 	position: absolute;
 	top: 8px;
 	right: 12px;
 	display: flex;
 	align-items: center;
-	gap: var(--space-1);
+	gap: var(--space-3);
 	z-index: var(--z-overlay);
 }
 
@@ -1685,10 +1692,12 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
-	/* 左右内边距让出窗口两角：App 层的侧栏开关（左）与产物面板开关（右）
-	   钉在那里，行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区
-	   （48 = 40px 开关占位 + 8px gap）。 */
-	padding: var(--space-3) 48px;
+	/* 左右内边距让出窗口两角：App 层的侧栏开关（左）与面板开关组（右）钉在那里，
+	   行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区。
+	   右侧 84 = right 12 + 两个按钮（28×2）+ 组内 gap 8 + 呼吸 8 ——
+	   面板开关从一个变两个（任务诊断，2026-09-15）后 48 不再够：
+	   行尾的 ModeSwitch 会被第二个按钮压住。 */
+	padding: var(--space-3) 84px;
 	border-bottom: 1px solid var(--border);
 }
 
@@ -3567,11 +3576,12 @@ textarea:focus-visible {
 	gap: var(--space-1);
 	/* 右内边距让出窗口右上角：App 层的面板开关组（含面板全屏态）钉在那里，
 	   行尾的「全屏/外部打开」不能被它盖住。
-	   80 = 组宽（两个 28px 按钮 + 4px gap = 60）+ right 12 + 4 余量。
+	   84 = right 12 + 两个按钮（28×2）+ 组内 gap 8 + 呼吸 8 —— **与 .chat-header
+	   同一套算法**（两个 header 的右让位必须同值，否则面板开合时行尾会错位）。
 	   开关组从 1 个按钮变 2 个（任务诊断，2026-09-15）后 44 不再够 —— 这正是
 	   它当初被登记成「让位偏移」的原因：它跟着控件宽度走，不是间距档值。
-	   80 已落进「≥48px 页面留白」的内置豁免区间，故不再需要白名单条目。 */
-	padding: var(--space-3) 80px var(--space-3) var(--space-4);
+	   84 已落进「≥48px 页面留白」的内置豁免区间，故不再需要白名单条目。 */
+	padding: var(--space-3) 84px var(--space-3) var(--space-4);
 	border-bottom: 1px solid var(--border);
 }
 

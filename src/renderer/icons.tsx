@@ -154,6 +154,19 @@ export const IconChart = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+/**
+ * 任务诊断入口：活动脉冲（心电图）。
+ *
+ * 不复用 IconChart —— 那是侧栏「统计」入口的图标，两处同名会让「统计」与
+ * 「这个任务的诊断」在视觉上分不开。语义上诊断看的是「这一轮跑得顺不顺」，
+ * 脉冲比柱状图贴切。
+ */
+export const IconActivity = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		<path d="M2 12h4l3-7 4 14 3-7h6" />
+	</Svg>
+);
+
 /** 统计页入口：四格网格（沿用 WorkBuddy 用量热力图的方格语义）。 */
 export const IconStats = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
