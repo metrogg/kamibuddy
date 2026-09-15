@@ -282,6 +282,9 @@ export function spawnConfined(api: Win32Bindings, request: SpawnRequest): Spawne
 			// CREATE_UNICODE_ENVIRONMENT 与显式环境块配对，缺了就是 ERROR_INVALID_PARAMETER。
 			abi.CREATE_SUSPENDED |
 				abi.CREATE_UNICODE_ENVIRONMENT |
+				// 不给子进程新建控制台：daemon 是 GUI 进程、没有宿主控制台可继承，
+				// 不加这个标志时用户会看到「闪一下空终端」（理由与实测见 win32-abi.ts）。
+				abi.CREATE_NO_WINDOW |
 				// 诊断矩阵用：脱离调用链所在的 Job（Job 未禁止时才生效）。
 				(request.breakawayFromJob === true ? abi.CREATE_BREAKAWAY_FROM_JOB : 0),
 			// envBase 缺省时继承 process.env（正常路径）；诊断脚本可换基底。

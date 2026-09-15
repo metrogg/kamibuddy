@@ -144,6 +144,22 @@ export const CREATE_SUSPENDED = 0x4;
  */
 export const CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
 
+/**
+ * 不为新进程创建控制台窗口。
+ *
+ * dsh README 记录受限令牌下用它会死在 DLL 初始化（0xC0000142），因此他们依赖
+ * 「共享宿主控制台」—— 而我们的 daemon 是 GUI 进程（Electron utilityProcess），
+ * **没有宿主控制台可继承**：不加这个标志时，每个受限子进程都会**新建一个控制台**，
+ * 用户能看到「闪一下空终端」（2026-09-15 实测报告）。
+ *
+ * **实测结论：在我们的环境里可用**（cmd.exe 与 powershell.exe 均正常退出哨兵码；
+ * 见 `npm run smoke:sandbox` 的 9 项断言，跑在真实 utilityProcess 里）。
+ * dsh 那条警告来自他们的令牌/默认 DACL 组合，我们修掉默认 DACL 的毒性路径后
+ * 已不适用 —— 但仍由启动自检兜底：万一某台机器上它导致进程起不来，
+ * 探测会报 `process-start-failed` 并降级，而不是静默废掉所有命令。
+ */
+export const CREATE_NO_WINDOW = 0x08000000;
+
 /** JOBOBJECTINFOCLASS：基本 UI 限制。 */
 export const JobObjectBasicUIRestrictions = 4;
 /** UI 限制位：只能用 Job 句柄表里已有的 USER 对象句柄（打击桌面/窗口站访问）。 */
