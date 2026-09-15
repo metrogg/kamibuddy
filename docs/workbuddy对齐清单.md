@@ -141,7 +141,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | F11 | 个人文件安全 | `<personal_files_safety>` 是全提示最长章节：Trigger→Rules 结构，8 条规则（禁区目录、只读扫描、模糊先问、警告+列清单+确认、先备份、用回收站不用 rm、单批≤10、Windows 禁写非 ASCII 路径脚本） | 权限门做了机制层拦截，提示层无此章节 | 🟡 |
 | F12 | Windows 命令安全 | 禁多余 shell 包装、破坏命令路径必须绝对且校验、失败后禁止换命令重试 | command-guard 拦危险模式；无「失败禁止重试」提示条款 | 🟡 |
 | F13 | 地域约定 | `<regional_conventions>`：A 股红涨绿跌、¥ 符号 —— 显式声明「默认用户是中国人」 | 无 | ❌ 便宜 |
-| F14 | UI 感知输出 | `<final_answer_instructions>`：告知模型中间过程在 UI 被折叠，最终回复必须自足、上限 50–70 行 | delivery-rules 片段含自足 + 复述清单 + 50-70 行约束（WB 搬用适配）；**前台配套已落地**：轮折叠 + 段折叠 + 锚点终答（`renderer/fold-view.ts` + `turn-fold.ts`，对标 MetaFold） | ✅ |
+| F14 | UI 感知输出 | `<final_answer_instructions>`：告知模型中间过程在 UI 被折叠，最终回复必须自足、上限 50–70 行 | delivery-rules 片段含自足 + 复述清单 + 50-70 行约束（WB 搬用适配）；**前台配套已落地**：轮折叠 + 段折叠 + 锚点终答（`renderer/fold-view.ts` + `turn-fold.ts`，对标 MetaFold）。**2026-09-15 补**：工具分组前移到顶层渲染路径（进行中的轮同样成组），组头由计数摘要改为**意图标题**（`shared/metafold.ts` 的 `summarizeToolRun`；WB `computeFoldSummary` + `TOOL_DESCRIPTORS` 同款，模型不参与），并补「点击组头展开时释放吸底跟随」（WB `useNotifyUserExpandToggle` 同款）；**相邻正文取批前优先**（WorkBuddy 是批后优先，证据 `lib-chat-ui-ChIVprRk.js:227346` 的 `segmentBodyText(segments[i + 1]) ?? segmentBodyText(segments[i - 1])`）——**有意偏离**：批间那句是过渡句，对下一批才是引子/意图，取批后会把上一批的结果/评价句当成组头主题（轮首位无批前正文时仍退回批后兜底） | ✅ |
 | F15 | 特性开关进模板 | `productFeatures.*` / `IsWindows` / `LocalSkillsMemoryEnabled` 条件裁剪 | 无 | ❌ |
 | F16 | 提示级 i18n | `'中文' in ResponseLanguage` 检测，连 UI 指路文案和文档站域名都切换 | 无（只有中文） | ⛔ |
 | F17 | 模板云端热更 | 118 个 nunjucks 模板全在 product.json，云端下发；三级合并（内置 → 本地 overlay → 云控）+ 两级缓存 + last-good 门 | 本地文件；`config.get` 单一入口已预留云端 | 🟡 接口预留 |
@@ -235,7 +235,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | 编号 | 能力 | WorkBuddy 机制（内部实现） | 我们 | 状态 |
 |---|---|---|---|---|
 | L1 | 首页 | 场景页签 + 能力入口 + 输入卡 + 案例卡 + 吉祥物 | `home-view.tsx` 同构（hero / 页签 / 能力 chip / 案例卡） | ✅ |
-| L2 | 对话页 | 流式、思考折叠、工具卡、中断、扫光、复制、代码块、输入历史、字数闸、IME 守卫 | `chat-view.tsx` 全套 + **轮折叠/段折叠/终答锚点**（fold-view + turn-fold，已完成轮过程折进「已完成 Xs」头、≥2 连续工具批摘要条、锚点=最长∪最后正文） | ✅ |
+| L2 | 对话页 | 流式、思考折叠、工具卡、中断、扫光、复制、代码块、输入历史、字数闸、IME 守卫 | `chat-view.tsx` 全套 + **轮折叠/段折叠/终答锚点**（fold-view + turn-fold，已完成轮过程折进「已完成 Xs」头、≥2 连续工具批摘要条、锚点=最长∪最后正文）。**2026-09-15 补**：**进行中的轮同样按意图成组**（`fold-view.ts` 的 `streamingItems` → 计划项 `tool-group`，`shouldFold = 其后出现过正文 || 整轮已结束`，正在执行的尾批保持平铺），组头展开释放吸底跟随；组头文案见 F14 | ✅ |
 | L3 | 右侧预览面板 | tab + 概览下拉 + pin + 外部打开；HTML 活预览（webview + 本地静态服务） | `artifact-panel.tsx`：多 tab + 概览 + 多格式渲染（HTML / Office / PDF / 代码），iframe + 127.0.0.1 静态服务 | ✅ |
 | L4 | 变更跟踪 UI | 工具行带绝对路径 + `+N −M` 徽章 + 「查看所有变更」 | 已对齐（真实 diff + 状态标签） | ✅ |
 | L5 | 产物卡片 | 文件名 + 大小 + 预览/打开图标 | 产物卡已对齐 | ✅ |

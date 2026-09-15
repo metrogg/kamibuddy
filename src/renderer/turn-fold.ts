@@ -60,6 +60,20 @@ export interface TurnView {
 	readonly turnId: MessageId | undefined;
 	readonly userEntry: UserMessage | undefined;
 	readonly state: TurnState;
+	/**
+	 * 操作条挂点：本轮**末条 assistant 消息**的 id；本轮还在流式时为 undefined。
+	 *
+	 * 口径直接取自 WorkBuddy 的助手操作条（AssistantFeedback）：它不是每条消息都有 ——
+	 * `nextMessageType === "assistant"` 直接 return null（本 request 后面还有 assistant），
+	 * `isSessionActive && nextMessageType === null` 也 return null（本 request 还在跑）
+	 * （docs/WorkBuddy-reference/extracted/renderer/assets/lib-chat-ui-ChIVprRk.js:183179 起）。
+	 * 换成我们的说法就是「本条之后本轮没有别的 assistant」+「该轮已结束」。
+	 *
+	 * 只在流式轮上不给值，是因为末条会随「思考 → 工具 → 思考」不断换宿主：不 gate 的话
+	 * 按钮会一行行往下跳。这里只给 id，不给渲染策略 —— 调用点（chat-view）用它同时决定
+	 * 复制/重试/指标/模型名落在哪一条，避免「指标在 A 条、模型名在 B 条」。
+	 */
+	readonly actionsAnchorId: MessageId | undefined;
 	/** 本轮内容条目（user 之后、下一条 user 之前）的折叠计划。 */
 	readonly plan: FoldPlan;
 	/** 被取消的轮：轮末补「用户已取消」指示行（在折叠区外）。 */
@@ -108,6 +122,9 @@ export function buildTurnViews(
 			turnId: user?.id,
 			userEntry: user,
 			state,
+			// 挂点 = 本轮末条 assistant，且本轮已结束（流式轮见字段注释）。
+			actionsAnchorId:
+				state === "streaming" ? undefined : content.findLast((e) => e.role === "assistant")?.id,
 			plan: buildFoldPlan(content, state),
 			cancelled: user !== undefined && cancelledTurns.includes(user.id),
 		});

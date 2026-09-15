@@ -159,3 +159,33 @@ describe("轮终态推导与计划接线", () => {
 		expect(views[1]?.cancelled).toBe(false);
 	});
 });
+
+describe("操作条挂点", () => {
+	it("挂在本轮末条 assistant 上：中间的过程条目不挂（否则每段过程下面一个复制钮）", () => {
+		const views = buildTurnViews(
+			[user("u1"), assistant("a1", "过程说明"), tool("t1"), assistant("a2", "终答")],
+			{ streaming: false },
+		);
+		expect(views[0]?.actionsAnchorId).toBe("a2");
+	});
+
+	it("流式轮不给挂点（末条每变一次按钮就跳一次）", () => {
+		const entries = [user("u1"), assistant("a1", "终答")];
+		expect(buildTurnViews(entries, { streaming: true })[0]?.actionsAnchorId).toBeUndefined();
+		expect(buildTurnViews(entries, { streaming: false })[0]?.actionsAnchorId).toBe("a1");
+	});
+
+	it("历史轮各有挂点，不随新轮流式被夺走（上一轮的操作条不闪失）", () => {
+		const views = buildTurnViews(
+			[user("u1"), assistant("a1", "旧答"), user("u2"), tool("t2")],
+			{ streaming: true },
+		);
+		expect(views[0]?.actionsAnchorId).toBe("a1");
+		expect(views[1]?.actionsAnchorId).toBeUndefined();
+	});
+
+	it("纯过程轮（还没有 assistant 条目）没有挂点", () => {
+		const views = buildTurnViews([user("u1"), tool("t1")], { streaming: false });
+		expect(views[0]?.actionsAnchorId).toBeUndefined();
+	});
+});

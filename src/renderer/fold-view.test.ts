@@ -5,9 +5,13 @@
  *   1. 锚点选举（最长/最后/并列/空文本/全空/非正文不参与）
  *   2. 段折叠分组（≥2 成批/孤立不批/正文断批/思考不断批/豁免断批）
  *   3. 轮折叠计划（完成/进行中/错误/豁免恒外/无正文/无工具/双锚点/末锚点尾巴）
+ *   4. 进行中轮的顶层分组与折叠时机（shouldFold：其后出现过正文 / 执行中尾批平铺 /
+ *      组 id 稳定）
+ *   5. 批次主题的相邻正文兜底（批前优先 → 批后兜底；入参主题优先）
  */
 
 import { describe, expect, it } from "vitest";
+import { summarizeToolRun } from "@shared/metafold.ts";
 import type {
 	ArtifactsPresentedEntry,
 	AssistantMessage,
@@ -64,13 +68,18 @@ function planKinds(items: readonly FoldPlanItem[]): string[] {
 	return items.map((item) => item.kind);
 }
 
-/** 计划项覆盖的条目 id 序列（折叠段展开、单块取自身）。 */
+/** 计划项覆盖的条目 id 序列（折叠段/顶层组展开、单块取自身）。 */
 function itemIds(item: FoldPlanItem | undefined): string[] {
 	if (item === undefined) return [];
-	if (item.kind === "turn-folded" || item.kind === "process-fold") {
+	if (item.kind === "turn-folded" || item.kind === "process-fold" || item.kind === "tool-group") {
 		return item.entries.map((e) => e.id);
 	}
 	return [item.entry.id];
+}
+
+/** 顶层工具组项（断言时避免逐处窄化）。 */
+function groups(items: readonly FoldPlanItem[]): Extract<FoldPlanItem, { kind: "tool-group" }>[] {
+	return items.filter((i): i is Extract<FoldPlanItem, { kind: "tool-group" }> => i.kind === "tool-group");
 }
 
 function batches(items: readonly ToolBatchItem[]): Extract<ToolBatchItem, { kind: "batch" }>[] {
@@ -130,7 +139,10 @@ describe("段折叠分组", () => {
 		expect(batch?.cards.map((c) => c.id)).toEqual(["t1", "t2", "t3"]);
 		expect(batch?.leadName).toBe("read");
 		expect(batch?.totalCount).toBe(3);
-		expect(batch?.summary).toBe("读取 2 个文件、写入 1 个文件");
+		// 摘要措辞归 shared/metafold 的词汇表（意图标题那一版在那边的测试里钉），
+		// 这里只钉「分组直连那份词汇表、不自己拼文案」。
+		expect(batch?.summary).toBe(summarizeToolRun(batch?.cards ?? []));
+		expect(batch?.summary).not.toBe("");
 	});
 
 	it("孤立单块不成批：原样平铺", () => {
@@ -230,12 +242,13 @@ describe("轮折叠计划", () => {
 		expect(plan.hasTurnFold).toBe(false);
 	});
 
-	it("进行中轮：全展开计划，锚点集为空", () => {
+	it("进行中轮：其后出现过正文的批次收成顶层组，无正文时仍平铺", () => {
 		const plan = buildFoldPlan(
 			[user("u1"), tool("t1"), tool("t2"), assistant("a1", "写到一半")],
 			"streaming",
 		);
-		expect(planKinds(plan.items)).toEqual(["visible", "visible", "visible", "visible"]);
+		expect(planKinds(plan.items)).toEqual(["visible", "tool-group", "visible"]);
+		expect(itemIds(plan.items[1])).toEqual(["t1", "t2"]);
 		expect(plan.hasTurnFold).toBe(false);
 		expect(plan.anchors.size).toBe(0);
 	});
@@ -282,5 +295,172 @@ describe("轮折叠计划", () => {
 		);
 		expect(planKinds(plan.items)).toEqual(["turn-folded", "anchor"]);
 		expect(itemIds(plan.items[0])).toEqual(["a1", "t1"]);
+	});
+});
+
+describe("批次主题的相邻正文兜底", () => {
+	it("批前无正文（轮首批）：退回批后的正文，不丢唯一的线索", () => {
+		const blocks = [
+			tool("t1", "read", ""),
+			tool("t2", "read", ""),
+			assistant("a1", "先跑一遍测试，看有没有挂。"),
+		];
+		const batch = batches(groupToolBatches(blocks))[0];
+		expect(batch?.summary).toBe("查看 跑一遍测试");
+		// 对照组：抽掉那条正文就退回无主题形态（说明主题确实来自正文）。
+		expect(batches(groupToolBatches(blocks.slice(0, 2)))[0]?.summary).toBe("查看相关文件");
+	});
+
+	it("批后没有正文：用批前最近的一条正文", () => {
+		const blocks = [
+			assistant("a0", "先梳理一下目录结构，再动手。"),
+			tool("t1", "read", ""),
+			tool("t2", "read", ""),
+		];
+		expect(batches(groupToolBatches(blocks))[0]?.summary).toBe("查看 梳理一下目录结构");
+	});
+
+	it("批前后都有正文：批前优先（有意偏离 WorkBuddy 的批后优先）", () => {
+		const blocks = [
+			assistant("a0", "先梳理目录结构。"),
+			tool("t1", "read", ""),
+			tool("t2", "read", ""),
+			assistant("a1", "依赖检查完毕。"),
+		];
+		// 批前那句是下一批的引子/意图；批后那句读出来的是本批的「结果」，不当主题。
+		expect(batches(groupToolBatches(blocks))[0]?.summary).toBe("查看 梳理目录结构");
+	});
+
+	it("豁免卡断批：批后取不到，用批前的正文", () => {
+		const blocks = [
+			assistant("a0", "先梳理目录结构。"),
+			tool("t1", "read", ""),
+			tool("t2", "read", ""),
+			tool("w1", "show_widget", ""),
+		];
+		expect(batches(groupToolBatches(blocks))[0]?.summary).toBe("查看 梳理目录结构");
+	});
+
+	it("入参有主题时不被相邻正文覆盖", () => {
+		const blocks = [
+			tool("t1", "read", "README.md"),
+			tool("t2", "read", "src/a.ts"),
+			assistant("a1", "先跑一遍测试，看有没有挂。"),
+		];
+		expect(batches(groupToolBatches(blocks))[0]?.summary).toBe("查看 README.md");
+	});
+
+	it("进行中轮的顶层组同样接到相邻正文（streamingItems 走同一遍分组）", () => {
+		const plan = buildFoldPlan(
+			[tool("t1", "read", ""), tool("t2", "read", ""), assistant("a1", "先跑一遍测试，看有没有挂。")],
+			"streaming",
+		);
+		expect(groups(plan.items)[0]?.summary).toBe("查看 跑一遍测试");
+	});
+
+	it("折叠段内的批次：段内的过程正文可用作主题", () => {
+		const plan = buildFoldPlan(
+			[
+				tool("t1", "read", ""),
+				tool("t2", "read", ""),
+				assistant("a1", "先跑一遍测试，看有没有挂。"),
+				assistant("a2", "x".repeat(40)),
+			],
+			"finished",
+		);
+		const segment = plan.items[0];
+		expect(segment?.kind).toBe("turn-folded");
+		const entries = segment?.kind === "turn-folded" ? segment.entries : [];
+		expect(itemIds(segment)).toEqual(["t1", "t2", "a1"]);
+		expect(batches(groupToolBatches(entries))[0]?.summary).toBe("查看 跑一遍测试");
+	});
+});
+
+describe("进行中轮的顶层分组与折叠时机", () => {
+	it("连续 ≥2 次调用且其后出现过正文：收成一个顶层组", () => {
+		const blocks = [tool("t1", "read"), tool("t2", "grep"), assistant("a1", "查完了")];
+		const plan = buildFoldPlan(blocks, "streaming");
+		expect(planKinds(plan.items)).toEqual(["tool-group", "visible"]);
+		const group = groups(plan.items)[0];
+		expect(group?.entries.map((e) => e.id)).toEqual(["t1", "t2"]);
+		expect(group?.cards.map((c) => c.id)).toEqual(["t1", "t2"]);
+		expect(group?.leadName).toBe("read");
+		expect(group?.totalCount).toBe(2);
+		// 文案来自同一遍分组（词汇表只有一套）：不在这里钉措辞，钉「同源」。
+		expect(group?.summary).toBe(batches(groupToolBatches(blocks))[0]?.summary);
+		expect(group?.summary).not.toBe("");
+	});
+
+	it("正文断组：正文两侧各成一组，正文自身平铺", () => {
+		const plan = buildFoldPlan(
+			[tool("t1"), tool("t2"), assistant("a1", "先看看"), tool("t3"), tool("t4"), assistant("a2", "再看")],
+			"streaming",
+		);
+		expect(planKinds(plan.items)).toEqual(["tool-group", "visible", "tool-group", "visible"]);
+		expect(itemIds(plan.items[0])).toEqual(["t1", "t2"]);
+		expect(itemIds(plan.items[2])).toEqual(["t3", "t4"]);
+	});
+
+	it("单个调用不成组：即使其后有正文也平铺为单卡", () => {
+		const plan = buildFoldPlan([tool("t1"), assistant("a1", "说明")], "streaming");
+		expect(planKinds(plan.items)).toEqual(["visible", "visible"]);
+	});
+
+	it("执行中尾批平铺：整轮还没结束且其后还没正文", () => {
+		const plan = buildFoldPlan([tool("t1"), tool("t2"), tool("t3")], "streaming");
+		expect(planKinds(plan.items)).toEqual(["visible", "visible", "visible"]);
+	});
+
+	it("正文之后新起的尾批仍平铺：只有等过正文的批才收起", () => {
+		const plan = buildFoldPlan(
+			[tool("t1"), tool("t2"), assistant("a1", "中途说明"), tool("t3"), tool("t4")],
+			"streaming",
+		);
+		expect(planKinds(plan.items)).toEqual(["tool-group", "visible", "visible", "visible"]);
+		expect(itemIds(plan.items[0])).toEqual(["t1", "t2"]);
+	});
+
+	it("纯思考块被组吸收：不单独平铺，随组展开原位可见", () => {
+		const plan = buildFoldPlan(
+			[tool("t1"), assistant("a1", "", "推导"), tool("t2"), assistant("a2", "结论")],
+			"streaming",
+		);
+		expect(planKinds(plan.items)).toEqual(["tool-group", "visible"]);
+		expect(itemIds(plan.items[0])).toEqual(["t1", "a1", "t2"]);
+	});
+
+	it("豁免卡断组且不入组：show_widget 原位平铺", () => {
+		const plan = buildFoldPlan(
+			[tool("t1"), tool("w1", "show_widget", ""), tool("t2"), tool("t3"), assistant("a1", "结论")],
+			"streaming",
+		);
+		expect(planKinds(plan.items)).toEqual(["visible", "exempt", "tool-group", "visible"]);
+		expect(itemIds(plan.items[2])).toEqual(["t2", "t3"]);
+	});
+
+	it("组 id 稳定：流式增量只加内容不改 id（手点展开态不被刷新重置）", () => {
+		const live = buildFoldPlan([tool("t1"), tool("t2"), assistant("a1", "结论")], "streaming");
+		const grown = buildFoldPlan(
+			[tool("t1"), tool("t2"), tool("t3"), assistant("a1", "结论")],
+			"streaming",
+		);
+		const liveId = groups(live.items)[0]?.id;
+		expect(liveId).toBeDefined();
+		expect(groups(grown.items)[0]?.id).toBe(liveId);
+		// 且组随增量长大（同一个组，不是换了个新组）。
+		expect(groups(grown.items)[0]?.totalCount).toBe(3);
+	});
+
+	it("组 id 不含易变下标、与折叠段内的批次同源（轮结束后同一批仍是同一 id）", () => {
+		const blocks = [tool("t1"), tool("t2"), assistant("a1", "结论")];
+		const liveId = groups(buildFoldPlan(blocks, "streaming").items)[0]?.id;
+		expect(liveId).toBe("batch-t1");
+		expect(liveId).toBe(batches(groupToolBatches(blocks))[0]?.id);
+	});
+
+	it("新轮的组 id 全新 → 天生默认收起（旧轮的手点展开不外溢）", () => {
+		const first = groups(buildFoldPlan([tool("t1"), tool("t2"), assistant("a1", "结论")], "streaming").items)[0];
+		const second = groups(buildFoldPlan([tool("t9"), tool("t10"), assistant("a9", "结论")], "streaming").items)[0];
+		expect(second?.id).not.toBe(first?.id);
 	});
 });

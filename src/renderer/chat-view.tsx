@@ -310,6 +310,15 @@ function UserBubble({
  * hover 浮现（时间戳/复制不该常显），两者的分叉写在 CSS 的 .entry-toolbar-right /
  * .entry-toolbar-left 上，基类只留行内布局。
  *
+ * **但它一轮只有一条**：只挂在「该轮已结束」的那条**末条 assistant 消息**上
+ * （挂点由 turn-fold 的 TurnView.actionsAnchorId 判定，调用点见 actionsAnchorIds）。
+ * 「常驻」是显隐口径，不是挂载粒度 —— 曾经每条 assistant 条目都挂一个，是 hover 时代
+ * 留下的粒度：entry 很细，一个「深度思考」段、一段过程说明各自就是一条 assistant 条目，
+ * 那时按钮要 hover 才现、不显眼；改成常驻后就成了每段过程下面都露出一个孤零零的复制
+ * 图标，一轮里重复多次。WorkBuddy 的 assistant-feedback 同口径（只有 request 末条
+ * assistant 消息才有），这里照它做：复制/重试/指标说的是**一条回答**，过程条目不该有
+ * 「回答级」的操作条。
+ *
  * 按钮走 DESIGN.md §3.1 的「图标按钮」档（.bar-btn：无底无边、16px 图标、hover 只落
  * 一层 --bg-hover），**不用**用户侧气泡那套 .entry-icon-btn 白圆钮 —— 后者是「浮在气泡
  * 上、hover 一闪」的形态；本操作条常驻、每轮一行，白底 + 边框 + 卡片阴影会把「一行轻量
@@ -322,6 +331,7 @@ function UserBubble({
  * 重试 / 指标 / 模型名都只挂在「本轮最后一条 assistant 消息」上
  * （调用点的 metricsAnchorId，与 WB 的 credit 挂 isLastMessageOfRequest 同口径）：
  * 它们说的是**本轮**，挂到历史消息上就是错的（重试会重发最后一条用户消息）。
+ * 操作条本体（复制）则每一轮的末条 assistant 都有 —— 那是**那条回答**的操作条。
  */
 function AssistantActions({
 	text,
@@ -343,8 +353,22 @@ function AssistantActions({
 	readonly onRetry: () => void;
 	/** 本轮指标读数；不是本轮的挂点消息时传 undefined（整段不渲染，不给空壳）。 */
 	readonly metrics?: { readonly entries: readonly ConversationEntry[]; readonly turn: TurnTiming };
-}): React.JSX.Element {
+}): React.JSX.Element | null {
 	const { copied, copy } = useCopyWithTick();
+	// 复制的前提是这条回答有正文：纯思考的挂点（异常收尾、还没吐正文的轮）复制出来是空串，
+	// 不如不给一个按下去什么也拿不到的按钮。
+	const copyable = text.trim() !== "";
+	// 读数项在这里算（读数条只负责画）：空态守卫要问「读数到底有没有东西」，
+	// 只判 metrics 这个 prop 在不在会漏掉「挂了 metrics 但本轮没有 usage」的路径。
+	const items = metrics === undefined ? [] : metricItems(metrics.entries, metrics.turn);
+	/*
+		空态守卫：操作条是这条回答的「完成凭据」，一项都没得显示时整条不渲染。
+		挂点存在但无内容的情形是真的（上面那个纯思考挂点、无 usage 且无可重发消息的收尾），
+		留一个空白容器比不渲染更糟 —— 读起来像「这里本来有东西没加载出来」。
+	*/
+	if (!showExecutePlan && !copyable && !showRetry && items.length === 0 && modelId === undefined) {
+		return null;
+	}
 
 	// WorkBuddy 操作条位序：复制 → 赞踩 → 重试 → 分享 → ⋯ → 共消耗 | 模型名。
 	// 我们只做有数据/有能力的四项（赞踩是云端上报项、分享需后端，均 descope）。
@@ -356,15 +380,17 @@ function AssistantActions({
 					执行计划
 				</button>
 			)}
-			<button
-				type="button"
-				className="bar-btn"
-				aria-label="复制回答"
-				title={copied ? "已复制" : "复制回答"}
-				onClick={() => void copy(text)}
-			>
-				{copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-			</button>
+			{copyable && (
+				<button
+					type="button"
+					className="bar-btn"
+					aria-label="复制回答"
+					title={copied ? "已复制" : "复制回答"}
+					onClick={() => void copy(text)}
+				>
+					{copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+				</button>
+			)}
 			{showRetry && (
 				<button
 					type="button"
@@ -376,7 +402,7 @@ function AssistantActions({
 					<IconRefresh size={16} />
 				</button>
 			)}
-			{metrics !== undefined && <RunMetricsBar entries={metrics.entries} turn={metrics.turn} />}
+			{items.length > 0 && <RunMetricsBar items={items} />}
 			{modelId !== undefined && <span className="assistant-model">{shortModelName(modelId)}</span>}
 		</div>
 	);
@@ -733,10 +759,11 @@ const FOLD_LEAD_ICONS: Readonly<Record<string, typeof IconDoc>> = {
 
 /**
  * 段折叠条（机制对标 WorkBuddy）：一行摘要（主导图标 + 文案 + chevron），
- * 点击展开段内内容原位展示。两个用途共用同一外壳（别造两套折叠 UI）：
- *   - 工具批摘要条：fold-view groupToolBatches 的 ≥2 连续工具批，
- *     文案是 metafold 词汇表的归类摘要（「读取 2 个文件、写入 1 个文件」）；
- *     批内夹着的思考块随批展开。
+ * 点击展开段内内容原位展示。三个用途共用同一外壳（别造两套折叠 UI）：
+ *   - 顶层工具组：fold-view 计划里的 tool-group 项（进行中轮的 ≥2 连续工具批，
+ *     其后已出现正文才收进来），文案是 metafold 词汇表的摘要；
+ *   - 折叠段内的工具批摘要条：groupToolBatches 的 ≥2 连续工具批，
+ *     批内夹着的思考块随批展开；
  *   - 「过程消息」折叠条：锚点之间（或末锚点之后）的过程段，文案恒定
  *     「过程消息」，图标取段内主导工具（无工具段用兜底图标）。
  *
@@ -1089,14 +1116,14 @@ function TurnHeader({
  * token 与命中率「有数据才显示」—— 缺字段整项省略，不填 0：上游没上报与真的没用
  * 是两回事，显示 0 会把前者误导成后者。同理**一项都没有时整条不渲染**（本轮没有任何
  * usage 字段的轮）：空读数条只是操作条尾部的一段无内容间距，读起来像「这里本来有东西
- * 没加载出来」。语义克制：纯读数，不可点、无弹层（详情浮层不在本次范围）。
+ * 没加载出来」。判据在 metricItems，与操作条自身的空态守卫同源（见 AssistantActions）。
+ * 语义克制：纯读数，不可点、无弹层（详情浮层不在本次范围）。
  *
  * **不再显示「用时」**（2026-09-15 订正）：它与回合头的「已完成 Ns」同源同值，同一轮的
  * 时长在头尾各出现一次是纯噪音；WorkBuddy 的操作条里也没有时长（只有成本 + 模型名）。
  * spec: surface-run-metrics-in-chat 的「用时必显」随之作废，见该 spec 的订正注。
  * 连带去掉每 500ms 的走表 —— 那个 interval 的唯一用途就是刷新这个用时读数，摘掉读数后
- * 它只会让整条操作条在流式期间白重渲染。foldTurnMetrics 的签名仍要 now（它同时算
- * elapsedMs），传渲染时刻即可：剩下的读数与 now 无关。
+ * 它只会让整条操作条白重渲染。
  *
  * 读数段**常驻**，不跟 WorkBuddy 走 hover：WB 应用层确实把成本段藏到 hover 才现
  * （lib-chat-ui-Co_VI_pZ.css:1828 的 `.group-messages:has(.cb-assistant-message:hover)
@@ -1104,23 +1131,30 @@ function TurnHeader({
  * 而复制/赞踩/重试那排按钮是常驻的）。不跟的理由是两者的「行数」不同：WB 的成本段
  * 挂在**每一个** request 的末条消息上，长会话里就是每轮一行，藏起来才合理；我们的
  * 数据源只 fold **当前轮**（turn-metrics.ts 口径），全程只可能出现一处，藏起来等于
- * 把「指标归位」又抹掉；且它的值随本轮各步 assistant_done 递增，不是 WB 那种事后定值。
+ * 把「指标归位」又抹掉。
+ * （2026-09-15：原先「它的值随本轮各步 assistant_done 递增，不是 WB 那种事后定值」
+ * 这条理由随渲染时机收口而作废 —— 操作条只在轮结束后挂上，读数到那时就是终值。）
  * 若仍要逐字对齐 WB，改动量是两条 CSS（读数段 opacity: 0 + .entry:hover 复原）。
  */
-function RunMetricsBar({
-	entries,
-	turn,
-}: {
-	readonly entries: readonly ConversationEntry[];
-	readonly turn: TurnTiming;
-}): React.JSX.Element | null {
+
+/**
+ * 指标条的显示项（WorkBuddy 三个读数的排法：↑输入 · ↓输出 · 命中率）。
+ *
+ * 单独提出来是为了让「有没有东西可显示」只有一份判据：读数条自己按项为空不渲染，
+ * 操作条的空态守卫也要问同一个问题 —— 只按 metrics 这个 prop 在不在判，会漏掉
+ * 「挂了 metrics 但本轮一个 usage 字段都没上报」那条路径，那一下就空出一条白盒。
+ * foldTurnMetrics 的签名仍要 now（它同时算 elapsedMs），传渲染时刻即可：剩下的读数与 now 无关。
+ */
+function metricItems(entries: readonly ConversationEntry[], turn: TurnTiming): readonly string[] {
 	const metrics = foldTurnMetrics(entries, turn, Date.now());
 	const items: string[] = [];
 	if (metrics.inputTokens !== undefined) items.push(`↑${formatTokenCount(metrics.inputTokens)}`);
 	if (metrics.outputTokens !== undefined) items.push(`↓${formatTokenCount(metrics.outputTokens)}`);
 	if (metrics.hitRate !== undefined) items.push(`命中 ${Math.round(metrics.hitRate * 100)}%`);
-	if (items.length === 0) return null;
+	return items;
+}
 
+function RunMetricsBar({ items }: { readonly items: readonly string[] }): React.JSX.Element {
 	return (
 		<div className="run-metrics">
 			{items.map((text, index) => (
@@ -1476,9 +1510,11 @@ export function ChatView({
 	const currentExpert = expertId === undefined ? undefined : experts?.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
-	// 段折叠条（工具批 /「过程消息」段）的展开状态：按段 id 记忆。折叠计划
-	// 每次渲染由纯函数重算（fold-view.ts），状态必须留在组件层，否则随计划
-	// 重建丢失。段 id 由条目 id 派生（全局唯一），跨会话残留只是死键，无害。
+	// 段/组折叠条（顶层工具组、「过程消息」段、折叠段内的工具批）的展开状态：按
+	// 段 id 记忆。折叠计划每次渲染由纯函数重算（fold-view.ts），状态必须留在组件层，
+	// 否则随计划重建丢失。id 由条目 id 派生（toolCallId 全局唯一，不含下标），流式
+	// 增量只改批次内容不改 id —— 手点展开态因此不被刷新重置；新轮的 id 全新，
+	// 天然回到默认收起。跨会话残留只是死键，无害。
 	const [foldOpen, setFoldOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
 	// 渲染轮视图：先过 todo_write 聚合投影（todo-projection.ts）：多次调用
 	// 折叠成一张合成清单卡（最新全量、钉在首次出现处）。渲染侧一切消费方
@@ -1510,17 +1546,14 @@ export function ChatView({
 	// 恢复历史会话也正确 —— 有历史的会话 chips 本就不该再出现）。
 	const hasUserMessage = lastUserEntry !== undefined;
 	/*
-		指标条数据源（spec: surface-run-metrics-in-chat Task 4.1）：流式中读当前
-		回合计时（走表）；非流式按最后一条 user 消息 id 查回合计时映射，得到该轮
-		完整计时。两者都是「当前会话最近一轮」，切会话自然跟着换。查不到就不渲染
+		指标条数据源（spec: surface-run-metrics-in-chat Task 4.1）：按最后一条 user
+		消息 id 查回合计时映射，得到该轮完整计时。切会话自然跟着换。查不到就不渲染
 		（不给空壳）—— 只读读数宁可缺席，也不该显示没有依据的 0。
+		不再有「流式中读 conversation.turn（实时计时）」的分支：操作条只在轮结束后
+		渲染（见下面的 actionsAnchorIds），流式期的在跑计时没有消费方；run_finished /
+		run_error 会把停表结果写进映射，所以轮一结束就查得到（2026-09-15 收口）。
 	*/
-	const metricsTurn =
-		streaming && conversation.turn !== undefined
-			? conversation.turn
-			: lastUserId !== undefined
-				? conversation.turnTimings?.[lastUserId]
-				: undefined;
+	const metricsTurn = lastUserId === undefined ? undefined : conversation.turnTimings?.[lastUserId];
 	/*
 		操作条尾部读数（指标 / 模型名）与「重试」的挂点：**当前回合的最后一条
 		assistant 消息**（最后一条 user 之后那一段里的最后一条 assistant），与
@@ -1537,6 +1570,31 @@ export function ChatView({
 		if (lastAssistantIndex <= lastUserIndex) return undefined;
 		return entries[lastAssistantIndex]?.id;
 	}, [entries]);
+	/*
+		操作条本体的挂点：**每一轮**的末条 assistant 消息，且该轮已结束
+		（per-turn 判定在 turn-fold 的 buildTurnViews，WorkBuddy 的 assistant-feedback
+		同口径 —— 只有 request 末条 assistant 消息才有这根条）。
+
+		为什么不再每条 assistant 条目都挂：entry 粒度很细，一个「深度思考」段、一段
+		过程说明、一张工具卡各自就是一条条目。操作条原本挂在每一条 assistant 条目上
+		（那时 hover 才显，不显眼），上一轮把它改成常驻（对齐 WorkBuddy）之后，每段
+		过程下面就都露出一个孤零零的复制图标，一轮里重复出现多次 —— 常驻是显隐口径，
+		不该顺带把挂载粒度也放大。
+
+		中间条目**完全不挂**，不保留 hover 版：hover 版要常驻 DOM 才不抖布局
+		（用户气泡那套绝对定位），藏在每条过程消息里等于把观感问题原样留着 ——
+		划过时照旧闪出一个复制钮，只是平时看不见；而过程内容本身可选中复制，
+		回答级的操作条一轮一条才读得懂（WorkBuddy 也是直接不渲染，而非藏起来）。
+
+		这里的值与 metricsAnchorId 同一挂点：当前轮结束时的 actionsAnchorId 就是
+		metricsAnchorId（末条 user 之后的那条末条 assistant），所以操作条与指标条／
+		模型名／重试永远在同一行出现；历史轮只带复制（指标与重试说的是本轮，
+		挂到历史轮上就是错值）。
+	*/
+	const actionsAnchorIds = useMemo(
+		() => new Set(turnViews.flatMap((view) => (view.actionsAnchorId === undefined ? [] : [view.actionsAnchorId]))),
+		[turnViews],
+	);
 
 	/*
 		轮折叠开合状态：Map<turnId, expanded>，**缺省 = 折叠** —— run 结束
@@ -1617,6 +1675,37 @@ export function ChatView({
 		const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < BOTTOM_THRESHOLD_PX;
 		followRef.current = atBottom;
 		setShowJumpToBottom(!atBottom);
+	};
+
+	/*
+		用户主动展开折叠头 → 释放贴底跟随（机制对标 WorkBuddy 的
+		useNotifyUserExpandToggle → notifyUserExpandToggle，取证见
+		docs/WorkBuddy-reference/extracted/renderer/assets/lib-chat-ui-ChIVprRk.js：
+		该 hook 由 CollapseRenderer / ToolHeader 在点击 toggle 时调用，宿主侧
+		useUserExpandSuppression 把它转成「暂停保持贴底」）。
+
+		为什么必须释放：展开内容是**向下**增长的，而贴底跟随会把下一个流式增量
+		重新贴到底 —— 用户刚点开的折叠头会被顶出视口顶（看不到自己点开的东西）。
+		释放后视口不动，内容在头的下方长出来（展开体本身有 grid-template-rows
+		过渡，观感是「向下顶」而不是「向上推」）。
+
+		只在「展开」方向释放：收起是内容变矮，贴底不会把任何东西顶出去，
+		没必要打断用户正在进行的跟随。
+
+		为什么不照 WorkBuddy 再补一个抑制窗口（useUserExpandSuppression 的
+		USER_EXPAND_SUPPRESS_MS = 800，配合 shouldResumeBottomFollow 的
+		`!isUserExpanding` 挡住「布局增长把跟随重开」）：我们的 followRef
+		**没有自动重开闸** —— 只有用户滚到底（handleStreamScroll）、点「回到底部」、
+		新发送三处置真 —— 不存在那条路，窗口没有要守的东西。
+
+		按钮可见性按「此刻内容是否真的可滚」判定，而不是无条件显示：内容不足
+		一屏时贴底本就是空操作，「回到底部」与底部渐隐层（.stream-fade）在这时
+		出现都是假交互。
+	*/
+	const releaseFollowForExpand = (): void => {
+		followRef.current = false;
+		const node = scrollRef.current;
+		setShowJumpToBottom(node !== null && node.scrollHeight - node.clientHeight > 0);
 	};
 
 	/*
@@ -1731,7 +1820,14 @@ export function ChatView({
 		);
 	};
 
+	/*
+		段/组折叠头的开合：三个 SegmentFold 用途（顶层工具组、折叠段内的工具批、
+		「过程消息」段）共用这一个入口，所以展开时释放贴底跟随也只有一处 ——
+		既有折叠头与新组头行为一致，不会出现「有的头释放、有的头不释放」。
+	*/
 	const toggleFold = (id: string): void => {
+		const opening = !(foldOpen.get(id) ?? false);
+		if (opening) releaseFollowForExpand();
 		setFoldOpen((current) => {
 			const next = new Map(current);
 			next.set(id, !(current.get(id) ?? false));
@@ -1749,7 +1845,13 @@ export function ChatView({
 	*/
 	const anchorSpace = streaming || activePendingAlign(pendingAlign, sessionId) !== undefined;
 
+	/*
+		轮折叠头（「已完成 Xs」）同样只在展开方向释放跟随：它把整段过程插在
+		自己下方，与组头展开是同一件事（展开内容向下顶）。收起走 writeTurnFolds
+		的自动收回路径（新 run 时不经过这里），所以只有手点会触发释放。
+	*/
 	const toggleTurn = (turnId: string): void => {
+		if (!turnFoldExpanded(turnFolds, turnId)) releaseFollowForExpand();
 		writeTurnFolds(toggleTurnFold(turnFolds, turnId));
 	};
 
@@ -1824,29 +1926,34 @@ export function ChatView({
 					onPathClick={onPathClick}
 				/>
 				{/*
+					操作条只挂在本轮的挂点消息上（actionsAnchorIds）—— 一轮一条，且
+					该轮必须已结束。过程条目（思考段、过程说明）不挂：每条都挂就是
+					「每段过程下面一个孤立的复制图标」，理由见 actionsAnchorIds 的注释。
 					「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 					流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
-					重试/指标/模型名则钉在本轮的挂点消息上（metricsAnchorId）：
+					重试/指标/模型名再收紧一层，只在本轮挂点（metricsAnchorId）上：
 					重试重发的是最后一条用户消息，挂到历史轮就是错的；指标只 fold
 					当前轮、模型名也只在本轮成立，散到每条消息上就是同一串读数重复
 					或干脆是错值。
 				*/}
-				<AssistantActions
-					text={entry.text}
-					modelId={entry.id === metricsAnchorId ? conversation.state.modelId : undefined}
-					showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
-					onExecutePlan={executePlan}
-					showRetry={!streaming && entry.id === metricsAnchorId && retryText !== undefined}
-					onRetry={() => {
-						if (retryText === undefined) return;
-						retrySubmit(retryText);
-					}}
-					metrics={
-						entry.id === metricsAnchorId && metricsTurn !== undefined
-							? { entries, turn: metricsTurn }
-							: undefined
-					}
-				/>
+				{actionsAnchorIds.has(entry.id) && (
+					<AssistantActions
+						text={entry.text}
+						modelId={entry.id === metricsAnchorId ? conversation.state.modelId : undefined}
+						showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
+						onExecutePlan={executePlan}
+						showRetry={!streaming && entry.id === metricsAnchorId && retryText !== undefined}
+						onRetry={() => {
+							if (retryText === undefined) return;
+							retrySubmit(retryText);
+						}}
+						metrics={
+							entry.id === metricsAnchorId && metricsTurn !== undefined
+								? { entries, turn: metricsTurn }
+								: undefined
+						}
+					/>
+				)}
 			</div>
 		);
 	};
@@ -1878,6 +1985,8 @@ export function ChatView({
 		fold plan 单项渲染：
 		- anchor / visible / exempt → renderEntry 原位（锚点常显；豁免的产物/
 		  错误/内联卡位置不动）；
+		- tool-group → 进行中轮的顶层工具组：它已经是 batch 的内容（groupToolBatches
+		  产出），直接铺开条目，**不再过 renderSegmentEntries**（那会再套一层组头）；
 		- turn-folded → 「已完成 Xs」轮折叠区：头部展开时才渲染（前缀轮没有
 		  头部可点，内容直接铺开，段内工具批仍是摘要条）；
 		- process-fold → 锚点之间/之后的过程段，恒渲染为「过程消息」折叠条。
@@ -1888,6 +1997,25 @@ export function ChatView({
 			case "exempt":
 			case "anchor":
 				return renderEntry(item.entry);
+			case "tool-group":
+				/*
+					复用同一张 SegmentFold 外壳与同一份 foldOpen 状态（不新建折叠层）。
+					open 缺省即收起：组里只可能存「用户手点展开」的记录，组 id 由首卡 id
+					派生（流式增量不改 id），所以手点展开在组的生命周期内不会被刷新重置；
+					轮结束转 folded 计划后同一批仍是同一 id，展开态随之延续。展开体里
+					条目原位渲染——批内夹着的思考块随组展开。
+				*/
+				return (
+					<SegmentFold
+						key={item.id}
+						leadName={item.leadName}
+						label={item.summary}
+						open={foldOpen.get(item.id) ?? false}
+						onToggle={() => toggleFold(item.id)}
+					>
+						{item.entries.map(renderEntry)}
+					</SegmentFold>
+				);
 			case "turn-folded": {
 				const open = view.turnId === undefined ? true : turnFoldExpanded(turnFolds, view.turnId);
 				if (!open) return null;

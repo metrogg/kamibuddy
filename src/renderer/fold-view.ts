@@ -9,8 +9,9 @@
  *   electAnchors      锚点选举：`trim 后最长的所有正文 ∪ 最后一条正文`
  *                     （空文本不参与，连「最后一条」都不算；并列最长全保留）。
  *                     锚点常显，永不折叠。
- *   groupToolBatches  段折叠分组：连续 ≥2 个工具块成一批（摘要 = 主工具名 + 总数
- *                     + shared/metafold 的归类文案）；孤立单块不成批。
+ *   groupToolBatches  工具分组：连续 ≥2 个工具块成一批（摘要 = 主工具名 + 总数
+ *                     + shared/metafold 的归类文案）；孤立单块不成批。折叠段内部与
+ *                     顶层（进行中轮）共用这一遍分组，规则只有一套。
  *   buildFoldPlan     轮折叠计划：条目流 + 轮终态 → 每条目的渲染归属。
  *
  * 块分类（WorkBuddy taxonomy 到本模型的映射）：
@@ -42,7 +43,9 @@
  *   豁免块位置不动（exempt），user 恒 visible。
  *   无正文轮（全工具）：无锚点，一切 foldable 进 turn-folded，头部仍可展开。
  *   无工具纯文本轮：没有过程可折 → 无折叠区（锚点照常标注）。
- * streaming 轮：全展开计划（visible/exempt）——折叠是墓碑，活的过程必须可见。
+ * streaming 轮：无锚点、无轮折叠区；顶层照常按批次成组，但只有 shouldFold 为真的
+ *   批次（其后出现过正文）才收进折叠容器，正在执行的尾批保持平铺 —— 折叠是墓碑，
+ *   活的过程必须可见（判定见 streamingItems）。
  */
 
 import type {
@@ -74,6 +77,11 @@ function classify(entry: ConversationEntry): BlockClass {
 		case "artifacts_presented":
 			return "exempt";
 	}
+}
+
+/** 正文块的文本（只有 assistant 的非空文本算 text）；断批点取「相邻正文」用。 */
+function bodyText(entry: ConversationEntry): string | undefined {
+	return entry.role === "assistant" && classify(entry) === "text" ? entry.text : undefined;
 }
 
 /* ── 锚点选举 ────────────────────────────────────────────────── */
@@ -108,20 +116,25 @@ export function electAnchors(blocks: readonly ConversationEntry[]): ReadonlySet<
 
 /* ── 段折叠分组 ──────────────────────────────────────────────── */
 
+/**
+ * 一个工具组：连续 ≥2 个 foldable 单元的批次。折叠段内部的批次条与进行中轮的
+ * 顶层组是同一件事（同一遍 groupToolBatches 产出），字段共用一份，不各写一遍。
+ */
+export interface ToolGroup {
+	/** 组 id 取首卡 id：toolCallId 由 pi 保证唯一，天然稳定（metafold 同款）。 */
+	readonly id: string;
+	/** 组覆盖的原始条目序列（工具卡 + 夹在其中的思考块），展开时按此渲染。 */
+	readonly entries: readonly ConversationEntry[];
+	readonly cards: readonly ToolCard[];
+	/** 组内调用次数最多的工具名；图标映射是渲染侧的事（shared 不装渲染资产）。 */
+	readonly leadName: string;
+	readonly totalCount: number;
+	/** 组头文案（摘要 / 意图标题），措辞由 shared/metafold 的词汇表决定，这里不拼。 */
+	readonly summary: string;
+}
+
 export type ToolBatchItem =
-	| {
-			readonly kind: "batch";
-			/** 批次 id 取首卡 id：toolCallId 由 pi 保证唯一，天然稳定（metafold 同款）。 */
-			readonly id: string;
-			/** 批次覆盖的原始条目序列（工具卡 + 夹在其中的思考块），展开时按此渲染。 */
-			readonly entries: readonly ConversationEntry[];
-			readonly cards: readonly ToolCard[];
-			/** 批次内调用次数最多的工具名；图标映射是渲染侧的事（shared 不装渲染资产）。 */
-			readonly leadName: string;
-			readonly totalCount: number;
-			/** 归类摘要文案（「读取 3 个文件、写入 1 个文件」），复用 metafold 词汇表。 */
-			readonly summary: string;
-	  }
+	| ({ readonly kind: "batch" } & ToolGroup)
 	| { readonly kind: "block"; readonly entry: ConversationEntry };
 
 /**
@@ -129,13 +142,43 @@ export type ToolBatchItem =
  *
  * 连续性：正文（text）/豁免/user 断批；纯思考块不断批——思考是夹在工具
  * 调用之间的过程，被批次吸收（批次 entries 里保留它，展开时原位可见）。
+ *
+ * 相邻正文：每一批把「紧邻的正文」交给 summarizeToolRun 当主题兜底
+ * （入参字段取不到主题时才用得上，见 shared/metafold）。取值**批前优先，
+ * 批后兜底**；两者都在同一次单遍扫描里顺手记下，不做任何回扫（这段在流式
+ * 主渲染路径上，性能敏感）。
+ *
+ * 为什么批前优先：批间那句正文是**过渡句** —— 对上一批它是「结果/解释」，
+ * 对**下一批**才是「引子/意图」。`[批1] 正文A [批2]` 里的正文A 正是读作
+ * 「因为发现了 X，所以要 Y」，那就是批2 的意图；反之取批后取到的是**上一批
+ * 的结果**，实测会把「依赖装好了」「没找到相关的配置文件」「看起来这个方案
+ * 有性能问题」这类结果/评价句当成主题。本组头要的是**意图**标题（spec 的
+ * Scenario），所以批前的那句更贴合语义。
+ *
+ * 这里**有意偏离** WorkBuddy：它取批后优先，证据
+ * `docs/WorkBuddy-reference/extracted/renderer/assets/lib-chat-ui-ChIVprRk.js:227346`
+ * —— `segmentBodyText(segments[i + 1]) ?? segmentBodyText(segments[i - 1])`
+ * （同文件 :227006-227009 的 deriveTopic 是「入参对象 → 相邻正文」两级降级序，
+ * 与前后侧的选择无关）。WorkBuddy 那侧疑似**实现便利**而非设计：它的 flush 是
+ * 被 text 触发的，手边正好是刚遇到的那段正文，取批后最省事。
+ *
+ * 兜底保留：轮首的第一批前面没有正文（它前面是 user 消息，user 是轮边界、
+ * 不在本轮的 blocks 里），此时退回批后的正文 —— 否则该批会丢掉唯一的线索。
+ * 批后也没有（被豁免卡断批、或轮到批尾就结束了）时退回无主题形态。
+ *
+ * 注意：这里的「相邻」以**本次调用的入参切片**为准。顶层（streamingItems）
+ * 传的是整轮 blocks，能看见全轮正文；折叠段内（chat-view 的
+ * renderSegmentEntries）传的是段内条目，故段外紧邻的锚点正文看不见——
+ * 这是有意的：锚点是终答/重点正文，不是过程叙述，不该当组头主题。
  */
 export function groupToolBatches(blocks: readonly ConversationEntry[]): readonly ToolBatchItem[] {
 	const items: ToolBatchItem[] = [];
 	let runEntries: ConversationEntry[] = [];
 	let runCards: ToolCard[] = [];
+	/** 本批之前最近的一条正文（本批的主题首选；过渡句对下一批是引子/意图）。 */
+	let beforeText: string | undefined;
 
-	const flush = (): void => {
+	const flush = (afterText: string | undefined): void => {
 		if (runCards.length >= 2) {
 			items.push({
 				kind: "batch",
@@ -144,7 +187,7 @@ export function groupToolBatches(blocks: readonly ConversationEntry[]): readonly
 				cards: runCards,
 				leadName: leadToolName(runCards),
 				totalCount: runCards.length,
-				summary: summarizeToolRun(runCards),
+				summary: summarizeToolRun(runCards, beforeText ?? afterText),
 			});
 		} else {
 			for (const entry of runEntries) items.push({ kind: "block", entry });
@@ -159,16 +202,25 @@ export function groupToolBatches(blocks: readonly ConversationEntry[]): readonly
 			if (entry.role === "tool") runCards.push(entry);
 			continue;
 		}
-		flush();
+		// 断批的这一条若正是正文，它是本批的批后正文（批前取不到时的兜底）。
+		const body = bodyText(entry);
+		flush(body);
 		items.push({ kind: "block", entry });
+		// 正文同时成为下一批的「批前相邻正文」。
+		if (body !== undefined) beforeText = body;
 	}
-	flush();
+	flush(undefined);
 	return items;
 }
 
 /* ── 轮折叠计划 ──────────────────────────────────────────────── */
 
 export type FoldPlanItem =
+	/**
+	 * 顶层工具组：连续 ≥2 个 foldable 单元的批次，收成一行组头（与折叠段内部的
+	 * 批次条共用同一张渲染外壳）。streaming 轮里只有 shouldFold 的批次是这个 kind。
+	 */
+	| ({ readonly kind: "tool-group" } & ToolGroup)
 	/** 进「已完成 Xs」轮折叠区的一段连续 foldable 条目。 */
 	| { readonly kind: "turn-folded"; readonly id: string; readonly entries: readonly ConversationEntry[] }
 	/** 锚点之间的「过程消息」折叠段。 */
@@ -177,7 +229,7 @@ export type FoldPlanItem =
 	| { readonly kind: "anchor"; readonly entry: AssistantMessage }
 	/** 豁免块（错误卡/产物卡/内联产物/活面板），位置不动。 */
 	| { readonly kind: "exempt"; readonly entry: ConversationEntry }
-	/** 常规可见（user、无折叠区轮里的条目、进行中轮的一切）。 */
+	/** 常规可见（user、无折叠区轮里的条目、进行中轮里未成组的条目——含等正文的尾批）。 */
 	| { readonly kind: "visible"; readonly entry: ConversationEntry };
 
 export interface FoldPlan {
@@ -189,22 +241,64 @@ export interface FoldPlan {
 }
 
 /**
+ * 进行中轮的顶层计划：顶层同样成组，但只有 shouldFold 的批次才进折叠容器。
+ *
+ * shouldFold = **其后出现过正文** || **整轮已结束**（WorkBuddy buildSegments
+ * ~:227352 `seg.shouldFold = bodyTextAfter || turnFinished`）。流式轮的「整轮已结束」
+ * 恒为假，只剩「其后出现过正文」一条 —— 从后往前判定等价于「组末条目在最后一条正文
+ * 之前」，因为正文是唯一断组边界（classify 的 text），最后一条正文之后的一切都在等
+ * 正文，正在执行的尾批自然落在里面。
+ *
+ * shouldFold 为假的批次（其后还没正文、轮未结束）**不进折叠容器**，按原序平铺：
+ * WorkBuddy 的 applySummaryFolds 对 `!shouldFold` 的段直接 continue，段内单元留在
+ * 顶层、没有组头。工具还在跑的时候，用户要看到的是逐条进度，不是一个还没到点的摘要。
+ *
+ * 组 id 与折叠段内的批次条同源（groupToolBatches 取首卡 id）：
+ *   1. 组 id 只由 toolCallId 派生，流式增量（追加卡片/追加文本）不改 id ——
+ *      手点展开态在组的整个生命周期内不会被刷新重置（foldOpen 按 id 记忆）；
+ *   2. 轮结束转 finished 计划后，同一批在折叠段里仍是同一个 id，展开态自然延续；
+ *   3. 新轮的 toolCallId 全新，旧 id 不会再出现 → 新轮的组天然是默认收起。
+ */
+function streamingItems(blocks: readonly ConversationEntry[]): FoldPlanItem[] {
+	const items: FoldPlanItem[] = [];
+	/** 本轮最后一条正文的位置；-1 = 还没有正文（一切批次都还在等正文）。 */
+	const lastTextIndex = blocks.findLastIndex((entry) => classify(entry) === "text");
+	const flatten = (entry: ConversationEntry): FoldPlanItem =>
+		classify(entry) === "exempt" ? { kind: "exempt", entry } : { kind: "visible", entry };
+	// 分组保序且覆盖全部条目，所以按消费长度推进游标即可换算「组末条目的下标」。
+	let cursor = 0;
+	for (const item of groupToolBatches(blocks)) {
+		if (item.kind === "block") {
+			cursor += 1;
+			items.push(flatten(item.entry));
+			continue;
+		}
+		const lastIndex = cursor + item.entries.length - 1;
+		cursor += item.entries.length;
+		if (lastIndex > lastTextIndex) {
+			for (const entry of item.entries) items.push(flatten(entry));
+			continue;
+		}
+		items.push({ ...item, kind: "tool-group" });
+	}
+	return items;
+}
+
+/**
  * 条目流 + 轮终态 → 渲染计划。
  *
  * 计划的形态完全由 turnState 与锚点位置决定，不持有任何开合状态——
- * 「默认折叠、点击展开」是渲染侧按 turn id 记忆的视图态（Task 2），
+ * 「默认折叠、点击展开」是渲染侧按 turn id / 组 id 记忆的视图态（Task 2），
  * 这一层只回答「每条目属于哪个渲染区」。
  */
 export function buildFoldPlan(
 	blocks: readonly ConversationEntry[],
 	turnState: TurnState,
 ): FoldPlan {
-	// 未结束轮：全展开计划。折叠是墓碑，活的过程必须可见。
+	// 未结束轮：无锚点、无轮折叠区；顶层按批次成组，等正文的尾批保持平铺。
 	if (turnState === "streaming") {
 		return {
-			items: blocks.map((entry): FoldPlanItem =>
-				classify(entry) === "exempt" ? { kind: "exempt", entry } : { kind: "visible", entry },
-			),
+			items: streamingItems(blocks),
 			anchors: new Set<MessageId>(),
 			hasTurnFold: false,
 		};

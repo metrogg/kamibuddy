@@ -47,7 +47,7 @@ toast 体系升级（旧 Task 18）、消息流底部免责声明（旧 Task 19�
 操作条只含一个复制按钮：点击把该条消息的 Markdown 源文写入剪贴板，成功图标变对勾 2 秒
 （复用现有 useCopyWithTick 节奏）。
 
-> **【2026-09-15 订正】** 上述两处已不成立，以本注为准：
+> **【2026-09-15 订正】** 上述三处已不成立，以本注为准：
 > ① **助手侧改为常驻可见**，「hover 时切透明度浮现」作废（**用户侧气泡工具条不变**，
 > 仍是 hover 浮现）。理由与 WorkBuddy 同：操作条是这条回答的「完成凭据」，藏进 hover 里
 > 就等于没有（WB 的 `_assistantFeedback` 是 `display: flex` + `visibility: visible`）。
@@ -58,6 +58,15 @@ toast 体系升级（旧 Task 18）、消息流底部免责声明（旧 Task 19�
 > （仅本轮末条）→ 本轮指标读数 → 本轮模型名」。按钮语言取 DESIGN.md §3.1 的轻量图标按钮档
 > （`.bar-btn`：无底无边、16px 图标、hover 只落一层 `--bg-hover`），不用用户侧那套白圆钮
 > `.entry-icon-btn` —— 后者是「浮在气泡上」的形态，在常驻的一行元信息里太重。
+> ③ **挂载粒度不再是「每条助手消息」**：改为**只挂在「该轮已结束」时的那条末位 assistant
+> 消息**上，一轮一条（挂点判定 `src/renderer/turn-fold.ts` 的 `TurnView.actionsAnchorId`，
+> 调用点 `src/renderer/chat-view.tsx` 的 `actionsAnchorIds`）。原粒度是 hover 时代留下的：
+> entry 很细，一段「深度思考」、一段过程说明各自就是一条助手条目，那时按钮要 hover 才现、
+> 不显眼；改常驻后每条过程条目下面都会露出一个孤立的复制图标，一轮里重复多次。WorkBuddy
+> 的助手操作条本是同口径（`docs/WorkBuddy-reference/extracted/renderer/assets/lib-chat-ui-ChIVprRk.js:183181-183183`：
+> 非 assistant 直接 return null、`nextMessageType === "assistant"` 直接 return null、
+> `isSessionActive && nextMessageType === null` 也 return null），这里照它做：复制/重试/指标
+> 说的是**一条回答**，过程条目不该有「回答级」的操作条。
 
 #### Scenario: 复制助手回答
 - **WHEN** 用户 hover 一条助手消息并点击操作条的复制按钮
