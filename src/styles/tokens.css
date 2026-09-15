@@ -151,11 +151,15 @@
 
 	/* ── 字体栈（2 个，唯一真源）──────────────────────────────────────
 	   界面字体栈只在 --font-body 定义一处，body 引用它（不再各写一份，避免漂移）。
-	   MiSans 随包（@font-face 见 src/renderer/index.css），插在 "PingFang SC" 之后：
-	   macOS 命中苹方，Windows 上苹方/-apple-system/BlinkMacSystemFont 都不在，
-	   落到 MiSans（有真 400/600 字重，避免雅黑合成加粗发虚）；"Segoe UI" 与
-	   "Microsoft YaHei" 是 MiSans 子集未覆盖字符（二级汉字/生僻字）的兜底。 */
-	--font-body: "PingFang SC", "MiSans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+
+	   Windows 上**拉丁走 Segoe UI、中文走系统雅黑**（"Microsoft YaHei"）：两者都是
+	   系统字体、带微软做的 hinting，各类 DPI / 缩放下的清晰度稳。2026-09-15 用户实测
+	   反馈后改回 —— 此前 MiSans 插在苹方之后，把 Windows 的拉丁与中文**都**盖住了。
+	   MiSans 保留在**栈尾**只作兜底（@font-face 见 src/renderer/index.css）：它是随包
+	   webfont，部分机器上小字号发虚，且子集只有 3876 字（雅黑覆盖面远大于它），放到
+	   最后实际几乎不命中 —— 留着只为雅黑也缺字的极端环境不露空。
+	   macOS 命中苹方。 */
+	--font-body: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "MiSans", sans-serif;
 	--font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 

@@ -58,6 +58,9 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.workspaceRename, cwd, name),
 	removeWorkspace: (cwd) => ipcRenderer.invoke(INVOKE.workspaceRemove, cwd),
 	revealWorkspace: (cwd) => ipcRenderer.invoke(INVOKE.workspaceReveal, cwd),
+	worktreeBranches: (cwd) => ipcRenderer.invoke(INVOKE.worktreeBranches, cwd),
+	setWorktreeBranch: (branch) =>
+		ipcRenderer.invoke(INVOKE.setWorktreeBranch, branch),
 
 	respondToUi: (response) => ipcRenderer.invoke(INVOKE.uiResponse, response),
 	respondToPermission: (response) =>

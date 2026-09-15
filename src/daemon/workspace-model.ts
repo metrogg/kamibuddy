@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { isAutoSessionDirName } from "../shared/workspace.ts";
 import { createSessionDir } from "../core/workspace.ts";
+import { isWorktreePath } from "../core/worktree.ts";
 
 /**
  * 历史共享临时目录的目录名（`<生效根>/临时任务`）。
@@ -39,7 +40,16 @@ export function isTaskPrivateCwd(cwd: string, configDir: string): boolean {
 	return (
 		isAutoSessionDirName(name) ||
 		name === LEGACY_TEMP_TASKS_DIR_NAME ||
-		cwd === join(configDir, "playground")
+		cwd === join(configDir, "playground") ||
+		/*
+		 * worktree 副本（对齐清单 C22 / L27）：启用副本的会话 cwd 指向
+		 * `<配置目录>/worktrees/<仓库名>/<分支 id>`。归任务区有两个理由：
+		 *   ① 它不是用户经营的工作空间，进空间区会以 `main-a1b2c3d4` 这种目录名成组；
+		 *   ② 更要紧的是 isOwnedSessionDir 因此为假 —— 「保存到工作空间」走**新建目录**的
+		 *      回退分支，而不会去 rename 副本目录。rename 一份 git worktree 会让仓库里的
+		 *      worktree 登记表（.git/worktrees/）指向一个不存在的路径，仓库从此半坏。
+		 */
+		isWorktreePath(cwd)
 	);
 }
 

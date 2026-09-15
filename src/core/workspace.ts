@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
 import { autoSessionDirName } from "../shared/workspace.ts";
+import { isWorktreePath } from "./worktree.ts";
 
 export interface WorkspaceGuards {
 	readonly configDir: string;
@@ -47,7 +48,20 @@ export function validateWorkspacePath(path: string, guards: WorkspaceGuards): st
 	if (!isAbsolute(path)) return "工作空间必须是绝对路径";
 	if (parse(resolve(path)).root === resolve(path)) return "不能把文件系统根目录设为工作空间";
 	if (sameOrInside(guards.configDir, path) || sameOrInside(path, guards.configDir)) {
-		return "不能把配置目录（含密钥）或其上层目录设为工作空间";
+		/*
+		 * 例外：worktree 副本根之下（`<配置目录>/worktrees/...`）。
+		 *
+		 * 副本里只有某个仓库的工作树快照，凭据不在其中（auth.json 在配置目录根，
+		 * 不在 worktrees/ 子目录），而这是代码场景的**正常会话目录**
+		 *（对齐清单 C22/L27）—— 不放行的话，副本会话 resume 一律报
+		 *「会话的工作目录不可用」，功能直接不可用。
+		 *
+		 * 口子只开在副本根之内：配置目录本身、它的祖先、以及 worktrees 下的
+		 * 非副本路径照旧拒绝（两向判定都还在，只是多了一个精确的例外）。
+		 */
+		if (!isWorktreePath(path)) {
+			return "不能把配置目录（含密钥）或其上层目录设为工作空间";
+		}
 	}
 	if (sameOrInside(guards.appDir, path) || sameOrInside(path, guards.appDir)) {
 		return "不能把应用目录设为工作空间";

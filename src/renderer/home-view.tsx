@@ -19,6 +19,7 @@ import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { EmptyState, LoadingState } from "./state-views.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
+import { WorktreeChip } from "./worktree-chip.tsx";
 import {
 	IconChart,
 	IconClipboard,
@@ -295,6 +296,15 @@ export function HomeView({
 							{/* 工作空间/权限 chips：WorkBuddy wb-input-footer 同位置（白卡正下方、槽内）。 */}
 							<div className="context-row">
 								<WorkspacePicker cwd={cwd} onChanged={onWorkspaceChanged} />
+								{/*
+									worktree 副本开关：代码场景 + 已选工作目录时出现 ——
+									与 WorkBuddy 的门控逐条对齐（`sceneMode === "code" && cwd`，
+									见对齐清单 L27）。组件内部再判一次「cwd 是不是 git 仓库」，
+									不是则整块不渲染。
+								*/}
+								{sceneId === "code" && cwd !== undefined && cwd !== "" && (
+									<WorktreeChip cwd={cwd} />
+								)}
 								{/* 权限预设就地快切；两个独立旋钮与完整说明在设置页（菜单底部有入口）。 */}
 								<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
 							</div>

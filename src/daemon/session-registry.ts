@@ -32,6 +32,7 @@
 
 import type { ConversationView } from "../shared/conversation.ts";
 import type { SystemSegmentStat } from "../shared/observability.ts";
+import type { WorktreeInfo } from "../shared/worktree.ts";
 
 /**
  * 保留的空闲宿主上限。WorkBuddy D2 同值（其会话池默认保 5 个空闲）。
@@ -74,6 +75,19 @@ export interface SessionBucket<THost> {
 	conversation: ConversationView;
 	/** 会话工作目录。终身绑定（cwd 在建会话时一次性注入工具集），saveToWorkspace 换绑是唯一的写点。 */
 	cwd: string;
+	/**
+	 * 本任务的 worktree 意图（基准分支名）。建宿主时消费**一次**并清空 ——
+	 * 副本一经创建就与会话终身绑定，不清空的话每次重建宿主（空闲回收后再发消息）
+	 * 都会再建一份副本，磁盘上无声堆积。
+	 * undefined = 不在副本里跑（缺省，也是绝大多数会话的形态）。
+	 */
+	pendingWorktreeBranch: string | undefined;
+	/**
+	 * 已创建的副本信息（pendingWorktreeBranch 消费成功的产物）。
+	 * live 会话在建宿主时写入；resume 的会话由 cwd 反推重建（副本路径就是会话
+	 * cwd，形态可逆）。随 session_state 下发给 UI。
+	 */
+	worktree: WorktreeInfo | undefined;
 	/** 是否有正在进行的 run（run_started / run_finished / 折叠后的 isStreaming 维护）。 */
 	running: boolean;
 	/** 该会话在途的权限审批/问卷等待数。>0 时豁免回收 —— 用户在答的框不能随宿主一起消失。 */
@@ -119,6 +133,8 @@ export function createBucket<THost>(options: CreateBucketOptions): SessionBucket
 		sessionFilePath: undefined,
 		conversation: options.conversation,
 		cwd: options.cwd,
+		pendingWorktreeBranch: undefined,
+		worktree: undefined,
 		running: false,
 		pendingApprovals: 0,
 		spawnBudgetRemaining: SPAWN_BUDGET_PER_SESSION,

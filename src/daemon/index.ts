@@ -93,6 +93,12 @@ import {
 	setDisplayName,
 	validateDisplayName,
 } from "../core/workspace-registry.ts";
+import {
+	createWorktree,
+	getBranchList,
+	isGitRepo,
+	worktreeInfoFromCwd,
+} from "../core/worktree.ts";
 import { indexFiles } from "../core/file-index.ts";
 import { automationExtensionFactory } from "../extensions/automation-tools.ts";
 import { conversationSearchExtensionFactory } from "../extensions/conversation-search-tool.ts";
@@ -190,6 +196,7 @@ import {
 	type SessionEventEnvelope,
 	type SessionState,
 } from "../shared/session-events.ts";
+import { requireBranchName } from "../shared/worktree.ts";
 import type { CustomModelInput, CustomProviderInput, SkillInfo } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
 import { deriveSessionTitle, searchSessionFiles } from "./conversation-search.ts";
@@ -507,6 +514,21 @@ async function composeSystemPrompt(
  * 共享临时目录 `<根>/临时任务`（已退役为历史目录）。
  */
 let defaultWorkspaceDir: string = "";
+
+/**
+ * 新建任务的 worktree 基准分支（INVOKE.setWorktreeBranch 的唯一语义，对齐清单 C22/L27）。
+ *
+ * 与 defaultWorkspaceDir 同构 —— 两者都只决定**后续新建任务**怎么起，既有会话
+ * 原地不动。两处差异：
+ *
+ *   1. 工作空间是「落在哪」，worktree 是「怎么落」；后者依赖前者（没有仓库目录
+ *      就无从建副本），所以只有在新任务同时具备非空 cwd 且该 cwd 是 git 仓库时才
+ *      真建副本，见 createHost。
+ *   2. 新建任务**不重置它**（与 defaultWorkspaceDir 相反）：空间选择在「新建任务」
+ *      时清空是产品语义（不绑定空间），而副本开关是「我习惯在隔离副本里干活」的
+ *      偏好，连续开几个任务都该沿用。用户主动关掉才归 undefined。
+ */
+let pendingWorktreeBranch: string | undefined;
 
 /**
  * 历史共享临时目录 `<根>/临时任务`。**现算不缓存**：生效根 = env > 设置项 > 内置
@@ -833,6 +855,18 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 		event = {
 			type: "session_state",
 			state: { ...event.state, skippedLines: bucket.skippedLines },
+		};
+	}
+	/*
+	 * worktree 副本身份同口径并入（对齐清单 C22 / L27）：它是桶级事实
+	 *（建宿主时定下），宿主侧的 emitState 不知道有这回事，而 state 是整体替换
+	 * 语义 —— 不并入的话下一次 emitState 就把副本身份抹掉，界面会在对话中途
+	 * 突然显示「不在副本里」，而文件其实一直在副本里改。
+	 */
+	if (event.type === "session_state" && bucket.worktree !== undefined) {
+		event = {
+			type: "session_state",
+			state: { ...event.state, worktree: bucket.worktree },
 		};
 	}
 	// 折叠进**该会话**的桶：多任务并发后后台会话的事件不能污染当前视图
@@ -1223,7 +1257,42 @@ async function createHost(
 		});
 	}
 
-	// 会话与 cwd 终身绑定：桶在建任务/恢复时定好 cwd（或上面刚分配好），这里只读取。
+	/*
+	 * worktree 副本（对齐清单 C22 / L27）：意图在这里消费**一次**并清空
+	 *（见 SessionBucket.pendingWorktreeBranch 的注释）。
+	 *
+	 * 位置必须在 cwd 分配之后、建宿主之前 —— 副本路径就是本轮会话的 cwd，
+	 * 工具集、权限门、预览服务、系统提示词里的「当前工作目录」全都按它注入，
+	 * 晚一步就白建了。
+	 *
+	 * 失败**降级回原目录继续**（对齐 WorkBuddy 的 createFailedFallback）：
+	 * 副本是隔离增强，不是会话前提。最常见的失败是「cwd 不是 git 仓库」
+	 *（用户选了普通文件夹）或 git 不在 PATH，两者都不该让用户连消息都发不出去。
+	 * 但**必须响亮记日志** —— 静默降级会让用户以为自己在副本里，实际在主仓库
+	 * 目录上改文件，而这正是这个功能存在的理由。
+	 */
+	if (bucket.pendingWorktreeBranch !== undefined) {
+		const baseBranch = bucket.pendingWorktreeBranch;
+		bucket.pendingWorktreeBranch = undefined;
+		const repoCwd = bucket.cwd;
+		if (repoCwd !== "" && (await isGitRepo(repoCwd))) {
+			try {
+				const worktree = await createWorktree({ repoCwd, baseBranch });
+				bucket.worktree = worktree;
+				bucket.cwd = worktree.worktreePath;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`worktree 副本创建失败，回退到原目录继续：${message}`);
+				eventLog.append({ kind: "ipc_error", channel: "worktree:create", message });
+			}
+		} else {
+			console.error(
+				`worktree 意图未生效：${repoCwd === "" ? "会话还没有工作目录" : `不是 git 仓库：${repoCwd}`}`,
+			);
+		}
+	}
+
+	// 会话与 cwd 终身绑定：桶在建任务/恢复时定好 cwd（或上面刚分配好/换成副本），这里只读取。
 	// 建会话前确保目录存在（SessionHost.create 里也会 mkdir，
 	// 但权限门要先拿到一个已确定存在的目录）。
 	const cwd = bucket.cwd;
@@ -1754,6 +1823,13 @@ async function resumeSessionOnce(path: string): Promise<void> {
 		),
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
+	/*
+	 * 副本身份从 cwd 反推（副本路径就是会话 cwd，形态可逆）。baseBranch 与
+	 * sourceCwd 反推不出 —— 副本目录名里的 slug 是**不可逆**的清洗结果
+	 *（`origin/main` 与 `origin-main` 都成了 `origin-main`），原仓库路径更是
+	 * 完全不在里面。按类型缺省留空，硬凑一个假的基准分支比不显示更糟。
+	 */
+	bucket.worktree = worktreeInfoFromCwd(nextCwd);
 	// 降级打开的跳过计数进桶：emitSessionEvent 把它并入该桶发出的 session_state。
 	if (skippedLines > 0) bucket.skippedLines = skippedLines;
 
@@ -2020,6 +2096,9 @@ async function newTask(targetCwd = ""): Promise<void> {
 		// pristine 桶没有可保留的现场（无宿主无历史）：直接换绑，不另开新桶 ——
 		// 否则首开应用连点两次「新建任务」会留下一串空桶。
 		// （显式 cwd 那条路上面已被 applyWorkspace 换绑过，这里通常是 no-op。）
+		// worktree 意图随全局偏好带进来（与工作空间选择相反，它不在新建任务时重置，
+		// 见 pendingWorktreeBranch 的注释）。
+		currentBucket.pendingWorktreeBranch = pendingWorktreeBranch;
 		if (currentBucket.cwd !== targetCwd) {
 			currentBucket.cwd = targetCwd;
 			updateStateLocally(currentBucket, {
@@ -2040,6 +2119,7 @@ async function newTask(targetCwd = ""): Promise<void> {
 		),
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
+	bucket.pendingWorktreeBranch = pendingWorktreeBranch;
 	setCurrentBucket(bucket);
 	/*
 	 * 走事件而不是直接改 conversation：reducer 两端共用（shared/conversation.ts），
@@ -2428,6 +2508,29 @@ const handlers: Record<string, Handler> = {
 
 	// 临时任务转正：命名 → 根下把任务目录 rename 为空间名（自动目录整体改名，非自动目录回退建新目录）→ 当前会话以新 cwd 重建（见 saveToWorkspace）。
 	[INVOKE.saveToWorkspace]: async ([name]) => saveToWorkspace(name as string),
+
+	/*
+	 * worktree（对齐清单 C22 / L27）。两者都不碰既有会话：
+	 * 列分支是只读查询；设基准分支只改「下一个新任务在哪个分支上建副本」，
+	 * 副本一经创建就与会话终身绑定，换分支意味着换工作副本（那要重建会话，
+	 * 属另一件事）。当前会话还没建宿主时顺带写进桶，好让 createHost 读到。
+	 */
+	[INVOKE.worktreeBranches]: async ([cwd]) => getBranchList(cwd as string),
+	[INVOKE.setWorktreeBranch]: async ([branch]) => {
+		if (branch === undefined || branch === null) {
+			pendingWorktreeBranch = undefined;
+		} else if (typeof branch === "string") {
+			const trimmed = branch.trim();
+			// 走与 daemon 侧创建时同一个校验器：设的时候拦住非法分支名，
+			// 比建副本时才失败好（那时用户已经发完消息了）。
+			pendingWorktreeBranch = trimmed === "" ? undefined : requireBranchName(trimmed);
+		} else {
+			throw new Error("基准分支必须是字符串或 undefined");
+		}
+		if (currentBucket.hostPromise === undefined) {
+			currentBucket.pendingWorktreeBranch = pendingWorktreeBranch;
+		}
+	},
 
 	[INVOKE.setScene]: async ([sceneId]) => {
 		const id = requireReady(SCENES, sceneId as string, "场景");
@@ -2912,6 +3015,9 @@ const handlers: Record<string, Handler> = {
 		// 保留全部目录，过滤是选择器自己的口径（谓词见 workspace-model.ts）。
 		workspaces: listWorkspaces(getEffectiveWorkspaceRoot()).filter(isSelectableWorkspaceDir),
 		previewBaseUrl: previewServers.baseUrlFor(defaultWorkspaceDir),
+		// worktree 意图与 current 同源（都是「下一个新任务怎么起」）：
+		// 芯片据此显示自己是否已启用，见 WorkspaceSnapshot.worktreeBranch 的注释。
+		worktreeBranch: pendingWorktreeBranch,
 	}),
 
 	// 按 cwd 查多根实例表（每 cwd 一个端口，懒建）；未启动返回 undefined ——

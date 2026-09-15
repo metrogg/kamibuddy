@@ -9,7 +9,7 @@
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 194 条：**✅ 42 ／ 🟡 42 ／ ❌ 85 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核）
+> 当前 195 条：**✅ 42 ／ 🟡 42 ／ ❌ 86 ／ ⛔ 25**（L23 拆为 a–d 四个子项；2026-09-11 复核，2026-09-15 增补 L27「场景专属输入区芯片」并修正 C22）
 
 ## 怎么用这份清单
 
@@ -87,7 +87,7 @@ automation_create / automation_list / automation_delete / task。
 | C19 | 工作流 | Workflow（Dynamic Workflow 后台运行，TaskOutput 取结果）+ 6 个 workflow 模板 | 无 | ❌ |
 | C20 | 代码智能 | LSP（定义/引用/类型/诊断，需语言服务器插件） | 无 | ⛔ 办公场景不需要 |
 | C21 | Notebook | NotebookRead / NotebookEdit（Jupyter 单元格） | 无 | ⛔ |
-| C22 | Worktree 隔离 | EnterWorktree / LeaveWorktree（`.codebuddy/worktrees`） | 无 | ❌ |
+| C22 | Worktree 隔离 | **桌面端有独立实现，不是 CLI 的 EnterWorktree / `--worktree`**（此前按 CLI 形态记，会误导）：`WorktreeTaskDomain` 服务 + 9 个 RPC 通道（IS_GIT_REPO / LIST_LOCAL_BRANCHES / FETCH_BRANCHES / COUNT_WORKTREES / CLEANUP_WORKTREES / GET_WORKTREE_STATUS / CREATE_WORKTREE / DELETE_WORKTREE / CHECKOUT_BRANCH）；目录 `<home>/WorkBuddy/Worktrees/<原仓库目录名>/<分支slug>-<uid8>`，分支 `workbuddy/<分支slug>-<uid8>`（slug=小写化后非 `[a-z0-9]` 全转 `-` 再去首尾；uid=randomUUID 去横线取 8 位）；`createWorktree` 失败回滚（removeWorktree → rm -rf → throw）；`checkoutBranch` 的 dirtyPolicy 四态 `abort`(默认)/`commit`/`stash`/`discard`；`cleanupWorktrees` 跳过有未提交改动的、跳过近期的、只删 `workbuddy/` 前缀分支；计数阈值 25 警告 / 50 提示清理；所有路径参数强制绝对路径否则抛错。桌面端如何消费见 L27 | 无 | ❌ |
 | C23 | 通知与审查 | PushNotification / Monitor / ReportFindings（结构化审查发现） | 无（有 toast，但模型无法主动推） | ❌ |
 | C24 | 渠道回复 | WeChatReply / WeComReply | 无 | ⛔ 依赖 IM 渠道 |
 | C25 | ComputerUse | 电脑操作（`CODEBUDDY_COMPUTER_USE_ENABLED`） | 无 | ⛔ |
@@ -130,7 +130,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 |---|---|---|---|---|
 | F1 | 组合式模板 | 主骨架 + `{% include %}` 片段；`workMode` 变量分发；条件槽空内容零 token | `core/prompt-composer.ts`：`{{> fragment}}` 引擎（递归/环检测/缺失抛错，不引模板引擎）+ `resources/prompts/fragments/`（交付/工具纪律/Windows/地域，WB 搬用适配）+ **provenance 分段溯源** + 设置页「提示词预览」 | ✅ 另有预览可视化（WB 没有） |
 | F2 | 双面文件 | 一份 `.md` 的 frontmatter 给加载器读工具白名单，正文给模板引擎读提示片段 | modes/*.md 与 agents/*.md 都是双面文件 | ✅ |
-| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 2（work + code，code 骨架搬 welcomemode/code 适配）× 交互 3（ask/craft/plan）+ 专家正交绑定（expertId 独立会话状态，spec rework-expert-orthogonal-and-skills）；design 维持占位（依赖 ardot 设计技能体系，E2 范畴） | 🟡 2×3 + 专家正交绑定；design 占位 |
+| F3 | 场景 × 模式矩阵 | welcomeMode 3（work/code/design）× interaction 4（ask/craft/plan/expert） | 场景 2（work + code，code 骨架搬 welcomemode/code 适配）× 交互 3（ask/craft/plan）+ 专家正交绑定（expertId 独立会话状态，spec rework-expert-orthogonal-and-skills）；design 维持占位（依赖 ardot 设计技能体系，E2 范畴） | 🟡 2×3 + 专家正交绑定；design 占位；**场景差异不止在提示词** —— 输入区芯片按场景挂载（见 L27），运行时 `mapHomeWelcomeMode` 返回 `"coding"`/`"working"`/`"design"`（`-ing` 后缀即 CodeBuddy 遗留命名，≠ 新插件目录名 code/work/design；说明桌面端走的是旧版命名口径） |
 | F4 | 两代架构并存 | 单体 .tpl（9 份）→ 组合式 fragments；灰度迁移保留旧变量名 | 直接上组合式，无历史包袱 | ✅ |
 | F5 | 每轮 hidden context | `composeUserPrompt` 遍历 17 个 section：stage(every_turn/first_turn) × container(user-context/additional_data)，包成 `<system-reminder data-role=...>` 前置到用户消息；压缩时 additional-data 可剥离、user-context 常驻 | 无。systemPrompt 由 `before_agent_start` 整体替换，没有用户消息级动态注入 | ❌ 自评最大差距 |
 | F6 | 三层 reminder | 系统提示常驻条款 → 模式切换 reminder（含「This supersedes any other instructions」覆盖声明）→ 工具结果夹带 `<system-reminder>` 即时纠偏 | 无 | ❌ |
@@ -263,6 +263,8 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L24 | 反馈与统计 | 消息点赞点踩（`vote_like_dislike`）、`ReportAfterCancel`（取消后上报）、`DisableResponseStatistics`；对话埋点事件族（`chat_message_send` / `chat_tool_action` / `agent_task_created` 等） | 无 | ❌ |
 | L25 | 正文路径徽章 | 行内 code 经 path-detector 形态判定（盘符/相对/文件名/`#L` 行号）+ 会话资源比对存在性，两步过才渲染 `cb-clickable-path`（图标 + 截断文件名，浅色 `#1470B4`/`#E9EEF2`）；点击 `openPath` → 右侧 DetailPanel，目录转文件树视图 | `markdown-path.ts` 形态判定 + `artifact:stat` 存在性探测（不限工作区、只报类型）；`markdown.tsx` InlineCode 徽章（模块级探测缓存防流式闪烁）；点击进右侧面板，目录/工作区外文件落外部打开 | ✅ v1：无 `#L` 行定位、无右键菜单 |
 | L26 | 引用来源面板 | 从 web_search 工具结果提取（结构化优先、Markdown 降级，web_fetch 不计入），按 URL 去重；footer「来源」按钮（favicon 头像组 ≤3 按站点去重）；面板复用右侧 DetailPanel 容器互斥渲染（favicon+站点+标题1行+摘要2行，点击外部打开）；零持久化、切会话清空 | `web-tools.ts` details 带结构化 results + `source-parse.ts` 安全校验（公网 http(s)，禁凭据/localhost/内网）+ ToolCard.sources 两路径填充（live/恢复）+ `collect-sources.ts` 聚合 + 来源按钮 + `sources-panel.tsx`（与 ArtifactPanel 同位互斥）；spec：`.trae/specs/add-search-sources-panel/`。favicon 曾全部被 CSP 拦截回退（img-src 无 https:），`add-source-favicons` 已放行并补搜索卡来源列表（卡头头像组 + 展开行列表，WorkBuddy cr-tool-web-search 同款） | ✅ v1：按会话聚合一行（WorkBuddy 按 requestId 每轮一个 footer）；favicon 用 origin/favicon.ico 回退（无服务端下发） |
+
+| L27 | 场景专属输入区芯片 | 输入区按 `welcomeMode` 挂载专属芯片，位置枚举 `FooterStart` / `AfterAddMenu` / `FooterAfterWorkspace`（`packages/agent-ui/src/modules/home/components/use-home-input-providers.tsx` 的 slots）：design → `HomeDesignOptions`（风格 + 生图模式，AfterAddMenu）；**code → `WbWorktreeChip`**（分支选择 + Worktree 开关，FooterAfterWorkspace，门控 `sceneMode === "code" && cwd && taskTarget !== "cloud"`）；work → 无。芯片本体 `packages/agent-ui/src/modules/worktree/worktree-chip.tsx`，依赖 `useWorktreeGit`（isGit / branches / currentBranch / worktreeCount）、branch-list、cleanup-dialog、overlays、source-map。发送链路：`useCreateHomeTask` 先建 worktree 再把 cwd 换成副本路径并 `recordWorktreeSource` 记映射，失败 toast `worktree.createFailedFallback` 后**降级回原目录继续**；`useHomeBranchSwitchGate` 在发送前再过一道脏工作区门（`BranchSwitchDirtyPicker` 从 abort / commit / stash / discard 里选，默认 abort） | 无 —— `sceneId` 只进提示词骨架，`resources/scenes/*/prompt.md` 的 frontmatter 只有 id/label/description/ready，没有承载「本场景多出哪些控件」的位置 | ❌ |
 
 ## M. 渠道与远程
 

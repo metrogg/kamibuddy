@@ -15,6 +15,7 @@ import type { TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
 import type { ImagePart } from "./image.ts";
+import type { WorktreeInfo } from "./worktree.ts";
 
 /** 一次用户提问到 agent 停止之间的完整过程。 */
 export type RunId = string;
@@ -535,6 +536,15 @@ export interface SessionState {
 	 * 新建/完好会话键缺席），renderer 据此提示「会话文件有 N 行损坏已跳过」。
 	 */
 	readonly skippedLines?: number;
+	/**
+	 * 本会话跑在 worktree 副本里的信息（对齐清单 C22 / L27）。
+	 *
+	 * 缺省 = 「直接在所选目录里工作」，这是绝大多数会话的形态，不占字段。
+	 * 只在代码场景下用户启用了副本、**且副本真的建成功**时才出现 ——
+	 * 建失败会降级回原目录并把原因记日志，那时这里也是缺省（UI 不该显示
+	 * 一份并不存在的隔离）。
+	 */
+	readonly worktree?: WorktreeInfo;
 }
 
 /**

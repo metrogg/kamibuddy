@@ -306,6 +306,17 @@ export const IconCode = (p: IconProps): React.JSX.Element => (
 	</Svg>
 );
 
+export const IconBranch = (p: IconProps): React.JSX.Element => (
+	<Svg {...p}>
+		{/* 两节点一汇流的线性分叉：git 分支的通用隐喻（不用 git logo —— 那是外部品牌）。 */}
+		<circle cx="7" cy="5" r="2" />
+		<circle cx="7" cy="19" r="2" />
+		<circle cx="17" cy="9" r="2" />
+		<path d="M7 7v10" />
+		<path d="M17 11c0 3.5-3 4.5-6.5 4.5" />
+	</Svg>
+);
+
 export const IconImage = (p: IconProps): React.JSX.Element => (
 	<Svg {...p}>
 		{/* 相框 + 太阳 + 山脊：位图/矢量图共用。 */}

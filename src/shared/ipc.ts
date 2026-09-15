@@ -167,6 +167,21 @@ export const INVOKE = {
 	 */
 	pickWorkspaceDirectory: "workspace:pick-directory",
 	/**
+	 * 列某个目录的本地分支（含是否 git 仓库的一次性判定）。
+	 * 代码场景的 worktree 芯片用它填基准分支下拉；非 git 仓库时
+	 * isGitRepo=false 而**不是**报错 —— 用户选个普通文件夹是正常情形。
+	 */
+	worktreeBranches: "worktree:branches",
+	/**
+	 * 设置「下一次新建任务在哪个基准分支上建 worktree 副本」；undefined = 关闭。
+	 *
+	 * 与 workspace:set 同语义：只改**后续新建任务**的落点，既有会话原地不动
+	 *（副本一经创建就与会话终身绑定，换分支不是「改偏好」而是「换工作副本」，
+	 * 那需要重建会话，属另一件事）。新建任务时该意图被重置（对齐
+	 * newTask 重置工作空间选择的口径）。
+	 */
+	setWorktreeBranch: "worktree:set-branch",
+	/**
 	 * 空间分组元数据列表：侧栏「空间」区的组头信息。
 	 * 组集合由 daemon 从会话文件的 cwd 去重派生，这里只额外携带显示名覆盖。
 	 */
@@ -556,6 +571,15 @@ export interface WorkspaceSnapshot {
 	 * undefined 仅出现在尚无工作目录的瞬态。
 	 */
 	readonly previewBaseUrl: string | undefined;
+	/**
+	 * 「下一个新任务在哪个基准分支上建 worktree 副本」；undefined = 不建副本。
+	 *
+	 * 与 current 同属「下一次新建任务怎么起」的权威值，所以放在同一个快照里：
+	 * 芯片平时要显示自己是不是已启用，而它只是 renderer 的局部状态的话，
+	 * 切页面/重建组件后就会与 daemon 的真实意图脱节 —— 界面说「没启用」、
+	 * 新任务却建了副本，是最难排查的那类不一致。
+	 */
+	readonly worktreeBranch: string | undefined;
 }
 
 /** readArtifact 的返回：文件大小 + 文本内容（二进制或超大时不给）。 */

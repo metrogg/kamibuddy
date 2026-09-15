@@ -39,6 +39,7 @@ import type { ObservabilitySnapshot } from "./observability.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
+import type { WorktreeBranchList } from "./worktree.ts";
 import type {
 	CustomModelInput,
 	CustomProviderInput,
@@ -133,6 +134,19 @@ export interface KamiBridge {
 	readonly removeWorkspace: (cwd: string) => Promise<void>;
 	/** 在系统文件管理器中打开空间目录。cwd 经 daemon 校验为已知工作空间，否则 reject。 */
 	readonly revealWorkspace: (cwd: string) => Promise<void>;
+
+	/* ── worktree 任务隔离（对齐清单 C22 / L27） ─────────────────── */
+
+	/**
+	 * 列某个目录的本地分支。非 git 仓库时回 isGitRepo=false 而不是 reject ——
+	 * 用户选个普通文件夹是正常情形，芯片据此隐藏即可，不该弹错。
+	 */
+	readonly worktreeBranches: (cwd: string) => Promise<WorktreeBranchList>;
+	/**
+	 * 设置「下一次新建任务在哪个基准分支上建 worktree 副本」；传 undefined 关闭。
+	 * 只影响之后新建的任务，既有会话的副本不动（同 setWorkspace 的语义）。
+	 */
+	readonly setWorktreeBranch: (branch: string | undefined) => Promise<void>;
 
 	readonly respondToUi: (response: UiResponse) => Promise<void>;
 	readonly respondToPermission: (response: PermissionResponse) => Promise<void>;
