@@ -1924,13 +1924,20 @@ textarea:focus-visible {
 	gap: 2px;
 }
 
+/* 回合头（WorkBuddy avatar-container 同形态）：身份与状态同字号，读成「一条回合的
+   表头」而不是「发言者身份行 + 一行小字附注」。WB 的 .name 与 .avatar-fold-status
+   都是 15px/line-height 1.75（status 走三级灰）—— 我们取同字号同色（--text-emphasis
+   / --text-secondary，值都对得上 WB），但不搬 1.75 的行高：行高无 token，
+   DESIGN.md §2.6 的正文基准是 1.6，为一行表头引入档外值不划算。 */
 .turn-agent {
-	font-size: var(--text-body);
+	font-size: var(--text-emphasis);
 	font-weight: 600;
 }
 
 .turn-duration {
-	font-size: var(--text-meta);
+	/* 与名字同字号、只降一档灰 —— 12px 的写法把它压成了「附注」，正是它不像
+	   回合头的原因（WB 的 status 与 name 同 15px）。 */
+	font-size: var(--text-emphasis);
 	color: var(--text-secondary);
 	/* 进行中的回合时长每秒刷新，比例宽数字每秒抖行宽（尾部 chevron 跟着跳）。 */
 	font-variant-numeric: tabular-nums;
@@ -2158,19 +2165,23 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 }
 
-/* hover 工具条（user / assistant 共用基类）：常驻占位只切透明度，
-   避免 hover 插入 DOM 推搡下方消息流。 */
+/* 消息操作条（user / assistant 共用基类）：基类只给行内布局，定位与显隐由两侧
+   修饰类各自决定 —— 用户侧 hover 浮现（时间戳/复制不该常显），助手侧常驻在正文
+   下方（WorkBuddy _assistantFeedback 的 display:flex + visibility:visible 同形态）。 */
 .entry-toolbar {
-	/* WorkBuddy 底部浮动操作条：绝对定位、居中浮在消息下方，不占布局高度，
-	   避免 hover 插入/显示时推搡消息流。 */
-	position: absolute;
-	left: 50%;
-	bottom: -14px;
-	z-index: var(--z-panel);
-	transform: translateX(-50%);
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+}
+
+/* 用户侧：WorkBuddy 底部浮动操作条 —— 绝对定位浮在气泡下缘、不占布局高度，
+   避免 hover 插入/显示时推搡消息流。锚在 entry 右缘（气泡在 entry 内右对齐且
+   entry padding 为 0，右缘即气泡右缘）。 */
+.entry-toolbar-right {
+	position: absolute;
+	right: 0;
+	bottom: -14px;
+	z-index: var(--z-panel);
 	height: 32px;
 	opacity: 0;
 	/* 进出场不对称：基类写退出（--dur-fast），hover/focus 态写入场（--dur-base）。
@@ -2181,24 +2192,11 @@ textarea:focus-visible {
 
 /* :focus-within 与 hover 同口径（同 .task-item-ops 的写法）：键盘 Tab 进
    消息区时工具条不能消失，否则按钮对键盘用户不可达。 */
-.entry:hover .entry-toolbar,
-.entry:focus-within .entry-toolbar {
+.entry:hover .entry-toolbar-right,
+.entry:focus-within .entry-toolbar-right {
 	opacity: 1;
 	pointer-events: auto;
 	transition: opacity var(--dur-base) ease;
-}
-
-/* 用户侧：锚在 entry 右缘 —— 气泡在 entry 内右对齐且 entry padding 为 0，
-   右缘即气泡右缘。 */
-.entry-toolbar-right {
-	left: auto;
-	right: 0;
-	transform: none;
-}
-
-.entry-toolbar-left {
-	left: 14px;
-	transform: none;
 }
 
 /* 时间戳文字（仅用户侧工具条有）。原从 .user-toolbar 继承字号与颜色，
@@ -2218,7 +2216,9 @@ textarea:focus-visible {
 }
 
 .entry-icon-btn {
-	/* 浮动圆钮：白底 + 卡片阴影（WorkBuddy 消息工具条同款）。 */
+	/* 浮动圆钮（白底 + 边框 + 卡片阴影）：**只给用户侧气泡工具条**用 —— 它浮在气泡下缘、
+	   hover 才现，需要一个「实体」按钮才看得清。助手侧操作条常驻、每轮一行，走 .bar-btn
+	   的轻量图标按钮档（见 chat-view 的 AssistantActions），两边的语义是有意分叉的。 */
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -2274,34 +2274,27 @@ textarea:focus-visible {
 	margin: var(--space-3) 0;
 }
 
-/* 助手侧：左对齐贴正文 —— assistant 消息在左，与用户气泡的右对齐相反。 */
+/* 助手侧（WorkBuddy 操作条位）：常驻在正文下方、占布局高度，左缘贴齐正文
+   （assistant 无气泡，正文左缘即 entry 左缘）。
+   为什么不沿用用户侧那套绝对定位：`bottom: -14px` + 32px 高的浮条上缘落在
+   entry 底部之上 18px，会把本条最后一个文本行压掉 —— hover 时一闪而过不显眼，
+   常显就是遮挡。WorkBuddy 同位置也是常驻占位（_assistantFeedback 的
+   padding-top: 12px），故取同值。 */
 .entry-toolbar-left {
-	margin-top: var(--space-1);
+	/* 允许折行：窄窗口下「执行计划 + 三个钮 + 读数 + 模型名」一行放不下时，
+	   读数整段掉到第二行，而不是把行内元素挤出正文列（WB 的 _assistantFeedback
+	   也是 flex-wrap: wrap）。 */
+	flex-wrap: wrap;
+	margin-top: var(--space-4);
 }
 
-/*
- * 「执行计划」文字按钮：与 .entry-icon-btn 同族（同一条 hover 工具条），
- * 用文字不用图标 —— 「执行计划」这个动作没有不言自明的图标可表达。
- * line-height 收紧是为了不撑破工具条 18px 的常驻占位高度。
- */
-.assistant-execute {
-	/* 与浮动操作条里的圆钮同族：同白底、同阴影、同 32px 高。 */
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	height: 32px;
-	padding: 0 var(--space-4);
-	border-radius: var(--radius-full);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	box-shadow: var(--shadow-md);
-	color: var(--text);
+/* 本轮所用模型名（WorkBuddy 操作条尾部 modelTag）：只读读数，不是切换入口 ——
+   换模型在输入区的 ModelMenu 上，这里重复一个可点切换器会让「操作回答」与
+   「配置会话」两件事混在同一行。 */
+.assistant-model {
 	font-size: var(--text-meta);
-	line-height: 1;
-}
-
-.assistant-execute:hover {
-	background: var(--bg-raised);
+	color: var(--text-secondary);
+	white-space: nowrap;
 }
 
 /* ── 错误卡（内嵌于消息流，run 异常或提交失败时展示）───────────────
@@ -2436,9 +2429,12 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
-/* Markdown 渲染区：模型输出的结构化排版。 */
+/* Markdown 渲染区：模型输出的结构化排版。
+   行高 1.786 是 WorkBuddy 宽松主题的原值（--cb-md-p1-line-height，
+   data-md-theme=loose；同组 --cb-md-p1-font-size 是 0.875em ≈ 14px，与我们的
+   --text-body 同值，故字号不动）。 */
 .markdown {
-	line-height: 1.7;
+	line-height: 1.786;
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
@@ -2453,8 +2449,11 @@ textarea:focus-visible {
 	line-height: 1.4;
 }
 
+/* 段间距 12px = WorkBuddy 的 --cb-md-p-pb（宽松主题）。WB 用 padding-bottom 而非
+   margin（不参与折叠、每段都留），我们用 margin 是因为相邻段的外边距会折叠成同一个
+   12px，观感等价而不用给末段多垫一层。 */
 .markdown p {
-	margin: var(--space-3) 0;
+	margin: var(--space-4) 0;
 }
 
 .markdown ul,
@@ -2579,22 +2578,51 @@ textarea:focus-visible {
 	border-radius: 0;
 }
 
+/* 表格（WorkBuddy .cb-markdown table 形态）：
+   - `separate` + `border-spacing: 0`：`collapse` 下 border-radius 会被相邻单元格
+     的边框盖掉，圆角根本出不来（这是必须换模型的原因，不是风格偏好）。
+   - 圆角 + 外框画在 <table> 自己身上，再配 `overflow: hidden` 裁掉表头方角 ——
+     th 的背景会溢出 table 的圆角，只有裁剪才让首行跟着圆。WB 同款写法。
+   - 网格线只留右/下（外框由 table 的 border 提供）：全网格的 1px 交叉线在长表上
+     会糊成灰度网，WB 的疏网格读起来才是「表」。
+   - 末列去右边线、末行去下边线 —— 否则与 table 的外框叠成 2px。
+   - th 12px / td 14px（WB 的 thead/tbody 字号）：表头是标签、正文才是内容。 */
 .markdown table {
 	margin: var(--space-3) 0;
-	border-collapse: collapse;
-	font-size: var(--text-list);
+	border-collapse: separate;
+	border-spacing: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	overflow: hidden;
 }
 
 .markdown th,
 .markdown td {
-	padding: var(--space-2) var(--space-3);
-	border: 1px solid var(--border);
+	/* 8px 16px = WB 的 thead th / tbody td 内边距。 */
+	padding: var(--space-3) var(--space-5);
 	text-align: left;
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+}
+
+.markdown th:last-child,
+.markdown td:last-child {
+	border-right: none;
+}
+
+/* 末行去下边线：:last-child 落在 tr 上（td 的父级），不能写成 td:last-child —— 那是「每行最后一格」。 */
+.markdown tbody tr:last-child td {
+	border-bottom: none;
 }
 
 .markdown th {
 	background: var(--bg-raised);
 	font-weight: 600;
+	font-size: var(--text-meta);
+}
+
+.markdown td {
+	font-size: var(--text-body);
 }
 
 /* 链接可辨识靠颜色+常态下划线双线索（仅靠色相对色弱用户不友好，此前
@@ -4090,19 +4118,21 @@ textarea:focus-visible {
 	margin-inline: auto;
 }
 
-/* ── 输入区常驻指标条（本轮用时 / token / 缓存命中） ──────────────── */
+/* ── 本轮指标读数（token / 缓存命中） ─────────────────────────────── */
 
-/* spec: surface-run-metrics-in-chat Task 4.2。只读辅助读数：低调、紧凑，
-   与 ContextUsageRing / .stream-queue 同一视觉语言（三级灰、小字号）。
-   tabular-nums 防抖动（流式中用时每 500ms 刷新，比例宽数字会抖行宽）；
-   flex-wrap + max-width 自适应窄面板，不写死宽度。左侧缩进对齐输入卡内文案。 */
+/* spec: surface-run-metrics-in-chat Task 4.2（位置与内容见 Task 4.1 的订正注）。只读辅助
+   读数：低调、紧凑，与 ContextUsageRing / .stream-queue 同一视觉语言（三级灰、小字号）。
+   挂在助手消息操作条内（与复制/重试同排），不再贴输入卡 —— 它是「本轮这条回答的读数」，
+   不是输入区的系统状态。
+   无数据显示时整条不渲染（见 chat-view 的 RunMetricsBar），故这里不需要空态样式。
+   tabular-nums 防抖：token / 命中率随本轮各步 assistant_done 跳档（3.1K → 12.4K），
+   比例宽数字会让整条宽度来回抽动；
+   flex-wrap + max-width 自适应窄面板，不写死宽度。 */
 .run-metrics {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: baseline;
 	gap: var(--space-2);
-	margin-top: var(--space-2);
-	padding-inline: var(--space-5);
 	font-size: var(--text-meta);
 	color: var(--text-secondary);
 	font-variant-numeric: tabular-nums;

@@ -28,6 +28,7 @@ import {
 	IconEdit,
 	IconFolder,
 	IconMic,
+	IconRefresh,
 	IconResearch,
 	IconSkill,
 	IconAssistant,
@@ -44,7 +45,7 @@ import type { FoldPlanItem } from "./fold-view.ts";
 import { imageDataUrl } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 import { useModalFocus } from "./use-modal-focus.ts";
-import { ModelMenu } from "./model-menu.tsx";
+import { ModelMenu, shortModelName } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
@@ -301,41 +302,81 @@ function UserBubble({
 /* ── 助手消息操作条 ──────────────────────────────────────────────── */
 
 /**
- * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条）。
- * 与用户气泡工具条同款「常驻占位、hover 切透明度」模式（.entry-toolbar），理由相同：
- * hover 才插入 DOM 会推搡下方消息流。流式中的末条也渲染 —— 复制部分内容无害。
+ * 助手回答底部的操作条（对标 WorkBuddy 的 assistant 消息操作条 _assistantFeedback）。
+ *
+ * **常驻，不 hover**（WB 是 display:flex + visibility:visible）：操作条是这条回答的
+ * 「完成凭据」——复制、重试、本轮读数藏进 hover 里就等于没有。用户气泡工具条仍是
+ * hover 浮现（时间戳/复制不该常显），两者的分叉写在 CSS 的 .entry-toolbar-right /
+ * .entry-toolbar-left 上，基类只留行内布局。
+ *
+ * 按钮走 DESIGN.md §3.1 的「图标按钮」档（.bar-btn：无底无边、16px 图标、hover 只落
+ * 一层 --bg-hover），**不用**用户侧气泡那套 .entry-icon-btn 白圆钮 —— 后者是「浮在气泡
+ * 上、hover 一闪」的形态；本操作条常驻、每轮一行，白底 + 边框 + 卡片阴影会把「一行轻量
+ * 元信息」压成「一行控件」。WorkBuddy 的消息操作钮同口径：透明底、无边框、无阴影、图标 16
+ * （lib-chat-ui-Co_VI_pZ.css:20906 `_actionButton_jnle9_7` / :20969 `_copyButton_1ncbp_1`）。
  *
  * 「执行计划」是 plan→craft 的衔接入口：plan 模式产出的计划只在末条
  * assistant 消息上给这个按钮（历史消息不给，否则满屏按钮）。
+ *
+ * 重试 / 指标 / 模型名都只挂在「本轮最后一条 assistant 消息」上
+ * （调用点的 metricsAnchorId，与 WB 的 credit 挂 isLastMessageOfRequest 同口径）：
+ * 它们说的是**本轮**，挂到历史消息上就是错的（重试会重发最后一条用户消息）。
  */
 function AssistantActions({
 	text,
+	modelId,
 	showExecutePlan,
 	onExecutePlan,
+	showRetry,
+	onRetry,
+	metrics,
 }: {
 	readonly text: string;
+	/** 本轮所用模型；不是本轮的挂点消息时传 undefined（尾部的模型名整段不渲染）。 */
+	readonly modelId: string | undefined;
 	/** 是否显示「执行计划」（父组件按 plan 模式 + 非流式 + 末条判定）。 */
 	readonly showExecutePlan: boolean;
 	readonly onExecutePlan: () => void;
+	/** 是否显示「重试」（父组件按「本轮末条 assistant + 非流式 + 有可重发的用户消息」判定）。 */
+	readonly showRetry: boolean;
+	readonly onRetry: () => void;
+	/** 本轮指标读数；不是本轮的挂点消息时传 undefined（整段不渲染，不给空壳）。 */
+	readonly metrics?: { readonly entries: readonly ConversationEntry[]; readonly turn: TurnTiming };
 }): React.JSX.Element {
 	const { copied, copy } = useCopyWithTick();
 
+	// WorkBuddy 操作条位序：复制 → 赞踩 → 重试 → 分享 → ⋯ → 共消耗 | 模型名。
+	// 我们只做有数据/有能力的四项（赞踩是云端上报项、分享需后端，均 descope）。
 	return (
 		<div className="entry-toolbar entry-toolbar-left">
+			{/* 文字按钮而非图标：这个动作没有不言自明的图标（同 .bar-btn 档的文字变体）。 */}
 			{showExecutePlan && (
-				<button type="button" className="assistant-execute" onClick={onExecutePlan}>
+				<button type="button" className="bar-btn bar-btn-text" onClick={onExecutePlan}>
 					执行计划
 				</button>
 			)}
 			<button
 				type="button"
-				className="entry-icon-btn"
+				className="bar-btn"
 				aria-label="复制回答"
 				title={copied ? "已复制" : "复制回答"}
 				onClick={() => void copy(text)}
 			>
-				{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+				{copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
 			</button>
+			{showRetry && (
+				<button
+					type="button"
+					className="bar-btn"
+					aria-label="重试"
+					title="重试（重新发送上一条消息）"
+					onClick={onRetry}
+				>
+					<IconRefresh size={16} />
+				</button>
+			)}
+			{metrics !== undefined && <RunMetricsBar entries={metrics.entries} turn={metrics.turn} />}
+			{modelId !== undefined && <span className="assistant-model">{shortModelName(modelId)}</span>}
 		</div>
 	);
 }
@@ -954,15 +995,18 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」）。
+ * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」/「已完成 41s」）。
  *
  * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；计时起点是用户消息
  * 落库时间，不是首个 token —— 排队/检索的时间也计入，与其口径一致。
  *
  * turn 由调用点按轮解析（spec: surface-run-metrics-in-chat Task 4.3）：活动轮
  * 传实时计时（已处理 Ns，走表）；历史/已结束轮传从 ConversationView.turnTimings
- * 按 turnId 查到的真实计时（用时 Ns，取消轮 已取消 Ns）。查不到计时才回落
+ * 按 turnId 查到的真实计时（已完成 Ns，取消轮 已取消 Ns）。查不到计时才回落
  * 「已完成」—— 中断是用户主动动作，UI 上必须看得出（机制对标 WorkBuddy 取消终态）。
+ * 终态措辞取 WorkBuddy 的 metaFold.turnCompletedWithDuration（「已完成 {duration}」）：
+ * 「用时」是旁观者视角的测量词，「已完成」才是回合的终态陈述 —— 与轮折叠开关
+ * （点它收起本轮过程）说的是同一件事。
  *
  * 轮折叠开关（spec: add-turn-fold-and-anchor）：fold plan 判定本轮有折叠区
  * （hasTurnFold）时整头可点，时长行尾带 chevron，点击切换过程区显隐；
@@ -997,7 +1041,7 @@ function TurnHeader({
 		duration =
 			turn.cancelled === true
 				? `已取消 ${formatDuration(turn.endedAt - turn.startedAt)}`
-				: `用时 ${formatDuration(turn.endedAt - turn.startedAt)}`;
+				: `已完成 ${formatDuration(turn.endedAt - turn.startedAt)}`;
 	}
 
 	// 容器用 span 不用 div：可点击时它们要落在 <button> 里，
@@ -1033,17 +1077,34 @@ function TurnHeader({
 	);
 }
 
-/* ── 输入区常驻指标条（本轮用时 / token / 缓存命中） ──────────────── */
+/* ── 本轮指标读数（token / 缓存命中） ─────────────────────────────── */
 
 /**
- * 输入区下方常驻的只读指标条（spec: surface-run-metrics-in-chat Task 4.1）。
+ * 本轮指标读数（spec: surface-run-metrics-in-chat Task 4.1）。渲染在助手消息的
+ * 操作条内、与复制/重试同排 —— 对齐 WorkBuddy 把 credit/model 放在回答尾部读数的位置；
+ * 原先贴在输入卡下方，观感是「系统状态/调试读数」，与本轮的归属关系看不出来。
  *
  * 数据全部由 UI 层折叠（turn-metrics.ts 的 foldTurnMetrics），不新增 IPC / 事件。
- * 用时必显，token 与命中率「有数据才显示」—— 缺字段整项省略，不填 0：上游
- * 没上报与真的没用是两回事，显示 0 会把前者误导成后者。
+ * token 与命中率「有数据才显示」—— 缺字段整项省略，不填 0：上游没上报与真的没用
+ * 是两回事，显示 0 会把前者误导成后者。同理**一项都没有时整条不渲染**（本轮没有任何
+ * usage 字段的轮）：空读数条只是操作条尾部的一段无内容间距，读起来像「这里本来有东西
+ * 没加载出来」。语义克制：纯读数，不可点、无弹层（详情浮层不在本次范围）。
  *
- * 计时只在「当前回合仍在跑」时每 500ms 走表（与回合头部同精度）；历史轮直接
- * 读 endedAt，不做无谓空转。语义克制：纯读数，不可点、无弹层（详情浮层不在本次范围）。
+ * **不再显示「用时」**（2026-09-15 订正）：它与回合头的「已完成 Ns」同源同值，同一轮的
+ * 时长在头尾各出现一次是纯噪音；WorkBuddy 的操作条里也没有时长（只有成本 + 模型名）。
+ * spec: surface-run-metrics-in-chat 的「用时必显」随之作废，见该 spec 的订正注。
+ * 连带去掉每 500ms 的走表 —— 那个 interval 的唯一用途就是刷新这个用时读数，摘掉读数后
+ * 它只会让整条操作条在流式期间白重渲染。foldTurnMetrics 的签名仍要 now（它同时算
+ * elapsedMs），传渲染时刻即可：剩下的读数与 now 无关。
+ *
+ * 读数段**常驻**，不跟 WorkBuddy 走 hover：WB 应用层确实把成本段藏到 hover 才现
+ * （lib-chat-ui-Co_VI_pZ.css:1828 的 `.group-messages:has(.cb-assistant-message:hover)
+ * .cb-credit-usage-text--feedback { opacity: 1 }`，与同处的 .cb-message-time-tip 同款；
+ * 而复制/赞踩/重试那排按钮是常驻的）。不跟的理由是两者的「行数」不同：WB 的成本段
+ * 挂在**每一个** request 的末条消息上，长会话里就是每轮一行，藏起来才合理；我们的
+ * 数据源只 fold **当前轮**（turn-metrics.ts 口径），全程只可能出现一处，藏起来等于
+ * 把「指标归位」又抹掉；且它的值随本轮各步 assistant_done 递增，不是 WB 那种事后定值。
+ * 若仍要逐字对齐 WB，改动量是两条 CSS（读数段 opacity: 0 + .entry:hover 复原）。
  */
 function RunMetricsBar({
 	entries,
@@ -1051,20 +1112,13 @@ function RunMetricsBar({
 }: {
 	readonly entries: readonly ConversationEntry[];
 	readonly turn: TurnTiming;
-}): React.JSX.Element {
-	const live = turn.endedAt === undefined;
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		if (!live) return;
-		const timer = window.setInterval(() => setNow(Date.now()), 500);
-		return () => window.clearInterval(timer);
-	}, [live]);
-
-	const metrics = foldTurnMetrics(entries, turn, now);
-	const items: string[] = [`用时 ${formatDuration(metrics.elapsedMs)}`];
+}): React.JSX.Element | null {
+	const metrics = foldTurnMetrics(entries, turn, Date.now());
+	const items: string[] = [];
 	if (metrics.inputTokens !== undefined) items.push(`↑${formatTokenCount(metrics.inputTokens)}`);
 	if (metrics.outputTokens !== undefined) items.push(`↓${formatTokenCount(metrics.outputTokens)}`);
 	if (metrics.hitRate !== undefined) items.push(`命中 ${Math.round(metrics.hitRate * 100)}%`);
+	if (items.length === 0) return null;
 
 	return (
 		<div className="run-metrics">
@@ -1466,6 +1520,22 @@ export function ChatView({
 			: lastUserId !== undefined
 				? conversation.turnTimings?.[lastUserId]
 				: undefined;
+	/*
+		操作条尾部读数（指标 / 模型名）与「重试」的挂点：**当前回合的最后一条
+		assistant 消息**（最后一条 user 之后那一段里的最后一条 assistant），与
+		WorkBuddy 把 credit 挂在 isLastMessageOfRequest 上同口径。
+
+		为什么按「最后一条 user 之后」而不是「最后一条 assistant」：等待首响应时
+		本轮还没有 assistant，直接取 findLast(assistant) 会挂到**上一轮**的回答上，
+		却显示本轮的计时 —— 错位比缺席更糟。三条读数共享同一挂点，不会出现
+		「指标在 A 条、模型名在 B 条」的错配。
+	*/
+	const metricsAnchorId = useMemo(() => {
+		const lastUserIndex = entries.findLastIndex((e) => e.role === "user");
+		const lastAssistantIndex = entries.findLastIndex((e) => e.role === "assistant");
+		if (lastAssistantIndex <= lastUserIndex) return undefined;
+		return entries[lastAssistantIndex]?.id;
+	}, [entries]);
 
 	/*
 		轮折叠开合状态：Map<turnId, expanded>，**缺省 = 折叠** —— run 结束
@@ -1755,11 +1825,26 @@ export function ChatView({
 				{/*
 					「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 					流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
+					重试/指标/模型名则钉在本轮的挂点消息上（metricsAnchorId）：
+					重试重发的是最后一条用户消息，挂到历史轮就是错的；指标只 fold
+					当前轮、模型名也只在本轮成立，散到每条消息上就是同一串读数重复
+					或干脆是错值。
 				*/}
 				<AssistantActions
 					text={entry.text}
+					modelId={entry.id === metricsAnchorId ? conversation.state.modelId : undefined}
 					showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
 					onExecutePlan={executePlan}
+					showRetry={!streaming && entry.id === metricsAnchorId && retryText !== undefined}
+					onRetry={() => {
+						if (retryText === undefined) return;
+						retrySubmit(retryText);
+					}}
+					metrics={
+						entry.id === metricsAnchorId && metricsTurn !== undefined
+							? { entries, turn: metricsTurn }
+							: undefined
+					}
 				/>
 			</div>
 		);
@@ -2165,11 +2250,6 @@ export function ChatView({
 							{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
 							{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						</Composer>
-						{/*
-							输入区下方常驻指标条（本轮用时 / token / 缓存命中）：
-							只读辅助读数，不抢输入区的注意力。查不到计时整条不渲染。
-						*/}
-						{metricsTurn !== undefined && <RunMetricsBar entries={entries} turn={metricsTurn} />}
 					</>
 				)}
 			</footer>
