@@ -165,37 +165,105 @@ shell 工具暴露出去**——agent 的 shell 能力是另一个决策，见 �
 - **不用 bash**：pi 在 Windows 找不到 bash 会直接抛异常（`utils/shell.ts:100`），
   目标用户不装 Git for Windows；见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
 - **用 powershell**：pi 内置该工具，Windows 原生、零额外依赖，绕开了上述问题；
-- **前置条件（尚未满足）**：必须先有危险命令检查器 ——
+- **前置条件（已满足）**：必须先有危险命令检查器 ——
   `iex` / `Invoke-Expression` / `Add-Type` / `-EncodedCommand` / 递归删除 / 下载执行…
   WorkBuddy 的 PowerShell 工具同样内置这类拦截。
+  实现在 `src/extensions/command-guard.ts`（五类：动态执行 / 下载执行 / 凭据读取 /
+  递归强删 / 破坏系统），powershell 工具在执行前无条件过它。
 
-**在检查器落地之前不要把它放进工具面。** 原因是能力边界的实话：
-我们没有 OS 级沙箱（§4.4b），而一条命令就能绕开权限门的全部路径保护
+**检查器是把 powershell 放进工具面的前置条件，它先落地、工具后启用。**
+理由是能力边界的实话：一条命令就能绕开权限门的全部路径保护
 （`type ~\.ssh\id_rsa` 读走密钥，权限门看不到这是一次凭据读取）。
-所以当前 `permission-policy.ts` 对 shell 在**任何权限档位下都拦**，含"允许完全访问"。
+**2026-09-15 起加了第三层**：`workspace-write` 档下命令进受限令牌执行，
+"写不出工作区"成为操作系统保证的事实（§4.4b）。但**读侧仍然没有任何 OS 约束**，
+所以上面那条 `type` 读密钥的路径依旧只有检查器拦得住 —— 三层分工见 §4.4b。
 
-### 4.4b OS 级沙箱：本轮搁置（成本，不是能力）
+`permission-policy.ts` 当前对 shell 的判定：`bash` 任何档位都拦（没有检查器，
+且默认工具集不含它）；`powershell` 在 `danger-full-access` 档放行、
+其余档位高风险询问（可被持久前缀规则免除）。
+
+### 4.4b OS 级沙箱：零安装档已落地（2026-09-15）
 
 **"Windows 做不了沙箱"是错的判断**，必须写清楚，否则后人以为此路不通：
 
 | 项目        | Windows 实现                                                           |
 | --------- | -------------------------------------------------------------------- |
-| codex     | `codex-rs/windows-sandbox-rs`（约 40 文件）：专用沙箱用户账号 + ACL + 独立桌面 + DPAPI |
-| dsh       | `packages/shell/pwsh-sandbox`：自述 "ACL restricted-token runner chain" |
-| WorkBuddy | 内核态 `tsbx.dll` + 287MB 用户态 + 语言 shim                                 |
+| codex     | `codex-rs/windows-sandbox-rs`（约 67 文件）：专用沙箱用户账号 + ACL + 独立桌面 + DPAPI |
+| dsh       | `packages/sandbox/sandbox-windows-acl`：纯 TypeScript + koffi，MIT      |
+| WorkBuddy | 用户态 Rust 栈（`tsbx.dll` + `sandbox-cli.exe`；**非**内核驱动，早期判断已更正）        |
 | pi        | 不做，指向容器 / 微 VM（其 sandbox 扩展硬编码只支持 darwin/linux）                      |
 
-两家独立收敛到同一机制（**受限令牌 + ACL**），这就是 Windows 上的正解。
+三家独立收敛到同一机制（**受限令牌 + ACL**），这就是 Windows 上的正解。
 
-搁置理由：① 需一次性**管理员安装 + 创建系统账号**，对"给同事试用"是显著摩擦；
-② codex 那份是 Rust，无法复用，只能同机制重写；③「人人可写目录」这类绕过点
-必须一并处理（codex 专门有个 `WindowsWorldWritableWarningNotification`），
-否则又是一个假边界。
+**原搁置理由已被证伪**（原文两条：需管理员建账号、codex 是 Rust 无法复用）：
+dsh 那套**只复制调用方自己的令牌**，不建账号、不需 UAC —— 授权目标是调用方
+自己拥有的目录，所有者天然持有 `WRITE_DAC`；而它是纯 TypeScript + koffi、MIT，
+可以逐文件搬。所以本期做掉，实现在 `src/sandbox/`（第 9 层，不许 import pi 与 electron）。
 
-搁置期间的诚实声明：`SandboxEnforcement` 恒为 `partial`，界面如实说明
-"这不是操作系统级隔离"。pi 的 security.md 警告过
+落地范围：`powershell` 工具在 `workspace-write` 档下进受限令牌执行。
+`read-only` 不进（权限门阶段 3 已把 shell 全拒）；`danger-full-access` 不进
+（该预设文案写的是"不限制文件范围"，加沙箱就是文案说谎）。
+装配在 `daemon/sandbox-runner.ts`（档位映射与降级策略）。
+
+**三层分工**（沙箱**不替代**任何一层）：
+权限门管**要不要问人** → 检查器管**这条命令能不能跑** → 沙箱管**跑起来能碰到什么**。
+
+**`SandboxEnforcement` 仍然恒为 `partial`，不因沙箱生效而改成 `full`。**
+`WRITE_RESTRICTED` 机制上**只约束写**，读与网络完全不受约束（已实测：受限子进程
+仍能读工作区外文件）。所以 `type ~\.ssh\id_rsa` 读走密钥这条路仍然只有
+`command-guard` 的 `credential-access` 拦得住 —— 不得因"有沙箱了"而削弱检查器。
+
+已知边界（不写清就又是一个假边界）：
+
+1. **读与网络完全不受约束**（机制使然，见上）。
+2. **Everyone 可写的外部目录仍可写**。dsh 缺"人人可写目录扫描告警"，codex 专门做了
+   `WindowsWorldWritableWarningNotification` —— 我们也还没做，留 TODO。
+3. **NTFS 硬链接是文件对象别名**：工作区 ACE 会渗到工作区外的同一文件对象。
+4. **FAT/exFAT 无 ACL**：授权会"成功"但毫无效果，所以探测阶段直接报
+   `unsupported-filesystem`，界面不假装生效。
+5. **常驻 ACE 残留**：工作区上留下用户无法干净移除的 ACE（`icacls /remove` 报
+   `ERROR_NONE_MAPPED`）。工作区是我们自己建的 `~/KamiBuddy`，可接受；
+   而且它同时是**性能设计的一部分**（见下）。
+6. **管理员用户基本不受约束** —— Windows 安全模型的边界，不是我们的 bug。
+7. **`read-only` 会把 PowerShell 降到 ConstrainedLanguage**（该档不进沙箱，暂无影响，
+   但将来改档位映射时要记着）。
+
+性能事实（实测，决定了授权时机）：首次 ACL 授权随文件数**略超线性**增长 ——
+100 文件 40ms、1000 文件 477ms、5000 文件 3134ms（约 0.6ms/文件），外推几万文件
+即几十秒，codex 说的"几十秒"可信。所以**首次授权在会话建立时预热，不懒加载到
+首次命令**，否则用户第一条命令会莫名挂住。幂等命中恒为 1ms 且与树大小无关
+（`hasExactGrant` 只读目录自身 DACL），加上 ACE 常驻，只有"该工作区第一次运行"付钱。
+
+**2026-09-15 事故与根因**（判别矩阵 `npm run smoke:sandbox -- --diagnose` 可复跑）：
+上线当天发现受限令牌下的 PowerShell 在部分启动上下文里**每条命令**都死在 DLL
+初始化（0xC0000142），命令一行未执行。十轮二分定位根因：**令牌默认 DACL 的
+ACE 受托者不能是外来 SID**（S-1-4-* 的 capability SID）——三条路径中只有这条
+有毒：受限列表含外来 SID 无辜、文件 ACE 用外来受托者无辜、唯独默认 DACL 用
+外来受托者必死；身份内受托者（登录 SID / Everyone / 令牌用户 SID）全部安全。
+内核级机制未完全查明（同一台机器上随启动链路不同而确定性地不同），但经验规则
+完整：**默认 DACL 授权恒用登录 SID**（它在两档受限列表里恒在），文件授权保留
+per-workspace capability SID（隔离边界不变）。dsh 官方探针的原班机制在本机
+复现同症状——这不是移植引入的偏差，是该机制对启动上下文的隐藏依赖
+（dsh 的测试与生产都在有控制台的 CLI 上下文，从未踩到）；codex 不用这套
+机制（专用账号 + 私有桌面），结构上免疫。教训有二：终端测试环境 ≠
+utilityProcess 生产环境，沙箱行为必须在真实进程形态里冒烟（`smoke:sandbox`
+因此而生）；启动自检（探测期用自选命令真跑一次）是第二道保险——它不依赖
+已知根因即可把这类故障从"静默废掉所有命令"变成"降级可用 + 日志留根因线索"。
+
+降级纪律：探测/授权失败 → 退回直接 spawn，但在工具结果与设置页**明确说明未生效**
+（原因枚举 `SandboxUnavailableReason`，结构化诊断落事件日志 `sandbox_status`）。
+这不是 WorkBuddy `node-brokered-fs-shim.cjs:41-42` 那种 fail-open —— 今天本来就没有
+沙箱，降级等于"没有改善"，不等于"打开了一个洞"。
+**但下一期放松审批时，这条判据必须翻转成 fail-closed**：放松的依据就是沙箱存在。
+
+仍然搁置：**提权那一档**（专用账号 + 禁读 + 禁网）。它只多出读隔离与网络隔离，
+写隔离与本期完全等强；代价是 UAC、常驻两个账号与一个组、**EDR/AV 高敏感**
+（建账号 + 改 ACL + 改防火墙是教科书级恶意软件特征）、可被企业 GPO 直接封死，
+且 codex 连卸载路径都没写。
+
+pi 的 security.md 警告过
 *"a partial in-process sandbox would be easy to misunderstand as a security boundary"* ——
-**做不到就说清楚，不假装有边界**。将来接上真沙箱只改 `buildPermissionInfo` 一处。
+**做不到就说清楚，不假装有边界**。诚实上报的落点仍是 `buildPermissionInfo` 一处。
 
 ### 4.5 配置读取单一入口
 

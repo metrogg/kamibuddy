@@ -17,6 +17,7 @@ const SRC = resolve("src");
 const LAYERS = [
 	"shared",
 	"documents",
+	"sandbox",
 	"core",
 	"extensions",
 	"daemon",
@@ -30,9 +31,13 @@ type Layer = (typeof LAYERS)[number];
 const ALLOWED_INTERNAL: Record<Layer, readonly Layer[]> = {
 	shared: [], // 零内部依赖，谁都可以 import 它
 	documents: ["shared"],
+	// 纯 Win32 适配层（受限令牌 + ACL + spawn）。只取 shared 的 SandboxMode 类型，
+	// 与 documents/ 同一取向：不碰 pi、不碰 electron，所以能脱离二者单测
+	// （下面 ALLOW_PI / ALLOW_ELECTRON 都不含 sandbox，这条由校验器机械保证）。
+	sandbox: ["shared"],
 	core: ["shared", "documents"],
-	extensions: ["shared", "documents", "core"],
-	daemon: ["shared", "documents", "core", "extensions"],
+	extensions: ["shared", "documents", "sandbox", "core"], // powershell 工具要用沙箱执行后端
+	daemon: ["shared", "documents", "sandbox", "core", "extensions"], // 可用性探测 → 诚实上报
 	main: ["shared"],
 	preload: ["shared"],
 	renderer: ["shared"],

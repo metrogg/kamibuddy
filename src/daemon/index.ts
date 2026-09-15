@@ -107,7 +107,12 @@ import { defaultProtectedDirs, isPathInside } from "../extensions/permission-pol
 import { rememberRuleFromApproval } from "../extensions/permission-rules.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
-import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
+import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
+import {
+	createSandboxedRunner,
+	warmUpSandbox,
+	type SandboxDiagnostics,
+} from "./sandbox-runner.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
@@ -119,6 +124,7 @@ import {
 	type PermissionInfo,
 	type PermissionRule,
 	type PermissionSettings,
+	type SandboxUnavailableReason,
 } from "../shared/permissions.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
@@ -991,14 +997,97 @@ function withHardTimeout<T>(promise: Promise<T>, ms: number, message = "请求�
  * 分析见 docs/workbuddy分析/09-sandbox-and-permissions.md。
  */
 function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
+	/*
+	 * 基础文案（任何情况都成立）：权限判定发生在工具调用前，不是 OS 隔离。
+	 * 沙箱只加固了 powershell 的**写**范围，不改变这条的性质。
+	 */
+	const base =
+		"权限由 KamiBuddy 在工具调用前判定：" +
+		"它能拦住助手主动的读写与命令，但不能约束已运行程序的行为。" +
+		"凭据目录（.ssh/.gnupg/.aws 等）在任何档位下都禁止读写。";
+
+	// 沙箱状态是进程级事实（这台机器上能不能用），与具体档位无关。
+	const sandbox = sandboxDiagnostics;
+	let sandboxNote = "";
+	if (sandbox !== undefined) {
+		sandboxNote = sandbox.available
+			? // 说清「加固了什么」也说清「没加固什么」——只讲前半句会让用户
+				// 以为这是完整隔离，那正是 pi security.md 警告的错误安全感。
+				"　命令执行（PowerShell）已受操作系统级写入约束：" +
+				"工作目录之外的写入会被系统拒绝，即使你批准了该操作。" +
+				"读取与联网**不受**此约束。"
+			: `　命令执行未受操作系统级写入约束（${describeSandboxReason(sandbox.reason)}），` +
+				"写入范围仅由上述权限判定把关。";
+	}
+
 	return {
 		settings,
+		/*
+		 * **恒为 partial，不因沙箱生效而改成 full。**
+		 * WRITE_RESTRICTED 机制上只约束写：读与网络完全不受约束（已实测），
+		 * 且存在 Everyone 环境写 ACE 与 NTFS 硬链接两个已知缺口
+		 * （见 docs/ARCHITECTURE.md §4.4b 的已知边界）。
+		 */
 		enforcement: "partial",
-		enforcementNote:
-			"权限由 KamiBuddy 在工具调用前判定，不是操作系统级隔离：" +
-			"它能拦住助手主动的读写与命令，但不能约束已运行程序的行为。" +
-			"凭据目录（.ssh/.gnupg/.aws 等）在任何档位下都禁止读写。",
+		// 沙箱状态并进这段文案（设置页整段渲染）；机器可读的诊断在事件日志的
+		// sandbox_status 里，不另开没有读取方的结构化字段。
+		enforcementNote: `${base}${sandboxNote}`,
 	};
+}
+
+/**
+ * 沙箱可用性诊断（进程级）。
+ *
+ * `undefined` = 尚未探测。存模块级而不是按会话：「这台机器能不能用受限令牌」
+ * 与会话无关，与 activePermissions 同一范式。
+ */
+let sandboxDiagnostics: SandboxDiagnostics | undefined;
+
+/** 原因枚举 → 给用户看的一句话。不把枚举名直接抛给界面。 */
+function describeSandboxReason(reason: SandboxUnavailableReason | undefined): string {
+	switch (reason) {
+		case "not-windows":
+			return "当前系统不是 Windows";
+		case "ffi-load-failed":
+			return "系统调用组件加载失败";
+		case "token-creation-failed":
+			return "受限令牌创建失败";
+		case "acl-grant-failed":
+			return "工作目录授权失败";
+		case "unsupported-filesystem":
+			return "工作目录所在磁盘不支持权限控制";
+		case "process-start-failed":
+			// 说「启动自检未通过」而不是「进程起不来」：后者像是用户的命令有问题，
+			// 而这其实是沙箱环境的问题，且此时命令仍可正常执行（已降级）。
+			return "命令执行环境的启动自检未通过";
+		case "disabled-by-setting":
+			return "已被设置关闭";
+		default:
+			return "原因未知";
+	}
+}
+
+/**
+ * 记录沙箱诊断。同一结论只落一次日志 —— 每个会话都装一个执行器，
+ * 各自去重也会在多会话时重复刷日志。
+ */
+function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string): void {
+	const previous = sandboxDiagnostics;
+	sandboxDiagnostics = diagnostics;
+	if (
+		previous !== undefined &&
+		previous.available === diagnostics.available &&
+		previous.reason === diagnostics.reason
+	) {
+		return;
+	}
+	eventLog.append({
+		kind: "sandbox_status",
+		available: diagnostics.available,
+		...(diagnostics.reason === undefined ? {} : { reason: diagnostics.reason }),
+		...(diagnostics.detail === undefined ? {} : { detail: diagnostics.detail }),
+		cwd,
+	});
 }
 
 /**
@@ -1339,6 +1428,22 @@ async function createHost(
 	mkdirSync(cwd, { recursive: true });
 
 	/*
+	 * 沙箱预热：**此刻开始**给工作区授权，不 await（spec: add-windows-acl-sandbox）。
+	 *
+	 * 为什么不能懒到首次 powershell 调用：实测首次 ACL 授权随文件数略超线性
+	 * （5000 文件 3134ms，外推几万文件即几十秒），拖到模型第一条命令时才做，
+	 * 用户会看到命令莫名挂住几十秒且毫无解释。
+	 * 为什么也不 await：那会让新建会话卡住同样的时长。折中是现在开始跑，
+	 * 让第一次调用 await 剩余部分 —— 模型思考与流式输出通常足够它跑完。
+	 * ACE 是常驻的，所以只有「该工作区第一次运行」付这个钱，之后都是 1ms。
+	 */
+	void warmUpSandbox({
+		workspaceDir: cwd,
+		mode: activePermissions.sandbox,
+		onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, cwd),
+	});
+
+	/*
 	 * 子代理定义随会话现载（不是进程级单例）：agents 是用户可覆盖的数据
 	 * （~/.kamibuddy/agents/ 同名覆盖内置），编辑后新会话生效，无需重启应用
 	 * （与技能清单同一哲学）。内置目录缺失/为空是打包错误，在这里抛出让
@@ -1548,10 +1653,27 @@ async function createHost(
 						...(bucket.sessionId === "" ? {} : { excludeSessionId: bucket.sessionId }),
 					}),
 			}),
-			// shell 能力：craft 白名单含 powershell。命令先过工具层危险命令检查器，
-			// 权限门另管「要不要问人」（balanced 高风险询问、read-only 拒，
-			// 见 permission-policy 的 SHELL 分支）——门与检查器是两道独立防线。
-			powershellExtensionFactory(),
+			/*
+			 * shell 能力：craft 白名单含 powershell。三道**独立**防线，缺一不可：
+			 *   权限门   —— 要不要问人（balanced 高风险询问、read-only 拒，
+			 *                见 permission-policy 的 SHELL 分支）；
+			 *   检查器   —— 这条命令能不能跑（command-guard 的五类拦截）；
+			 *   沙箱     —— 跑起来能碰到什么（受限令牌把写约束在工作区内）。
+			 *
+			 * 沙箱**不替代**检查器：WRITE_RESTRICTED 机制上只约束写，读与网络
+			 * 完全不受约束（已实测），`type ~\.ssh\id_rsa` 这条路仍然只有
+			 * 检查器的 credential-access 拦得住（spec: add-windows-acl-sandbox）。
+			 */
+			powershellExtensionFactory({
+				runner: createSandboxedRunner({
+					getSettings: () => activePermissions,
+					// 快照与权限门同口径：cwd 在宿主存活期间不会变（见 sandbox-runner 注释）。
+					workspaceDir: cwd,
+					// 降级路径就是今天在跑的那条 spawn，不另写一遍。
+					fallback: runCommand,
+					onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, cwd),
+				}),
+			}),
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),

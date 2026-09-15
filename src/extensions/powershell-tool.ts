@@ -32,7 +32,35 @@ export interface PowershellToolOptions {
 	 * 人在场终审，无论权限档一律关掉（questionnaire 的 unattended 同款语义）。
 	 */
 	readonly unattended?: boolean;
+	/**
+	 * 命令执行器。缺省是直接 spawn（今天的行为）；daemon 注入的版本会把命令
+	 * 放进受限令牌里跑（spec: add-windows-acl-sandbox）。
+	 *
+	 * 注入而非在本文件里判档位，是因为「哪个权限档该进沙箱」是**策略**，
+	 * 属于 daemon 装配层 —— 工具只负责跑命令与格式化结果。
+	 * 注入形态同时让整条路径能用假执行器单测（照 documents/docx-env.ts 的约定）。
+	 */
+	readonly runner?: CommandRunner;
 }
+
+/**
+ * 命令执行器。
+ *
+ * `note` 是执行环境的附带说明（如「沙箱未生效」），会被追加到给模型的文本里。
+ * 放在执行器的返回值而不是让工具去问沙箱状态：谁执行谁最清楚实际的约束情况。
+ */
+export type CommandRunner = (
+	command: string,
+	timeoutSeconds: number,
+	/**
+	 * 执行前的等待提示（可选）。执行器只在**确实要让用户等**时调用一次 ——
+	 * 目前唯一的用途是首次 ACL 授权超过 1 秒（大工作区可能几秒到几十秒）。
+	 *
+	 * 文本经 pi 的 onUpdate → tool_progress 追加到工具卡，终态会整卡替换，
+	 * 所以它是瞬时的：命令跑完就消失，不会污染最终结果。
+	 */
+	onProgress?: (text: string) => void,
+) => Promise<CommandOutcome & { readonly note?: string }>;
 
 /** 单次返回给模型的输出上限（字符），与 web-fetch / doc-extract 的 24k 同口径。 */
 const MAX_OUTPUT_CHARS = 24_000;
@@ -63,7 +91,12 @@ interface PowershellToolDetails {
 	readonly truncated: boolean;
 }
 
-interface CommandOutcome {
+/**
+ * 一次命令执行的结果。导出供 daemon 装配沙箱执行器用 ——
+ * `src/sandbox` 的 `SandboxRunOutcome` 与这个形状**逐字段对应**（含 exitCode
+ * 用 null 表示被杀），所以那边的结果可以直接充当这里的返回值，不需要转换层。
+ */
+export interface CommandOutcome {
 	readonly stdout: string;
 	readonly stderr: string;
 	/** null 表示被信号杀掉（超时路径）。 */
@@ -74,8 +107,11 @@ interface CommandOutcome {
 /**
  * 拉起 powershell.exe 跑一条命令。spawn 失败（非 Windows 没有 powershell.exe）
  * 走 error 事件 → reject，响亮报错；同步 throw 只发生在参数非法时，一并兜住。
+ *
+ * 导出是给 daemon 的沙箱执行器当**降级路径**用（daemon/sandbox-runner.ts）：
+ * 沙箱不可用时退回这条今天就在跑的路径，而不是自己再写一遍 spawn。
  */
-function runCommand(command: string, timeoutSeconds: number): Promise<CommandOutcome> {
+export function runCommand(command: string, timeoutSeconds: number): Promise<CommandOutcome> {
 	return new Promise((resolve, reject) => {
 		let child;
 		try {
@@ -123,8 +159,13 @@ function runCommand(command: string, timeoutSeconds: number): Promise<CommandOut
 	});
 }
 
-/** 执行结果 → 模型可读文本：状态行（含退出码）+ 分来源的输出 + 截断标注。 */
-function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number): {
+/**
+ * 执行结果 → 模型可读文本：状态行（含退出码）+ 环境说明 + 分来源的输出 + 截断标注。
+ *
+ * `note` 紧跟状态行、排在输出之前是有意的：输出可能长到被截断，
+ * 而「沙箱未生效」这类说明不能因为命令话多就丢掉。
+ */
+function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number, note?: string): {
 	readonly text: string;
 	readonly truncated: boolean;
 } {
@@ -137,6 +178,7 @@ function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number): {
 	} else {
 		sections.push("命令执行完成，退出码 0。");
 	}
+	if (note !== undefined && note !== "") sections.push(note);
 	const stdout = outcome.stdout.trimEnd();
 	const stderr = outcome.stderr.trimEnd();
 	if (stdout !== "") sections.push(`【标准输出】\n${stdout}`);
@@ -182,7 +224,14 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 					}),
 				),
 			}),
-			async execute(_toolCallId, params): Promise<{
+			/*
+			 * 第 4 参数 onUpdate 是 pi 的执行中进度通道（与 task-tool 同一用法）：
+			 * 它经 tool_execution_update → tool_progress 追加到工具卡的 detail，
+			 * 而终态 tool_finished 会**整卡替换** —— 所以进度文本是瞬时的，
+			 * 命令跑完即消失，不会污染最终结果。
+			 * 用它而不是新开 IPC 通道：提示本就该出现在用户正在等的那张卡上。
+			 */
+			async execute(_toolCallId, params, _signal, onUpdate): Promise<{
 				content: Array<{ type: "text"; text: string }>;
 				details: PowershellToolDetails;
 			}> {
@@ -217,8 +266,30 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 					};
 				}
 				const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
-				const outcome = await runCommand(params.command, timeoutSeconds);
-				const { text, truncated } = formatOutcome(outcome, timeoutSeconds);
+				/*
+				 * 缺省执行器 = 直接 spawn（今天的行为）；daemon 会注入沙箱版本。
+				 * 显式标注类型而不是让它推成联合：note 是可选字段，所以不带 note 的
+				 * runCommand 也满足 CommandRunner —— 这样 CommandOutcome 能保持
+				 * 与 sandbox 层 SandboxRunOutcome 逐字段对应的纯净形状。
+				 */
+				const run: CommandRunner = options?.runner ?? runCommand;
+				const outcome = await run(params.command, timeoutSeconds, (text) => {
+					/*
+					 * details 必须给全量字段（与终态同形）：pi 的
+					 * AgentToolResult<TDetails> 按分支联合推断，缺字段会让形状漂移。
+					 * 这里的取值表示「还在执行中、未被拦截」。
+					 */
+					onUpdate?.({
+						content: [{ type: "text" as const, text }],
+						details: {
+							blocked: false,
+							category: undefined,
+							exitCode: undefined,
+							truncated: false,
+						},
+					});
+				});
+				const { text, truncated } = formatOutcome(outcome, timeoutSeconds, outcome.note);
 				return {
 					content: [{ type: "text", text }],
 					details: {

@@ -57,6 +57,43 @@ export const APPROVAL_POLICIES: readonly ApprovalPolicy[] = ["ask", "never"] as 
  */
 export type SandboxEnforcement = "full" | "partial";
 
+/**
+ * 沙箱不可用的原因（spec: add-windows-acl-sandbox）。
+ *
+ * 照 WorkBuddy 的「二值 + reason code」而不是假装分级：产品面只回答
+ * 「生效了没有」+「为什么没生效」，不发明 `full`/`partial` 之外的中间态。
+ *
+ * 注意即使沙箱**完全正常生效**，`enforcement` 仍然是 `partial` ——
+ * `WRITE_RESTRICTED` 机制上只约束写，读与网络不受任何约束（已实测：
+ * 受限子进程仍能读工作区外文件）。所以本枚举回答的是「写约束在不在」，
+ * 不是「隔离完不完整」。
+ */
+export type SandboxUnavailableReason =
+	/** 非 Windows 平台。受限令牌是 Windows 特有机制。 */
+	| "not-windows"
+	/** koffi 加载失败（缺预编译产物，或运行环境不兼容）。 */
+	| "ffi-load-failed"
+	/** 受限令牌派生失败。 */
+	| "token-creation-failed"
+	/** ACL 授权失败（目录不归当前用户所有，或权限被组策略限制）。 */
+	| "acl-grant-failed"
+	/** 工作区所在卷不支持 ACL（FAT/exFAT）——沙箱会静默无效，必须报出来。 */
+	| "unsupported-filesystem"
+	/**
+	 * 受限令牌下**进程起不来**（自检未通过）。
+	 *
+	 * 2026-09-15 的真实故障就是这一类：PowerShell 死在 DLL 早期初始化
+	 * （退出码 `0xC0000142`），命令一行都没执行，而这个失败被当成「命令执行
+	 * 失败」原样报给了模型 —— 等于沙箱静默废掉了每一条命令。
+	 *
+	 * 加这一档的意义：把「沙箱让所有命令都失败」与「这条命令自己失败」分开。
+	 * 前者必须降级并说明，后者必须如实回传（详见 sandbox/index.ts 的
+	 * selfCheckSandbox：为什么自检只能放在探测期而不是每条命令）。
+	 */
+	| "process-start-failed"
+	/** 被设置显式关闭。 */
+	| "disabled-by-setting";
+
 /* ── 预设：旋钮的捆绑包 ──────────────────────────────────────────── */
 
 /**
@@ -134,7 +171,13 @@ export const DEFAULT_PERMISSIONS: PermissionSettings = {
 export interface PermissionInfo {
 	readonly settings: PermissionSettings;
 	readonly enforcement: SandboxEnforcement;
-	/** 一句话说明强制力边界，直接展示给用户。 */
+	/**
+	 * 一句话说明强制力边界，直接展示给用户。
+	 *
+	 * 沙箱状态（生效与否、未生效的原因）也**并进这段文案**，而不是另开
+	 * 结构化字段：设置页只把它整段渲染出来，多加字段就是没有读取方的死代码。
+	 * 需要机器可读的诊断时看事件日志的 `sandbox_status`（那里有原因枚举与细节）。
+	 */
 	readonly enforcementNote: string;
 }
 

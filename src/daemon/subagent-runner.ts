@@ -33,7 +33,8 @@ import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
-import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
+import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
+import { createSandboxedRunner } from "./sandbox-runner.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
@@ -294,9 +295,26 @@ function buildSubagentExtensions(
 				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
-		// shell 的用户在场变体：危险命令检查器 + 权限门两道防线与主会话一致
-		// （worker 的 frontmatter 含 powershell，必须注册同名工具）。
-		powershellExtensionFactory(),
+		/*
+		 * shell 的用户在场变体：三道防线与主会话**完全一致**
+		 * （危险命令检查器 + 权限门 + 沙箱）。worker 的 frontmatter 含 powershell，
+		 * 必须注册同名工具。
+		 *
+		 * 沙箱不能漏在这里：子代理与主会话同 cwd、同权限设置，若这边走缺省
+		 * spawn，就会出现「主会话写不出工作区、子代理能写出去」的不一致 ——
+		 * 而委派本身是模型可自主发起的，等于给写约束留了一道旁路。
+		 *
+		 * 不接 onDiagnostics：沙箱可用性是**进程级**事实（FFI 能否加载、卷是否
+		 * 支持 ACL），主会话建立时的预热已经上报过同一个 cwd 的结论，
+		 * 这里再报一遍只是重复。
+		 */
+		powershellExtensionFactory({
+			runner: createSandboxedRunner({
+				getSettings: deps.getPermissions,
+				workspaceDir: cwd,
+				fallback: runCommand,
+			}),
+		}),
 		createDocReadTool(),
 		/*
 		 * docx 生成：预先挂进子代理工具面 —— 文档流水线的 doc-converter 子代理

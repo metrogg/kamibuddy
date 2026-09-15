@@ -16,7 +16,11 @@
 import { describe, expect, it } from "vitest";
 import { Compile } from "typebox/compile";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { powershellExtensionFactory } from "./powershell-tool.ts";
+import {
+	powershellExtensionFactory,
+	type CommandOutcome,
+	type CommandRunner,
+} from "./powershell-tool.ts";
 
 interface FakeToolResult {
 	readonly content: ReadonlyArray<{ type: "text"; text: string }>;
@@ -32,14 +36,23 @@ interface FakeToolDef {
 	readonly name: string;
 	readonly label: string;
 	readonly parameters: unknown;
+	/**
+	 * 参数顺序照 pi 的真实签名：`(toolCallId, params, signal, onUpdate, ctx)`。
+	 * onUpdate 是**第 4 个** —— 传错位置会被当成 signal，进度回调静默失效。
+	 */
 	readonly execute: (
 		toolCallId: string,
 		params: Record<string, unknown>,
+		signal?: AbortSignal,
+		onUpdate?: (partial: FakeToolResult) => void,
 	) => Promise<FakeToolResult>;
 }
 
 /** 装好扩展，返回注册到的 powershell 工具定义。 */
-function mount(options?: { readonly unattended?: boolean }): FakeToolDef {
+function mount(options?: {
+	readonly unattended?: boolean;
+	readonly runner?: CommandRunner;
+}): FakeToolDef {
 	let tool: FakeToolDef | undefined;
 	const fakePi = {
 		registerTool: (def: FakeToolDef) => {
@@ -51,6 +64,26 @@ function mount(options?: { readonly unattended?: boolean }): FakeToolDef {
 
 	if (tool === undefined) throw new Error("powershell 工具没有注册");
 	return tool;
+}
+
+/** 记录调用的假执行器。默认返回成功。 */
+function fakeRunner(
+	outcome: Partial<CommandOutcome & { readonly note: string }> = {},
+): { readonly runner: CommandRunner; readonly calls: string[] } {
+	const calls: string[] = [];
+	return {
+		calls,
+		runner: async (command, timeoutSeconds) => {
+			calls.push(`${command}|${timeoutSeconds}`);
+			return {
+				stdout: "",
+				stderr: "",
+				exitCode: 0,
+				timedOut: false,
+				...outcome,
+			};
+		},
+	};
 }
 
 describe("schema 边界（pi 执行前校验，工具不再重复校验）", () => {
@@ -118,5 +151,116 @@ describe("危险命令检查器拦截", () => {
 
 		expect(result.details.blocked).toBe(true);
 		expect(result.details.category).toBe("recursive-force-delete");
+	});
+});
+
+describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", () => {
+	it("命令与超时原样交给注入的执行器", async () => {
+		const { runner, calls } = fakeRunner({ stdout: "hello" });
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "Get-Date", timeoutSeconds: 30 });
+
+		expect(calls).toEqual(["Get-Date|30"]);
+		expect(result.content[0]?.text).toContain("hello");
+		expect(result.details.blocked).toBe(false);
+		expect(result.details.exitCode).toBe(0);
+	});
+
+	it("省略 timeoutSeconds 时传缺省 120", async () => {
+		const { runner, calls } = fakeRunner();
+		const tool = mount({ runner });
+		await tool.execute("t1", { command: "Get-Date" });
+
+		expect(calls).toEqual(["Get-Date|120"]);
+	});
+
+	it("执行器给的 note 出现在结果文本里", async () => {
+		const { runner } = fakeRunner({ stdout: "x", note: "沙箱未生效说明" });
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "Get-Date" });
+
+		expect(result.content[0]?.text).toContain("沙箱未生效说明");
+	});
+
+	it("**输出超长被截断时 note 仍然保留**", async () => {
+		/*
+		 * 这条验证的是 formatOutcome 里「note 紧跟状态行、排在输出之前」那个
+		 * 设计断言：24k 截断是从尾部砍的，若 note 排在输出之后，
+		 * 命令一话多就会把「沙箱未生效」这句安全说明整段吞掉。
+		 */
+		const { runner } = fakeRunner({
+			stdout: "A".repeat(40_000),
+			note: "沙箱未生效说明",
+		});
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "Get-Date" });
+		const text = result.content[0]?.text ?? "";
+
+		expect(result.details.truncated).toBe(true);
+		expect(text).toContain("沙箱未生效说明");
+		expect(text).toContain("已截断");
+	});
+
+	it("非零退出码与超时如实回传（不被执行器形态改变）", async () => {
+		const { runner } = fakeRunner({ exitCode: 42, stderr: "boom" });
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "Get-Date" });
+
+		expect(result.details.exitCode).toBe(42);
+		expect(result.content[0]?.text).toContain("退出码 42");
+		expect(result.content[0]?.text).toContain("boom");
+	});
+
+	/*
+	 * 下面两条钉的是**三道闸的顺序**（unattended → 检查器 → 执行器）。
+	 * 顺序本身就是安全语义：执行器在最后，所以前两道拦下的命令
+	 * 绝不能到达执行层 —— 无论那一层是沙箱还是直接 spawn。
+	 */
+	it("无人值守时执行器根本不被调用", async () => {
+		const { runner, calls } = fakeRunner();
+		const tool = mount({ unattended: true, runner });
+		const result = await tool.execute("t1", { command: "Get-Date" });
+
+		expect(calls).toEqual([]);
+		expect(result.details.category).toBe("unattended");
+	});
+
+	it("检查器命中时执行器根本不被调用", async () => {
+		const { runner, calls } = fakeRunner();
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "Remove-Item -Recurse -Force C:\\" });
+
+		expect(calls).toEqual([]);
+		expect(result.details.category).toBe("recursive-force-delete");
+	});
+
+	it("执行器的等待提示经 pi 的 onUpdate 上报（进度接缝）", async () => {
+		/*
+		 * 这条钉的是「等待提示怎么到用户眼前」这条链路的第一跳：
+		 * 执行器调 onProgress → 工具转成 pi 的 onUpdate → tool_execution_update
+		 * → tool_progress → 追加到工具卡 detail。
+		 * 用 pi 的既有通道而不是新开 IPC，所以渲染层零改动。
+		 */
+		const updates: Array<{ text: string; blocked: boolean }> = [];
+		const runner: CommandRunner = async (_command, _timeout, onProgress) => {
+			onProgress?.("正在配置写入约束……");
+			return { stdout: "done", stderr: "", exitCode: 0, timedOut: false };
+		};
+		const tool = mount({ runner });
+		// signal 位（第 3 参）传 undefined：onUpdate 在第 4 位。
+		const result = await tool.execute("t1", { command: "Get-Date" }, undefined, (partial) => {
+			updates.push({
+				text: partial.content[0]?.text ?? "",
+				blocked: partial.details.blocked,
+			});
+		});
+
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.text).toBe("正在配置写入约束……");
+		// details 必须给全量字段且语义正确（执行中、未被拦截）——
+		// 缺字段会让 pi 的 AgentToolResult 联合推断形状漂移
+		expect(updates[0]?.blocked).toBe(false);
+		// 终态照旧，不被进度影响
+		expect(result.content[0]?.text).toContain("done");
 	});
 });
