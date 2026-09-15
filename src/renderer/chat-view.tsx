@@ -66,6 +66,7 @@ import {
 	turnFoldExpanded,
 } from "./turn-fold.ts";
 import type { TurnFoldMap, TurnView } from "./turn-fold.ts";
+import { SessionStatsLine } from "./session-stats-line.tsx";
 import { foldTurnMetrics } from "./turn-metrics.ts";
 import { TurnRail } from "./turn-rail.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
@@ -2250,6 +2251,14 @@ export function ChatView({
 							{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
 							{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						</Composer>
+						{/*
+							会话指标条：常驻输入卡下方（对齐 dsh 把 StatsLine 挂在
+							composer.dock 的做法）。与消息行内那条单轮读数分工不同 ——
+							那条答「这一轮用了多少」，这条答「整个会话跑了多少、多快」。
+							数据来自 daemon 的 session_stats 事件（台账全历史口径），
+							没有台账时组件自己整行不渲染；问卷浮层分支里不出现（与输入卡同条件）。
+						*/}
+						<SessionStatsLine stats={conversation.sessionStats} />
 					</>
 				)}
 			</footer>

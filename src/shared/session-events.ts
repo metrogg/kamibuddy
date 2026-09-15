@@ -11,7 +11,7 @@
  * （用户看到的是一条条消息和工具卡片，不是"轮"），所以在 adapter 里被吞掉。
  */
 
-import type { TokenUsage } from "./observability.ts";
+import type { SessionStatCard, TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
 import type { ImagePart } from "./image.ts";
@@ -393,6 +393,21 @@ export type SessionEvent =
 	 */
 	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail }
 	/**
+	 * 会话级统计的实时投影（对齐 dsh 的 sessionStats projection）。
+	 *
+	 * daemon 在**台账条目 fold 之后**推（只在 llm_call / run_end 两个时点：
+	 * 前者改变轮次 / 耗时 / 首字 / 解码 / 用量，后者收束该 run 的工具耗时；
+	 * tool_call 一个 run 有几十条，跟着推只会让 IPC 与事件日志膨胀）。
+	 *
+	 * 为什么不塞进 session_state：session_state 只在 pi 的元信息变化时发
+	 *（模型 / 模式 / 上下文用量），一条 llm_call 结束并不触发它，指标条会
+	 * 长期停在旧值。与 context_usage 同模式 —— daemon 才知道的聚合结果，
+	 * 由 daemon 主动推一条独立事件。
+	 *
+	 * 消费方是聊天页底部的常驻指标条（renderer/session-stats-line.tsx）。
+	 */
+	| { readonly type: "session_stats"; readonly stats: SessionStatCard }
+	/**
 	 * 模型自动重试状态（等待 delayMs 后再次发起）。
 	 *
 	 * start 事件由 session-host 在收到 pi auto_retry_start 后转发（计数从 1 开始）；
@@ -436,6 +451,44 @@ export type SessionEvent =
 		readonly aborted: boolean;
 		readonly errorMessage?: string;
 	};
+
+/**
+ * 流式与进度类事件：逐字 / 逐块的增量，不携带新的聚合事实。
+ *
+ * **这份名单只有一处**（2026-09-15 抽出）。两个用途共用它：
+ *   - daemon 的 `sanitizeForLog`：把其中的正文 / 累积参数收成长度后再落盘
+ *   - renderer 的统计类界面（诊断页 / 统计页 / 任务诊断面板）：跳过它们，
+ *     不做「重拉快照 / 重读台账」的无谓刷新
+ *
+ * 为什么必须共用：这两份名单此前各写一遍，而且**都漏了
+ * `tool_stream_progress`**（只写了名字相近的 `tool_progress`）。实测单日
+ * 3 万条的后果是双向的：落盘侧把 events-*.jsonl 撑到 26 MB，界面侧让诊断页
+ * 与统计页在一次 write 期间空转 3000+ 次全量重算。名字只差一个 stream 的
+ * 这对类型，是这套事件里最容易漏的地方 —— 下次加进度类事件时改这里。
+ *
+ * 判据是「会不会改变聚合结果」，不是「是不是增量小事件」：
+ * `context_usage` 就是聚合结果本身，虽小也**不**在内。
+ */
+/** 流式与进度类事件的联合（`isStreamingEvent` 的窄化目标）。 */
+export type StreamingEvent = Extract<
+	SessionEvent,
+	{
+		readonly type:
+			| "assistant_text_delta"
+			| "assistant_thinking_delta"
+			| "tool_progress"
+			| "tool_stream_progress";
+	}
+>;
+
+export function isStreamingEvent(event: SessionEvent): event is StreamingEvent {
+	return (
+		event.type === "assistant_text_delta" ||
+		event.type === "assistant_thinking_delta" ||
+		event.type === "tool_progress" ||
+		event.type === "tool_stream_progress"
+	);
+}
 
 /**
  * PUSH.sessionEvent 的信封：事件本体 + 路由键。
@@ -577,6 +630,11 @@ export interface SessionSnapshot {
 	readonly availableModes: readonly ModeDescriptor[];
 	/** 最近的上下文用量明细。还没有过带用量的响应时为 undefined。 */
 	readonly usageDetail?: ContextUsageDetail;
+	/**
+	 * 会话级统计（session_stats 事件折叠而来）。还没有跑过台账时为 undefined ——
+	 * 聊天页指标条据此整行不渲染，而不是显示一排 0。
+	 */
+	readonly sessionStats?: SessionStatCard;
 	/** 当前回合计时。还没有用户消息时为 undefined。 */
 	readonly turn?: TurnTiming;
 	/**

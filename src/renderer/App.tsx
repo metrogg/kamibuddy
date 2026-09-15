@@ -32,7 +32,9 @@ import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
 import { ArtifactPanel, clampPanelWidth, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
+import { IconChart } from "./icons.tsx";
 import { SourcesPanel } from "./sources-panel.tsx";
+import { TaskDiagnosticsPanel } from "./task-diagnostics-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
@@ -636,6 +638,14 @@ export function App(): React.JSX.Element {
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
 	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。默认关闭——用户进入对话后手动展开。 */
 	const [panelOpen, setPanelOpen] = useState(false);
+	/**
+	 * 任务诊断面板（右侧栏第三态，与产物 / 来源同位互斥）。
+	 *
+	 * **独立于 panelOpen**：它跟随会话 —— 切会话时 closePreviewPanel 会清掉
+	 * panelOpen，但诊断面板不该被关（它存在的意义就是「诊断对应任务」，
+	 * 关掉反而要用户重开）。两个开关同落一个面板位，优先级见渲染处。
+	 */
+	const [taskDiagOpen, setTaskDiagOpen] = useState(false);
 	/**
 	 * 引用来源面板开合：与 ArtifactPanel 同位互斥（true 时右侧面板位渲染
 	 * SourcesPanel）。会话内内存态（WorkBuddy 同口径：不持久化），
@@ -1363,11 +1373,19 @@ export function App(): React.JSX.Element {
 					onToast={showToast}
 				/>
 			)}
-			{/* 产物预览面板：只在对话任务里出现（WorkBuddy：预览属于任务上下文），
-		   首页是引导页，右侧没有面板。panelOpen 即渲染（无激活文件时显示空态）。
-		   引用来源面板与产物面板同位互斥（spec: add-search-sources-panel）：
-		   sourcesOpen 时渲染 SourcesPanel，关闭即回到产物面板（panelOpen 不动）。 */}
-			{view === "chat" && panelOpen && (sourcesOpen ? (
+			{/* 右侧面板位：同一时刻只渲染一个，三个占用者按优先级排 ——
+		   任务诊断 > 引用来源 > 产物预览。
+		   面板位只在对话任务里出现（WorkBuddy：预览属于任务上下文），首页是引导页、
+		   右侧没有面板。taskDiagOpen 与 panelOpen 的差别在「切会话」：
+		   前者跟随会话（不参与 closePreviewPanel 的清理），后者随会话关闭。 */}
+			{view === "chat" && (taskDiagOpen || panelOpen) && (taskDiagOpen ? (
+				<TaskDiagnosticsPanel
+					sessionId={conversation.state.sessionId}
+					stats={conversation.sessionStats}
+					width={panelWidth}
+					onClose={() => setTaskDiagOpen(false)}
+				/>
+			) : sourcesOpen ? (
 				<SourcesPanel
 					sources={sources}
 					width={panelWidth}
@@ -1416,16 +1434,49 @@ export function App(): React.JSX.Element {
 			之外 —— 面板收起时要靠它再展开）。
 		*/}
 			{view === "chat" && (
-				<button
-					type="button"
-					className={`bar-btn panel-toggle-btn${panelOpen ? " active" : ""}`}
-					aria-label={panelOpen ? "收起产物面板" : "展开产物面板"}
-					aria-pressed={panelOpen}
-					title={panelOpen ? "收起产物面板" : "展开产物面板"}
-					onClick={() => setPanelOpen((v) => !v)}
-				>
-					<IconPanelRight size={16} />
-				</button>
+				/*
+					右上角开关组：**定位在容器上**（.panel-toggle-group）——
+					两个按钮各自 absolute 会完全重叠（同 top/right），
+					这正是「右上角图标看着不对」的原因。
+					组在面板组件之外：面板收起时要靠它再展开。
+				*/
+				<div className="panel-toggle-group">
+					{/*
+						任务诊断入口：与产物面板按钮并排，共用右侧面板位。
+						诊断**跟随会话**（切会话不关），所以它的开关独立于 panelOpen；
+						点它先让出来源面板，否则关掉诊断会冒出 Sources。
+					*/}
+					<button
+						type="button"
+						className={`bar-btn panel-toggle-btn${taskDiagOpen ? " active" : ""}`}
+						aria-label={taskDiagOpen ? "关闭任务诊断" : "打开任务诊断"}
+						aria-pressed={taskDiagOpen}
+						title="任务诊断：这个任务跑到哪一步、花了多少"
+						onClick={() => {
+							const next = !taskDiagOpen;
+							setSourcesOpen(false);
+							setTaskDiagOpen(next);
+							// 关诊断时把面板位一并关掉，否则会露出空态的产物面板。
+							setPanelOpen(next);
+						}}
+					>
+						<IconChart size={16} />
+					</button>
+					<button
+						type="button"
+						className={`bar-btn panel-toggle-btn${panelOpen && !taskDiagOpen ? " active" : ""}`}
+						aria-label={panelOpen && !taskDiagOpen ? "收起产物面板" : "展开产物面板"}
+						aria-pressed={panelOpen && !taskDiagOpen}
+						title="产物面板：这个任务产出的文件与改动"
+						onClick={() => {
+							// 产物与诊断同位互斥：切到产物时让出诊断。
+							setTaskDiagOpen(false);
+							setPanelOpen((v) => !v);
+						}}
+					>
+						<IconPanelRight size={16} />
+					</button>
+				</div>
 			)}
 			{/*
 			审批弹窗有意维持全局模态（与 WorkBuddy 的取舍差异）：它是工具

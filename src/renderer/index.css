@@ -150,7 +150,7 @@ textarea:focus-visible {
 
 .app {
 	/* 定位基准：左上角的侧栏开关（.sidebar-toggle-btn）与右上角的
-	   产物面板开关（.panel-toggle-btn）都 absolute 钉在这里。 */
+	   面板开关组（.panel-toggle-group）都 absolute 钉在这里。 */
 	position: relative;
 	display: flex;
 	height: 100vh;
@@ -981,6 +981,31 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
+/*
+   会话指标条（对齐 dsh 把 StatsLine 挂在 composer.dock）：常驻输入卡下方的一行读数。
+
+   布局必须是 block + nowrap + ellipsis —— text-overflow 只对 block 的行内内容生效，
+   换成 flex 会从中间截掉半个字而不是以 … 收尾（dsh 的 StatsLine.module.css 同注）。
+   颜色用次文而不是更淡的档：它是「读数」，要与输入卡有可读的对比，不是底噪。
+   分隔符再淡一档（opacity）：它是标点不是内容，不为它新增色值。
+*/
+.session-stats {
+	display: block;
+	padding: var(--space-1) 0 0;
+	font-size: var(--text-meta);
+	line-height: 1.6;
+	color: var(--text-secondary);
+	text-align: center;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.session-stats-sep {
+	margin: 0 var(--space-3);
+	opacity: 0.55;
+}
+
 /* ── 输入框补全下拉（@ 文件 + / 命令） ──────────────────────────── */
 
 /* 下拉的定位上下文：菜单相对输入区上浮，不挤压布局。 */
@@ -1238,10 +1263,17 @@ textarea:focus-visible {
    排在面板之后，同档下按树序后绘者在上 —— 全屏时仍浮在面板之上可点。
    仍低于阻塞审批弹窗（--z-modal）。
    top/right 与 chat-header、preview-head 的 8px/12px 内边距对齐，同排呼吸。 */
-.panel-toggle-btn {
+/* 右上角的开关组：**容器承担定位**（原先挂在单个按钮上）。
+   加了第二个开关（任务诊断）后，两个按钮若各自 absolute 会完全重叠
+   （同 top/right）—— 所以定位上移到容器，按钮退化成组内的横排子项。
+   组必须在面板组件之外：面板收起时要靠它再展开；z 高于面板全屏态。 */
+.panel-toggle-group {
 	position: absolute;
 	top: 8px;
 	right: 12px;
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
 	z-index: var(--z-overlay);
 }
 
@@ -3533,10 +3565,13 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: var(--space-1);
-	/* 右内边距让出窗口右上角：App 层的面板开关（含面板全屏态）钉在那里，
-	   行尾的「全屏/外部打开」不能被它盖住（44 = 40px 开关占位 + 4px gap）。
-	   44px 是让位偏移不是间距档值：归 --space-7(32) 会被开关盖住，故保留原值（登记为 token 例外）。 */
-	padding: var(--space-3) 44px var(--space-3) var(--space-4);
+	/* 右内边距让出窗口右上角：App 层的面板开关组（含面板全屏态）钉在那里，
+	   行尾的「全屏/外部打开」不能被它盖住。
+	   80 = 组宽（两个 28px 按钮 + 4px gap = 60）+ right 12 + 4 余量。
+	   开关组从 1 个按钮变 2 个（任务诊断，2026-09-15）后 44 不再够 —— 这正是
+	   它当初被登记成「让位偏移」的原因：它跟着控件宽度走，不是间距档值。
+	   80 已落进「≥48px 页面留白」的内置豁免区间，故不再需要白名单条目。 */
+	padding: var(--space-3) 80px var(--space-3) var(--space-4);
 	border-bottom: 1px solid var(--border);
 }
 
@@ -3581,6 +3616,170 @@ textarea:focus-visible {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: var(--space-2);
+}
+
+/*
+   任务诊断面板（右侧栏第三态）：容器骨架复用 preview-panel / preview-head /
+   preview-view，这里只加它自己的内容排版。
+
+   层级靠「缩进 + 左侧竖线」表达，不画泳道 —— 面板最窄只有 300 多 px，
+   泳道（诊断页那套）在这个宽度里读不出时间关系，列表反而清楚。
+   数字全部用等宽（--font-mono）：读数会随流式刷新跳动，非等宽会左右抖。
+*/
+.task-diag-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	/* 覆盖 .preview-view 的 space-2：这里有区 → run → 条目的三层结构，
+	   需要比纯列表更松的内边距。 */
+	padding: var(--space-4);
+}
+
+/* 与 .sources-title 同档（面板标题的唯一档位）。 */
+.task-diag-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: var(--text-list);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.task-diag-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+/* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。 */
+.task-diag-heading {
+	margin: 0;
+	font-size: var(--text-meta);
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* 会话总览：两列键值对（dsh inspector 的 Summary 同构）。 */
+.task-diag-kv {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--space-2) var(--space-4);
+	margin: 0;
+}
+
+.task-diag-kv > div {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.task-diag-kv dt {
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+.task-diag-kv dd {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: var(--text-meta);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.task-diag-note {
+	margin: 0;
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+/* 台账：一轮一块，轮与轮之间靠间距分层；轮内左边一条竖线标出归属。 */
+.task-diag-runs {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.task-diag-run {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	border-left: 2px solid var(--border);
+	padding-left: var(--space-3);
+}
+
+.task-diag-run-head,
+.task-diag-run-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.task-diag-clock {
+	font-family: var(--font-mono);
+}
+
+.task-diag-model {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.task-diag-running {
+	color: var(--text-secondary);
+}
+
+/* 一步：缩进一级（挂在轮之下）。读数允许换行，窄面板里不挤成一坨。 */
+.task-diag-step {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
+	padding-left: var(--space-3);
+	font-size: var(--text-meta);
+}
+
+.task-diag-step-name {
+	color: var(--text);
+}
+
+.task-diag-num {
+	font-family: var(--font-mono);
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+/* 工具行：再缩进一级（挂在步之下，与 dsh 的嵌套 subtool 同级语义）。 */
+.task-diag-tool {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
+	padding-left: var(--space-5);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.task-diag-tool-summary {
+	max-width: 45%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 重试 / 压缩：与工具行同缩进，但走弱化文字（它们是状态，不是步骤）。 */
+.task-diag-note-line {
+	padding-left: var(--space-5);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
 }
 
 .preview-group-title {

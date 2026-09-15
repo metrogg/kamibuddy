@@ -53,6 +53,11 @@
   含早于台账存在的旧会话）。检索、使用统计都读它。
 - **运行台账**（`logs/runs/<sessionId>.jsonl`）：只有 pi 不记的
   （计时 / TTFT / 重试 / 请求快照 / 队列 / run 边界），**没有**按条的 model 与 usage。
+- **事件日志**（`logs/events-YYYY-MM-DD.jsonl`）：daemon 的全量 SessionEvent 落盘，
+  `sanitizeForLog` 把 delta 类字段收成长度。**体积是已知风险**：单日 5.3 万条 / 38 MB，
+  主因是 `tool_stream_progress`（参数生成期逐 delta 进度）的**条数**而非单条大小 ——
+  收掉累积 `rawArgs` 后仍约 22 MB/日。无轮转、无清理、界面也不显示它
+  （清单 LOG18 已从 ⛔ 改判 ❌、OPS1 严重度上调，2026-09-15）。
 
 ## 使用统计（spec add-usage-stats，2026-09-14）
 

@@ -27,6 +27,7 @@ import type {
 	TokenUsage,
 } from "@shared/observability.ts";
 import { cacheHitRate } from "@shared/observability.ts";
+import { isStreamingEvent } from "@shared/session-events.ts";
 import { IconBack, IconChart, IconRefresh } from "./icons.tsx";
 import {
 	foldRunLedger,
@@ -809,15 +810,12 @@ export function DiagnosticsView({
 	useEffect(() => {
 		refresh();
 		refreshLedger(selectedSessionId);
-		// 会话事件 = 统计变了的信号。delta 类事件不改变聚合结果，跳过免得空转。
+		// 会话事件 = 统计变了的信号。流式与进度类事件不改变聚合结果，跳过免得
+		// 空转（名单在 shared 的 isStreamingEvent，**唯一处** —— 此前三处各写
+		// 一遍且都漏了 tool_stream_progress，实测一次 write 就能把本页拖进
+		// 3000+ 次「重拉快照 + 重读全量台账」）。
 		const off = window.kami.onSessionEvent(({ event }) => {
-			if (
-				event.type === "assistant_text_delta" ||
-				event.type === "assistant_thinking_delta" ||
-				event.type === "tool_progress"
-			) {
-				return;
-			}
+			if (isStreamingEvent(event)) return;
 			refresh();
 			refreshLedger(selectedSessionId);
 		});

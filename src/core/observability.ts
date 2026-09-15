@@ -29,6 +29,7 @@
 import { basename } from "node:path";
 import {
 	cacheHitRate,
+	stepDecode,
 	type CacheMissReason,
 	type CacheMissRecord,
 	type ContextComposition,
@@ -267,6 +268,12 @@ interface MutableSessionStats {
 	turns: number;
 	llmMs: number;
 	toolMs: number;
+	/** 带 TTFT 记录的调用：延迟合计与计数（计数用于取平均，缺它就算不出）。 */
+	ttftMs: number;
+	ttftCalls: number;
+	/** 「首字 → 完成」窗口与其中的 output token（只统计两者兼备的调用）。 */
+	decodeMs: number;
+	decodeTokens: number;
 	usage: MutableUsage;
 	lastActiveAt: number;
 	/** 缓存 fold 状态：当前 run 的模型（run_start 记账，llm_call 自身不带模型字段）。 */
@@ -280,6 +287,10 @@ function mutableSessionStats(): MutableSessionStats {
 		turns: 0,
 		llmMs: 0,
 		toolMs: 0,
+		ttftMs: 0,
+		ttftCalls: 0,
+		decodeMs: 0,
+		decodeTokens: 0,
 		usage: mutableUsage(),
 		lastActiveAt: 0,
 		currentRunModel: undefined,
@@ -493,9 +504,26 @@ export class ObservabilityStore {
 		data: LlmCallData,
 	): void {
 		stats.turns += 1;
-		stats.llmMs += Math.max(0, data.endedAt - data.startedAt);
+		const elapsedMs = Math.max(0, data.endedAt - data.startedAt);
+		stats.llmMs += elapsedMs;
+		// 首字延迟与解码速度（对齐 dsh sessionStats 的 ttftMs/ttftSteps 与
+		// decodeMs/decodeTokens）。这三行必须在下面那个 usage 早退**之前**：
+		// ttftMs 是独立的计时字段，不依赖 usage 是否上报。
+		const ttftMs = data.ttftMs === undefined ? undefined : Math.max(0, data.ttftMs);
+		if (ttftMs !== undefined) {
+			stats.ttftMs += ttftMs;
+			stats.ttftCalls += 1;
+		}
 		const usage = data.usage;
 		if (usage === undefined) return;
+		// 解码窗口与其中的 output token —— 判定与侧栏的单步显示共用 shared 的
+		// stepDecode（口径唯一处：两处各算一遍必然漂移，而 tok/s 的分子分母
+		// 恰好是最容易写歪的地方）。
+		const decode = stepDecode(data);
+		if (decode !== undefined) {
+			stats.decodeMs += decode.ms;
+			stats.decodeTokens += decode.tokens;
+		}
 		addUsage(stats.usage, usage);
 
 		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
@@ -689,6 +717,38 @@ export class ObservabilityStore {
 		return stat;
 	}
 
+	/**
+	 * 会话累计 → 对外快照卡。snapshot() 与 sessionCard() 共用**这一处**构造 ——
+	 * 两处各构造一份必然漂移（同 shared/conversation.ts 的「两端不各算一份」）。
+	 */
+	private freezeSessionCard(sessionId: string, s: MutableSessionStats): SessionStatCard {
+		const usage = freezeUsage(s.usage);
+		return {
+			sessionId,
+			runs: s.runs,
+			turns: s.turns,
+			llmMs: s.llmMs,
+			toolMs: s.toolMs,
+			ttftMs: s.ttftMs,
+			ttftCalls: s.ttftCalls,
+			decodeMs: s.decodeMs,
+			decodeTokens: s.decodeTokens,
+			usage,
+			cacheHitRate: cacheHitRate(usage),
+			lastActiveAt: s.lastActiveAt,
+		};
+	}
+
+	/**
+	 * 单个会话的统计卡（daemon 推送 session_stats 事件用）。
+	 * 该会话还没有任何台账条目时返回 undefined —— 调用方据此**不推**，
+	 * 而不是推一张全零的卡让聊天页显示「0 轮 · 0 步」。
+	 */
+	sessionCard(sessionId: string): SessionStatCard | undefined {
+		const stats = this.sessions.get(sessionId);
+		return stats === undefined ? undefined : this.freezeSessionCard(sessionId, stats);
+	}
+
 	snapshot(args: {
 		readonly entries: readonly ConversationEntry[];
 		readonly systemPromptTokens: number;
@@ -722,19 +782,7 @@ export class ObservabilityStore {
 			});
 
 		const sessions: SessionStatCard[] = [...this.sessions.entries()]
-			.map(([sessionId, s]): SessionStatCard => {
-				const usage = freezeUsage(s.usage);
-				return {
-					sessionId,
-					runs: s.runs,
-					turns: s.turns,
-					llmMs: s.llmMs,
-					toolMs: s.toolMs,
-					usage,
-					cacheHitRate: cacheHitRate(usage),
-					lastActiveAt: s.lastActiveAt,
-				};
-			})
+			.map(([sessionId, s]) => this.freezeSessionCard(sessionId, s))
 			.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 
 		return {

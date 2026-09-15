@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { isStreamingEvent } from "@shared/session-events.ts";
 import {
 	buildHeatmapWeeks,
 	type HeatmapGrid,
@@ -208,14 +209,12 @@ export function StatsView({ onClose }: { onClose: () => void }): React.JSX.Eleme
 
 	useEffect(() => {
 		refresh();
+		// 流式与进度类事件不改变聚合结果，跳过免得空转 —— 统计页要重扫整个
+		// 会话目录（readdir + 全量 stat），更挡不起。名单在 shared 的
+		// isStreamingEvent（**唯一处**，此前三处各写一遍且都漏了
+		// tool_stream_progress，实测单日 3 万条）。
 		const off = window.kami.onSessionEvent(({ event }) => {
-			if (
-				event.type === "assistant_text_delta" ||
-				event.type === "assistant_thinking_delta" ||
-				event.type === "tool_progress"
-			) {
-				return;
-			}
+			if (isStreamingEvent(event)) return;
 			refresh();
 		});
 		return off;

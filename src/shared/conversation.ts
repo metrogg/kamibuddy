@@ -28,6 +28,7 @@ import type {
 import { generatingLabel } from "./session-events.ts";
 import { mergePresentedArtifacts, type ArtifactRef } from "./artifacts.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
+import type { SessionStatCard } from "./observability.ts";
 
 export interface ConversationView {
 	readonly state: SessionState;
@@ -38,6 +39,11 @@ export interface ConversationView {
 	readonly availableModes: readonly ModeDescriptor[];
 	/** 最近的上下文用量明细（context_usage 事件折叠而来）。 */
 	readonly usageDetail?: ContextUsageDetail;
+	/**
+	 * 会话级统计（session_stats 事件折叠而来），聊天页底部常驻指标条的读数。
+	 * 与 usageDetail 同性质：daemon 算好的投影，renderer 不二次计算。
+	 */
+	readonly sessionStats?: SessionStatCard;
 	/** 当前回合计时（user_message 起表，run 结束停表）。 */
 	readonly turn?: TurnTiming;
 	/**
@@ -204,6 +210,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			availableScenes: action.snapshot.availableScenes,
 			availableModes: action.snapshot.availableModes,
 			usageDetail: action.snapshot.usageDetail,
+			sessionStats: action.snapshot.sessionStats,
 			turn: action.snapshot.turn,
 			// snapshot 由 daemon 的 ConversationView（同一份 reducer，App 切会话时
 			// 也直接拿缓存桶当快照）经 IPC 原样下发，运行期带 turnTimings；而
@@ -235,6 +242,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				state: { ...view.state, sessionId: "", isStreaming: false },
 				entries: [],
 				usageDetail: undefined,
+				sessionStats: undefined,
 				turn: undefined,
 				turnTimings: {},
 				cancelledTurns: [],
@@ -438,11 +446,19 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				...view,
 				state: event.state,
 				usageDetail: event.state.contextUsage === undefined ? undefined : view.usageDetail,
+				// 换了会话（新建 / 切换）时旧会话的统计对新会话是错的，清掉；
+				// 同一会话则保留 —— 统计由 session_stats 事件独立更新（session_state
+				// 不携带它），无条件清会让指标条在每次状态重推后闪空一下。
+				sessionStats:
+					event.state.sessionId === view.state.sessionId ? view.sessionStats : undefined,
 				compacting: undefined,
 			};
 
 		case "context_usage":
 			return { ...view, usageDetail: event.usage };
+
+		case "session_stats":
+			return { ...view, sessionStats: event.stats };
 
 		case "artifacts_presented":
 			return {

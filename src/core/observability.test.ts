@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { CACHE_TTL_MS, estimateComposition, estimateTokens, ObservabilityStore } from "./observability.ts";
 import { RunLedger } from "./run-ledger.ts";
 import type { LlmCallData, TokenUsage } from "../shared/observability.ts";
+import { averageTtftMs, decodeTokensPerSecond } from "../shared/observability.ts";
 import type { AssistantMessage, SessionEvent, ToolCard } from "../shared/session-events.ts";
 
 function usage(input: number, cacheRead: number): TokenUsage {
@@ -179,8 +180,15 @@ function llmCall(
 	startedAt: number,
 	endedAt: number,
 	u?: TokenUsage,
+	ttftMs?: number,
 ): LlmCallData {
-	return { turnIndex, startedAt, endedAt, ...(u === undefined ? {} : { usage: u }) };
+	return {
+		turnIndex,
+		startedAt,
+		endedAt,
+		...(u === undefined ? {} : { usage: u }),
+		...(ttftMs === undefined ? {} : { ttftMs }),
+	};
 }
 
 /** 带缓存活动的 usage：prompt 侧 input + cacheRead + cacheWrite。 */
@@ -357,6 +365,66 @@ describe("增量 fold（台账条目到账即投影）", () => {
 		const snap = snapshotOf(store);
 		expect(snap.sessions[0]).toMatchObject({ sessionId: "s9", runs: 1, turns: 1, llmMs: 600 });
 		expect(snap.sessions[0]?.usage.input).toBe(42);
+	});
+});
+
+describe("首字延迟与解码速度（会话级，对齐 dsh sessionStats）", () => {
+	/** fold 一组 llm_call（前面补一条 run_start，模拟一轮里的多步）。 */
+	function foldCalls(store: ObservabilityStore, calls: readonly LlmCallData[]): void {
+		store.foldLedgerEntry("s1", { seq: 1, at: 1000, kind: "run_start", data: { runId: "run-1" } });
+		calls.forEach((data, i) => {
+			store.foldLedgerEntry("s1", { seq: i + 2, at: data.endedAt, kind: "llm_call", data });
+		});
+	}
+
+	it("按调用累加首字延迟并计数；缺 ttftMs 的调用不进平均", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldCalls(store, [
+			llmCall(0, 1000, 2000, promptUsage(10, 0, 0), 400),
+			llmCall(1, 2000, 3000, promptUsage(10, 0, 0), 600),
+			llmCall(2, 3000, 4000, promptUsage(10, 0, 0)),
+		]);
+
+		const card = snapshotOf(store).sessions[0];
+		if (card === undefined) throw new Error("会话卡缺失");
+		expect(card).toMatchObject({ ttftMs: 1000, ttftCalls: 2 });
+		expect(averageTtftMs(card)).toBe(500);
+	});
+
+	it("解码窗口 = 总耗时 − 首字延迟，token 取该次调用的 output", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		// 全程 2000ms，首字 500ms → 解码 1500ms；promptUsage 的 output 固定 10。
+		foldCalls(store, [llmCall(0, 1000, 3000, promptUsage(10, 0, 0), 500)]);
+
+		const card = snapshotOf(store).sessions[0];
+		if (card === undefined) throw new Error("会话卡缺失");
+		expect(card).toMatchObject({ decodeMs: 1500, decodeTokens: 10 });
+		expect(decodeTokensPerSecond(card)).toBeCloseTo(10 / 1.5, 10);
+	});
+
+	it("缺 usage 的调用仍计首字延迟，但不进解码（TTFT 不依赖用量上报）", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldCalls(store, [llmCall(0, 1000, 2000, undefined, 300)]);
+
+		expect(snapshotOf(store).sessions[0]).toMatchObject({
+			ttftMs: 300,
+			ttftCalls: 1,
+			decodeMs: 0,
+			decodeTokens: 0,
+		});
+	});
+
+	it("会话卡的命中率含 cacheWrite（三桶之和作分母）", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldCalls(store, [llmCall(0, 1000, 2000, promptUsage(100, 900, 200), 100)]);
+
+		// 900 / (100 + 900 + 200) = 0.75；旧口径（漏 cacheWrite）会算成 0.9。
+		expect(snapshotOf(store).sessions[0]?.cacheHitRate).toBeCloseTo(0.75, 10);
+	});
+
+	it("没跑过台账的会话，sessionCard 返回 undefined（调用方据此不推）", () => {
+		const store = new ObservabilityStore(() => 1000);
+		expect(store.sessionCard("nope")).toBeUndefined();
 	});
 });
 

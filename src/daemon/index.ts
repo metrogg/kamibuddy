@@ -190,6 +190,7 @@ import { readApiKey } from "../core/api-keys.ts";
 import { probeModel } from "../core/model-probe.ts";
 import { searchWeb } from "../core/web-search.ts";
 import {
+	isStreamingEvent,
 	isThinkingLevel,
 	type ModeDescriptor,
 	type SessionEvent,
@@ -896,6 +897,21 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 	if (event.type === "session_state" && event.state.contextUsage !== undefined) {
 		emitContextUsageDetail(bucket, event.state.contextUsage);
 	}
+
+	/*
+	 * 会话统计也在 session_state 到达时补推一条。
+	 *
+	 * session_state 是「会话身份变更」的信号（切换 / 重挂载 / 新建都走它），
+	 * 而 reducer 在 sessionId 变化时会清掉旧会话的统计 —— 没有这条补推，
+	 * 切回一个有历史台账的会话要等到下一次 llm_call 才有数字，用户看到的是
+	 * 指标条一直空着。用 event.state.sessionId（权威 state）而不是
+	 * bucket.sessionId：adoptHost 换桶的时序不保证两者此刻已经一致。
+	 *
+	 * 与 context_usage 同款：递归调用一次 emitSessionEvent，但事件类型已成
+	 * session_stats，不会再进本分支，无递归。session_state 每天只有几十条
+	 *（实测 87/天），不必节流。
+	 */
+	if (event.type === "session_state") emitSessionStats(bucket, event.state.sessionId);
 }
 
 /** 组装并发出上下文用量明细（分类是估算值，UI 必须标注，见 shared/context-usage.ts）。 */
@@ -911,6 +927,21 @@ function emitContextUsageDetail(
 	});
 	if (usage === undefined) return;
 	emitSessionEvent(bucket, { type: "context_usage", usage });
+}
+
+/**
+ * 推一条会话统计（聊天页底部常驻指标条的数据源）。
+ *
+ * 取数只有这一处：session_state 的补推与台账 fold 钩子都走它，
+ * 免得两个调用点各取一次、日后口径漂移。
+ *
+ * 没有台账（新会话还没跑过任何一轮）时**不推** —— reducer 与组件都按
+ * undefined 整行不渲染，推一张全零卡会让界面显示「0 轮 · 0 步」。
+ */
+function emitSessionStats(bucket: SessionBucket<SessionHost>, sessionId: string): void {
+	const stats = observability.sessionCard(sessionId);
+	if (stats === undefined) return;
+	emitSessionEvent(bucket, { type: "session_stats", stats });
 }
 
 /**
@@ -971,18 +1002,27 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 }
 
 /**
- * 落盘前把流式增量替换成长度——逐字 delta 全记会把日志撑爆且没有信息量，
+ * 落盘前把流式增量的正文收成长度——逐字 / 逐块全记会把日志撑爆且没有信息量，
  * 真正要查的是事件序列与终态，不是每个字符。
+ *
+ * 「哪些事件要收」由 shared 的 `isStreamingEvent` 给（**名单唯一处**）：这份
+ * 名单曾在本文件与 renderer 的两个页面里各写一遍，且都漏了
+ * `tool_stream_progress` —— 它的 `rawArgs` 是**累积**的参数全文
+ *（`core/session-host.ts` 每来一个参数 delta 就 emit 一次全文），逐条全记是
+ * 平方级字节量，实测单日 3 万条把 events-*.jsonl 撑到 26 MB。
+ *
+ * 字段处理各按类型：三种带 `delta` 的收成 `(N chars)`；
+ * `tool_stream_progress` 只收 `rawArgs` —— `path` / `added` / `changeType`
+ * 是有信息量的小字段，照留。
  */
 function sanitizeForLog(event: SessionEvent): unknown {
-	if (
-		event.type === "assistant_text_delta" ||
-		event.type === "assistant_thinking_delta" ||
-		event.type === "tool_progress"
-	) {
-		return { ...event, delta: `(${event.delta.length} chars)` };
+	if (!isStreamingEvent(event)) return event;
+	if (event.type === "tool_stream_progress") {
+		return event.rawArgs === undefined
+			? event
+			: { ...event, rawArgs: `(${event.rawArgs.length} chars)` };
 	}
-	return event;
+	return { ...event, delta: `(${event.delta.length} chars)` };
 }
 
 /* ── 权限审批：daemon 发问 → 渲染进程作答 ─────────────────────────── */
@@ -1358,7 +1398,18 @@ async function createHost(
 				Date.now,
 				// 增量投影：条目落盘即 fold 进诊断页聚合（会话级统计 / 缓存浪费），
 				// 不必等下次启动回放（observability.foldLedgerEntry 注释）。
-				(entry) => observability.foldLedgerEntry(sessionId, entry),
+				(entry) => {
+					observability.foldLedgerEntry(sessionId, entry);
+					/*
+					 * fold 完再推会话统计（聊天页底部的常驻指标条）。只在
+					 * llm_call / run_end 上推：前者改变轮次 / 耗时 / 首字 / 解码 /
+					 * 用量，后者收束该 run 的工具耗时；tool_call 一个 run 有几十条，
+					 * 跟着推只会让 IPC 与事件日志（本已偏大）继续膨胀。
+					 */
+					if (entry.kind === "llm_call" || entry.kind === "run_end") {
+						emitSessionStats(bucket, sessionId);
+					}
+				},
 			),
 		// request_snapshot 的 system 分段 provenance：prompt-switch 的 compose 现记现取。
 		getSystemPromptSegments: () => bucket.systemPromptSegments,

@@ -58,8 +58,17 @@ export function buildContextUsage(args: {
 	};
 }
 
-/** token 数 → 短文本：999 原样，1000 → 1.0K，128000 → 128.0K。 */
+/**
+ * token 数 → 短文本：999 原样，1000 → 1.0K，128000 → 128.0K，
+ * 1500000 → 1.5M。
+ *
+ * M 档是给**会话级累计**读数用的：agent loop 里每一步都要重发整个上下文，
+ * 一次会话的输入累计很容易过百万，K 档会写出「1500.0K」这种读不出量级的数。
+ * 单轮读数与上下文占用仍走 K 档。两档同处一个函数 ——「不同量级用不同写法」
+ * 这件事就只有一份实现。
+ */
 export function formatTokenCount(tokens: number): string {
+	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
 	if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
 	return String(tokens);
 }

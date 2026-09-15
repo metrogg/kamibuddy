@@ -205,12 +205,6 @@
       "reason": "让位偏移：.artifact-card 右内边距 40px = 预览钮（right 10px + 22px 宽）+ 8px 间隙；归 --space-7(32) 会让文件名贴到预览钮上。代码处已带注释。"
     },
     {
-      "file": "src/renderer/index.css",
-      "snippet": "padding: var(--space-3) 44px var(--space-3) var(--space-4);",
-      "rule": "space",
-      "reason": "让位偏移：.preview-head 右内边距 44px = App 层面板开关 40px + 4px 间隙；归 --space-7(32) 会让开关盖住行尾的「全屏/外部打开」。代码处已带注释。"
-    },
-    {
       "file": "src/renderer/code-preview.tsx",
       "snippet": "fontSize: 13",
       "rule": "font-size",

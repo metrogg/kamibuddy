@@ -48,11 +48,35 @@ export function emptyUsage(): TokenUsage {
 }
 
 /**
- * 缓存命中率：cacheRead 占全部 prompt 侧 token（input + cacheRead）的比例。
+ * prompt 侧计费的三桶之和（三桶互不相交）。
+ *
+ * 为什么必须三桶相加：pi 的 `Usage` 里 `input` 直接采自 provider 的
+ * `input_tokens`，而 `cacheRead` / `cacheWrite` 各采自 provider 的独立字段
+ * （`pi/packages/ai/src/api/anthropic-messages.ts`：
+ * `usage.input = input_tokens` / `cacheRead = cache_read_input_tokens` /
+ * `cacheWrite = cache_creation_input_tokens`）—— 三者并列而非包含关系
+ * （同文件对 `reasoning` ⊂ `output`、`cacheWrite1h` ⊂ `cacheWrite` 都明确标注了
+ * 子集关系，`input` 没有这样的标注）。漏掉 cacheWrite 会让「本轮 prompt 一共
+ * 花了多少输入」被低估。
+ *
+ * 口径与 dsh `StatsLine.tsx` 的同名函数一致（它注释为 "three disjoint
+ * prompt-side billing buckets"）。
+ */
+export function billedInputTokens(usage: TokenUsage): number {
+	return usage.input + usage.cacheRead + usage.cacheWrite;
+}
+
+/**
+ * 缓存命中率：cacheRead 占全部 prompt 侧计费 token 的比例。
  * undefined 表示还没有过一次带用量的响应，UI 显示「—」而不是误导性的 0%。
+ *
+ * **分母用 billedInputTokens（三桶之和），不是 input + cacheRead**
+ *（2026-09-15 修正）：cacheWrite 是「本轮新写入缓存、本轮并未命中」的那部分，
+ * 本就该占分母；漏掉它会让命中率系统性偏高，且写缓存越多的轮次偏得越狠。
+ * 修正后口径与 dsh `cacheHitPercent` 一致。
  */
 export function cacheHitRate(usage: TokenUsage): number | undefined {
-	const promptTokens = usage.input + usage.cacheRead;
+	const promptTokens = billedInputTokens(usage);
 	if (promptTokens === 0) return undefined;
 	return usage.cacheRead / promptTokens;
 }
@@ -133,9 +157,17 @@ export interface ContextComposition {
  * （受窗口截断、usage 只含窗口内该 run 的助手消息合计），这里是会话全历史
  * 计数器，重启不清零。
  */
+/**
+ * 单个会话的统计卡。
+ *
+ * **命名注意（容易搞错）**：本项目的 `turns` 是 llm_call 条数（模型调用轮次），
+ * 与外部术语「一轮对话」（= 用户发一次请求，即本卡的 `runs`）不是一回事。
+ * dsh 的 sessionStats 投影里对应关系是 `steps → 我们的 turns`、
+ * `turns → 我们的 runs`，两边比对时勿混。
+ */
 export interface SessionStatCard {
 	readonly sessionId: string;
-	/** run_start 条数。 */
+	/** run_start 条数（用户每发一次请求一个 run）。 */
 	readonly runs: number;
 	/** llm_call 条数（模型调用轮次）。 */
 	readonly turns: number;
@@ -143,12 +175,39 @@ export interface SessionStatCard {
 	readonly llmMs: number;
 	/** 全部工具执行耗时合计（tool_call 执行期口径，毫秒）。 */
 	readonly toolMs: number;
+	/** 带 TTFT 记录的调用的首字延迟合计（毫秒）。 */
+	readonly ttftMs: number;
+	/**
+	 * 有 TTFT 记录的调用数（llm_call 里 ttftMs 有值的条数）。
+	 * 平均首字延迟 = ttftMs / ttftCalls —— 缺了它算不出平均。
+	 * dsh 叫 `ttftSteps`：它的一「步」在台账里就是一条 llm_call。
+	 */
+	readonly ttftCalls: number;
+	/** 「首字 → 消息完成」耗时合计（毫秒），只累计 ttftMs 与 output 兼备的调用。 */
+	readonly decodeMs: number;
+	/** 与 decodeMs 同一批调用的 provider 上报 output token 合计。 */
+	readonly decodeTokens: number;
 	/** 五字段 + cost 的累计；细分字段（reasoning 等）只在有上报时出现。 */
 	readonly usage: TokenUsage;
-	/** cacheRead / (input + cacheRead)；还没有过带用量的响应为 undefined。 */
+	/** cacheRead 占 prompt 侧三桶之和（billedInputTokens）的比例；还没有过带用量的响应为 undefined。 */
 	readonly cacheHitRate: number | undefined;
 	/** 最新一条台账条目的时刻，卡片排序（最近活跃在前）用。 */
 	readonly lastActiveAt: number;
+}
+
+/** 平均首字延迟（毫秒）：ttftMs / ttftCalls。没有带 TTFT 的调用时为 undefined。 */
+export function averageTtftMs(stats: SessionStatCard): number | undefined {
+	return stats.ttftCalls === 0 ? undefined : stats.ttftMs / stats.ttftCalls;
+}
+
+/**
+ * 解码速度（tok/s）：decodeTokens / (decodeMs / 1000)。
+ * 只统计「既有首字延迟、又有 output 上报」的调用（dsh 同口径）——
+ * 没有这样的样本时返回 undefined，UI 整项不显示，而不是显示一个 0。
+ */
+export function decodeTokensPerSecond(stats: SessionStatCard): number | undefined {
+	if (stats.decodeMs <= 0) return undefined;
+	return stats.decodeTokens / (stats.decodeMs / 1000);
 }
 
 /** 缓存失效的归因（spec: add-observability-ledger Task 3.3，算法借 pi cache-stats）。 */
@@ -263,6 +322,28 @@ export interface LlmCallData {
 	/** 本轮 usage 全字段（turn_end 的 assistant 消息携带）。 */
 	readonly usage?: TokenUsage;
 	readonly errorMessage?: string;
+}
+
+/**
+ * 单步的解码窗口与其中的输出 token。
+ *
+ * **口径唯一处**：daemon 的会话级累加（`core/observability.ts` 的 foldLlmCall）
+ * 与侧栏的单步显示都调它 —— 两处各算一遍必然漂移，而这个数字（tok/s 的分子
+ * 分母）最容易在两处写得不一样。
+ *
+ * 只有 `ttftMs` 与 `usage` 兼备时才有样本（同 dsh「仅统计 ttftMs 与 output
+ * 兼备的步」）：缺任一项就返回 undefined，而不是拿全程耗时当分母 ——
+ * 那会把没有首字记录的轮次算成极慢。
+ */
+export function stepDecode(
+	data: LlmCallData,
+): { readonly ms: number; readonly tokens: number } | undefined {
+	if (data.ttftMs === undefined || data.usage === undefined) return undefined;
+	const elapsed = Math.max(0, data.endedAt - data.startedAt);
+	return {
+		ms: Math.max(0, elapsed - Math.max(0, data.ttftMs)),
+		tokens: data.usage.output,
+	};
 }
 
 /**
