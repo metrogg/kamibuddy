@@ -17,6 +17,7 @@ import { ExpertChip } from "./expert-chip.tsx";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
+import { EmptyState, LoadingState } from "./state-views.tsx";
 import { WorkspacePicker } from "./workspace-picker.tsx";
 import {
 	IconChart,
@@ -38,6 +39,9 @@ interface HomeViewProps {
 	/**
 	 * 场景轴选项，由 daemon 下发（对标 WorkBuddy 的 welcomemode/{work,code,design}）。
 	 * 不在此处硬编码：加场景应当只改 daemon 的资源目录，UI 零改动（AGENTS.md §3）。
+	 *
+	 * 快照落地前它是空数组（`shared/conversation.ts` 的初值），**不等于「没有场景」** ——
+	 * 两者由下面的 `snapshotLanded` 分开（DESIGN.md §4）。
 	 */
 	readonly scenes: readonly ModeDescriptor[];
 	readonly sceneId: string;
@@ -56,8 +60,12 @@ interface HomeViewProps {
 	readonly interactions: readonly ModeDescriptor[];
 	readonly interactionId: string;
 	readonly onInteractionChange: (interactionId: string) => void;
-	/** 专家列表与当前专家（「+」菜单的专家子菜单数据源），与对话页同源（App 层统一下发）。 */
-	readonly experts: readonly ExpertListItem[];
+	/**
+	 * 专家列表与当前专家（「+」菜单的专家子菜单数据源），与对话页同源（App 层统一下发）。
+	 * undefined = 还没拉回来（未就绪），与「拉回来但库里是空的」分开 ——
+	 * 子菜单据此区分「正在读取专家…」与「还没有可用专家」（DESIGN.md §4）。
+	 */
+	readonly experts: readonly ExpertListItem[] | undefined;
 	readonly expertId: string | undefined;
 	/** 取消选中专家传 undefined（与对话页同一 selectExpert 路径）。 */
 	readonly onSelectExpert: (expertId: string | undefined) => void;
@@ -144,8 +152,16 @@ export function HomeView({
 	/*
 	 * 当前专家 chip 的展示映射：expertId 在列表里找不到（专家库未拉回 / 已删除）就不渲染，
 	 * 与对话页 currentExpert 同一口径 —— chip 只做展示，菜单勾选仍以 session_state 为准。
+	 * 列表未拉回时 `experts` 是 undefined（不是空数组），这里按「找不到」处理。
 	 */
-	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
+	const currentExpert = expertId === undefined ? undefined : experts?.find((e) => e.name === expertId);
+	/*
+	 * 快照是否已落地。`cwd` 的 undefined 依契约**只**存在于「会话尚未建立」的初始瞬态
+	 * （SessionState 注释），而 `scenes` / `cwd` 由同一次 snapshot dispatch 一起写入，
+	 * 不会漂移 —— 所以它比 `scenes.length === 0` 更准确：后者把「还没到」与「确实没有」
+	 * 混成一个判断，正是本期要消除的写法（DESIGN.md §4）。
+	 */
+	const snapshotLanded = cwd !== undefined;
 	/*
 	 * 预填消费（创建专家：引导语进输入框待编辑发送，WorkBuddy
 	 * buildCreateExpertModeBlocks 的 jump home + fill input draft 语义）。
@@ -176,21 +192,36 @@ export function HomeView({
 				<div className="home-main">
 					<h1 className="home-title">嘉立创Work，开工吧</h1>
 
-					<div className="mode-tabs">
-						{scenes.map((scene) => (
-							<button
-								key={scene.id}
-								type="button"
-								className={`mode-tab${scene.id === sceneId ? " active" : ""}`}
-								title={scene.description}
-								// 未实现的场景仍然显示（对齐 WorkBuddy 的能力面），
-								// 点击给明确反馈而不是静默切过去。
-								onClick={() => (scene.ready ? onSceneChange(scene.id) : onTodo(`「${scene.label}」场景`))}
-							>
-								{scene.label}
-							</button>
-						))}
-					</div>
+					{/*
+						模式页签三态互斥（DESIGN.md §4）：快照落地前 `scenes` 是空数组，
+						整行会渲染成**空行** —— 既不是空态也不是加载态。未就绪走加载态，
+						快照落地后才判空（真为空是资源目录没装配出场景，不是用户可处置的空，
+						故比加载态更需要说出来）。
+					*/}
+					{!snapshotLanded ? (
+						<div className="mode-tabs">
+							<LoadingState text="正在读取场景…" />
+						</div>
+					) : scenes.length === 0 ? (
+						/* 空态不进 .mode-tabs：那个容器是固定 36px 高的胶囊，块级空态会被压扁溢出。 */
+						<EmptyState title="暂无可用场景" />
+					) : (
+						<div className="mode-tabs">
+							{scenes.map((scene) => (
+								<button
+									key={scene.id}
+									type="button"
+									className={`mode-tab${scene.id === sceneId ? " active" : ""}`}
+									title={scene.description}
+									// 未实现的场景仍然显示（对齐 WorkBuddy 的能力面），
+									// 点击给明确反馈而不是静默切过去。
+									onClick={() => (scene.ready ? onSceneChange(scene.id) : onTodo(`「${scene.label}」场景`))}
+								>
+									{scene.label}
+								</button>
+							))}
+						</div>
+					)}
 
 					<div className="capability-row">
 						{CAPABILITIES.map(({ icon: Icon, label }) => (

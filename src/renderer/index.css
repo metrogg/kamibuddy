@@ -99,6 +99,12 @@ textarea:focus-visible {
 	position: relative;
 	display: flex;
 	height: 100vh;
+	/* 窗口最小宽（main/index.ts 的 minWidth: 900）下，侧栏 216 + 面板宽
+	   仍可能超过视口：`.chat` 的 min-width: 0 只是被压成 0，多出来的部分
+	   会撑出横向滚动条、整页错位。面板宽的上限已随窗口可用宽动态计算
+	   （artifact-panel.tsx 的 maxPanelWidth，含缩窗时回落），这里再兜一道，
+	   万一还有溢出也只裁边界、不把主区挤出去。 */
+	overflow: hidden;
 }
 
 /* ── 侧栏 ─────────────────────────────────────────────────────── */
@@ -582,6 +588,9 @@ textarea:focus-visible {
 	z-index: var(--z-panel);
 	min-width: 140px;
 	padding: var(--space-2);
+	/* 空间连续性：挂在 .space-group-header（position: relative）下方、右侧
+	   （top: 100% + right: 4px），触发点是行右端的「⋯」→ 从触发点右上角生长。 */
+	transform-origin: top right;
 }
 
 .space-menu-item {
@@ -868,6 +877,11 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
 	padding: var(--space-1);
+	/* 入场：条件挂载（autocomplete 的 `open === undefined ? null : ...`），走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：整幅撑满输入区宽度（.composer-input 为定位锚点）、在其上方展开
+	   （left/right: 0 + bottom: calc(100% + 6px)）→ 从输入区顶边中点向上生长。 */
+	transform-origin: bottom center;
 }
 
 .ac-item {
@@ -953,6 +967,11 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
 	padding: var(--space-4);
+	/* 入场：条件挂载（context-usage 的 `{open && ...}`），走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：挂在触发钮（环形用量指示）上方、右对齐（right: 0 + bottom: calc(100% + 8px)）
+	   → 从触发点右下角生长。 */
+	transform-origin: bottom right;
 }
 
 .cu-header {
@@ -1458,6 +1477,12 @@ textarea:focus-visible {
  * 全应用只允许这一种「进行中」动效（思考标题 / 工具状态字 / 底部状态行），
  * 完成态一律回归静态灰字 —— 多种动效并存会让用户分不清什么还在跑。
  * 文字基色走 --shimmer-color（默认三级灰），套用方按需覆盖变量。
+ *
+ * 保持 background-position、不改为伪元素扫光（Task 3 评估结论，登记为 DESIGN.md §5
+ * 受控例外）：① 伪元素拿不到文字内容，而「文字明暗流动」必须以文字形状为裁剪源
+ * （background-clip: text）；② 即便用 content: attr(data-text) 复制文字，仍需 mask-position
+ * 移动遮罩 —— 与 background-position 同类，都不是合成属性；③ 本类用在 8 处行内 <span>，
+ * 改 display: inline-block 才能裁剪，会破坏行内排版与基线对齐；重绘面积仅限文字区域，收益不成立。
  */
 .text-shimmer {
 	--shimmer-color: var(--text-secondary);
@@ -1590,11 +1615,14 @@ textarea:focus-visible {
 	background: linear-gradient(to bottom, transparent, var(--bg));
 	pointer-events: none;
 	opacity: 0;
-	transition: opacity var(--dur-base) ease;
+	/* 进出场不对称：基类写退出（--dur-fast），[data-visible="true"] 写入场（--dur-base）。
+	   元素常驻 DOM 由属性切换，两侧都该有过渡，差别只在时长。 */
+	transition: opacity var(--dur-fast) ease;
 }
 
 .stream-fade[data-visible="true"] {
 	opacity: 1;
+	transition: opacity var(--dur-base) ease;
 }
 
 /* 「回到底部」：不在底部时浮现的圆形按钮（对标 WorkBuddy）。
@@ -1870,7 +1898,9 @@ textarea:focus-visible {
    不用 max-height 固定上限 —— 折叠体高度随卡片数变化，内层工具详情还会
    再展开，任何定死的上限都会裁掉内容。WorkBuddy 用 interpolate-size
    （Chromium 129+），0fr↔1fr 是同等效果的宽兼容写法（Chromium 107+）。
-   基类即收起态：元素常驻 DOM 由 open 类切换，过渡才有起跳点。 */
+   基类即收起态：元素常驻 DOM 由 open 类切换，过渡才有起跳点。
+   时长拆分（进出场不对称）：基类写退出（--dur-base），.open 写入场（--dur-slow）——
+   用户已经决定离开，动画只是善后，不该和进入一样慢。 */
 .metafold-body {
 	display: grid;
 	grid-template-rows: 0fr;
@@ -1878,17 +1908,24 @@ textarea:focus-visible {
 	visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		grid-template-rows var(--dur-slow) var(--ease-out),
-		opacity var(--dur-slow) var(--ease-out),
-		transform var(--dur-slow) var(--ease-out),
-		visibility var(--dur-slow) var(--ease-out);
+		grid-template-rows var(--dur-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out),
+		transform var(--dur-base) var(--ease-out),
+		visibility var(--dur-base) var(--ease-out);
 }
 
+/* 展开方向的过渡必须写在激活类上：基类的 duration 只管「回到收起态」（退出），
+   CSS 取的是发生变化的那个状态所匹配的 transition —— 展开时匹配 .open 的这组。 */
 .metafold-body.open {
 	grid-template-rows: 1fr;
 	opacity: 1;
 	visibility: visible;
 	transform: translateY(0);
+	transition:
+		grid-template-rows var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
 }
 
 /* 0fr 能真正收拢的前提：grid 子项默认 min-height:auto（不会缩到内容
@@ -1896,6 +1933,29 @@ textarea:focus-visible {
 .metafold-body-inner {
 	min-height: 0;
 	overflow: hidden;
+}
+
+/* 收起态跳过渲染（性能）：外层 .metafold-body 收起时 grid-template-rows: 0fr
+   （见上），内层盒子已被压到 0 高 —— content-visibility: hidden 让内层子树
+   不再参与 layout/paint（长会话里数十个已折叠轮的内容就此省掉）。
+   不改 scrollHeight 的理由：该属性只跳过「内容」的布局与绘制，不改变元素自身的
+   盒模型尺寸（width/height/margin/padding/border）；内层本就 min-height:0 被
+   父级 0fr 轨道压到 0 高，其占位恒为 0 → 吸底跟随（scrollTop = scrollHeight）
+   与刻度轨比例不漂移。展开态回落到默认值 visible（.open 时本选择器不匹配）。
+   与既有 visibility: hidden 并存无冲突：后者只管可见性（且已把子树移出 a11y
+   /焦点），前者管「要不要做这笔渲染」，语义正交。
+
+   过渡只写在收起态这一条上（下面 .open 里刻意不写，不是漏写）：
+   content-visibility 是离散类型，默认「一变即切」—— 收起瞬间内容就被跳过，
+   外层的 0fr↔1fr 会因起点尺寸塌成 0 而退化成瞬间消失（实测 Electron 44 /
+   Chromium 152：无过渡时收起过渡的起点被算成 0px，旧行为是 895.6px）。
+   配 transition-behavior: allow-discrete 后 visible→hidden 在 100% 时才翻转，
+   收起全程内容照常参与布局 → 起点是真实高度（实测与旧行为一致）。
+   展开方向刻意不给过渡：不加过渡即 t=0 直接翻成 visible，展开首帧就能量到
+   内容高度，逐帧轨迹与旧行为一致（加了 allow-discrete 反而要等第一帧才翻）。 */
+.metafold-body:not(.open) .metafold-body-inner {
+	content-visibility: hidden;
+	transition: content-visibility var(--dur-base) allow-discrete;
 }
 
 /* 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，右下角直角。
@@ -1967,7 +2027,9 @@ textarea:focus-visible {
 	gap: var(--space-2);
 	height: 32px;
 	opacity: 0;
-	transition: opacity var(--dur-base) ease;
+	/* 进出场不对称：基类写退出（--dur-fast），hover/focus 态写入场（--dur-base）。
+	   常驻占位元素由 hover 切换，只能靠 transition（没有条件挂载的 animation 起跳点）。 */
+	transition: opacity var(--dur-fast) ease;
 	pointer-events: none;
 }
 
@@ -1977,6 +2039,7 @@ textarea:focus-visible {
 .entry:focus-within .entry-toolbar {
 	opacity: 1;
 	pointer-events: auto;
+	transition: opacity var(--dur-base) ease;
 }
 
 /* 用户侧：锚在 entry 右缘 —— 气泡在 entry 内右对齐且 entry padding 为 0，
@@ -2522,30 +2585,46 @@ textarea:focus-visible {
    和消息正文在视觉上归为一档（对标 WorkBuddy）。
    基类即收起态、.open 是展开态 —— 元素常驻 DOM 由类切换，过渡才有起跳点
    （条件挂载下元素挂载即终态，transition 不会触发）。
-   max-height 过渡的坑：border-box 下 padding/border/margin 不一起收，
-   max-height:0 也会留下 ~38px 空壳，所以垂直方向全部归零并参与过渡。 */
+
+   高度只过渡 height 一项：interpolate-size 让 height 0↔auto 可插值
+   （Chromium 129+，本项目固定 Electron 44，内核远高于它；WorkBuddy 的
+   cr-expandable-motion 走的就是这条原生路径，0fr↔1fr 是旧内核的兼容写法）。
+   旧的 max-height 方案要一起过渡 6 个布局属性（max-height + 上下 padding +
+   上下 margin + border-width）：max-height 只封盒子自身高度，border-box 下盒高
+   下限仍是 padding+border 之和、margin 更在盒外 —— 这三类必须自己归零，也必须
+   跟着一起过渡，否则开合途中会突兀跳变。实测一次开合起 12 个属性过渡（其中 6 个
+   布局属性逐帧重排）。height 把整个盒子直接压到 0，这套 hack 连同那 6 项过渡一起删。
+
+   收起态的垂直 padding/margin/border 归零仍要保留：border-box 下 height: 0 只能
+   压到 padding+border 之和（实测：若不归零，开合第一帧就冒出 25px 高的空盒），
+   水平 padding 不占高度、保留。归零后它们不占高度，也就不需要过渡 —— 值在开合
+   瞬间切换，高度动画只由 height 一项承担。（本类被 .todo-list-box 复用，规则要
+   同时适配 <pre> 与 div 两种内容。）
+   时长拆分：基类写退出（--dur-base），.open 写入场（--dur-slow）。 */
 .tool-detail-box {
+	interpolate-size: allow-keywords;
 	margin: 0;
 	padding: 0 var(--space-5);
 	border: 0 solid var(--border);
 	border-radius: var(--radius-lg);
 	background: var(--bg-raised);
-	max-height: 0;
+	height: 0;
 	/* 收起时必须 hidden：auto 会在 0 高区冒出滚动条。 */
 	overflow: hidden;
 	opacity: 0;
 	visibility: hidden;
+	/* 收起态跳过渲染（性能）：高度已归 0，该属性只跳过内容子树，不改盒模型尺寸
+	   → scrollHeight 不变（论证见 .metafold-body-inner 处注释）。 */
+	content-visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		max-height var(--dur-slow) var(--ease-out),
-		padding-top var(--dur-slow) var(--ease-out),
-		padding-bottom var(--dur-slow) var(--ease-out),
-		margin-top var(--dur-slow) var(--ease-out),
-		margin-bottom var(--dur-slow) var(--ease-out),
-		border-width var(--dur-slow) var(--ease-out),
-		opacity var(--dur-slow) var(--ease-out),
-		transform var(--dur-slow) var(--ease-out),
-		visibility var(--dur-slow) var(--ease-out);
+		height var(--dur-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out),
+		transform var(--dur-base) var(--ease-out),
+		visibility var(--dur-base) var(--ease-out),
+		/* 过渡只在收起态声明（.open 刻意不写），理由与实测数据见
+		   .metafold-body-inner 处注释。 */
+		content-visibility var(--dur-base) allow-discrete;
 	color: var(--text-secondary);
 	font-size: var(--text-meta);
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -2557,12 +2636,20 @@ textarea:focus-visible {
 	margin: var(--space-1) 0 var(--space-3);
 	padding: var(--space-4) var(--space-5);
 	border-width: 1px;
+	/* 收起态是 0 高，展开态必须给 height 一个可插值的终值 auto。 */
+	height: auto;
 	/* 工具输出可能很长（读文件、搜索结果），限高避免把对话冲掉。 */
 	max-height: 300px;
 	overflow: auto;
 	opacity: 1;
 	visibility: visible;
+	content-visibility: visible;
 	transform: translateY(0);
+	transition:
+		height var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
 }
 
 /* ── 任务清单卡（todo_write，WorkBuddy cr-tool-plan-task 同构） ──────────
@@ -3116,36 +3203,51 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
-/* 开合机制镜像 .tool-detail-box（常驻 DOM + 类切换，理由见该处注释）：
-   收起态垂直方向全部归零，max-height 过渡才不会留下空壳。 */
+/* 开合机制镜像 .tool-detail-box（常驻 DOM + 类切换、height 方案与垂直归零的
+   理由见该处注释）：高度只过渡 height 一项，垂直 margin 收起态归零后不占高度、
+   也不再参与过渡（改为开合瞬间切值）。
+   展开态保留 max-height: 300px + overflow: auto —— 一次搜索可能十几条来源，
+   与详情盒同口径限高，超出在内部滚动。
+   时长拆分：基类写退出（--dur-base），.open 写入场（--dur-slow）。 */
 .tool-source-list {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+	interpolate-size: allow-keywords;
 	margin: 0;
-	max-height: 0;
+	height: 0;
 	/* 收起时必须 hidden：auto 会在 0 高区冒出滚动条。 */
 	overflow: hidden;
 	opacity: 0;
 	visibility: hidden;
+	/* 收起态跳过渲染（性能）：同 .tool-detail-box —— 高度已归 0，该属性只跳过
+	   内容子树，不改盒模型尺寸 → scrollHeight 不变。 */
+	content-visibility: hidden;
 	transform: translateY(-6px);
 	transition:
-		max-height var(--dur-slow) var(--ease-out),
-		margin-top var(--dur-slow) var(--ease-out),
-		margin-bottom var(--dur-slow) var(--ease-out),
-		opacity var(--dur-slow) var(--ease-out),
-		transform var(--dur-slow) var(--ease-out),
-		visibility var(--dur-slow) var(--ease-out);
+		height var(--dur-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out),
+		transform var(--dur-base) var(--ease-out),
+		visibility var(--dur-base) var(--ease-out),
+		content-visibility var(--dur-base) allow-discrete;
 }
 
 .tool-source-list.open {
 	margin: var(--space-1) 0 var(--space-3);
+	/* 收起态是 0 高，展开态必须给 height 一个可插值的终值 auto。 */
+	height: auto;
 	/* 来源可能很多（一次搜索十几条），限高与详情盒同口径。 */
 	max-height: 300px;
 	overflow: auto;
 	opacity: 1;
 	visibility: visible;
+	content-visibility: visible;
 	transform: translateY(0);
+	transition:
+		height var(--dur-slow) var(--ease-out),
+		opacity var(--dur-slow) var(--ease-out),
+		transform var(--dur-slow) var(--ease-out),
+		visibility var(--dur-slow) var(--ease-out);
 }
 
 /* 来源行 = favicon + 标题，整行可点（外部打开，WorkBuddy
@@ -3188,8 +3290,17 @@ textarea:focus-visible {
 	flex-shrink: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg);
-	/* 宽度过渡：sash 拖拽与全屏切换共用（WorkBuddy 240ms 同参数，归档 --dur-base）。 */
+	/* 宽度过渡：全屏切换需要（WorkBuddy 240ms 同参数，归档 --dur-base）。 */
 	transition: width var(--dur-base) ease;
+}
+
+/* sash 鼠标拖拽期禁用上面的 width 过渡。为什么：拖拽每个 mousemove 都改 width，
+   若仍带 200ms 过渡，面板就「追不上」鼠标（黏滞感），且整个过程持续逐帧重排
+   （面板内含 Monaco / PDF / Office 预览，代价更高）。标记只由 handleSashMouseDown
+   的鼠标路径加/去 —— 键盘调宽是离散的 ±10px 操作，带过渡反而更顺，故不禁用。
+   全屏态 .fullscreen 本就是 transition: none（且全屏不渲染 sash），不受影响。 */
+.preview-panel[data-dragging="true"] {
+	transition: none;
 }
 
 /* 全屏：absolute 覆盖主内容区，宽由定位撑满（非 width，避免与 transition 打架）。 */
@@ -3257,6 +3368,11 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
 	box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+	/* 入场：条件挂载（artifact-panel 的 `{open && ...}`），走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：挂在视图切换器按钮下方、左对齐（top: calc(100% + 4px) + left: 0）
+	   → 从触发按钮左上角生长。 */
+	transform-origin: top left;
 }
 
 /* 纯视图项的菜单比旧「内嵌三组文件列表」窄得多，收紧免得大片留白。 */
@@ -3900,6 +4016,11 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
 	overflow: hidden;
+	/* 入场：条件挂载（workspace-picker 的 `{open && ...}`），走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：挂在触发按钮上方、左对齐（left: 0 + bottom: calc(100% + 8px)）
+	   → 从触发按钮左下角生长。 */
+	transform-origin: bottom left;
 }
 
 .ws-list {
@@ -4132,6 +4253,10 @@ textarea:focus-visible {
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-md);
 	overflow: hidden;
+	/* 入场：设置弹层组件由父层按开关条件挂载，挂载即终态 → 走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中）→ 从自身中心生长。 */
+	transform-origin: center;
 }
 
 .settings-card-close {
@@ -4897,6 +5022,24 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
+	/* 入场走 animation，不走 transition：五个菜单（mode/model/permission/plus/space）
+	   在 TSX 里都是条件挂载（`{open && ...}`），挂载那刻已是终态，
+	   transition 没有「起始态→终态」的过程可跑。退出不需要动画 —— 卸载即消失。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+}
+
+/* 弹层统一入场：只动 transform/opacity。translateY(4px) 给「从触发点落下」的方向感，
+   scale(.98→1) 让各弹层的 transform-origin 真正可见（无 scale 时 origin 无观感作用）。 */
+@keyframes pop-layer-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px) scale(0.98);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
 }
 
 /* 弹层锚点：相对定位建立包含块，自身不随 flex 行拉伸。
@@ -4914,6 +5057,9 @@ textarea:focus-visible {
 	z-index: var(--z-panel);
 	min-width: 220px;
 	padding: var(--space-1);
+	/* 空间连续性：挂在触发按钮（.menu-zone 内的「模式」）下方、右对齐
+	   （top: calc(100% + 4px) + right: 0）→ 从按钮右上角生长。 */
+	transform-origin: top right;
 }
 
 .mode-menu-item {
@@ -4966,6 +5112,14 @@ textarea:focus-visible {
 	z-index: var(--z-panel);
 	min-width: 220px;
 	padding: var(--space-1);
+	/* 空间连续性：父菜单在它右侧（right: calc(100% + 4px)）、顶边与「专家」行对齐
+	   （top: -4px）并向下生长 → 从贴着父菜单的右上角生长，不是 left。
+	   （spec/task 把本类与 .plus-menu-sub 并列写成「向右飞出 → left center」，
+	   但本类方向镜像：上面的注释已写明「向右飞会溢出窗口被裁掉，只能向左飞」。）
+	   另：本类当前无 TSX 引用（grep 全仓只有本文件），属历史遗留选择器，
+	   保留是为了万一恢复「模式 ▸ 专家」子菜单时行为一致。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	transform-origin: right top;
 }
 
 /* 子菜单项要给 ✓ 留位（主菜单项没有 ✓，版式不动）。原 30px 不在间距档：
@@ -5407,6 +5561,20 @@ textarea:focus-visible {
 	justify-content: center;
 	padding: var(--space-6);
 	background: var(--overlay);
+	/* 背板淡入：背板与卡片同属条件挂载（父层按开关整块渲染），走 animation。
+	   只动 opacity —— 背板没有「触发角」，不配 transform-origin。 */
+	animation: backdrop-in var(--dur-base) var(--ease-out);
+}
+
+/* 背板统一淡入：单属性，避免背板跟着卡片一起位移/缩放（那会露出窗口底色边）。 */
+@keyframes backdrop-in {
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
 }
 
 .permission-card {
@@ -5420,6 +5588,12 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-lg);
+	/* 入场：条件挂载（App.tsx 的 `{approvals[0] !== undefined && <PermissionDialog/>}`），
+	   走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中），不对齐某个触发按钮 ——
+	   它由 daemon 侧阻塞调用触发、与触发点的空间关系无意义，从自身中心生长即可。 */
+	transform-origin: center;
 }
 
 /* 高风险时整卡描边警示，避免用户快速点过。 */
@@ -5523,6 +5697,10 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-lg);
+	/* 入场：条件挂载（父层按开关渲染整个弹层组件）→ 走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中）→ 从自身中心生长。 */
+	transform-origin: center;
 }
 
 .save-space-title {
@@ -5566,6 +5744,10 @@ textarea:focus-visible {
 	max-height: 320px;
 	overflow-y: auto;
 	padding: var(--space-1);
+	/* 空间连续性（默认定位，服务首页）：挂在触发按钮下方、右对齐
+	   （top: calc(100% + 6px) + right: 0）→ 从按钮右上角生长。
+	   对话页 composer-bar 的覆写把定位镜像到「上方 + 左对齐」，origin 随之改。 */
+	transform-origin: top right;
 }
 
 .model-menu-item {
@@ -5641,6 +5823,9 @@ textarea:focus-visible {
 	padding: var(--space-2);
 	/* 圆角比公共卡片大一档（12px vs --radius-md 10px），向上展开的大卡片视觉。 */
 	border-radius: var(--radius-md);
+	/* 空间连续性：与 WorkspacePicker 同在 context-row，弹层向上展开（bottom: calc(100% + 8px)）
+	   + 左对齐（left: 0）→ 从触发按钮左下角生长。 */
+	transform-origin: bottom left;
 }
 
 /* goto 与 .model-menu-goto 逐字相同，规则以选择器并集合并在 model-menu 一节，
@@ -5696,6 +5881,9 @@ textarea:focus-visible {
 	right: auto;
 	bottom: calc(100% + 8px);
 	left: 0;
+	/* 定位镜像到「触发按钮上方、左对齐」→ origin 跟着从右上角改到左下角，
+	   否则弹层会从窗口底部方向的错误一角生长（与本文件所有弹层同一规则）。 */
+	transform-origin: bottom left;
 }
 
 /* ── 对话页「+」菜单 ─────────────────────────────────────────── */
@@ -5710,6 +5898,9 @@ textarea:focus-visible {
 	z-index: var(--z-overlay);
 	min-width: 180px;
 	padding: var(--space-1);
+	/* 空间连续性：挂在「+」按钮上方、左对齐（left: 0 + bottom: calc(100% + 8px)）
+	   → 从按钮左下角生长。 */
+	transform-origin: bottom left;
 }
 
 .plus-menu-item {
@@ -5753,6 +5944,11 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
+	/* 空间连续性：left 贴着父菜单右缘（calc(100% + 4px)）向右飞出、底边与父项对齐
+	   → 从贴着父菜单的那条左边生长（left center）。
+	   注：垂直锚点实为「父项底边」（bottom: -4px），取 center 是刻意取整，
+	   4px 级偏差在 scale(.98) 的 200ms 入场里不可辨，不值得为它再拆一档。 */
+	transform-origin: left center;
 }
 
 /* 模式项两行布局（label + description），版式参照头部的 .mode-menu-item。 */
@@ -6240,6 +6436,8 @@ textarea:focus-visible {
 	justify-content: center;
 	padding: var(--space-6);
 	background: var(--overlay);
+	/* 与 .modal-backdrop 同一背板语言：条件挂载 + 只淡入（不动 transform）。 */
+	animation: backdrop-in var(--dur-base) var(--ease-out);
 }
 
 .ex-modal {
@@ -6254,6 +6452,11 @@ textarea:focus-visible {
 	border-radius: var(--radius-lg);
 	background: var(--bg);
 	box-shadow: var(--shadow-lg);
+	/* 入场：条件挂载（experts-view 的 `{detail !== undefined && <ExpertDetailModal/>}`），
+	   走 animation 不走 transition。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.ex-modal-mask 用 flex 居中）→ 从自身中心生长。 */
+	transform-origin: center;
 }
 
 .ex-modal-head {
@@ -6535,6 +6738,11 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-lg);
+	/* 入场：三个表单卡都由父层按开关条件挂载（automations-view 的定时表单、
+	   connectors-view 的添加/JSON 编辑器），挂载即终态 → 走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中）→ 从自身中心生长。 */
+	transform-origin: center;
 }
 
 /* JSON 编辑器更宽：mcp.json 行普遍比表单字段长，窄卡会迫使频繁折行。 */
@@ -7142,6 +7350,12 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
 	overflow: hidden;
+	/* 入场：条件挂载（select-field / models-section 的 `{open && ...}`），走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：整幅撑满触发控件宽度、在其下方展开（left/right: 0 + top: calc(100% + 4px)）
+	   → 从触发控件底边中点生长；水平取中与「左/右对齐」等价（与控件同宽）。
+	   （.add-model-card 内覆写为 static 内联排布，方向同为向下，本 origin 仍成立。） */
+	transform-origin: top center;
 }
 
 .provider-select-search {
@@ -7243,6 +7457,10 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-md);
+	/* 入场：条件挂载（models-section 的 `{addOpen && <AddModelDialog/>}`）→ 走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中）→ 从自身中心生长。 */
+	transform-origin: center;
 }
 
 .add-model-head {
@@ -7305,6 +7523,11 @@ textarea:focus-visible {
 	margin: 2px 0 var(--space-1);
 	padding-top: 2px;
 	border-top: 1px solid var(--border);
+	/* 入场：条件挂载（`{levelsOpen && ...}`），同 .pop-menu 的理由必须走 animation。 */
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
+	/* 空间连续性：不是飞出层，而是在「推理强度」行下方整行内联展开
+	   → 从这一行的顶边（贴触发行）向下生长，水平取中（与整行等宽，无左右角可言）。 */
+	transform-origin: top center;
 }
 
 .model-menu-level-item {

@@ -43,6 +43,7 @@ import { groupToolBatches } from "./fold-view.ts";
 import type { FoldPlanItem } from "./fold-view.ts";
 import { imageDataUrl } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
+import { useModalFocus } from "./use-modal-focus.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
@@ -84,8 +85,12 @@ interface ChatViewProps {
 	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	readonly onAbort: () => void;
 	readonly onInteractionChange: (interactionId: string) => void;
-	/** 专家列表（「+」菜单专家子菜单与 composer-bar 当前专家 chip 的数据源，App 层统一下发）。 */
-	readonly experts: readonly ExpertListItem[];
+	/**
+	 * 专家列表（「+」菜单专家子菜单与 composer-bar 当前专家 chip 的数据源，App 层统一下发）。
+	 * undefined = 还没拉回来（未就绪），与「拉回来但库里是空的」分开 —— 子菜单据此区分
+	 * 「正在读取专家…」与「还没有可用专家」（DESIGN.md §4）。
+	 */
+	readonly experts: readonly ExpertListItem[] | undefined;
 	/** 选择专家；传 undefined = 取消选中（daemon setExpert 只清 expertId，不动交互模式）。 */
 	readonly onSelectExpert: (expertId: string | undefined) => void;
 	/** 「+」菜单专家子菜单底部的「更多专家…」入口：跳专家页（App 层路由）。 */
@@ -225,6 +230,13 @@ function UserBubble({
 	// 点击放大的那张图；undefined = 预览关闭。MVP 不做轮播/缩放（YAGNI）。
 	const [preview, setPreview] = useState<ImagePart | undefined>(undefined);
 
+	/*
+	 * 浮层的焦点归还：关掉预览后焦点回到那张缩略图按钮（否则掉到 body）。
+	 * 这里只接「移入 + 归还」—— 浮层里除大图外没有可聚焦元素，陷阱退化成「Tab 不动」
+	 * （焦点原地留在缩略图上，不会跑到背景），符合 hook 的既有口径。
+	 */
+	const previewRef = useModalFocus();
+
 	// Esc 关闭大图预览：遮罩是不可聚焦的容器，键盘用户没有其它关闭路径。
 	useEffect(() => {
 		if (preview === undefined) return;
@@ -275,6 +287,7 @@ function UserBubble({
 					className="image-preview-overlay"
 					role="dialog"
 					aria-label="图片预览"
+					ref={previewRef}
 					onClick={() => setPreview(undefined)}
 				>
 					<img src={imageDataUrl(preview)} alt="" draggable={false} />
@@ -901,18 +914,24 @@ function WaitingPendingLine({
 					className="pending-tip"
 					onMouseEnter={() => setPaused(true)}
 					onMouseLeave={() => setPaused(false)}
-					onFocus={() => setPaused(true)}
-					onBlur={() => setPaused(false)}
 				>
 					<span className="pending-tip-sep" aria-hidden="true">
 						|
 					</span>
 					{WAITING_TIPS[tipIndex]}
+					{/*
+						focus 暂停挂在 × 按钮上、不挂外面的 .pending-tip：那个 span 不可聚焦，
+						React 的 onFocus 走 focusin（冒泡）所以此前也只在「× 获焦」时触发 ——
+						行为一样，但读起来像死代码、一旦有人给 span 加 tabIndex 还会变味。
+						挂在实际可聚焦的元素上，「暂停」的可达路径就一目了然。
+					*/}
 					<button
 						type="button"
 						className="pending-tip-close"
 						aria-label="不再显示提示"
 						title="不再显示提示"
+						onFocus={() => setPaused(true)}
+						onBlur={() => setPaused(false)}
 						onClick={onDismiss}
 					>
 						×
@@ -1146,7 +1165,10 @@ function ModeSwitch({
 				aria-expanded={open}
 				onClick={() => setOpen((v) => !v)}
 			>
-				{current?.label ?? currentId}
+				{/* 模式清单未到位（availableModes 仍是快照前存的空数组）时不给裸 id：
+				    `craft` 是内部标识，用户既看不懂，它也不是「当前模式」的名字。
+				    行内转圈与其它行内加载位同款，等清单到位后自然换成 label。 */}
+				{current === undefined ? <Spinner size={11} /> : current.label}
 				<IconChevronDown size={13} />
 			</button>
 			{open && (
@@ -1207,6 +1229,15 @@ function SaveToWorkspaceDialog({
 	const [submitting, setSubmitting] = useState(false);
 	const ime = useImeGuard();
 
+	/*
+	 * 焦点陷阱 / 归还 / 背景 inert 由共享 hook 负责。
+	 * 输入框的「自动聚焦」不再用 autoFocus：React 的 ref 与 autoFocus 都在 layout 阶段按
+	 * **子先父后**的次序提交，autoFocus 会赶在卡片的 callback ref 之前把焦点拿走，于是 hook
+	 * 记下的「打开它的元素」变成了这个输入框本身 —— 关弹层时它已被摘掉，焦点归还就失效。
+	 * hook 的默认落点（容器内首个可聚焦元素）正是这个输入框，用户看到的效果不变。
+	 */
+	const cardRef = useModalFocus();
+
 	const submit = (): void => {
 		const trimmed = name.trim();
 		if (trimmed === "" || submitting) return;
@@ -1232,7 +1263,7 @@ function SaveToWorkspaceDialog({
 
 	return (
 		<div className="modal-backdrop">
-			<div className="save-space-card" role="dialog" aria-modal="true" aria-label="保存到工作空间">
+			<div className="save-space-card" role="dialog" aria-modal="true" aria-label="保存到工作空间" ref={cardRef}>
 				<p className="save-space-title">保存到工作空间</p>
 				<p className="save-space-desc">
 					会把当前任务的目录重命名为这个空间名，目录里的产物与记忆一起跟过去；
@@ -1241,8 +1272,8 @@ function SaveToWorkspaceDialog({
 				<input
 					className="save-space-input"
 					value={name}
-					// 弹层里唯一的输入框，自动聚焦即预期（同侧栏重命名行）。
-					autoFocus
+					// 弹层里唯一的输入框，自动聚焦即预期（同侧栏重命名行）；
+					// 由 useModalFocus 的默认落点承接，故这里不再写 autoFocus（理由见上方注释）。
 					placeholder="空间名称"
 					aria-label="空间名称"
 					disabled={submitting}
@@ -1383,9 +1414,10 @@ export function ChatView({
 	const sessionId = conversation.state.sessionId;
 	// 当前专家（绑定专家才有值，与交互模式正交）：composer-bar chip、起手 chips
 	// 与「+」菜单勾选共用这份查找。expertId 是 session_state 的权威值，列表只是
-	// 展示映射；列表尚未拉回/专家被删时 chip 与起手 chips 不渲染（菜单勾选仍以 expertId 为准）。
+	// 展示映射；列表尚未拉回（undefined）/专家被删时 chip 与起手 chips 不渲染
+	//（菜单勾选仍以 expertId 为准）。
 	const expertId = conversation.state.expertId;
-	const currentExpert = expertId === undefined ? undefined : experts.find((e) => e.name === expertId);
+	const currentExpert = expertId === undefined ? undefined : experts?.find((e) => e.name === expertId);
 	// 产物清单：present_files 交付折叠而来（唯一来源，不再从 write 推导）。
 	const artifacts = conversation.artifacts;
 	// 段折叠条（工具批 /「过程消息」段）的展开状态：按段 id 记忆。折叠计划
@@ -1413,7 +1445,9 @@ export function ChatView({
 		[entries, streaming, conversation.cancelledTurns],
 	);
 	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
-	const lastUserEntry = entries.findLast((e) => e.role === "user");
+	// 反查要扫到「最后一个 user」为止（长会话末尾常是一串工具卡），按 [entries] memo，
+	// 与消息流无关的重渲染（折叠开合、面板交互）不再重扫。
+	const lastUserEntry = useMemo(() => entries.findLast((e) => e.role === "user"), [entries]);
 	const lastUserId = lastUserEntry?.id;
 	const retryText = lastUserEntry?.text;
 	// 起手 chips「发送一条后消失」的判定：entries 里有无 user 消息（权威口径，
@@ -1467,6 +1501,10 @@ export function ChatView({
 	// tips 轮播与 8s 安抚文案只在这个阶段计时，「正在写入文件…」等阶段不出现。
 	const lastEntry = entries[entries.length - 1];
 	const awaitingFirstResponse = streaming && (lastEntry === undefined || lastEntry.role === "user");
+	// 等待行文案（pendingText 纯函数，从末尾反查阶段）。按 [entries] memo：流式期间
+	// entries 每个 delta 都换引用、仍会重算（这是语义要求），省下的是折叠开合等
+	// 无关重渲染；纯函数本身很轻，这处收益有限，列在此处只为口径一致。
+	const pendingLabel = useMemo(() => pendingText(entries), [entries]);
 
 	// 滚动跟随（对标 WorkBuddy）：在底部时新内容自动贴底；用户上滚离开底部
 	// 即停止跟随，浮现「回到底部」按钮；回到底部后恢复跟随。
@@ -1798,7 +1836,7 @@ export function ChatView({
 					<WaitingPendingLine dismissed={tipsDismissed} onDismiss={() => setTipsDismissed(true)} welcomeGreeting={personalization.welcomeGreeting} />
 				) : (
 					<div className="stream-pending">
-						<span className="text-shimmer">{pendingText(entries)}</span>
+						<span className="text-shimmer">{pendingLabel}</span>
 					</div>
 				))}
 			{/* steer/followUp 排队指示（queue_changed 折叠）：只给计数不展示队列内容。 */}

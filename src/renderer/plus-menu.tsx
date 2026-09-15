@@ -16,13 +16,18 @@ import { useEffect, useState } from "react";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import { IconAssistant, IconCheck, IconDoc, IconPlus, IconSkill, IconWeb, IconWorkspace } from "./icons.tsx";
+import { EmptyState, LoadingState } from "./state-views.tsx";
 
 interface PlusMenuProps {
 	readonly modes: readonly ModeDescriptor[];
 	readonly currentId: string;
 	readonly onInteractionChange: (id: string) => void;
-	/** 专家列表与当前专家（专家子菜单数据源；expertId 命中项打 ✓）。 */
-	readonly experts: readonly ExpertListItem[];
+	/**
+	 * 专家列表与当前专家（专家子菜单数据源；expertId 命中项打 ✓）。
+	 * undefined = 还没拉回来（未就绪），与「拉回来但库里是空的」分开 ——
+	 * 子菜单据此区分「正在读取专家…」与「还没有可用专家」（DESIGN.md §4）。
+	 */
+	readonly experts: readonly ExpertListItem[] | undefined;
 	readonly expertId: string | undefined;
 	readonly onSelectExpert: (expertId: string) => void;
 	/**
@@ -166,37 +171,47 @@ export function PlusMenu({
 							</button>
 							{expertsOpen && (
 								<div className="plus-menu-sub">
-									{experts.map((expert) => (
-										<button
-											key={expert.name}
-											type="button"
-											className={`plus-menu-mode-item${expert.name === expertId ? " active" : ""}`}
-											// 副行只放一行：displayDescription（一句话能力）比头衔更能帮用户
-											// 决定选谁，profession 并进 tooltip 保留（spec: 专家体系对齐 Task 3.1）。
-											title={`${expert.displayName}｜${expert.profession}`}
-											onClick={() => {
-												close();
-												onSelectExpert(expert.name);
-											}}
-										>
-											<span className="plus-menu-mode-label">{expert.displayName}</span>
-											<span className="plus-menu-mode-desc">{expert.displayDescription}</span>
-											{expert.name === expertId && <IconCheck size={14} className="plus-menu-mode-check" />}
-										</button>
-									))}
-									{/* 子菜单底部常驻入口（WorkBuddy「召唤更多专家」同款）：跳专家页。
-									    可选 prop —— 未接线的页面（首页）不渲染该项。 */}
-									{onOpenExperts !== undefined && (
-										<button
-											type="button"
-											className="plus-menu-mode-item plus-menu-more-experts"
-											onClick={() => {
-												close();
-												onOpenExperts();
-											}}
-										>
-											<span className="plus-menu-mode-label">更多专家…</span>
-										</button>
+									{/* 三态互斥（DESIGN.md §4）：未就绪 ≠ 库里为空。原来调用侧传的是
+									    `experts ?? []`，两种状态渲染成同一个空子菜单。 */}
+									{experts === undefined ? (
+										<LoadingState text="正在读取专家…" />
+									) : experts.length === 0 ? (
+										<EmptyState title="还没有可用专家" />
+									) : (
+										<>
+											{experts.map((expert) => (
+												<button
+													key={expert.name}
+													type="button"
+													className={`plus-menu-mode-item${expert.name === expertId ? " active" : ""}`}
+													// 副行只放一行：displayDescription（一句话能力）比头衔更能帮用户
+													// 决定选谁，profession 并进 tooltip 保留（spec: 专家体系对齐 Task 3.1）。
+													title={`${expert.displayName}｜${expert.profession}`}
+													onClick={() => {
+														close();
+														onSelectExpert(expert.name);
+													}}
+												>
+													<span className="plus-menu-mode-label">{expert.displayName}</span>
+													<span className="plus-menu-mode-desc">{expert.displayDescription}</span>
+													{expert.name === expertId && <IconCheck size={14} className="plus-menu-mode-check" />}
+												</button>
+											))}
+											{/* 子菜单底部常驻入口（WorkBuddy「召唤更多专家」同款）：跳专家页。
+											    可选 prop —— 未接线的页面（首页）不渲染该项。 */}
+											{onOpenExperts !== undefined && (
+												<button
+													type="button"
+													className="plus-menu-mode-item plus-menu-more-experts"
+													onClick={() => {
+														close();
+														onOpenExperts();
+													}}
+												>
+													<span className="plus-menu-mode-label">更多专家…</span>
+												</button>
+											)}
+										</>
 									)}
 								</div>
 							)}

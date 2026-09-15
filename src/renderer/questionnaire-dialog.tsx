@@ -31,6 +31,7 @@ import {
 	IconSend,
 } from "./icons.tsx";
 import { useImeGuard } from "./ime-guard.ts";
+import { useModalFocus } from "./use-modal-focus.ts";
 
 interface QuestionnaireDialogProps {
 	readonly request: QuestionnaireRequest;
@@ -68,6 +69,23 @@ export function QuestionnaireDialog({
 	const submittedRef = useRef(false);
 	// 「其他补充…」行整行是输入热区（WorkBuddy v3：点行聚焦输入框）。
 	const otherInputRef = useRef<HTMLInputElement>(null);
+	/**
+	 * 首个选项：模态的默认落点。
+	 *
+	 * 不给 initialFocus 的话，hook 取容器内**文档顺序第一个**可聚焦元素 —— 单题问卷是
+	 * 头部右侧的「全部跳过」（多题非首页是「上一题」），盲按回车会**跳过整张问卷**，
+	 * 而问卷是阻塞式的（daemon 侧正 await 这条链路），误操作代价高。落「首个选项」是
+	 * 内容侧的主操作：回车 = 选它（单选问卷的默认答案），语义与视觉阅读顺序一致。
+	 */
+	const firstOptionRef = useRef<HTMLButtonElement>(null);
+
+	/*
+	 * 焦点陷阱 / 焦点归还由共享 hook 负责（本卡替换整个输入区、daemon 又正 await 着，
+	 * 语义上是模态）。注意它与别的 9 处不同：本卡是**内联浮层、不在 .modal-backdrop 里**，
+	 * 故 hook 的背景 inert 那一步在这里自然不生效（找不到背板祖先），Tab 陷阱照旧生效。
+	 * Esc 不在这里接：本卡既有出口是「跳过 / 全部跳过 / 点选项」三个显式动作，保持不变。
+	 */
+	const cardRef = useModalFocus({ initialFocus: () => firstOptionRef.current });
 
 	useEffect(() => () => window.clearTimeout(advanceTimer.current), []);
 
@@ -164,7 +182,7 @@ export function QuestionnaireDialog({
 	}
 
 	return (
-		<div className="questionnaire-card">
+		<div className="questionnaire-card" ref={cardRef}>
 			<div className="questionnaire-header">
 				{/* v3：header 左侧就是当前题文本，不再有「向用户提问」的固定标题。 */}
 				<p className="questionnaire-title">{question.question}</p>
@@ -211,6 +229,8 @@ export function QuestionnaireDialog({
 					{question.options.map((option, oi) => (
 						<button
 							key={oi}
+							/* 首个选项承接模态的默认落点（见 firstOptionRef 的理由）。 */
+							ref={oi === 0 ? firstOptionRef : undefined}
 							type="button"
 							role="radio"
 							aria-checked={selection.selected === oi}

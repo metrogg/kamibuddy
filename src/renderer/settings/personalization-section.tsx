@@ -7,7 +7,7 @@
  * 见 memory-section），另加失焦提交 —— 编辑完点出输入框即存上。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PersonalizationInfo, PersonalizationPatch } from "@shared/ipc.ts";
 import type { StyleConfigInfo } from "@shared/settings.ts";
 import { ErrorState, LoadingState } from "../state-views.tsx";
@@ -60,12 +60,19 @@ function StyleSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
 	const [config, setConfig] = useState<StyleConfigInfo | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 
-	useEffect(() => {
-		window.kami
-			.getStyle()
-			.then((result) => setConfig(result))
-			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	// 抽成可调用函数：错误态的重试要能真的重拉（原来只在 useEffect 里跑一次）。
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			setConfig(await window.kami.getStyle());
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
 
 	const change = (next: string): void => {
 		const prev = config;
@@ -84,12 +91,17 @@ function StyleSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
 				<h2>回复风格</h2>
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{config === undefined ? (
-				<LoadingState text="正在读取回复风格设置…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void refresh()} />
+				) : (
+					<LoadingState text="正在读取回复风格设置…" />
+				)
 			) : (
 				<>
+					{/* 切换风格失败的透出位（乐观更新已回滚，与内容并存）。 */}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="provider-row">
 						<div className="provider-main">
 							<span className="provider-name">回复的表达方式</span>

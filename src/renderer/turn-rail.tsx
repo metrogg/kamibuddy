@@ -80,7 +80,20 @@ export function TurnRail({
 			});
 		};
 		measureRef.current = measure;
-		measure();
+		/*
+			降频：每个流式 delta 都会让 entries 换引用，原来在这里同步调用 measure()，
+			等于每个 delta 强制一次同步布局（getBoundingClientRect）+ 一次 setTicks。
+			改为 rAF 尾沿 —— 一帧内的多次 entries 变化只测一次、只 setTicks 一次
+			（delta 频次高于帧率时，测量收敛到「每帧至多一次」）。
+
+			为什么不改成「只在 user 消息条数变化时测」：刻度 ratio = 刻度顶偏移 /
+			scrollHeight，而 scrollHeight 在流式期间持续增长（助手答复在刻度下方变高），
+			条数不变但比例在变 —— 只在条数变化时测会让整轮刻度都停在旧比例上（刻度偏低，
+			直到下一条 user 消息进流才纠正），准确性明显退化。rAF 尾沿保留「每帧按当前
+			scrollHeight 重算」的口径，最坏只晚一帧，RATIO_EPSILON 容差与测量算法均不动。
+		*/
+		const rafId = requestAnimationFrame(measure);
+		return () => cancelAnimationFrame(rafId);
 	}, [entries, scrollRef]);
 
 	/*

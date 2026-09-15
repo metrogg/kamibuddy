@@ -215,10 +215,18 @@ interface ArtifactPanelProps {
 function useArtifactText(
 	path: string,
 	onError: (m: string) => void,
-): { readonly text: string | undefined; readonly failed: string | undefined; readonly oversized: boolean } {
+): {
+	readonly text: string | undefined;
+	readonly failed: string | undefined;
+	readonly oversized: boolean;
+	/** 失败态的重试：bump 序号重跑下面的 effect（path 没变时唯一的重拉路径）。 */
+	readonly retry: () => void;
+} {
 	const [text, setText] = useState<string | undefined>(undefined);
 	const [failed, setFailed] = useState<string | undefined>(undefined);
 	const [oversized, setOversized] = useState(false);
+	/** 重试序号：只作 effect 依赖触发重跑，值本身不参与渲染。 */
+	const [attempt, setAttempt] = useState(0);
 
 	useEffect(() => {
 		let disposed = false;
@@ -243,9 +251,13 @@ function useArtifactText(
 		return () => {
 			disposed = true;
 		};
-	}, [path, onError]);
+	}, [path, onError, attempt]);
 
-	return { text, failed, oversized };
+	const retry = useCallback((): void => {
+		setAttempt((n) => n + 1);
+	}, []);
+
+	return { text, failed, oversized, retry };
 }
 
 /** 预览占位：图标 + 文案 + 操作按钮组（不支持 / 超大 / 不可播共用同一布局，类名区分语义）。 */
@@ -304,12 +316,12 @@ function TextPreview({
 	readonly onOpenExternal: (path: string) => void;
 	readonly onError: (m: string) => void;
 }) {
-	const { text, failed, oversized } = useArtifactText(path, onError);
+	const { text, failed, oversized, retry } = useArtifactText(path, onError);
 
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (failed !== undefined) return <ErrorState message={failed} onRetry={retry} />;
 	if (text === undefined) return <LoadingState />;
 	return <pre className="preview-text">{text}</pre>;
 }
@@ -332,12 +344,12 @@ function CodeFilePreview({
 	readonly onOpenExternal: (path: string) => void;
 	readonly onError: (m: string) => void;
 }) {
-	const { text, failed, oversized } = useArtifactText(path, onError);
+	const { text, failed, oversized, retry } = useArtifactText(path, onError);
 
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (failed !== undefined) return <ErrorState message={failed} onRetry={retry} />;
 	if (text === undefined) return <LoadingState />;
 	return (
 		<Suspense fallback={<LoadingState />}>
@@ -381,7 +393,7 @@ function MarkdownPreview({
 	readonly onOpenExternal: (path: string) => void;
 	readonly onError: (m: string) => void;
 }) {
-	const { text, failed, oversized } = useArtifactText(path, onError);
+	const { text, failed, oversized, retry } = useArtifactText(path, onError);
 
 	// 图片相对路径走方案 A：渲染时在 components.img 里 resolve 到 preview-server URL。
 	// 不选预处理文本（方案 B）—— 文本替换分不清正文与代码块，会把示例代码里的
@@ -394,7 +406,7 @@ function MarkdownPreview({
 	if (oversized) {
 		return <OversizedView folderPath={folderPath} downloadHref={downloadHref} onOpenExternal={onOpenExternal} />;
 	}
-	if (failed !== undefined) return <ErrorState message={failed} />;
+	if (failed !== undefined) return <ErrorState message={failed} onRetry={retry} />;
 	if (text === undefined) return <LoadingState />;
 	return (
 		<div className="preview-markdown">
@@ -506,6 +518,30 @@ function ViewSwitcher({
 	readonly onSelect: (view: PanelView) => void;
 }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
+
+	// Esc 关闭下拉（DESIGN.md §3.5 弹层三件套：Esc / 外部点击 / 焦点管理）。
+	// 菜单没有键盘焦点管理，Esc 是键盘用户唯一的关闭路径，与下面那个透明 backdrop 互补
+	// （一个管键盘、一个管指针）。
+	//
+	// 为什么这里偏离 ModelMenu 的 window 约定、改用 document + capture：
+	// 产物面板全屏时也在 document 上听 Esc（退出全屏，见下方 panel 的 effect）。
+	// 事件冒泡路径是 target → … → document → window，所以 document 上的冒泡监听**先于**
+	// window 上的执行 —— 只挂 window 的话，全屏时打开下拉再按 Esc 会「关下拉 + 退出全屏」
+	// 一起发生，违反 DESIGN.md §7.4「Esc 只关最内层」。
+	// capture 阶段在 document 上先于一切冒泡监听执行，此刻吃掉（stopPropagation）这次 Esc，
+	// 下面的冒泡监听（含全屏退出）就收不到它，只剩「关下拉」。
+	// 该监听只在下拉打开时注册：没打开时这次 Esc 照旧冒泡，全屏退出不受影响。
+	useEffect(() => {
+		if (!open) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key !== "Escape") return;
+			event.stopPropagation();
+			setOpen(false);
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, [open]);
+
 	return (
 		<div className="view-switcher">
 			<button
@@ -519,29 +555,33 @@ function ViewSwitcher({
 				<IconChevronDown size={13} />
 			</button>
 			{open && (
-				<div className="preview-menu view-switcher-menu" role="menu">
-					{VIEW_ORDER.map((v) => (
-						<button
-							key={v}
-							type="button"
-							className="preview-item"
-							role="menuitemradio"
-							aria-checked={v === view}
-							onClick={() => {
-								setOpen(false);
-								onSelect(v);
-							}}
-						>
-							{viewIcon(v)}
-							<span className="preview-item-name">{VIEW_LABELS[v]}</span>
-							{v === view && (
-								<span className="preview-item-meta view-switcher-check">
-									<IconCheck size={13} />
-								</span>
-							)}
-						</button>
-					))}
-				</div>
+				<>
+					{/* 透明 backdrop：点下拉外任意处关闭，与 ModelMenu/PermissionMenu 一致。 */}
+					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
+					<div className="preview-menu view-switcher-menu" role="menu">
+						{VIEW_ORDER.map((v) => (
+							<button
+								key={v}
+								type="button"
+								className="preview-item"
+								role="menuitemradio"
+								aria-checked={v === view}
+								onClick={() => {
+									setOpen(false);
+									onSelect(v);
+								}}
+							>
+								{viewIcon(v)}
+								<span className="preview-item-name">{VIEW_LABELS[v]}</span>
+								{v === view && (
+									<span className="preview-item-meta view-switcher-check">
+										<IconCheck size={13} />
+									</span>
+								)}
+							</button>
+						))}
+					</div>
+				</>
 			)}
 		</div>
 	);
@@ -570,13 +610,18 @@ function OverviewView({
 						key={a.path}
 						type="button"
 						className="preview-item"
-						title={isUrl ? `${a.path}（外部打开）` : a.path}
+						title={isUrl ? `${a.path}（外部打开）` : `${a.path}（双击或 Shift+Enter 转正）`}
+						aria-keyshortcuts={isUrl ? undefined : "Shift+Enter"}
 						onClick={() => {
 							if (isUrl) onOpenExternal(a.path);
 							else onPick({ kind: "file", path: a.path });
 						}}
 						onDoubleClick={() => {
 							if (!isUrl) onPin({ kind: "file", path: a.path });
+						}}
+						onKeyDown={(e) => {
+							// URL 条目没有 tab 语义（只有外部打开），不给转正入口。
+							if (!isUrl) pinByKeyboard(e, () => onPin({ kind: "file", path: a.path }));
 						}}
 					>
 						<IconDoc size={14} />
@@ -618,9 +663,11 @@ function ChangesView({
 							key={c.path}
 							type="button"
 							className="preview-item"
-							title={c.path}
+							title={`${c.path}（双击或 Shift+Enter 转正）`}
+							aria-keyshortcuts="Shift+Enter"
 							onClick={() => onPick({ kind: "change", path: c.path })}
 							onDoubleClick={() => onPin({ kind: "change", path: c.path })}
+							onKeyDown={(e) => pinByKeyboard(e, () => onPin({ kind: "change", path: c.path }))}
 						>
 							<IconDoc size={14} />
 							<span className="preview-item-name">{baseName(c.path)}</span>
@@ -650,6 +697,15 @@ function WorkspaceView({
 	readonly onPin: (sel: PreviewSelection) => void;
 }): React.JSX.Element {
 	const [tree, setTree] = useState<LazyTreeState | undefined>(undefined);
+	/**
+	 * 扫描失败的原因。与 tree 并列，而不是塞进 LazyTreeState：那个状态机里的
+	 * loadingPaths 表达的是**单个文件夹**展开时的懒加载转圈，这里是**整个视图的
+	 * 数据源**没拉到，粒度不同；混进去会污染一个被单测覆盖的纯状态机
+	 *（workspace-file-tree.test.ts），且它也没有字段能承载错误文案。
+	 */
+	const [treeError, setTreeError] = useState<string | undefined>(undefined);
+	/** 重试序号：只作 effect 依赖触发重跑（cwd 没变时唯一的重拉路径）。 */
+	const [treeAttempt, setTreeAttempt] = useState(0);
 
 	// 切入该视图（组件挂载）时拉一次（复用补全通道的索引，两份扫描必然漂移）。
 	// 数据一次性全量（file-index maxEntries 2000 上限），目录树的「懒加载」
@@ -659,18 +715,21 @@ function WorkspaceView({
 	useEffect(() => {
 		if (cwd === undefined) return;
 		let disposed = false;
+		setTreeError(undefined);
 		window.kami
 			.completions()
 			.then((d) => {
 				if (!disposed) setTree(createLazyTreeState(d.files));
 			})
-			.catch(() => {
-				if (!disposed) setTree(createLazyTreeState([]));
+			.catch((error: unknown) => {
+				// 不降级成空树：空树渲染出没有任何条目的列表，用户会把「扫描挂了」
+				// 读成「目录确实没文件」，且没有任何重试出口（DESIGN.md §4）。
+				if (!disposed) setTreeError(error instanceof Error ? error.message : String(error));
 			});
 		return () => {
 			disposed = true;
 		};
-	}, [cwd]);
+	}, [cwd, treeAttempt]);
 
 	/** 文件夹行点击：已加载的折叠 → 即刻展开；展开态 → 折叠；未加载 → 转圈后展开。 */
 	const toggleFolder = (path: string): void => {
@@ -692,8 +751,17 @@ function WorkspaceView({
 		<div className="preview-view">
 			{cwd === undefined ? (
 				<EmptyState title="工作区尚未就绪" />
+			) : treeError !== undefined ? (
+				/* 错误分支必须排在加载分支之前：失败时 tree 也是 undefined，
+				   排在后面就会被「正在读取…」盖住（三态互斥，DESIGN.md §4）。 */
+				<ErrorState message={treeError} onRetry={() => setTreeAttempt((n) => n + 1)} />
 			) : tree === undefined ? (
 				<LoadingState />
+			) : tree.fullTree.length === 0 ? (
+				/* 扫描成功但工作空间确实没有可索引文件（空目录、或只有 node_modules/.git
+				   这类被跳过的目录）：原来渲染没有任何条目的空 .file-tree —— 与「扫描
+				   还没回来」在视觉上无从区分（DESIGN.md §4）。 */
+				<EmptyState title="工作区里没有可预览的文件" />
 			) : (
 				<div className="file-tree">
 					{flattenTree(tree.fullTree, visibleCollapsed(tree)).map(({ node, depth }) =>
@@ -725,9 +793,11 @@ function WorkspaceView({
 									}`}
 								/* 文件行没有 chevron：补 18px（12 chevron + 6 gap）让图标与文件夹行对齐。 */
 								style={{ paddingLeft: `${8 + depth * 12 + 18}px` }}
-								title={node.path}
+								title={`${node.path}（双击或 Shift+Enter 转正）`}
+								aria-keyshortcuts="Shift+Enter"
 								onClick={() => onPick({ kind: "file", path: node.path })}
 								onDoubleClick={() => onPin({ kind: "file", path: node.path })}
+								onKeyDown={(e) => pinByKeyboard(e, () => onPin({ kind: "file", path: node.path }))}
 							>
 								<FileTypeIcon name={node.name} size={14} />
 								<span className="file-tree-name">{node.name}</span>
@@ -738,6 +808,58 @@ function WorkspaceView({
 			)}
 		</div>
 	);
+}
+
+/** 面板宽度下限（WorkBuddy 默认口径，与拖拽/键盘/resize 共用一份）。 */
+const PANEL_MIN_WIDTH = 340;
+/** 面板宽度软上限（WorkBuddy 默认口径）；实际还要被窗口可用宽压住，见 maxPanelWidth。 */
+const PANEL_MAX_WIDTH = 800;
+/*
+ * 主区（对话列）最小可用宽。取 320 的算式：窗口最小宽 900 - 侧栏 216 - 320 = 364，
+ * 面板压到下限 340 后三者恰好铺满视口；取更大（如 360）则面板已在下限、主区仍在视口外
+ * 溢出 16px（spec 场景「拉到最小仍可用」）。是布局约束不是视觉档位，故不登记 token。
+ */
+const MAIN_MIN_WIDTH = 320;
+
+/**
+ * 面板宽度上限：随窗口可用宽动态计算（spec: harden-desktop-interactions）。
+ *
+ * 窗口最小宽 900 < 侧栏 216 + 面板上限 800 = 1016，固定 800 会把主区挤出屏幕；
+ * 上限必须由「窗口可用宽 - 侧栏 - 主区最小宽」决定。
+ *
+ * 侧栏宽从 DOM 量（index.css `.sidebar { flex: 0 0 216px }`）而不是在 TS 里再抄一份 216：
+ * 侧栏收起时它整个不渲染，量到 0 恰好是对的 —— 抄常量会白占 216px，且与 CSS 双写必然漂移。
+ * 结果兜底到 PANEL_MIN_WIDTH：窗口极窄时上限不能低于下限，否则 clamp 上下限自相矛盾。
+ */
+export function maxPanelWidth(): number {
+	const sidebar = document.querySelector<HTMLElement>(".sidebar");
+	const sidebarWidth = sidebar === null ? 0 : sidebar.getBoundingClientRect().width;
+	return Math.max(
+		PANEL_MIN_WIDTH,
+		Math.min(PANEL_MAX_WIDTH, window.innerWidth - sidebarWidth - MAIN_MIN_WIDTH),
+	);
+}
+
+/** 拖拽 / 键盘调宽 / 窗口缩窄共用的宽度 clamp —— 三条路径一份上下限，不会各自漂移。 */
+export function clampPanelWidth(px: number): number {
+	return Math.min(Math.max(px, PANEL_MIN_WIDTH), maxPanelWidth());
+}
+
+/**
+ * 条目按钮的键盘等效入口：双击「转正为固定 tab」原本只有鼠标可达（DESIGN.md §7.7
+ * 要求「双击动作的键盘等价入口」）。Shift+Enter 做同一件事。
+ *
+ * 为什么不是 Enter：它是 `<button>` 的原生激活键，等价于单击 = 预览（主操作），
+ * 抢给「转正」会让键盘用户失去预览；为什么要修饰键而不是加个可见小按钮：
+ * 后者要新增元素与类名（既有视觉会动），而这里缺的只是一个键盘入口。
+ *
+ * preventDefault 拦掉原生 click；即便某浏览器仍补发 click，App 的 openPreview 对
+ * 已存在的 tab 是幂等的（sameSelection 命中即原样返回），转正结果不会被撤销。
+ */
+function pinByKeyboard(event: React.KeyboardEvent, pin: () => void): void {
+	if (event.key !== "Enter" || !event.shiftKey) return;
+	event.preventDefault();
+	pin();
 }
 
 export function ArtifactPanel({
@@ -803,7 +925,32 @@ export function ArtifactPanel({
 		setPanelState((s) => (remaining.length === 0 ? closeLastTab(s) : closeTab(s)));
 	};
 
-	const servable = previewBaseUrl !== undefined && cwd !== undefined;
+	/**
+	 * 预览服务的兜底重试。baseUrl 由 App 按当前会话 cwd 取（App.tsx 的
+	 * refreshPreviewBaseUrl），且只在 cwd 变化时重取 —— 「工作空间已选好、服务那一刻
+	 * 没起来」这一态 App 不会自动再试，面板必须自己给出口（DESIGN.md §4：失败就地
+	 * 呈现 + 重试动作）。重试结果连同取它的 cwd 一起记：切了工作空间旧结果即失效，
+	 * 绝不复用别的目录的端口。
+	 */
+	const [retriedBaseUrl, setRetriedBaseUrl] = useState<
+		{ readonly cwd: string; readonly url: string } | undefined
+	>(undefined);
+	const retryPreviewBaseUrl = useCallback((): void => {
+		if (cwd === undefined) return;
+		window.kami
+			.previewBaseUrl(cwd)
+			.then((url) => {
+				if (url !== undefined) setRetriedBaseUrl({ cwd, url });
+			})
+			// 仍未取到：维持错误态（用户可再点），原因透出去，不静默吞。
+			.catch((error: unknown) =>
+				onError(error instanceof Error ? error.message : String(error)),
+			);
+	}, [cwd, onError]);
+	const baseUrl =
+		previewBaseUrl ??
+		(retriedBaseUrl !== undefined && retriedBaseUrl.cwd === cwd ? retriedBaseUrl.url : undefined);
+	const servable = baseUrl !== undefined && cwd !== undefined;
 	const activeChange =
 		active?.kind === "change" ? changes.find((c) => c.path === active.path) : undefined;
 
@@ -815,20 +962,26 @@ export function ArtifactPanel({
 	const folderPath = cwd === undefined ? "" : dirRel === "" ? cwd : `${cwd}/${dirRel}`;
 
 	// sash 拖拽调宽（WorkBuddy colleague-artifact-provider 同口径：
-	// mousedown 记起点与起始宽，mousemove clamp [340, 800]，拖拽时 body cursor/user-select）。
+	// mousedown 记起点与起始宽，mousemove clamp，拖拽时 body cursor/user-select）。
+	// 上下限见 clampPanelWidth：下限 340 固定、上限随窗口可用宽动态（不再是硬编码 800）。
+	// 面板容器 ref：拖拽期在其上加 data-dragging，供 CSS 关掉 width 过渡
+	//（否则每次 mousemove 都带过渡，面板「追不上」鼠标且逐帧重排）。
+	const panelRef = useRef<HTMLElement>(null);
 	const handleSashMouseDown = (event: React.MouseEvent): void => {
 		event.preventDefault();
 		const startX = event.clientX;
 		const startWidth = width;
+		panelRef.current?.setAttribute("data-dragging", "true");
 		const onMouseMove = (moveEvent: MouseEvent): void => {
 			const delta = startX - moveEvent.clientX;
-			onWidthChange(Math.min(Math.max(startWidth + delta, 340), 800));
+			onWidthChange(clampPanelWidth(startWidth + delta));
 		};
 		const onMouseUp = (): void => {
 			document.removeEventListener("mousemove", onMouseMove);
 			document.removeEventListener("mouseup", onMouseUp);
 			document.body.style.cursor = "";
 			document.body.style.userSelect = "";
+			panelRef.current?.removeAttribute("data-dragging");
 		};
 		document.addEventListener("mousemove", onMouseMove);
 		document.addEventListener("mouseup", onMouseUp);
@@ -836,14 +989,14 @@ export function ArtifactPanel({
 		document.body.style.userSelect = "none";
 	};
 
-	// sash 键盘调宽：与鼠标拖拽同一个 setter、同一份 [340, 800] clamp。
+	// sash 键盘调宽：与鼠标拖拽同一个 setter、同一份 clamp（clampPanelWidth）。
 	// 方向口径与拖拽一致 —— 分隔条向左移面板变宽（delta = startX - clientX），
 	// 所以 ArrowLeft 加宽、ArrowRight 收窄（WAI-ARIA window splitter 同约定）。
 	const handleSashKeyDown = (event: React.KeyboardEvent): void => {
 		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
 		event.preventDefault();
 		const delta = event.key === "ArrowLeft" ? 10 : -10;
-		onWidthChange(Math.min(Math.max(width + delta, 340), 800));
+		onWidthChange(clampPanelWidth(width + delta));
 	};
 
 	// Esc 退出全屏（监听挂在全屏态上，非全屏不注册）。
@@ -858,6 +1011,7 @@ export function ArtifactPanel({
 
 	return (
 		<aside
+			ref={panelRef}
 			className={`preview-panel${fullscreen ? " fullscreen" : ""}`}
 			style={fullscreen ? undefined : { width: `${width}px` }}
 		>
@@ -971,28 +1125,38 @@ export function ArtifactPanel({
 								/>
 							)
 						)}
-						{active.kind === "file" && !servable && (
+						{/* 不可预览的两因分开说：未选工作空间是「还没到位」的引导（无从重试），
+						    工作空间已选而服务没起来是失败（必须给重试出口）。原来共用
+						    「选择工作空间后可预览文件」—— 工作空间明明选好了、只是服务挂了时，
+						    这句是**错误的指引**（DESIGN.md §4：失败文案必须指向真实原因）。 */}
+						{active.kind === "file" && !servable && cwd === undefined && (
 							<EmptyState title="选择工作空间后可预览文件" />
+						)}
+						{active.kind === "file" && !servable && cwd !== undefined && (
+							<ErrorState
+								message="预览服务未就绪，无法加载该文件"
+								onRetry={retryPreviewBaseUrl}
+							/>
 						)}
 						{active.kind === "file" && servable && kind === "html" && (
 							<iframe
 								className="preview-frame"
 								title={baseName(rel)}
-								src={previewUrl(previewBaseUrl, rel)}
+								src={previewUrl(baseUrl, rel)}
 								// 与宿主不同源（127.0.0.1:端口），allow-same-origin 只给它自己
 								// 源的 localStorage（游戏存档类需要），够不着我们的状态。
 								sandbox="allow-scripts allow-same-origin allow-forms"
 							/>
 						)}
 						{active.kind === "file" && servable && kind === "image" && (
-							<img className="preview-image" src={previewUrl(previewBaseUrl, rel)} alt={baseName(rel)} />
+							<img className="preview-image" src={previewUrl(baseUrl, rel)} alt={baseName(rel)} />
 						)}
 						{active.kind === "file" && servable && kind === "markdown" && (
 							<MarkdownPreview
 								path={rel}
-								previewBaseUrl={previewBaseUrl}
+								previewBaseUrl={baseUrl}
 								folderPath={folderPath}
-								downloadHref={downloadUrl(previewBaseUrl, rel)}
+								downloadHref={downloadUrl(baseUrl, rel)}
 								onOpenExternal={onOpenExternal}
 								onError={onError}
 							/>
@@ -1001,7 +1165,7 @@ export function ArtifactPanel({
 							<CodeFilePreview
 								path={rel}
 								folderPath={folderPath}
-								downloadHref={downloadUrl(previewBaseUrl, rel)}
+								downloadHref={downloadUrl(baseUrl, rel)}
 								onOpenExternal={onOpenExternal}
 								onError={onError}
 							/>
@@ -1010,18 +1174,18 @@ export function ArtifactPanel({
 							<TextPreview
 								path={rel}
 								folderPath={folderPath}
-								downloadHref={downloadUrl(previewBaseUrl, rel)}
+								downloadHref={downloadUrl(baseUrl, rel)}
 								onOpenExternal={onOpenExternal}
 								onError={onError}
 							/>
 						)}
 						{active.kind === "file" && servable && kind === "pdf" && (
-							<PdfPreview url={previewUrl(previewBaseUrl, rel)} />
+							<PdfPreview url={previewUrl(baseUrl, rel)} />
 						)}
 						{active.kind === "file" && servable && (kind === "docx" || kind === "xlsx" || kind === "pptx") && (
 							<OfficePreview
-								url={previewUrl(previewBaseUrl, rel)}
-								downloadHref={downloadUrl(previewBaseUrl, rel)}
+								url={previewUrl(baseUrl, rel)}
+								downloadHref={downloadUrl(baseUrl, rel)}
 								name={baseName(rel)}
 								format={kind}
 								onOpenExternal={() => onOpenExternal(active.path)}
@@ -1029,20 +1193,20 @@ export function ArtifactPanel({
 						)}
 						{active.kind === "file" && servable && kind === "video" && (
 							<VideoPreview
-								url={previewUrl(previewBaseUrl, rel)}
+								url={previewUrl(baseUrl, rel)}
 								mime={MEDIA_MIME[extOf(rel)] ?? ""}
-								downloadHref={downloadUrl(previewBaseUrl, rel)}
+								downloadHref={downloadUrl(baseUrl, rel)}
 							/>
 						)}
 						{active.kind === "file" && servable && kind === "audio" && (
-							<audio className="preview-audio" controls src={previewUrl(previewBaseUrl, rel)} />
+							<audio className="preview-audio" controls src={previewUrl(baseUrl, rel)} />
 						)}
 						{active.kind === "file" && servable && kind === "unsupported" && (
 							<PreviewPlaceholder className="preview-unsupported" message="暂不支持预览">
 								<button type="button" className="preview-action" onClick={() => onOpenExternal(active.path)}>
 									外部打开
 								</button>
-								<a className="preview-action" href={downloadUrl(previewBaseUrl, rel)} download>
+								<a className="preview-action" href={downloadUrl(baseUrl, rel)} download>
 									下载
 								</a>
 							</PreviewPlaceholder>

@@ -191,8 +191,8 @@
 | 事项 | 去向 |
 |---|---|
 | 12 个主界面的 7 状态逐页补齐（空会话引导、MCP 授权态、模型卡「去配置」动作等） | spec #2 状态补齐 |
-| 动效属性改造（`.tool-detail-box` 等 9 处布局属性过渡 → transform/grid；`.text-shimmer` 的 `background-position` 扫光） | spec #3 动效 |
-| 长列表虚拟化、流式渲染合批、`widget-view` memo 化 | spec #4 性能 |
+| ~~动效属性改造（`.tool-detail-box` 等布局属性过渡 → transform/grid；`.text-shimmer` 的 `background-position` 扫光）~~ | ✅ **已完成**（spec #3），见 §7；扫光经评估保持现状并登记例外 |
+| 长列表虚拟化、流式渲染合批、`widget-view` memo 化 | ✅ **已完成**（spec #4），见 §8；其中完整虚拟滚动经评估**不做**，理由见 §8.4 |
 | 焦点陷阱与焦点归还、Esc 层级仲裁、拖拽越界拦截、最小宽度溢出 | spec #5 桌面端硬伤 |
 | iframe 的 `--kw-*` 跨上下文 token 注入机制 | 待决策（本轮只对齐取值，见 §3.3） |
 
@@ -216,6 +216,541 @@
    无暗色实测依据；暗色主题整体仍为「未接线预留」，首次启用时须对照 WB 暗色截图逐区校验。
 7. **白名单未命中告警不阻断构建**：当前设计为告警（写歪了要能被发现，但通过与否只看真违例数）。
    若后续希望「白名单腐烂即失败」，需把告警升级为非零退出。
+
+---
+
+## 7. 动效属性改造（spec #3，本期成果）
+
+> spec：`.trae/specs/refine-motion-discipline/spec.md`，分支 `feat/ui-design-system`。
+> 目标：把「动效只动合成属性」从声明变成存量代码的实态，并补上场景规范（DESIGN.md §5）。
+> 上一期（token 地基）只收拢了时长取值；本期处理**属性选择**。
+
+### 7.1 本期做了什么
+
+| 事项 | 结果 |
+|---|---|
+| 折叠体过渡属性收敛 | `.tool-detail-box` / `.tool-source-list` 改用 `interpolate-size: allow-keywords` + `height: 0↔auto`；过渡属性从 **12 项降到 4 项**（布局属性只剩 `height`），删掉为配合 `max-height: 0` 而设的 padding/margin/border-width 归零 hack；展开后 `max-height: 300px` + 内部滚动保留 |
+| 弹层入场 + 空间连续性 | **22 处**弹层/模态/子菜单接入 `@keyframes pop-layer-in`（`opacity` + `translateY(4px)` + `scale(.98)`）+ 背板 `@keyframes backdrop-in`；21 处配 `transform-origin` 对齐触发点。全部用 `animation`：条件挂载元素（`{open && <div>}`）挂载即终态，`transition` 无起跳点 |
+| 进出场时长拆分 | 常驻 DOM 元素由「同一时长来回」改为「退出降一档」：`.tool-detail-box` / `.tool-source-list` / `.metafold-body`（`--dur-slow` 入 → `--dur-base` 出）、`.stream-fade` / `.entry-toolbar`（`--dur-base` 入 → `--dur-fast` 出）。**未新增 token 档位** |
+| 拖拽期停过渡 | `.preview-panel[data-dragging="true"] { transition: none; }`，由 sash 鼠标路径加/去标记（键盘调宽是离散操作，不禁用） |
+
+### 7.2 两项经评估保持现状（登记为 DESIGN.md §5 受控例外）
+
+| 事项 | 为何保持现状 |
+|---|---|
+| `.text-shimmer` 的 `background-position` 扫光 | 无法用合成属性等价复刻：① 伪元素拿不到文字内容，而「文字明暗流动」必须以文字形状（`background-clip: text`）为裁剪源；② 用 `content: attr(data-text)` 复制文字后仍需 `mask-position` 移动遮罩（与 `background-position` 同类，非合成属性）；③ 本类用在 8 处行内 `<span>`，改 `display: inline-block` 才能裁剪，会破坏行内排版与基线对齐。收益亦不成立：重绘面积仅限文字区域（非整屏），`prefers-reduced-motion` 下已有降级 |
+| `.metafold-body` 的 `grid-template-rows: 0fr↔1fr` | 这已是「从 0 到内容高度」的推荐现代做法（绕开 `height: auto` 不可过渡的坑），本就不是问题；它与 `.tool-detail-box` 的 `interpolate-size` 方案同为受控例外（折叠展开只动**一个**布局属性） |
+
+### 7.3 待决策 / 未处理（诚实记录）
+
+- **`.mode-menu-sub` 是死 CSS**：经 grep 确认**无任何 TSX 引用**——模式子菜单已在「专家正交化」那期删除。
+  本期按弹层清单给它补齐了动画并注释标明，**是否删除留待后续清理**（本分支 #2~#5 或单独清理）。
+- **`.plus-menu-sub` 的 4px 级取整**：其垂直锚点实为父项底边（`bottom: -4px`），
+  当前 `transform-origin: left center` 是取整近似（更精确应为 `left bottom`）；差异极小，本期未改。
+- **`.mode-menu-sub` 的 origin 口径**：其实际定位是 `right: calc(100% + 4px)`（**向左飞出**），
+  origin 取 `right top`；spec 原稿写的 `left center` 有误，实现时已按实测纠正。
+
+---
+
+## 8. 流式渲染开销优化（spec #4，本期成果）
+
+> spec：`.trae/specs/optimize-stream-rendering/spec.md`，分支 `feat/ui-design-system`。
+> 与前三期不同，本期处理的是**诊断报告里排第一、第二**的两个 P0——不是一次性整理，
+> 而是「每次对话都在付」的成本（长会话几百轮会线性放大）。
+> 硬约束已写入 DESIGN.md §11（工程红线）；本节记**做了什么**与**代码层证据**。
+
+### 8.1 本期做了什么
+
+| 事项 | 结果 |
+|---|---|
+| 流式 delta 合批（daemon 侧） | `session-host.ts` 引入 **16ms 时间窗缓冲**：连续同类型 delta 合并为一条 emit，6 处 flush 落点。事件类型与字段语义不变，`shared/` 与 reducer / UI **零改动** |
+| 收起态跳过渲染 | `index.css` **5 条声明**：`.metafold-body-inner` / `.tool-detail-box` / `.tool-source-list` 收起时 `content-visibility: hidden`，展开恢复 `visible`；每条收起态配 `transition-behavior: allow-discrete` |
+| 热点 memo 化 | **5 处**（`widget-view` 的 `parseWidgetResult`、`Markdown` 的 `React.memo`、`App.tsx` 两处 collect、`chat-view` 的 `pendingText` / `findLast`）+ 一处**必要支撑**（`App.tsx` 的 `openPath` 提 `useCallback`）+ `turn-rail` 测量降频（rAF 尾沿） |
+| 开发期性能浮层 | 新建 `src/renderer/perf-overlay.tsx`（FPS + 主线程 longtask 采集），`main.tsx` 用动态 `import()` 挂载 |
+
+### 8.2 代码层证据
+
+**① 流式事件数：从「每 delta 一条」降到「每 16ms 最多一条」**
+
+- `src/core/session-host.ts`：`DELTA_FLUSH_MS = 16`（L77）；状态用**单个对象**
+  `pendingDeltas = { kind, messageId, text, timer }`（L421-428，避免四个字段互相漂移）；
+  `bufferDelta()` 负责追加 / 切换（L865-881），`flushDeltas()` 负责 emit（L888-898）。
+- **6 处 flush 落点**（比 spec 要求的 4 类更密）：定时器到期（L876）、类型切换（含 messageId 变化，L867-869）、
+  `message_end`（L1230）、`turn_end`（L1117）、`agent_end`（L996，含用户 abort 的收尾）、`abort()`（L652）。
+  额外存 `messageId` 是必需的：`agent_end` 路径会先清 `currentAssistantId`，flush 时不能现读。
+- `dispose()`（L697-700）`clearTimeout` 并置 undefined，**故意不 flush**——会话已作废，补发只会把残句推到废弃会话。
+- `turnFirstDeltaAt`（TTFT 基准）保持在**缓冲之前**记录：它量的是 pi 事件到达时刻，不是 flush 时刻（L1207-1211）。
+- **单测对拍证据**：`session-host.test.ts` 的 `describe("流式 delta 合批（16ms 窗口）")`，6 例，该文件 **47 → 53 通过**。
+  其中对拍一例喂入 `think, think, text, text, think, text, text`（**7 个 delta**），
+  断言按类型拼接的结果与「逐个 delta 原样拼接」的参照实现 `toEqual` 一致，
+  且 `deltaTrace(events)` 长度为 **4**（think/text/think/text 四次类型切换）——即 **7 个 delta → 4 次 emit**。
+
+**② 折叠内容不再参与 layout / paint**
+
+- `src/renderer/index.css` 5 条声明：`.metafold-body:not(.open) .metafold-body-inner`（L1950-1953）、
+  `.tool-detail-box`（基类即收起态，L2612 + 过渡 L2621）、`.tool-detail-box.open { content-visibility: visible }`（L2640）、
+  `.tool-source-list`（L3219 + L3226）、`.tool-source-list.open { … }`（L3238）。
+  复用 `.tool-detail-box` 的 `.todo-list-box` / `.task-agent-box` **自动一并受益**。
+- 选择器口径：轮折叠的激活类 `.open` 在**外层**、内层没有，只能用祖先表达收起态；展开态不显式声明
+  （选择器不匹配即回落 `visible`）。两个工具盒与该文件既有的「基类 = 退出态」写法一致，所以写在基类 + `.open` 显式恢复。
+- **探针 A/B 证据**（Electron 44 / Chromium 152，改前 vs 改后）：收起态 **`scrollHeight` 完全相等（2106 = 2106）**；
+  三个目标元素自身盒高恒为 0；展开态 `content-visibility` 计算值为 `visible`、高度正常（300 / 300 / 895.63）。
+  与既有 `visibility` / `opacity` 语义正交可共存；因折叠态本就 `visibility: hidden`，不引入可访问性回归。
+- **顺路救回的一个坑**：`content-visibility` 是**离散属性**，直接加会让收起瞬间把内容高度算成 0 →
+  收起动画从「真实高度 → 0」退化成「0 → 0」（瞬间消失，实测旧行为起点 895.6px、退化后起点被算成 0px）。
+  **修复：每条都配 `transition-behavior: allow-discrete`**（时长取既有 token，零硬编码），
+  且**只写在收起态那一条**——实测展开态也加会晚一帧翻转、轨迹偏离更大。
+- 附注：`content-visibility: hidden` 下 `innerText` 返回空串（`textContent` 仍完整）；
+  当前代码库无 `innerText` 调用（已 grep 确认），仅作提示。
+
+**③ 5 处 memo 化清单（+1 处必要支撑 +1 处降频）**
+
+| 位置 | 改动 | 改前每 delta 会重算什么 |
+|---|---|---|
+| `widget-view.tsx:438` | `parseWidgetResult(card.detail)` → `useMemo([card.detail])` | 同一份卡片 JSON 被反复 `JSON.parse`（同文件 L442 的 `partial` 本就 memo 了） |
+| `markdown.tsx:159` | `Markdown` → `React.memo` | 长会话里成百条历史消息的 remark 解析随每个 delta 重跑 |
+| `App.tsx:1044-1045` | `collectSources` / `collectChanges` → `useMemo([conversation.entries])` | 原是 JSX 内联调用：App 任何重渲染都重扫全部 entries（线性成本） |
+| `chat-view.tsx:1418` | `entries.findLast(user)` → `useMemo([entries])` | 每次渲染反向扫到「最后一个 user」为止（长会话末尾常是一串工具卡） |
+| `chat-view.tsx:1475` | `pendingText(entries)` → `useMemo([entries])` | 每次渲染重跑阶段判定 |
+| `App.tsx:1056`（**必要支撑**） | 传给 `ChatView` 的 `openPath` 由 JSX 内联箭头提成 `useCallback`（依赖 `[conversation.state.cwd, openArtifact, openPreview]`，函数体逐行照搬） | 本身不是热点，但它是 `Markdown` memo 的**前提**：内联箭头每次渲染换引用，会把 memo 全部击穿（历史消息照样重解析） |
+| `turn-rail.tsx:95` | 测量 `useLayoutEffect` 从「依赖 `[entries]` 就地同步测量」改为 **rAF 尾沿** | 每个 delta 强制一次同步布局（`getBoundingClientRect`）+ 一次 `setTicks` |
+
+`turn-rail` 用 rAF 尾沿而**不是**「条数门控」：刻度 ratio = 刻度顶偏移 / `scrollHeight`，流式期 `scrollHeight`
+持续增长而条数不变，门控会让整轮刻度停在旧比例上（准确性退化）。rAF 仍每帧按当帧 `scrollHeight` 重算，
+最坏只晚一帧；**测量算法与 `RATIO_EPSILON` 容差未动**。同理未写自定义比较函数（默认浅比较已够；
+放过函数型 prop 会引入「旧闭包 + 新 cwd」的隐式耦合）。
+
+**④ 开发期性能浮层的开关与取证方式**
+
+- **开关**：单一 key `localStorage.kbPerf`——`"1"` 强开、`"0"` 强关、未设置时 **DEV 开 / 生产关**。
+  控制台执行 `localStorage.kbPerf = "1"; location.reload()` 即可。
+- **取证**：右下角浮层显示当前 FPS、最近 10s 的 longtask 条数与最长时长；longtask 明细
+  （`duration` / `name` / `startTime`）与低 FPS 告警（**带上同窗口的 longtask 明细**，只有一个数字定位不到元凶）
+  打在 DevTools Console。FPS 按 1s 档统计；窗口切走造成的「空窗」按 `elapsed >= 2000ms` 丢弃以免误报；
+  longtask 做能力检测 + try/catch，不支持则静默跳过。
+- **为什么不进 App 树**：浮层是**独立 React root**（App 每轮重渲染不带它，也不必改 `App.tsx`），
+  样式全内联 + CSS 变量，**零 CSS 文件改动**。
+
+### 8.3 诚实标注：两处在流式期间收益为 0
+
+`App.tsx` 的 `collectSources` / `collectChanges` 与 `chat-view` 的 `pendingText` / `findLast`，
+依赖都是 `conversation.entries`，而 `entries` **每个 delta 都换引用**（`replaceEntry` 走 `map`）——
+memo 在**流式期间仍会重算，收益为 0**。它们真正省下的是「**与消息流无关的重渲染**」
+（折叠开合、面板交互、toast、审批弹窗），这些在一次会话里同样高频。
+流式期「历史消息不重解析」的主要收益来自 `Markdown` 的 `React.memo` 与 `openPath` 的引用稳定。
+（这三处代码注释已写明同一口径，避免被误读为「流式不再重算」。）
+
+### 8.4 本期刻意未做（三项）
+
+| 事项 | 理由 |
+|---|---|
+| 完整虚拟滚动（react-window 类） | 会同时牵动**吸顶 / 吸底跟随 / 轮折叠 / 刻度轨**四套机制（`send-anchor.ts`、`turn-fold.ts`、`turn-rail.tsx` 都依赖真实 DOM 与 `scrollHeight`），风险远超收益 |
+| 未折叠的屏幕外条目用 `content-visibility: auto` | 屏幕外元素用**估值高度**会让 `scrollHeight` 漂移 → 滚动条跳动、贴底跟随抖动；我们依赖 `scrollTop = scrollHeight` 贴底，这条风险不可接受（已升级为 DESIGN.md §11 第 4 条硬约束） |
+| Markdown 解析移入 Web Worker | remark 生态的序列化 / 通信开销可能抵消收益，且要改整条渲染链路；先用 `React.memo` 拿「已完成消息不重解析」这块主要收益 |
+
+同批明确不做的另两项（spec 同期记录）：`extractPartialWidgetArgs` 的增量提取（已 `useMemo`，
+O(n²) 只在大 widget 的流式期出现、频率低）；滚动跟随 / 刻度轨的既有算法（已有防抖与 `RATIO_EPSILON` 容差，不动）。
+
+### 8.5 已知问题（Task 1 遗留，机制未成立）
+
+**生产构建仍打包 `perf-overlay`**：
+
+- 现象：`npm run build` 成功后产物里有 `out/renderer/assets/perf-overlay-<hash>.js`（**4.90 kB**），
+  入口产物里也留有 `__vitePreload(() => import("./perf-overlay-…js"), …)`；
+  `Select-String -Path out\renderer\assets\*.js -Pattern longtask` 能命中该 chunk。**「生产不打包」不成立。**
+- 根因（产物实证，折叠后源码即）：
+  ```js
+  const perfFlag = localStorage.getItem("kbPerf");
+  if (perfFlag === "1" || false) { void __vitePreload(() => import("./perf-overlay-5Nt5SV08.js"), …) }
+  ```
+  守卫写成 `perfFlag === "1" || (import.meta.env.DEV && perfFlag !== "0")`：生产下 `import.meta.env.DEV`
+  确实被折成 `false`（折叠生效了），但剩下的是 `perfFlag === "1" || false`——**仍取决于运行时的 localStorage**，
+  rollup 无法判定该死分支，于是动态 import 与它引出的 chunk 都被保留。
+- 现状的实际行为：**默认不执行**（用户没设 `kbPerf` 时 `null === "1"` 为假），但代码**已在包里**
+  （4.9 kB chunk + 入口里的 import 存根）。
+- 修复方向（**本期未改代码**：`.tsx` 不在 Task 5 的改动面内）：让 `import.meta.env.DEV` 成为**唯一**的编译期闸门
+  （如 `if (import.meta.env.DEV && perfFlag !== "0")`），生产下整句折叠为 `false`、分支与 chunk 一并消失；
+  代价是放弃「生产用 `kbPerf=1` 强开」——这与既定的「生产关」设计一致。
+- 相关注释（`main.tsx` 尾部、`perf-overlay.tsx` 文件头）当前断言「模块不进生产包」，与实测不符：
+  修代码时**一并订正注释**，不要只改注释。
+
+### 8.6 实测性能对比：未完成（需人工）
+
+本沙箱**可以**跑 Electron（已有本应用实例在运行，`~/.kamibuddy/auth.json` 亦已配 provider），
+但 FPS / longtask 的**前后对比必须人工完成**：agent 无法向正在运行的窗口注入输入，也无法读取它的
+DevTools Console，而「≥200 轮、含代码块的真实流式会话」需要真人驱动。
+故本期以**代码层证据**代替（§8.2），并把清单留清楚：
+
+1. `localStorage.kbPerf = "1"` 开启浮层，跑 **≥200 轮、含代码块与折叠体**的长会话。
+2. 记录：稳态 FPS（是否持续 ≥55）、10s 窗口内 longtask 条数与最长时长、控制台里 longtask 的
+   `startTime` 明细（能否对到合批 / flush 之外的可疑点）。
+3. 对照项：① 滚动是否仍贴底、刻度轨比例是否随流式增长正确更新；② 折叠 / 展开动画是否与改造前一致
+   （**重点确认不是「瞬间消失」**——这是 `allow-discrete` 那条修复的验收点）；
+   ③ 历史消息的 Markdown 解析是否只出现在流式那条上（Performance 面板）。
+4. 只有「改后」数据也可接受：至少确认**没有**新增 longtask 与掉帧（本期目标是「变便宜」，不是「换一种贵法」）。
+
+### 8.7 本期校验结论（Task 5 收官）
+
+```
+npm run typecheck    → 通过（tsc --noEmit 无输出）
+npm run check:deps   → 通过（扫描 257 个文件。依赖方向校验通过。）
+npm run check:tokens → 真违例 0 处 / 白名单命中 77 处 / 豁免 107 处（圆角 29 / 间距 73 / 时长 5）
+npm test             → 95 文件 / 1717 用例全绿（1711 基线 + Task 2 新增 6）
+npm run check        → 通过（上面三项的串联）
+npm run build        → 成功（main / preload / renderer 三目标均产出；遗留问题见 §8.5）
+```
+
+- 扫描的 tsx 由 48 增至 **49**（新增 `perf-overlay.tsx`）；豁免数由 105 增至 **107**（`间距 71 → 73`）——
+  均为本期代码改动带来的口径变化，**真违例仍为 0**（没有新增白名单条目）。
+- 上一轮并行执行时偶发的 `src/core/doc-extract.test.ts` 超时，本期**串行全量跑两次均通过**
+  （95 文件 / 1717 用例；该文件 23/23，单跑 469ms）。并行负载下的偶发超时归因于环境负载，非该文件本身。
+
+---
+
+## 9. 桌面端交互加固（spec #5，本期成果）
+
+> spec：`.trae/specs/harden-desktop-interactions/spec.md`，分支 `feat/ui-design-system`。
+> 本期处理诊断报告「如果只做 5 件事」的第 5 项——**三条桌面端硬伤**：
+> 模态的 `aria-modal` 是空声明 / 拖拽越界无防护 / 最小宽度横向溢出；外加一批键盘可达性的小缺口。
+> 行为要求已写进 DESIGN.md §7（无障碍第 3 条与新增第 10 条）。
+
+### 9.1 本期做了什么
+
+| 事项 | 结果 |
+|---|---|
+| 模态焦点管理 | 新建 `src/renderer/use-modal-focus.ts`（约 190 行），**10 个接入点 / 8 个组件**（spec 记为 9 处，实际因 `chat-view` 有 2 处而为 10；问卷卡自身注释也写「与别的 9 处不同」） |
+| 拖拽越界防护 | `App.tsx` document 级 `dragover`/`drop` 兜底 + `src/main/index.ts` 的 `will-navigate` 守卫（外链出口抽成 `openExternally`，与 `setWindowOpenHandler` 共用） |
+| 最小宽度不溢出 | `index.css` 的 `.app` 加 `overflow: hidden`；面板宽度上限由硬编码 800 改为 `maxPanelWidth()` 动态 clamp；`App.tsx` 补窗口 resize 回落 |
+| 三处键盘可达性 | `.pending-tip` 的 focus 处理移到可聚焦子元素；`ViewSwitcher` 补 Esc（capture 层，见 §9.5）+ 外部点击；产物条目「转正」补 `Shift+Enter` 键盘等效入口 |
+| 问卷默认落点 | `firstOptionRef` + `initialFocus`：首个落点是**首选项**（此前容器内文档序首个可聚焦元素是头部的「全部跳过」，正是要绕开的） |
+| `inert` 粒度 | 背景隔离排除 `.toast-stack`（见 §9.3） |
+
+### 9.2 三条硬伤的处理
+
+**① 模态焦点管理（`use-modal-focus.ts`）**
+
+三条职责，一个入口：
+
+- **移入**：`initialFocus()` 指定的元素优先，返回 `null` 或已脱离文档则退回容器内首个可聚焦元素。
+- **Tab 陷阱**：`document` 上的 keydown 在容器内首尾回绕。监听挂 `document` 而非容器——
+  焦点万一不在容器内（刚打开、或鼠标点到非可聚焦处），挂容器的监听根本收不到这次 keydown。
+  不插哨兵元素（会往卡片里塞可聚焦空节点、污染选择器）。
+- **归还**：节点挂上时记 `document.activeElement`（此刻还在触发按钮上），摘下时若
+  `instanceof HTMLElement && isConnected` 才 `focus()`；顺序**先撤 `inert`、再还焦点**
+  （要还给的按钮往往正是被标 `inert` 的那个）。
+
+选型理由（都是被真实场景逼出来的）：
+
+- **返回 callback ref 而不是 `useRef` 对象**：模态常常「先挂组件、后挂节点」——
+  `chat-view` 的图片预览浮层跟消息气泡同生命周期，要等用户点开图片才有节点。
+  `useRef` 只在组件挂载/卸载时可观察，这类节点会被整段漏掉；callback ref 恰好在节点挂上时跑。
+- **模块级 `openModals` 栈**：嵌套是真实存在的（`AddModelDialog` 渲染在 `.settings-card` 内部），
+  两个 hook 都听 `document` 时，外层容器的 `querySelectorAll` 会穿透进内层，
+  Tab 只由**栈顶**处理，否则外层会把内层的陷阱拆掉。
+- **可聚焦选取 5 道判定**（不写死选择器清单，清单一定会漏）：`tabIndex < 0`（一举覆盖显式 -1、
+  默认不可聚焦、禁用控件）/ `:disabled` 伪类 / `closest("[inert]")` / **`getClientRects().length === 0`**
+  （**不用 `offsetParent`**——它对 `position: fixed` 元素同样是 `null`，而固定定位恰是模态常态）/
+  计算样式 `visibility`。
+- **背景 `inert`**：给背板（`.modal-backdrop` / `.ex-modal-mask`）的**兄弟节点**标 `inert`
+  （背板自身与卡片在模态链上，标了等于把模态也冻住）；本来就是 `inert` 的兄弟跳过且不记录
+  （记了会在内层摘下时把外层背景隔离一并关掉）。
+
+**② 拖拽越界防护**
+
+- **关键判断是 `dataTransfer.types.includes("Files")`，不是只看 `defaultPrevented`**：
+  读 `composer.tsx:250-252` 与 `image-attachments.tsx:250-259` 后发现，输入卡的 `onDrop` 在
+  **含文件时** `preventDefault`，**不含文件时直接 return 且故意不 `preventDefault`**
+  （放行 textarea 原生插入拖入的文本），且两个 handler 都**没有 `stopPropagation()`**。
+  所以兜底必须**只兜文件拖放、放行文本拖放**——否则会吃掉 textarea 的原生文本投递。
+- **顺序依据**：React 合成事件委托在 `#root`，它是 `document` 的后代 → `document` 级监听
+  一定在输入卡处理**之后**；`dragover` 一律 `preventDefault`。
+- **main 侧 `will-navigate`**：`isAppUrl` 判据 = dev 放行 dev server 同源、生产**只放行 `file://`
+  且路径以 `/renderer/index.html` 结尾**（**不能只判 `file:`**，否则被拖入的任意文件同为 `file://`
+  会被误放行，守卫就白设）；非本应用 URL 一律 `preventDefault` 并走 `openExternally(url)`。
+  `will-navigate` 只对**主帧**触发，预览面板的 `http://127.0.0.1:*` iframe 不受影响。
+
+**③ 最小宽度不溢出**
+
+- `.app` 加 `overflow: hidden`（已核实 `.modal-backdrop` / `.toast-stack` 都是 `position: fixed`、
+  `.app` 无 transform/filter → 不会裁掉全局模态与 toast）。
+- 面板上限动态化（`artifact-panel.tsx` 约 770–812 行）：
+  `maxPanelWidth = max(340, min(800, innerWidth − 侧栏宽 − MAIN_MIN_WIDTH))`，
+  `MAIN_MIN_WIDTH = 320`（900 − 216 − 320 = 364，面板压到下限 340 后三者恰好铺满视口）。
+  **侧栏宽从 DOM 量而非在 TS 里抄 216**（侧栏收起时整个不渲染，量到 0 恰好正确；抄常量会双写漂移）。
+  下限 340 与「拖拽 / 键盘同一 setter」的既有设计不变。
+- **额外补了一个 resize 回落**（`App.tsx` 约 548–553）：否则「宽窗口把面板拖到上限、再缩小窗口」
+  这一刻没人调 setter，面板会一直超出视口 → spec 的「面板被压缩而非挤出主区」会落空。
+
+### 9.3 必要支撑改动（两处，都不是顺手改）
+
+| 位置 | 改动 | 为什么是**必要**的 |
+|---|---|---|
+| `chat-view.tsx` 的 `SaveToWorkspaceDialog` | 移除输入框的 `autoFocus`（由 hook 的默认落点承接） | `autoFocus` 会让 hook 在节点挂上时记下的「打开源」变成输入框自己 → 关闭时把焦点还给它自己，**焦点归还当场失效**。而「归还失效」恰是本期要修的现象，不删就自相矛盾 |
+| `use-modal-focus.ts` 的 `isolateBackground` | 兄弟循环里跳过 `.toast-stack` | `role="status"` 是实时播报区，`inert` 会把它移出无障碍树、**连播报一起掐掉**；而后台任务失败这类提示恰恰可能在模态开着时出现。toast 高悬在模态之上（`--z-toast`），不属于「模态背后的界面」 |
+
+### 9.4 诚实标注（四条，必须写）
+
+1. **拖拽那条现象本轮未实测**（需 GUI 拖拽）。准确说法是「补了两道任何 Electron 应用都该有的
+   标准防护」——两个前提（渲染层无全局 drop 拦截、main 无 `will-navigate`）是 grep 实证的，
+   **不声称「已修复某现象」**。
+2. **`use-modal-focus.ts` 没有自动化测试**：仓库无 DOM 测试基建——`vitest.config.ts` 是 node 环境、
+   未装 jsdom/happy-dom 也无 testing-library、`include` 只收 `src/**/*.test.ts`。
+   三条行为（移入 / 陷阱 / 归还）只能靠 GUI 人工验收。未为凑测试去加依赖或改配置（超范围）。
+3. **诊断报告的一处误判已修正**：`.pending-tip` 的 `onFocus`/`onBlur` **不是死代码**——
+   React 的 `onFocus` 走 `focusin`（**冒泡**），此前子元素「×」获焦时那个 `<span>` 的处理
+   **确实会被触发**、`paused` 确实置位。故改法相应调整为「把处理移到可聚焦的子元素（× 按钮）上」，
+   行为逐字不变；不加 `tabIndex={0}`（会造一个「聚焦后除暂停轮播无事可做」的空 tab stop，
+   且要给非 button 补焦点环＝新增视觉值），也不删处理（会丢掉键盘用户的暂停行为）。
+4. **`inert` 的粒度**：10 个接入点里只有 **8 个**能拿到背景 `inert`——问卷浮层（`.questionnaire-card`）
+   与图片预览浮层（`.image-preview-overlay`）**不在** `.modal-backdrop` 里，`isolateBackground`
+   找不到背板祖先、自然不生效。这两处仍完整生效「移入 / Tab 陷阱 / 归还」三条，
+   但**背景读屏隔离缺位**（已在代码注释就地标明）。
+
+### 9.5 `ViewSwitcher` 的 Esc 层级修复（Task 4 新发现的冲突）
+
+**现象**：产物面板的 `ViewSwitcher` Esc 监听挂 `window`（照 `ModelMenu` 的既有约定）且未
+`stopPropagation`，而 ArtifactPanel 的**全屏** Esc 监听挂 `document`。事件冒泡路径是
+`target → … → document → window`，所以 **`document` 上的冒泡监听先于 `window` 上的执行**——
+全屏时打开视图下拉再按 Esc，会「关下拉 + 退出全屏」一起发生，违反 DESIGN.md §7.4「Esc 只关最内层」。
+
+**修法**：把 `ViewSwitcher` 的 Esc 改为 **`document` + capture 阶段**监听，命中 `Escape` 时
+`event.stopPropagation()` 并关闭下拉。capture 在 `document` 上先于一切冒泡监听执行（含全屏那条），
+此刻吃掉这次 Esc，全屏退出就收不到它。**只改了这一处 Esc**，没有重构 Esc 体系。
+
+**回归确认**：「没下拉时全屏 Esc 仍生效」由 effect 的 `if (!open) return;` 保证——
+下拉未打开时该 capture 监听**根本不注册**，这次 Esc 照旧冒泡到 `document` 的冒泡监听、正常退出全屏。
+（无 GUI 无法实机按键，此条以事件模型与代码为据；GUI 复验见 §9.6 第 ④ 条。）
+
+### 9.6 人工验收清单（沙箱无 GUI，需人工确认）
+
+1. **权限弹窗 Tab 循环**：触发一次需要审批的工具调用 → 连续按 Tab，焦点应在弹窗内的
+   拒绝 / 允许 / 详情之间循环，**不出现**弹窗背后的侧栏或消息流元素。
+2. **关闭后焦点归还**：从某个按钮（如设置入口）打开设置模态 → 按 Esc 关闭 →
+   焦点应回到那个按钮本身（**不是**掉到页面顶部/`<body>`）。
+3. **窗口最小宽度**：把窗口宽度拖到最小（`minWidth` 900）→ 侧栏 + 主区 + 产物面板都在视口内，
+   面板被压缩、主区不被挤出屏幕，**无横向溢出/无法滚动的裁切**。
+4. **拖文件到消息流区域**（**本轮唯一无法自测的现象**）：把桌面文件拖到输入卡**之外**
+   （消息流、首页空白）再松开 → 页面**不导航**、不变成文件内容；仍把文件拖到输入卡上，
+   投递照旧（插入 `@路径`）。
+5. **产物面板视图切换下拉**：打开下拉 → 按 Esc，下拉关闭；
+   **全屏态**下打开下拉再按 Esc，应只关下拉、**不再一起退出全屏**；再按一次 Esc 才退出全屏。
+6. **问卷弹窗默认落点**：问卷弹窗打开后，**首个落点应是首选项**（不是头部「全部跳过」）。
+7. **（顺带）折叠动画**：收起/展开折叠体应仍是「从真实高度动画收起」而非「瞬间消失」
+   （第 3 期 `allow-discrete` 的验收点）。
+
+### 9.7 本期刻意未做（及理由）
+
+| 事项 | 理由 |
+|---|---|
+| 右键菜单 | 诊断确认全仓无 `onContextMenu`，但这是**产品需求缺失**而非缺陷；WorkBuddy 侧栏用的是「⋯」按钮 + 自绘弹层（我们已同构）。要加需先定需求 |
+| `connectors-view` 两个表单（mcp-form / mcp-editor）无 Esc 关闭 | 既有不一致（这两个弹层一直没有 Esc），补属**新增行为**、超出本期「补三处键盘可达性」的范围；留给后续统一（可与 §6 的「抽共享 popover 行为」一起做） |
+| `diagnostics-view` 表格行的键盘可达 | 归第 2 期状态补齐的同类问题（诊断页整体），避免本期范围膨胀 |
+| OS 沙箱 / 危险命令检查器 | 属权限模块（`docs/workbuddy分析/09-sandbox-and-permissions.md` 决策 A 的前置条件），另有 spec |
+
+另：`use-modal-focus.ts` 的已知局限（如实记录）——正向 `tabindex`（1、2…）不特殊排序
+（本项目 9 处模态都没用，属反模式）；零可聚焦元素的模态会让 Tab 被吞（焦点原地不动、不落到背景），
+现有接入点都不触发。`iframe`/widget 上的拖放不会冒泡到父 `document`，drop 兜底管不到它
+（其导航走 `will-frame-navigate`，未加，spec 也未要求）。
+
+### 9.8 本期校验结论（Task 5 收官）
+
+```
+npm run typecheck    → 通过（tsc --noEmit 无输出）
+npm run check:deps   → 通过（扫描 258 个文件。依赖方向校验通过。）
+npm run check:tokens → 真违例 0 处 / 白名单命中 77 处 / 豁免 107 处（圆角 29 / 间距 73 / 时长 5）
+npm test             → 95 文件 / 1717 用例全绿
+npm run check        → 通过（上面三项的串联）
+```
+
+- 扫描文件数由第 4 期的 257 增至 **258**（新增 `src/renderer/use-modal-focus.ts`）；
+  `check:tokens` 扫描的 tsx 仍为 49、真违例仍为 **0**、白名单仍为 77（**未新增白名单条目**）。
+- 用例数与第 4 期基线一致（95 / 1717）：本期新增的 `use-modal-focus.ts` 与 `artifact-panel.tsx`
+  改动**没有自动化测试覆盖**（DOM/焦点行为在本仓库无测试基建，见 §9.4 第 2 条）。
+
+---
+
+## 10. 视图状态覆盖补齐（spec #6，本期成果）
+
+> spec：`.trae/specs/complete-view-states/spec.md`，分支 `feat/ui-design-system`（该分支系列第 5 期，收尾）。
+> 第 1 期建了 `src/renderer/state-views.tsx`（`EmptyState` / `LoadingState` / `ErrorState` / `Spinner`）
+> 并顺带修了 5 处「加载与空混淆」，但**只覆盖了当时发现的**。本期逐页盘点 12 个主界面 × 7 态，
+> 补齐了 **4 处 P1 级残留**（用户会看到错误信息，或失败后没有任何恢复路径）与一批 P2。
+> 行为要求已写进 DESIGN.md §4（新增视图四条硬要求 + 豁免与刻意偏离登记）。
+>
+> **参照标杆**：改法一律照 `skills-view.tsx`（三态互斥 + 重试）与 `personalization-section.tsx`
+> （settings 分区的模板）。
+
+### 10.1 本期做了什么
+
+| 事项 | 结果 |
+|---|---|
+| **P1** 侧栏误报「暂无历史任务」 | `App.tsx` 的 `taskList` 初值 `[]` → `undefined`、新增 `taskListError`；侧栏任务区四态互斥（失败 / 断开 / 加载 / 空） |
+| **P1** 定时任务页失败零出口 | `automations-view.tsx` 三态互斥 + `onRetry`（原「错误条 + 正在读取…」永久同框） |
+| **P1** 专家页失败即死 | `App.tsx` 抽出 `reloadExperts`；`experts-view.tsx` 两处 `ErrorState` 接 `onRetry` |
+| **P1** 文件树扫描失败伪装成空目录 | `artifact-panel.tsx` 失败改错误态 + 重试（**不再降级成空树**） |
+| **P2** 预览失败文案分流 | 未选工作空间 / 服务未就绪分开说，后者带重试 |
+| **P2** settings 各处三态 | **10 处**分区改 `error ? ErrorState(onRetry) : data === undefined ? LoadingState : 内容` |
+| **P2** 四处「在途被当空」 | 首页页签、对话页模式标签、`+` 专家子菜单、侧栏空间区 |
+| 顺带（前序报告发现的新增同型残留） | 侧栏 **daemon 启动即 down 的断开态**（原永久「正在读取…」）、空间计数不再误报 `(0)`、`artifact-panel` 空树补 `EmptyState`、`general-section` 的 `WebSearchSection` 三态 |
+
+### 10.2 四处 P1 的处置
+
+**① 侧栏误报「暂无历史任务」**（`App.tsx` / `sidebar.tsx`）
+
+根因是三件事叠在一起：`taskList` 初值 `[]`（不是 `undefined`）+ `activate()` 里**先** `setLink({kind:"ready"})`
+**再** `listSessions()` + `.catch(() => { })` 静默吞。于是 ready 之后、列表返回之前这段窗口判
+`length === 0` → 渲染空态；失败则**永久**误报且无出口。（第 1 期修的是 `connecting` 窗口，
+ready 之后在途的窗口没覆盖——同一缺陷的残留。）
+
+处置：
+
+- 初值改 `undefined`（与同文件 `experts` 同口径），失败写入 `taskListError`，成功**清空**它
+  （否则重试成功后错误条赖着不走）。
+- **Task 1.3 的口径**：既然「在途」已由 `taskList === undefined` 表达，侧栏原判断
+  `link.kind === "connecting" ? undefined : groups.tasks` 里的 `link` 就是**多余的第二个真相源**——
+  已去掉，任务区只认数据本身；顺序（先 ready 再拉列表）保留，因为 ready 是「引擎已就绪」的解闸信号
+  （首页输入卡等它开门），首屏不该为一次列表往返延后。
+- 断开（`link.kind === "down"`）时列表若**已有值**仍照常展示：数据没了才算没数据，断开本身由底部
+  状态行如实说明，不拿转圈把用户还能看的历史清掉。
+
+**② 定时任务页失败后零出口**（`automations-view.tsx`）
+
+原结构 `{error !== undefined && <ErrorState/>}` 与 `{tasks === undefined ? <LoadingState/> : …}`
+**并存**：拉取失败时 `tasks` 永远停在 `undefined`，页面永久停在加载态、没有任何恢复出口
+（与第 1 期修掉的 `skills-view` 完全同型）。改为三态互斥 + `onRetry={() => void load()}`。
+**头部不加刷新按钮**：三态互斥后错误态里已有重试，头部再加一个是语义重复的第二个入口。
+
+**③ 专家页失败即死**（`App.tsx` / `experts-view.tsx` / `skills-view.tsx`）
+
+全仓 `listExperts` **只在 `App` 的 `activate()` 里调一次**，`experts-view` 两处 `ErrorState` 都没有
+`onRetry` → 失败后只能重启应用。处置：把拉取抽成 `reloadExperts()`（首拉与重试**同一条路径**，
+不各写一份而漂移），与 `expertsError` 一起下发给专家页接 `onRetry`。
+**多改了 `skills-view.tsx` 4 行**透传（专家市场入口渲染在 skills-view 内，同样两处错误态）。
+
+**④ 工作空间文件视图扫描失败被伪装成「空目录」**（`artifact-panel.tsx`）
+
+原写法 `.catch(() => setTree(createLazyTreeState([])))`：失败静默降级成空树，渲染出无任何条目的
+`.file-tree`（连 `EmptyState` 都没有），且无重试。处置：
+
+- 新增 `treeError` 状态 + `treeAttempt` 计数（cwd 没变时唯一的重拉路径，只作 effect 依赖触发重跑）。
+- **`treeError` 与 `tree` 并列，不塞进 `LazyTreeState`**：那个状态机里的 `loadingPaths` 表达的是
+  **单个文件夹**展开时的懒加载转圈，这里是**整个视图的数据源**没拉到，粒度不同；混进去会污染一个
+  被单测覆盖的纯状态机（`workspace-file-tree.test.ts`），且它没有字段能承载错误文案。
+- 错误分支**必须排在加载分支之前**：失败时 `tree` 也是 `undefined`，排后面会被「正在读取…」盖住。
+- 保留原来的 `disposed` 守卫（组件已卸载时不 setState）。
+- 扫描**成功但确实没有可索引文件**（空目录、或只有 `node_modules`/`.git` 这类被跳过的目录）→
+  `EmptyState`（Task 4 补，原来与「还没扫完」在视觉上无从区分）。
+
+### 10.3 P2：预览文案分流 / settings 10 处 / 四处瞬态
+
+**预览失败文案按原因分流**（`artifact-panel.tsx`）：`servable = baseUrl !== undefined && cwd !== undefined`
+是假的有两因，原先混成一句「请选择工作空间」——在工作空间**已选好**、只是预览服务挂了时给出错误指引。
+
+| 条件 | 呈现 |
+|---|---|
+| `cwd === undefined` | `EmptyState`「选择工作空间后可预览文件」 |
+| `cwd !== undefined && baseUrl === undefined` | `ErrorState`「预览服务未就绪，无法加载该文件」+ `onRetry` |
+
+另有三处文本 / 代码 / Markdown 预览失败（`useArtifactText`）补 `onRetry`：bump `attempt` 序号重跑
+effect（`path` 没变时唯一的重拉路径）。
+
+**settings 10 处三态互斥**（原清单 8 处，实测多 2 处）：
+
+| # | 分区 | 处 |
+|---|---|---|
+| 1-3 | `general-section.tsx` | 推理强度 / 默认存储路径 / 权限 |
+| 4 | `general-section.tsx` | `WebSearchSection`（**新增的第 9 处**，Task 4 发现） |
+| 5-6 | `memory-section.tsx` | 记忆开关 / 长期记忆 |
+| 7 | `personalization-section.tsx` | 回复风格 |
+| 8 | `prompt-section.tsx` | 提示词资源 |
+| 9 | `settings-view.tsx` | 模型页配置 |
+| 10 | `models-section.tsx` | 快照失败的 `ErrorState` 补 `onRetry`（**第 10 处**） |
+
+统一形如 `error ? <ErrorState onRetry={…}/> : data === undefined ? <LoadingState/> : 内容`
+（模板：`personalization-section.tsx`）。
+
+**四处「在途被当空」改为走加载态**：
+
+- `home-view.tsx` 模式页签：`scenes` 初值 `[]`（来自 `conversation.ts` 的 `availableScenes: []`）→
+  快照落地前整行是**空行**。改判「快照落地」后三态互斥。
+- `chat-view.tsx` 模式标签：`{current?.label ?? currentId}` 在 `availableModes` 未拉回时**回退显示裸 id
+  `craft`**（内部标识暴露给用户，且它不是「当前模式」的名字）→ 未到位时给行内 `Spinner`。
+- `plus-menu.tsx` 专家子菜单：调用侧原来传 `experts ?? []`，把「在途」与「库里确实为空」抹成同一态 →
+  原样透传 `undefined`，子菜单区分「正在读取专家…」与「还没有可用专家」。
+- `sidebar.tsx` 空间区：原「在途 / 失败 / 确实没有空间」三态都渲染**空**，现补「未就绪」的行内
+  `LoadingState`；失败 / 断开**不在空间区重复第二张错误卡**（216px 窄栏里叠两个重试按钮只是噪音）。
+
+### 10.4 必要支撑改动（都不是顺手改）
+
+| 位置 | 改动 | 为什么是**必要**的 |
+|---|---|---|
+| `App.tsx` | 抽出 `reloadSessions()` / `reloadExperts()` | 错误态里的「重试」必须**真的能重拉**；原逻辑只写在 `activate()` 里跑一次。抽成函数后首拉与重试走同一条路径，不会各写一份而漂移——否则 `onRetry` 只能是空壳 |
+| settings **4 个分区 / 区块**（共 5 个加载函数） | 抽出可重复调用的 `load` / `refresh`：`personalization-section`（`refresh`）、`prompt-section`（`load`）、`memory-section`（两处 `load`）、`general-section` 的 `WebSearchSection`（`refresh`） | 这几处原先**只在 `useEffect` 里跑一次**，没有可重复入口。Task 3.3 明确要求「不要写一个空壳 `onRetry`」。（`settings-view` 的 `load` 与 `general-section` 另三处 `refresh` 本来就有） |
+| settings 上述 5 个加载函数 | 成功路径补 `setError(undefined)` | 失败写、**成功必须清**——否则「失败 → 重试成功 → 错误条赖着不走」，等于重试只修了一半 |
+
+### 10.5 诚实标注（五条，必须写）
+
+1. **4.1 的断开态只治「误导」，不治「自动恢复」**。`App` 的 `activate()` 挂在 `onDaemonReady` 上，
+   daemon **启动即失败**时它压根没跑、`listSessions()` 永远不会返回 —— 旧行为是永久「正在读取…」
+   （与旧版永久「暂无历史任务」同类的误导）。本期把它换成「连接已断开，未能读取历史任务」+ 重试
+   （连接未恢复时重试会立即失败，但至少先给出**真原因**）。**真正恢复仍需重启应用**——
+   `activate()` 不会重跑，本期没有造重连/重放机制。
+2. **`home` 用 `cwd !== undefined` 当「快照已落地」是代理判据**，不是新契约：`scenes` / `cwd` 由
+   同一次 snapshot dispatch 一起写入（`SessionState` 注释），不会漂移 —— 故它比
+   `scenes.length === 0` 准确（后者把「还没到」与「确实没有」混为一谈）。**判据是既有契约的代理**。
+3. **空间区故意不写「确实没有空间」的空态文案**。空间组由**会话派生**，没有会话的目录不形成组 ——
+   空集合 **≠** 没有工作空间（用户可能已选过目录、只是还没在里面跑过任务），照写空态文案会给出
+   **错误结论**。故只补「在途」的行内加载位，不补空态。
+4. **settings 内容分支里的写入失败错误条故意不给 `onRetry`**：重拉会冲掉用户正在编辑的草稿；
+   重试语义只属于「初次加载失败」那一支。（已登记进 DESIGN.md §4「豁免与刻意偏离」。）
+5. **Task 2 的预览重试是面板侧兜底，且两份来源本身是技术债**。`App` 的 `refreshPreviewBaseUrl`
+   只在 `cwd` 变化（effect）与 `artifacts_presented` 时触发 —— 「工作空间已选好、服务那一刻没起来」
+   这一态 App 不会自动再试，所以面板必须自己给出口。重试结果连同取它的 `cwd` 一起记
+   （`{cwd, url}` 打标），切了工作空间旧结果即失效，**绝不复用别的目录的端口**。
+   但 `App` 的 `previewBaseUrl` 与面板的 `retriedBaseUrl` **是同一事实的两个真相源**——
+   合成一处才干净，属本期未做的技术债。
+
+### 10.6 人工验收清单（沙箱无 GUI，需人工确认）
+
+1. **启动瞬间**：侧栏任务区应显示**加载态**，不再闪一下「暂无历史任务」。
+2. **让 `listSessions` 失败**（断网 / 改 daemon 返回）：侧栏应显示**错误态 + 重试**，
+   重试成功后错误条**消失**（不赖着不走）。
+3. **daemon 未连上**（启动即失败）：侧栏应显示「连接已断开，未能读取历史任务」+ 重试，
+   **不是**永久的「正在读取…」；空间区标题不应显示 `空间 (0)`。
+4. **定时任务页首次失败**：应**只**显示错误态 + 重试（不再「错误条 + 正在读取…」同框）。
+5. **专家库失败**：专家页两处错误态都应能**就地重试**（不必重启应用）；
+   专家市场（技能页内）同样能重试。
+6. **预览两种原因**：① 未选工作空间 → 「选择工作空间后可预览文件」；
+   ② 工作空间已选、预览服务未就绪 → 「预览服务未就绪」+ 重试。**两者文案必须不同**。
+7. **工作空间扫描失败**：文件视图应显示**错误态 + 重试**，而不是一个没有任何条目的空目录；
+   扫描成功但目录确实没文件时才是空态。
+
+### 10.7 本期刻意未做（及理由）
+
+| 事项 | 理由 |
+|---|---|
+| MCP `needs-auth` 态（`connectors-view.tsx` + `shared/ipc.ts`） | 结构上确实把「需授权」与「连接失败」混成 `failed`（用户对 401 与「配置写错」得到同一句话，而处置动作完全不同）。但**要改 IPC 契约 + 产品需先定口径**，且是否命中取决于用户接入的 server 类型（stdio 本地 server 一般不触发）。**另立 spec** |
+| `office-pptx.tsx` 的绝对定位浮层 / `diagnostics-view.tsx` 的 `.stat-hint`·`.stat-err` 行内状态 | **登记豁免**（理由见 DESIGN.md §4）：前者是 echarts canvas 在 `display:none` 下量到 0×0 画空白，必须用浮层；后者是行内单行读数，块级 `LoadingState` 放不下，也不为两处给 `state-views` 加 inline 变体 |
+| `ModeSwitch` 弹层在 `availableModes` 未到位时的空列表 | 一次 IPC 往返的**瞬态**（快照落地前模式清单为空），未做一致化。头部标签那处已改（见 §10.3），弹层内的列表留作后续 |
+| 第 1 期遗留的两处静默 catch | `App.tsx` 的空间元数据（回退 basename 后列表仍可用，弹 toast 反而打扰）、`chat-view.tsx` 的个性化（增强项不该拖垮等待行）——源码注释明示为**设计意图**，不属缺陷 |
+| 模型菜单 / 权限菜单失败态 | DESIGN.md §4 表里仍标 ☐（本期未纳入范围） |
+| 旧空态类名清理 / 禁用态补齐 | 已在第 1 期完成，无事可做 |
+
+### 10.8 本期校验结论（Task 5 收官）
+
+```
+npm run typecheck    → 通过（tsc --noEmit 无输出）
+npm run check:deps   → 通过（扫描 258 个文件。依赖方向校验通过。）
+npm run check:tokens → 真违例 0 处 / 白名单命中 77 处 / 豁免 107 处（圆角 29 / 间距 73 / 时长 5）
+npm test             → 95 文件 / 1717 用例全绿
+npm run check        → 通过（上面三项的串联）
+```
+
+- 扫描文件数、`check:tokens` 的三项计数、用例数**与第 4 期基线完全一致**（258 / 0·77·107 / 95·1717）：
+  本期只改 renderer 组件的状态分支，**未新增文件、未新增白名单条目**。
+- 本期改动**没有新增自动化测试**：仓库无 DOM 测试基建（`vitest.config.ts` 是 node 环境、无 jsdom、
+  `include` 只收 `src/**/*.test.ts`，见 §9.4 第 2 条），状态分支的可见行为只能靠 §10.6 人工验收。
+  未为凑测试去加依赖或改配置（超范围）。
 
 ---
 

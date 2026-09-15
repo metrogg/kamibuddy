@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { SettingsSnapshot } from "@shared/settings.ts";
 import { IconClose } from "../icons.tsx";
 import { ErrorState, LoadingState } from "../state-views.tsx";
+import { useModalFocus } from "../use-modal-focus.ts";
 import { GeneralSection } from "./general-section.tsx";
 import { PersonalizationSection } from "./personalization-section.tsx";
 import { MemoryEvolutionSection } from "./memory-section.tsx";
@@ -77,6 +78,16 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 	);
 
 	/*
+	 * 焦点陷阱 / 归还 / 背景 inert 交给共享 hook（落点用默认值：卡片内首个可聚焦元素
+	 * 是右上「关闭设置」钮）。
+	 *
+	 * 本卡是**外层模态**：models-section 的「添加模型」弹层渲染在它内部，两层各自持有
+	 * 一份 hook —— hook 内部按挂载先后维护 openModals 栈，Tab 只由最上层处理，
+	 * 所以内层打开时焦点不会被外层按「设置卡全境」的可聚焦元素抢回去。
+	 */
+	const cardRef = useModalFocus();
+
+	/*
 	 * Esc 关闭。焦点在表单控件里时放行给控件自己的语义（清空/收起，如 Key 输入框）——
 	 * 否则正在填 Key 按 Esc 会把整个设置卡带走，输入内容全丢。
 	 */
@@ -92,6 +103,15 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 		return () => window.removeEventListener("keydown", onKey);
 	}, [onClose]);
 
+	/*
+	 * 模型页的配置块是快照驱动的：快照未就绪时由它自己渲染「错误态 / 加载态」二选一。
+	 * 此前容器层无条件透出的错误条会与它并存 —— 首拉失败后快照永远停在 undefined，
+	 * 「正在读取配置…」与错误条永久同框且没有重试出口。
+	 * 其余分组不依赖快照（各自拉自己的数据），快照失败不该把它们一并挡掉，
+	 * 所以错误条只在「非模型页」或「快照已就绪（此时是写操作失败）」时透出。
+	 */
+	const modelsAwaitingSnapshot = page === "models" && snapshot === undefined;
+
 	return (
 		// 背板点击关闭用 mousedown 而不是 click：在卡片里拖选文本、指针滑出
 		// 到背板上松开时 click 会误判为「点背板」，mousedown 的目标判定不会。
@@ -101,7 +121,7 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 				if (e.target === e.currentTarget) onClose();
 			}}
 		>
-			<div className="settings-card" role="dialog" aria-modal="true" aria-label="设置">
+			<div className="settings-card" role="dialog" aria-modal="true" aria-label="设置" ref={cardRef}>
 				<button type="button" className="bar-btn settings-card-close" aria-label="关闭设置" onClick={onClose}>
 					<IconClose size={16} />
 				</button>
@@ -121,14 +141,19 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 				</nav>
 
 				<div className="settings-panel">
-					{error !== undefined && <ErrorState message={error} />}
+					{!modelsAwaitingSnapshot && error !== undefined && <ErrorState message={error} />}
 
 					{page === "general" && <GeneralSection busy={busy} />}
 					{page === "personalization" && <PersonalizationSection busy={busy} />}
 					{page === "memory" && <MemoryEvolutionSection busy={busy} />}
+					{/* 三态互斥：快照未就绪时「失败」只渲染错误态 + 重拉，不叠加加载态。 */}
 					{page === "models" &&
 						(snapshot === undefined ? (
-							<LoadingState text="正在读取配置…" />
+							error !== undefined ? (
+								<ErrorState message={error} onRetry={() => void load()} />
+							) : (
+								<LoadingState text="正在读取配置…" />
+							)
 						) : (
 							<ModelsSection snapshot={snapshot} busy={busy} run={run} />
 						))}

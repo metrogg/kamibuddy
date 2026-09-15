@@ -26,6 +26,7 @@ import {
 	IconUser,
 } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
+import { useModalFocus } from "./use-modal-focus.ts";
 
 interface ExpertsViewProps {
 	/**
@@ -35,6 +36,11 @@ interface ExpertsViewProps {
 	readonly experts: readonly ExpertListItem[] | undefined;
 	/** 专家库拉取失败的原因（undefined = 没失败）。失败不等于「搜不到」。 */
 	readonly error: string | undefined;
+	/**
+	 * 错误态的「重试」：App 侧可重复调用的 listExperts 拉取函数。
+	 * 没有它时失败即死路（只能重启应用）—— 两处错误态都必须带上。
+	 */
+	readonly onRetry: () => void;
 	/**
 	 * 启用专家：选中该专家并进入新任务对话页；prefill 有值时把文本填入
 	 * 输入框待发送（详情弹窗里点 quickPrompt 的路径）。
@@ -53,7 +59,7 @@ function matchKeyword(expert: ExpertListItem, keyword: string): boolean {
 		.some((field) => field.toLowerCase().includes(keyword));
 }
 
-export function ExpertsView({ experts, error, onUseExpert, onCreateExpert }: ExpertsViewProps): React.JSX.Element {
+export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpert }: ExpertsViewProps): React.JSX.Element {
 	const [searchInput, setSearchInput] = useState("");
 	const [keyword, setKeyword] = useState("");
 	const [selectedTag, setSelectedTag] = useState<string | undefined>(undefined);
@@ -110,8 +116,8 @@ export function ExpertsView({ experts, error, onUseExpert, onCreateExpert }: Exp
 	/*
 	 * 三态的顺序不能反（两处渲染分支都用它）：库为空或拉取失败原来都会落到
 	 * 「没有找到与「」匹配的专家」—— 把「还没拿到 / 拿不到」说成「搜索无结果」，
-	 * 用户会去改关键词。未就绪 → 加载态；失败 → 就地错误卡；有数据但过滤为空
-	 * → 才是「无匹配」（DESIGN.md §4）。
+	 * 用户会去改关键词。未就绪 → 加载态；失败 → 就地错误卡（带重试出口，
+	 * 不让专家库失败变成必须重启）；有数据但过滤为空 → 才是「无匹配」（DESIGN.md §4）。
 	 */
 
 	if (myExperts) {
@@ -124,7 +130,7 @@ export function ExpertsView({ experts, error, onUseExpert, onCreateExpert }: Exp
 					</button>
 				</div>
 				{error !== undefined ? (
-					<ErrorState message={error} />
+					<ErrorState message={error} onRetry={onRetry} />
 				) : experts === undefined ? (
 					<LoadingState />
 				) : userExperts.length === 0 ? (
@@ -230,7 +236,7 @@ export function ExpertsView({ experts, error, onUseExpert, onCreateExpert }: Exp
 						</div>
 					)}
 					{error !== undefined ? (
-						<ErrorState message={error} />
+						<ErrorState message={error} onRetry={onRetry} />
 					) : experts === undefined ? (
 						<LoadingState />
 					) : visibleExperts.length === 0 ? (
@@ -317,6 +323,11 @@ function ExpertDetailModal({
 	readonly onClose: () => void;
 	readonly onUse: (expertId: string, prefill?: string) => void;
 }): React.JSX.Element {
+	// 焦点陷阱 / 归还 / 背景 inert 交给共享 hook（背板 .ex-modal-mask 也被它识别）。
+	// 落点用默认值：头部「关闭」钮是卡片内首个可聚焦元素。
+	// 既有的遮罩点击关闭与 Esc 关闭都保持原样，hook 不碰 Esc、也不接管背板点击。
+	const cardRef = useModalFocus();
+
 	// Esc 关闭：遮罩点击对键盘/读屏用户不可达，弹窗必须有键盘关闭路径。
 	useEffect(() => {
 		const onKey = (event: KeyboardEvent): void => {
@@ -330,7 +341,13 @@ function ExpertDetailModal({
 		// 遮罩点击即关闭（WorkBuddy 同款：轻量弹窗不强制点按钮）。
 		<div className="ex-modal-mask" onClick={onClose}>
 			{/* 卡片本体拦冒泡：点内容区不关闭。 */}
-			<div className="ex-modal" role="dialog" aria-label={`专家详情：${expert.displayName}`} onClick={(e) => e.stopPropagation()}>
+			<div
+				className="ex-modal"
+				role="dialog"
+				aria-label={`专家详情：${expert.displayName}`}
+				ref={cardRef}
+				onClick={(e) => e.stopPropagation()}
+			>
 				<div className="ex-modal-head">
 					<ExpertAvatar displayName={expert.displayName} className="ex-detail-avatar" />
 					<div className="ex-modal-title">

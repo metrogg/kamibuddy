@@ -34,6 +34,8 @@ interface SkillsViewProps {
 	readonly experts: readonly ExpertListItem[] | undefined;
 	/** 专家库拉取失败的原因（undefined = 没失败）。失败不能与「库为空」混为一谈。 */
 	readonly expertsError: string | undefined;
+	/** 专家库失败态的重试（App 侧可重复调用的 listExperts），原样透传给专家页。 */
+	readonly onRetryExperts: () => void;
 	/** 启用专家：选中 + 进新任务对话页（App 层组合 newTask/setExpert/路由/预填）。 */
 	readonly onUseExpert: (expertId: string, prefill?: string) => void;
 	/** 创建专家：跳回主页并把引导语填入输入框（App 层组合 prefill + 路由）。 */
@@ -49,7 +51,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
+export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, onRetryExperts, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
 	const [tab, setTab] = useState<TabId>("experts");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
@@ -150,6 +152,7 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 					<ExpertsView
 						experts={experts}
 						error={expertsError}
+						onRetry={onRetryExperts}
 						onUseExpert={onUseExpert}
 						onCreateExpert={onCreateExpert}
 					/>

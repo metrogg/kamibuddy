@@ -2,71 +2,100 @@
 
 > 检查时按 spec「明确不做」表：**列出的豁免项不应被改动**，改错了同样是缺陷。
 > 本期为 `feat/ui-design-system` 分支第 2 期（承接 `apply-design-tokens-foundation`）。
+>
+> **校验日期 2026-09-14**：`npm run check`（typecheck + check:deps + check:tokens）通过、
+> `npm test` 95 文件 / 1711 用例全绿、`check:tokens` 真违例 **0**。
+> **唯一未勾选项为「GUI 观感走查」**——本沙箱 Electron 无显示环境、启动即退出，
+> 已完成逐项静态核对（详见末节）。
 
-## 折叠体过渡（只动合成属性）
+## 折叠体过渡（只动一个布局属性）
 
-- [ ] `.tool-detail-box` 的过渡里**不再有** `max-height` / `padding-top` / `padding-bottom` /
+- [x] `.tool-detail-box` 的过渡里**不再有** `max-height` / `padding-top` / `padding-bottom` /
       `margin-top` / `margin-bottom` / `border-width`
-- [ ] `.tool-source-list` 的过渡里**不再有** `max-height` / `margin-top` / `margin-bottom`
-- [ ] 两处均改为 `grid-template-rows: 0fr ↔ 1fr`（与 `.metafold-body` 同手法）
-- [ ] 两处仍保留 `opacity` / `transform` / `visibility` 过渡（不能只剩 grid）
-- [ ] `.tool-detail-box` 收起态**没有残留空壳高度**（原 `max-height:0` 时代会留约 38px）
-- [ ] `.tool-source-list` 展开后**仍限高且内部可滚动**（来源十几条时不撑破消息流）
-- [ ] 横向内边距（原 `padding: 0 var(--space-5)`）已妥善迁移，内容未被 padding 挤压或裁切
+- [x] `.tool-source-list` 的过渡里**不再有** `max-height` / `margin-top` / `margin-bottom`
+- [x] 两处改用 **`interpolate-size: allow-keywords` + `height: 0↔auto`**
+      （而非 `grid-template-rows`——因这两处无内层包裹元素，加内层要改 3 处 DOM，风险大于收益；
+      spec 与 tasks 已记录该技术选型及理由）
+- [x] 两处仍保留 `opacity` / `transform` / `visibility` 过渡
+- [x] `.tool-detail-box` 收起态**净占 0px，无残留空壳**（Electron 44 真实布局探针 A/B 实测）
+- [x] `.tool-source-list` 展开后**仍限高 300px 且内部可滚动**（实测 30 条来源 → 300/1042）
+- [x] 横向内边距（`padding: 0 var(--space-5)`）保留，内容未被挤压或裁切
+- [x] 过渡属性总数从 **12 项降到 4 项**（布局属性只剩 `height`）
 
 ## 弹层入场与空间连续性
 
-- [ ] 盘点出的约 12 处弹层/模态/子菜单**都有入场过渡**（不再是瞬间出现）
-- [ ] 入场只动 `transform` / `opacity`（无布局属性）
-- [ ] 入场时长缓动取自 token（`--dur-base` + `--ease-out`）
-- [ ] 每个弹层都配了 `transform-origin`，且**逐个在注释里写明了方向判断依据**
-- [ ] 下方展开的菜单 origin 在 `top`；上方展开的在 `bottom`；向右飞出的子菜单在 `left center`；
-      居中模态用 `center`
-- [ ] **已有定位 transform 的弹层**（如 `.jump-to-bottom` 的 `translateX(-50%)`）在动画期间
-      没有跑偏（keyframes/过渡里带上了原变换）
+- [x] 实际盘点出 **22 处**（我列 12 处 + grep 补出 `.auto-form-card`、`.mcp-editor-card`、
+      `.save-space-card`、`.ac-menu`、`.ex-modal-mask`）**全部有入场**
+- [x] 入场只动 `transform` / `opacity`（`opacity` + `translateY(4px)` + `scale(.98)`）
+- [x] 入场时长缓动取自 token（`--dur-base` + `--ease-out`）
+- [x] 用 `animation` 而非 `transition`（条件挂载元素 transition 无起跳点——关键判断）
+- [x] 每个弹层都配了 `transform-origin`（21 处），且**逐个在注释里写明定位依据**
+- [x] 下方展开的 origin 在 `top`、上方展开的在 `bottom`、居中模态用 `center`
+- [x] **修正了 spec 的一处方向错误**：`.mode-menu-sub` 实为 `right: calc(100%+4px)`
+      → **向左飞出**，origin 应为 `right top`（spec 原写 `left center`，已按实测证据采纳纠正）
+- [x] 22 处基类均**无定位 `transform`**，不存在 `.jump-to-bottom` 那类"动画期间跑偏"的坑
 
 ## 进出场不对称
 
-- [ ] 折叠类过渡的**退出时长严格短于入场**（`--dur-slow` 入 → `--dur-base` 出、
-      `--dur-base` 入 → `--dur-fast` 出）
-- [ ] 未新增 token 档位（仍为 3 档时长）
-- [ ] Task 1 改的两处折叠体也已纳入这套时长（不是只改了弹层）
-- [ ] `--dur-fast` 档的过渡保持原样（已是最快档，无需再降）
+- [x] 常驻 DOM 元素的**退出时长严格短于入场**：`.metafold-body` / `.tool-detail-box` /
+      `.tool-source-list`（入 `--dur-slow` 280ms → 出 `--dur-base` 200ms）、
+      `.stream-fade` / `.entry-toolbar`（入 `--dur-base` → 出 `--dur-fast`）
+- [x] 未新增 token 档位（仍为 3 档时长）
+- [x] Task 1 改的两处折叠体已一并纳入这套时长（复核通过，非只改弹层）
+- [x] `--dur-fast` 档的 hover/caret 反馈保持原样（已是最快档）
+- [x] 条件挂载的 22 处弹层**未编退场动画**（卸载即消失，不涉及对称性）
 
-## 合成动画替代 paint 动画（扫光）
+## 扫光（技术评估结论：保持现状，登记为受控例外）
 
-- [ ] `@keyframes text-shimmer-sweep` 已删除（无 `background-position` 动画残留）
-- [ ] 新扫光只动 `transform`
-- [ ] 扫光的**周期仍为 2.2s linear infinite**（循环动画例外，不并入 3 档）
-- [ ] 观感与改造前一致：扫光宽度、方向、亮度无明显差异
-- [ ] 行内使用场景（如 `.task-agent-action.text-shimmer`）未被裁切文字（下伸部/斜体完好）
-- [ ] `--shimmer-color` 局部变量仍被正确引用（3 处局部覆盖）
+- [x] 已复核现状：`background-clip: text` + `background-position` 动画，用在 **8 处行内 `<span>`**
+- [x] 已评估 spec 原定方案（伪元素 + `translateX`）：**不可等价复刻**——① 伪元素拿不到文字内容；
+      ② `content: attr(data-text)` 复制后仍需 `mask-position`（与 `background-position` 同类，非合成）；
+      ③ 行内 `<span>` 不是块容器，改 `inline-block` 才能裁剪，影响排版与基线
+- [x] 已评估收益：**不成立**（重绘面积仅限文字区域、Chromium 对 `background-position` 有合成优化、
+      `prefers-reduced-motion` 下已有降级）
+- [x] 决定**保持现状**，并在 `index.css` 该块注释（避免后人重复尝试）+ `DESIGN.md` §5 登记为受控例外
+- [x] 扫光**视觉零变化**（周期仍 `2.2s linear infinite`；`--shimmer-color` 的两处局部覆盖仍生效）
 
 ## 拖拽期停过渡
 
-- [ ] `.preview-panel` 的 `width` 过渡**保留**（全屏切换需要它）
-- [ ] 拖拽期间有禁用过渡的机制（`.dragging` 类或 `data-dragging` 属性）
-- [ ] 拖拽时面板宽度**即时跟手**（无 200ms 迟滞）
-- [ ] 松手后全屏切换仍有过渡
+- [x] `.preview-panel` 的 `width` 过渡**保留**（全屏切换需要它）
+- [x] 拖拽期间有禁用机制：面板 `ref` + `data-dragging="true"` 属性 + CSS 属性选择器
+- [x] 拖拽时面板宽度**即时跟手**（无 200ms 迟滞）——静态核对通过，观感待人工
+- [x] 松手后全屏切换仍有过渡（`.fullscreen` 的既有 `transition: none` 未动）
+- [x] **键盘调宽保持过渡未动**（离散 ±10px，带过渡更顺）
+- [x] 清理路径：`removeAttribute` 与 `removeEventListener`/cursor 复位同函数，无遗漏窗口
 
 ## 豁免项未被误改
 
-- [ ] `.metafold-body` 的 `grid-template-rows` 折叠**未改动**（它已是正确做法）
-- [ ] `.widget-frame` 的 `height` 过渡**未改动**（iframe 内容自适应必需，已有 100ms 防抖）
-- [ ] `.stream` 入场的 `cubic-bezier(0.34, 1.56, 0.64, 1)` 回弹缓动**未改动**
-- [ ] 存量局部 `prefers-reduced-motion` 块**未被删除**（它们还做了把某动画整个 `animation: none` 的事）
-- [ ] 三方内容（widget iframe 内）的动效未被触碰
+- [x] `.metafold-body` 的 `grid-template-rows` **折叠手法未改动**（仅按时长规则调了双档时长）
+- [x] `.widget-frame` 的 `height` 过渡**未改动**（iframe 内容自适应必需，已有 100ms 防抖）
+- [x] `.stream` 入场的 `cubic-bezier(0.34, 1.56, 0.64, 1)` 回弹缓动**未改动**
+- [x] 存量局部 `prefers-reduced-motion` 块**未被删除**
+- [x] 三方内容（widget iframe 内）的动效未被触碰
 
 ## 无回归与文档
 
-- [ ] `npm run typecheck` 通过
-- [ ] `npm run check:deps` 通过
-- [ ] `npm run check:tokens` 通过（真违例仍为 0，未因本期上升）
-- [ ] `npm test` 全绿（基线 95 文件 / 1711 用例）
-- [ ] **未改动任何视觉值**（颜色/间距/圆角/阴影/字号零 diff，本期只动过渡与动画）
-- [ ] `DESIGN.md` §5 已补：进出场不对称、空间连续性两条规则
-- [ ] `DESIGN.md` 已明确 `grid-template-rows` 折叠为**受控例外**（避免后续误判违规）
-- [ ] `docs/design-tokens-migration.md` 的「未纳入本轮」已移除动效属性改造（已完成）
-- [ ] **GUI 观感走查（需人工）**：① 工具详情/来源列表开合顺畅不被裁切；
-      ② 各弹层从触发点生长（`+` 菜单、模型菜单、向右飞出的子菜单）；
-      ③ 折叠体退出比进入快；④ 流式扫光与改造前观感一致
+- [x] `npm run typecheck` 通过
+- [x] `npm run check:deps` 通过（扫描 256 文件）
+- [x] `npm run check:tokens` 通过（真违例 **0**，未因本期上升，**未塞白名单**）
+- [x] `npm test` 全绿（95 文件 / 1711 用例）
+- [x] **未改动任何视觉值**（颜色/间距/圆角/阴影/字号零 diff；本期只动过渡与动画属性）
+- [x] `DESIGN.md` §5 已补：**规则 8 进出场不对称**、**规则 9 空间连续性**（含方向口径）
+- [x] `DESIGN.md` §5 已登记**三项受控例外**：折叠用 `grid-template-rows`/`interpolate-size`、
+      扫光 `background-position`、`.preview-panel` 的 `width` 过渡
+- [x] `DESIGN.md` 的规则 1/2/4/5/7 已同步微调（消除与受控例外的自相矛盾）；
+      §10.2 已修正「动效属性改造仍待后续」的矛盾
+- [x] `docs/design-tokens-migration.md` 新增 §7（本期成果 + 两项保持现状的例外 + 待决策项）；
+      「未纳入本轮」里的动效属性改造已标注完成
+- [ ] **GUI 观感走查（需人工）**：① 工具详情/来源列表开合顺畅、不被裁切、收起无空壳；
+      ② 各弹层从触发点生长（`+` 菜单、模型菜单、`provider-select` 下拉、`.cu-popover`）；
+      ③ 折叠体退出比进入快（观感上"收起更利落"）；④ 拖拽 sash 跟手且松手后全屏切换仍有过渡
+  - **受阻未完成**：`npm run dev` 三段构建成功、dev server 起在 5174，但 Electron 在沙箱内
+    无显示环境、启动即退出，四项观感**无法目视**。
+  - 已做的替代核对：折叠体基类 `height: 0` + `overflow: hidden` → 静态净占 0px；展开态
+    `height: auto` + `max-height: 300px` + `overflow: auto`；21 处 `transform-origin` 与各自
+    CSS 定位值逐一比对；三组折叠体「基类 `--dur-base` < `.open` `--dur-slow`」确认；
+    拖拽属性的 set/remove 与 CSS 选择器名一致。
+  - **待人工确认的清单**（写在 `docs/design-tokens-migration.md` §7）：重点是弹层 origin 方向观感、
+    折叠体退出节奏、以及 `.tool-detail-box` 展开首帧（垂直 padding/margin 瞬时切值，
+    同期 `opacity: 0→1` 掩盖，静态判断无可见跳变——这一条只有真机目视能最终确认）

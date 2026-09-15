@@ -145,7 +145,18 @@ function InlineCode({
 	);
 }
 
-export function Markdown({
+/**
+ * React.memo 的意义在**已完成的消息**：流式中的 text 每个 delta 都在变，必然重解析
+ * （无法避免）；但长会话里成百条历史消息的 text 早已定型，父级（对话页）每个 delta
+ * 重渲染时若没有这层 memo，会把所有历史消息的 remark 解析全部重跑一遍。
+ *
+ * 收益依赖 props 引用稳定：text 是字符串天然稳定，cwd 是字符串，函数型 prop
+ * （onPathClick / resolveImageSrc）必须由调用方 useCallback 固定（chat-view 路径已
+ * 在 App 层固定）—— 否则每渲染一个新箭头就会击穿 memo、退化成无 memo。
+ * 不写自定义比较函数：默认浅比较已经足够，自定义放过函数 prop 会引入
+ * 「旧闭包 + 新 cwd」的隐式耦合，不值得。
+ */
+export const Markdown = React.memo(function Markdown({
 	text,
 	resolveImageSrc,
 	cwd,
@@ -212,4 +223,4 @@ export function Markdown({
 			</ReactMarkdown>
 		</div>
 	);
-}
+});

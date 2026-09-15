@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { McpConfigSnapshot, McpServerInfo } from "@shared/ipc.ts";
 import { IconEdit, IconPlus, IconRefresh } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
+import { useModalFocus } from "./use-modal-focus.ts";
 
 interface ConnectorsViewProps {
 	readonly onToast: (text: string) => void;
@@ -387,11 +388,15 @@ function AddServerForm({
 }): React.JSX.Element {
 	const patch = (part: Partial<AddFormDraft>): void => onChange({ ...draft, ...part });
 
+	// 焦点陷阱 / 归还 / 背景 inert 交给共享 hook；落点用默认值（首个可聚焦元素 = 「名称」输入框）。
+	// 本表单没有 Esc 处理（既有行为），hook 不碰 Esc，故不新增退出路径。
+	const cardRef = useModalFocus();
+
 	return (
 		// 遮罩不响应点击关闭：表单内容多，误触一次全丢，只能从按钮退出
 		// （与权限弹窗「不许悬空」的考虑一致）。
 		<div className="modal-backdrop">
-			<div className="mcp-form-card" role="dialog" aria-modal="true">
+			<div className="mcp-form-card" role="dialog" aria-modal="true" ref={cardRef}>
 				<h2 className="save-space-title">添加 MCP 服务器</h2>
 
 				<div className="field">
@@ -541,10 +546,14 @@ function JsonEditor({
 	readonly onSave: () => void;
 	readonly onCancel: () => void;
 }): React.JSX.Element {
+	// 焦点陷阱 / 归还 / 背景 inert 交给共享 hook；落点用默认值（首个可聚焦元素 = JSON 文本域）。
+	// 同添加表单：既无 Esc 处理，这里也不新增。
+	const cardRef = useModalFocus();
+
 	return (
 		// 遮罩不响应点击关闭（同添加表单：编辑中的文本误触即丢）。
 		<div className="modal-backdrop">
-			<div className="mcp-editor-card" role="dialog" aria-modal="true">
+			<div className="mcp-editor-card" role="dialog" aria-modal="true" ref={cardRef}>
 				<h2 className="save-space-title">编辑 MCP 配置</h2>
 				<textarea
 					className="mcp-json-editor"

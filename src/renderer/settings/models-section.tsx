@@ -27,6 +27,7 @@ import type {
 import { validateCustomModel, validateCustomProvider } from "@shared/settings.ts";
 import { IconCheck, IconChevronDown, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "../icons.tsx";
 import { EmptyState, ErrorState } from "../state-views.tsx";
+import { useModalFocus } from "../use-modal-focus.ts";
 
 /** 凭据来源 → 用户能看懂的说明。 */
 function sourceLabel(provider: ProviderInfo): string {
@@ -686,6 +687,16 @@ function AddModelDialog({ providers, onClose, onSaved }: AddModelDialogProps): R
 	const [saveError, setSaveError] = useState<string | undefined>(undefined);
 
 	/*
+	 * 焦点陷阱 / 归还 / 背景 inert 交给共享 hook（落点用默认值：卡片内首个可聚焦元素
+	 * 是右上「关闭」钮）。
+	 *
+	 * 本弹层是**内层模态**：它渲染在 .settings-card 内部，而设置卡自己也挂了一份 hook。
+	 * 两份 hook 的 keydown 都挂在 document 上，但 Tab 只由 openModals 栈顶（最后挂上的
+	 * 本弹层）处理，故外层不会按「设置卡全境」的可聚焦元素把焦点从本弹层挪走。
+	 */
+	const cardRef = useModalFocus();
+
+	/*
 	 * Esc 关闭（capture 阶段拦下并 stopPropagation）：设置卡自己的 Esc 监听在
 	 * window 的 bubble 阶段，不拦的话关弹层会连带把整个设置卡带走。
 	 * 焦点在表单控件里时放行给控件（与 settings-view 的同款守卫对齐：
@@ -761,7 +772,7 @@ function AddModelDialog({ providers, onClose, onSaved }: AddModelDialogProps): R
 				if (e.target === e.currentTarget) onClose();
 			}}
 		>
-			<div className="add-model-card" role="dialog" aria-modal="true" aria-labelledby="add-model-title">
+			<div className="add-model-card" role="dialog" aria-modal="true" aria-labelledby="add-model-title" ref={cardRef}>
 				<div className="add-model-head">
 					<h2 id="add-model-title">添加模型</h2>
 					<button type="button" className="bar-btn" aria-label="关闭" onClick={onClose}>
@@ -915,7 +926,14 @@ export function ModelsSection({ snapshot, busy, run }: ModelsSectionProps): Reac
 
 	return (
 		<>
-			{snapshot.error !== undefined && <ErrorState message={snapshot.error} />}
+			{/*
+				snapshot.error 是「快照里的目录/凭据读取失败」，恢复方式是重拉快照；
+				空 action + run 就是重拉（同下方「添加模型」弹层保存后的用法）——
+				只读操作也走 run 是为了复用它的置忙与错误透出，不另开一条通路。
+			*/}
+			{snapshot.error !== undefined && (
+				<ErrorState message={snapshot.error} onRetry={() => void run(async () => {})} />
+			)}
 
 			<ModelPicker
 				models={snapshot.models}

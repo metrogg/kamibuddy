@@ -175,7 +175,26 @@ function installCsp(isDev: boolean): void {
 
 /* ── 窗口 ─────────────────────────────────────────────────────────── */
 
+/**
+ * 该 URL 是否属于本应用自身（放行应用内导航，其余交给 will-navigate 拦下）。
+ *
+ * dev = renderer dev server 同源（Vite 的整页重载走这里）；
+ * 打包 = 加载 renderer 的那份本地 index.html —— 只认文件协议**且**路径是这个文件，
+ * 否则被拖入的任意文件（同为 file:// 但路径不同）也会被误判为「本应用」而放行，
+ * 主进程这道守卫就白设了。解析失败的畸形 URL 按「非本应用」处理（拒绝）。
+ */
+function isAppUrl(url: string, devServer: string | undefined): boolean {
+	try {
+		const target = new URL(url);
+		if (devServer !== undefined) return target.origin === new URL(devServer).origin;
+		return target.protocol === "file:" && target.pathname.endsWith("/renderer/index.html");
+	} catch {
+		return false;
+	}
+}
+
 function createWindow(): void {
+	const devServer = process.env["ELECTRON_RENDERER_URL"];
 	window = new BrowserWindow({
 		width: 1280,
 		height: 860,
@@ -195,13 +214,33 @@ function createWindow(): void {
 
 	window.once("ready-to-show", () => window?.show());
 
-	// 外链走系统浏览器，不在应用内开窗（防钓鱼页伪装成应用界面）。
-	window.webContents.setWindowOpenHandler(({ url }) => {
+	/*
+	 * 外链一律走系统浏览器，不在应用内开窗/导航（防钓鱼页伪装成应用界面）。
+	 * setWindowOpenHandler（window.open / target=_blank）与下面的 will-navigate
+	 * 共用这一个出口：两条导航路径的信任口径必须一致，各写一份迟早漂移。
+	 */
+	const openExternally = (url: string): void => {
 		void shell.openExternal(url);
+	};
+
+	window.webContents.setWindowOpenHandler(({ url }) => {
+		openExternally(url);
 		return { action: "deny" };
 	});
 
-	const devServer = process.env["ELECTRON_RENDERER_URL"];
+	/*
+	 * 导航守卫（spec: harden-desktop-interactions）：页面里点到外链、或把文件
+	 * 拖到窗口上（渲染层没拦到时）都会触发整帧导航，把当前界面替换掉。除应用
+	 * 自身来源外一律拦下，改走系统浏览器（与上面同一出口）。
+	 * will-navigate 只对**主帧**触发（iframe 导航走 will-frame-navigate），
+	 * 所以预览面板的 iframe 不受影响。
+	 */
+	window.webContents.on("will-navigate", (details) => {
+		if (isAppUrl(details.url, devServer)) return;
+		details.preventDefault();
+		openExternally(details.url);
+	});
+
 	if (devServer !== undefined) void window.loadURL(devServer);
 	else void window.loadFile(join(__dirname, "../renderer/index.html"));
 }

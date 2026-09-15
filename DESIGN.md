@@ -177,38 +177,93 @@
 `Spinner`——**已建成**（`src/renderer/state-views.tsx`），一律复用，禁止新造类名。
 具体收敛记录见 [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §4。
 
-**已知缺口清单**（修复 backlog，打勾表示已补；引用诊断报告条目）：
+**覆盖实况**（打勾＝已具备；「说明」列写本期处置，或仍缺什么）。
 
-| 组件 | 空 | 加载 | 部分 | 失败 | 禁用 | 权限不足 | 缺口 |
+> 本表第 1 期建成时是**缺口清单**。`complete-view-states`（第 5 期收尾）逐页盘点 12 个主界面后
+> 补齐了 P1/P2 残留，本节据此更新为**实况**：**已补齐**的行注明处置，其余行保留原缺口描述
+> （本期未纳入范围，不是遗漏）。逐项处置与证据见
+> [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §10。
+
+| 组件 | 空 | 加载 | 部分 | 失败 | 禁用 | 权限不足 | 说明（本期处置 / 仍缺） |
 |---|---|---|---|---|---|---|---|
-| 侧栏任务列表 | ✓ | ☐ | — | ☐ | — | — | 加载与空未分（首屏闪「暂无历史任务」）；失败静默 |
-| 专家市场页 | △ | ☐ | — | ☐ | — | — | 空库/失败显示成「搜索无结果」 |
-| 技能页 | ✓ | △ | ☐ | △ | ✓ | — | 失败时错误条与「正在读取」并存，无重试 |
-| 模型菜单 | ✓ | ✓ | — | ☐ | ☐ | — | 失败永久停「正在读取模型…」 |
+| 侧栏任务列表 | ✓ | ✓ | — | ✓ | — | — | **本期补齐**：初值 `undefined` 分「在途」与「确实没有」；失败→错误态 + 重试；daemon 启动即 down→「连接已断开」同一出口（原先永久「正在读取…」） |
+| 侧栏空间区 | ✓ | ✓ | — | — | — | — | **本期补齐**：行内「正在读取空间…」；标题计数不再误报 `(0)`。**故意不写**「确实没有空间」空态文案（空集合≠没有工作空间） |
+| 专家市场页 | ✓ | ✓ | — | ✓ | — | — | **本期补齐**：两处 `ErrorState` 接 `onRetry`（不再需要重启应用）；`skills-view` 4 行透传 |
+| 技能页 | ✓ | ✓ | ☐ | ✓ | ✓ | — | 第 1 期已修，本期作为**三态互斥 + 重试的标尺** |
+| 定时任务页（自动化） | ✓ | ✓ | — | ✓ | ✓ | — | **本期补齐**：三态互斥 + 重试（原「错误条 + 正在读取…」永久同框）；头部不加刷新按钮，重试只在错误态里 |
+| 产物面板 | ✓ | ✓ | ☐ | ✓ | ✓ | △ | **本期补齐**：文件树扫描失败→错误态 + 重试（**不再降级成空树**）、扫描成功但无文件→空态；预览失败按「未选工作空间」与「服务未就绪」分流，后者带重试 |
+| 首页页签 / 对话页模式标签 / 「+」专家子菜单 | ✓ | ✓ | — | — | ✓ | — | **本期补齐**：三处「在途被当空」改走加载态；模式标签不再回退显示裸 id，专家子菜单区分「正在读取」与「还没有可用专家」 |
+| 设置各分区（模型卡 / 通用 / 记忆 / 个性化 / 提示词） | ✓ | ✓ | ✓ | ✓ | ✓ | △ | **本期补齐**：**10 处**三态互斥 + 重试。仍缺：模型卡「未配 Key 当禁用呈现、无『去配置』动作」；内容分支里的**写入失败**错误条不给重试（见「豁免与刻意偏离登记」③） |
+| 模型菜单 | ✓ | ✓ | — | ☐ | ☐ | — | 失败仍永久停「正在读取模型…」（本期未动） |
 | 权限菜单 | — | ✓ | — | ☐ | ☐ | — | 同上，且 chip 加载态与正常态无法区分 |
 | 消息流 | ☐ | ✓ | ✓ | ✓ | ✓ | △ | 空会话全白无引导；权限被拒与执行失败同图标 |
-| 产物面板 | ✓ | ✓ | ☐ | ✓ | ✓ | △ | 无 stale-while-revalidate（切文件全屏闪加载）；预览失败无重试 |
-| 连接器页 | ✓ | ✓ | — | ✓ | ✓ | ☐ | 无「需授权」态（鉴权失败落入泛化 failed） |
-| 设置-模型卡 | ✓ | ✓ | ✓ | ✓ | ✓ | △ | 未配 Key 当禁用呈现，无「去配置」动作 |
-| 诊断页/统计页 | ✓ | ✓ | ☐ | ✓ | — | — | 无局部刷新态（每次整拉） |
-| 代码/文档预览 | — | ✓ | — | △ | ✓ | — | Monaco chunk 加载失败会冒泡到根 ErrorBoundary 打白屏 |
+| 连接器页 | ✓ | ✓ | — | ✓ | ✓ | ☐ | 无「需授权」态（鉴权失败落入泛化 failed）——需改 IPC 契约 + 产品定口径，另立 spec |
+| 诊断页 / 统计页 | ✓ | ✓ | ☐ | ✓ | — | — | 无局部刷新态（每次整拉）；`.stat-hint` / `.stat-err` 行内状态见「豁免与刻意偏离登记」② |
+| 代码 / 文档预览 | — | ✓ | — | △ | ✓ | — | Monaco chunk 加载失败会冒泡到根 ErrorBoundary 打白屏 |
 | 问卷浮层 | — | — | ✓ | ☐ | ✓ | — | 契约错位 throw 打白屏，应就地降级 |
+
+**新增视图必须遵守的四条硬要求**（源自 `complete-view-states` 的 ADDED Requirements，违反即缺陷）：
+
+1. **在途与空必须分开**：数据源在途用 `undefined` 表达（初值不得预置 `[]` / `{}`），视图据此渲染
+   加载态；只有数据真正到达**且为空**才渲染空态。不得用「长度为零」同时表达「还没到」与「确实没有」。
+2. **失败必须就地可见且可重试**：不得静默 `catch` 吞掉失败；不得把失败降级成空数据（空数组 / 空树）
+   伪装成「没有内容」；不得在错误态之外并行保留加载态导致两者永久同框。
+3. **四分支严格互斥**：同一视图内 `error` / `loading` / `empty` / `content` 只走一条
+   （参照 `skills-view.tsx`、`personalization-section.tsx`）。
+4. **失败文案必须指向真实原因**：不得用一句话覆盖多个互斥原因（反例：把「未选工作空间」与
+   「预览服务未就绪」混成一句）。
+
+**豁免与刻意偏离登记**（有正当理由，**不属于违规**；后续 spec 不再重复尝试改造）：
+
+① **`office-pptx.tsx` 的加载 / 错误绝对定位浮层**（`.office-overlay`，源码 L75-76 注释）：pptx
+   内嵌的 echarts canvas 在 `display:none` 下初始化会量到 0×0 画成空白，故幻灯片容器在加载 / 错误期
+   必须**保持可见**、状态改用浮层覆盖（WorkBuddy 同机制）。**不适用**块级 `LoadingState` / `ErrorState`。
+② **`diagnostics-view.tsx` 的 `.stat-hint` / `.stat-err` 行内状态**（如 L699-700、L740-741 的
+   「查询中… / 状态查询失败」）：是**行内单行读数**，块级 `LoadingState` 放不下。**不为两处给
+   `state-views` 加 inline 变体**（避免为两个调用点做抽象）。
+③ **设置各分区内容分支里的写入失败错误条不给 `onRetry`**（如 `general-section` 的保存失败）：
+   重拉会冲掉用户正在编辑的草稿；重试语义只属于「初次加载失败」那一支。
 
 ## 5. 动效规范
 
 1. **只动 `transform` / `opacity` / `visibility`**。禁止过渡/动画这些属性：
    `width`、`height`、`max-height`、`min-height`、`padding`、`margin`、`border-width`、
    `font-weight`、`background-position`、`top`/`left`（非 transform 写法）、`grid-template-rows`。
-2. **折叠展开的合法写法**：`grid-template-rows: 0fr ↔ 1fr`（参考 `.metafold-body` 手法，
-   但该值本身不参与 transition），或固定容器 + 内部 `transform`。
+   （三条**受控例外**见本节末，明确不属于违规。）
+2. **折叠展开的合法写法**：「从 0 到内容高度」只有两条可靠路径 —— `grid-template-rows: 0fr ↔ 1fr`
+   （配内层 `min-height: 0; overflow: hidden`，参考 `.metafold-body` 手法）或
+   `interpolate-size: allow-keywords` + `height: 0 ↔ auto`（参考 `.tool-detail-box` 手法，
+   原生 `height: auto` 不可过渡，此为该坑的唯一解）。两者都是受控例外（见本节末 ①）。
 3. 时长/缓动只用 §2.8 的 3+2，散值（0.12s/0.16s/0.24s/0.32s 等）迁移时归档。
-4. **扫光（shimmer）**：禁止动画 `background-position`（每帧重绘文字）。改用伪元素 +
-   `transform: translateX` 扫过。
+4. **扫光（shimmer）**：除 `.text-shimmer` 的既有例外（见本节末 ②）外，禁止动画
+   `background-position`（每帧重绘文字）。
 5. **拖拽期间停过渡**：面板拖拽等 mousemove 高频路径，拖拽中给容器加
-   `transition: none` 态，结束恢复。
+   `transition: none` 态，结束恢复（`.preview-panel` 的既有例外见本节末 ③）。
 6. **流式期间的常驻动画**（等待行、思考标题、工具状态字）必须是合成动画（transform/opacity），
    且进入 `prefers-reduced-motion` 全局兜底（见 §7.5）。
-7. 弹层入场只做一次；不做退场动画（消失瞬时）——除非该组件有明显「取消」语义需要回收感。
+7. 弹层入场只做一次；**条件挂载**的弹层（`{open && <div>}`）不做退场动画（卸载即消失）——
+   除非该组件有明显「取消」语义需要回收感。常驻 DOM 的元素另见规则 8。
+8. **进出场不对称**：退出时长比进入短一档（`--dur-slow` 入 → `--dur-base` 出、
+   `--dur-base` 入 → `--dur-fast` 出），表达「用户已决定离开」——退出动画只是善后，
+   不该和进入一样慢。**不新增 token 档位**（§2.8 的三档即表达手段）。
+   手法：基类写退出参数，`.open` / `[data-visible="true"]` 等激活类写入场参数。
+   注：条件挂载的弹层只有入场没有退场，不涉及本规则（见规则 7）。
+9. **空间连续性**：弹层/浮层 SHALL 用 `transform-origin` 对齐其触发位置，使弹层呈现为
+   「从触发点生长」而非凭空出现。方向口径：触发按钮**下方**展开 → `top`（水平按按钮位置
+   取 `left` / `center` / `right`）；**上方**展开 → `bottom ...`；**向左/右飞出**的子菜单 →
+   对应侧 `center`；**居中模态** → `center`。入场需配 `scale(.98 → 1)`，否则 origin 无观感作用。
+
+**受控例外**（明确不属于上述违规，逐条登记；后续 spec 不再重复尝试改造）：
+
+① **折叠展开的「从 0 到内容高度」**：`grid-template-rows: 0fr ↔ 1fr`（配内层
+   `min-height: 0; overflow: hidden`）或 `interpolate-size: allow-keywords` + `height: 0 ↔ auto`。
+   这是该效果的唯一可靠实现，属受控例外；但**同时过渡多个布局属性**
+   （如 `max-height` + `padding` + `margin` + `border-width`）仍是禁止的。
+② **`.text-shimmer` 的 `background-position` 扫光**：无法用合成属性等价复刻——伪元素拿不到
+   文字内容，而「文字明暗流动」必须以文字形状（`background-clip: text`）为裁剪源；且重绘面积
+   仅限文字区域（非整屏），改造收益不成立。
+③ **`.preview-panel` 的 `width` 过渡**：全屏切换需要（WB 同参数）；拖拽期间由
+   `[data-dragging="true"]` 置 `transition: none` 禁用（见规则 5）。
 
 ## 6. 禁止清单
 
@@ -239,6 +294,12 @@
 2. **图标按钮必须有名字**：`aria-label` 或可见文字，二选一。
 3. **弹层焦点管理**：打开时焦点移入首个可交互元素（危险弹窗默认落「安全」按钮），
    Tab 在弹层内循环，关闭后焦点归还触发元素。审批弹窗是安全闸，这条是硬要求。
+   凡声明 `aria-modal="true"`（或 `role="dialog"` / `role="alertdialog"`）的模态，
+   **「焦点移入 + Tab 陷阱 + 焦点归还」三条缺一不可**；背景 `inert` 为加强项
+   （`aria-modal` 只是声明，`inert` 才真把背景移出可访问性树；`.toast-stack` 除外，
+   否则 `role="status"` 的实时播报会被一并掐掉）。**这三条只有唯一入口：
+   `src/renderer/use-modal-focus.ts` 的 `useModalFocus`**——不许在每个模态里各写一遍
+   （各写必漂移；且嵌套模态的 Tab 归属需要模块级的打开栈来仲裁）。
 4. **Esc 层级**：同级多弹层时 Esc 只关最内层（最内层 `stopPropagation`）。
 5. **reduced-motion**：全局兜底块
    `@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important } }`，
@@ -249,6 +310,12 @@
 8. **滚动链**：嵌套滚动容器（思考块、工具详情、浮层列表）加 `overscroll-behavior: contain`，
    除非产品明确要链动。
 9. **对比度**：文字/背景对比 ≥ 4.5:1；`--text-faint` 只允许用于非关键信息。
+10. **拦截拖放与外部导航**：页面的 `dragover` / `drop` 默认行为**必须**被拦截
+    （renderer 在 `App` 层做 document 级兜底，只放行输入卡既有的文本投递；
+    **关键是判 `dataTransfer.types.includes("Files")`**——只兜文件拖放），
+    否则把文件拖到非投递区会走 Chromium 默认行为、整页被替换成那个文件。
+    外部导航**必须**走主进程 `will-navigate` 守卫（非本应用 URL 一律 `preventDefault`、
+    改走既有外部打开通道），否则 `file://` 之类的导航拦不住。
 
 ## 8. 术语词表（写作与代码命名共同遵守）
 
@@ -293,6 +360,7 @@
 **性能**
 - [ ] 流式路径上的新渲染成本有意识（memo / 合批 / 虚拟化三选一说明）
 - [ ] 长列表有上限或虚拟化策略
+- [ ] 没碰 §11 的四条硬约束（delta 合批 / 收起态跳过渲染 / 完成条目 memo / 未折叠条目禁 `content-visibility: auto`）
 
 ## 10. 本轮落地范围与已知例外
 
@@ -311,12 +379,23 @@
   reduced-motion 全局兜底、嵌套滚动 `overscroll-behavior`、全局滚动条基线。
 - **动效纪律（新增部分）**：本轮新增动效只动 transform/opacity、时长缓动取自 §2.8；
   §5.1 里 `font-weight` 过渡已移除。
+- **动效属性改造（spec #3 已完成）**：折叠体过渡属性 12 → 4 项（布局属性只剩 `height`）、
+  全站 22 处弹层入场 + `transform-origin` 对齐触发点、进出场时长拆分（退出降一档）、
+  拖拽期停过渡；扫光与 `.metafold-body` 的 grid 手法经评估保持现状，见 §5 受控例外。
+  详见 [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §7。
+- **性能硬约束（spec #4 已完成）**：流式 delta 16ms 合批（6 处 flush）、折叠体收起态
+  `content-visibility: hidden`（配 `allow-discrete` 保住收起动画）、5 处热点 memo 化、
+  开发期 FPS/longtask 观测浮层。约束条文见 §11，代码层证据见
+  [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §8
+  （**含一个遗留问题**：生产构建仍打包 `perf-overlay`，见该节 §8.5）。
 
 ### 10.2 仍待后续
 
-动效属性改造（§5.1 存量布局属性过渡、§5.4 扫光）、状态逐页补齐（§4 缺口清单）、
-性能（§9 性能项）、桌面端硬伤（焦点陷阱/归还、Esc 层级仲裁、拖拽越界、最小宽度溢出）。
-均在本分支以 spec #2~#5 续作。
+桌面端硬伤（焦点陷阱/归还、Esc 层级仲裁、拖拽越界、最小宽度溢出）已由 spec #5 落地
+（§7 / 迁移文档 §9）；视图状态逐页补齐已由 `complete-view-states` 收尾（§4 已从缺口清单更新为实况，
+剩余缺口与两处豁免均在 §4 就地表）。
+性能类改动已由 spec #4 落地（§11 / 迁移文档 §8），但 §9 的「长列表虚拟化策略」**仍未做**——
+完整虚拟滚动经评估与吸底/刻度轨机制冲突，理由见迁移文档 §8.4。
 
 ### 10.3 已知例外（不与规范冲突，但读者需知道）
 
@@ -328,3 +407,38 @@
 - **循环动画时长**：spin / pulse / shimmer 的周期（0.8/1.1/2/2.2s）是动画语义，不是交互动效时长。
 - **ring 手法**：`0 0 0 1px` 类焦点环/描边不是阴影尺度，不入 §2.7。
 - **档外场景阴影**：面板定向影、下拉 18%、纸张影、开关滑块影——非 sm/md/lg 等值，保留原值（未造第 4 档）。
+
+## 11. 性能约束（硬约束）
+
+> 来源：spec `.trae/specs/optimize-stream-rendering`（第 3 期）。与 §5 同性质——**这是工程约束，不是目标态愿景**：
+> 每条都有代码层证据（见 [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §8），触犯即缺陷而非风格分歧。
+> **为何追加在文末而不插在 §5 之后**：§6 起依次是禁止清单 / 无障碍 / 术语 / CR 自查 / 落地范围，插队要整体顺延编号，
+> 会打断 AGENTS.md、`.trae/specs/*` 与迁移文档里对 DESIGN.md §7 / §8 / §9 的既有引用（引用即验收依据，不能漂）。
+
+1. **流式 delta 必须合批**。正文 / 思考 delta 不许「收到一条就发一条」——那等于每个 token 一次 IPC + 一次 renderer 全量重渲染。
+   合批窗口取 **16ms（≈ 一帧）**，且只合并**连续同类型**的 delta。
+   四个终止时机**必须 flush**（缺一即丢最后半句或与终态校正串序）：① 类型切换（含 messageId 变化）；
+   ② `message_end`；③ turn 结束（`turn_end` / `agent_end`）；④ 中断（`abort()`）。
+   `delta` 字段是拼接结果、事件类型与字段语义不变（下游 reducer / UI 零改动）；拼接结果必须与未合批时**逐字一致**。
+   实现落点：`src/core/session-host.ts`（`DELTA_FLUSH_MS = 16` / `bufferDelta` / `flushDeltas`，共 6 处 flush 落点）。
+   附则：不得改动 delta 的**到达时刻**语义——TTFT 的 `turnFirstDeltaAt` 记在缓冲之前（它量的是 pi 事件到达时刻）。
+
+2. **收起态必须跳过渲染**。折叠体（`.metafold-body-inner` / `.tool-detail-box` / `.tool-source-list`）处于收起态时用
+   `content-visibility: hidden`，让内容子树跳过 layout 与 paint。
+   `content-visibility` 是**离散属性**：它若参与过渡（收起动画），**必须配 `transition-behavior: allow-discrete`，且只写在收起态那一条**——
+   否则收起瞬间内容高度被算成 0，收起动画退化成「瞬间消失」（会把 §5 第 2 条与受控例外 ① 的成果一起摧毁）。
+   该属性不得改变收起态占位（高度恒为 0，`scrollHeight` 不变），也不得改变展开态表现。
+
+3. **完成条目必须 memo**。已完成消息 / 工具结果的昂贵转换（JSON 解析、Markdown 解析、集合派生）不得随父级重渲染而重算：
+   - `widget-view` 的 `parseWidgetResult(card.detail)` → `useMemo([card.detail])`
+   - `Markdown` 组件 → `React.memo`（text 不变即不重解析）
+   - `App.tsx` 的 `collectSources` / `collectChanges` → `useMemo([conversation.entries])`
+   - `chat-view` 的 `pendingText(entries)` / `entries.findLast(...)` → `useMemo([entries])`
+   前提：传给 `React.memo` 组件的**函数型 prop 必须由调用方 `useCallback` 固定**（如 `App.tsx` 的 `openPath`），否则 memo 被逐渲染的新箭头击穿。
+   诚实口径：`entries` 每个 delta 换引用，按 `entries` memo 的项**在流式期间收益为 0**，省的是「与消息流无关的重渲染」；
+   `Markdown` 那层才是「流式期历史消息不重解析」的主要收益。
+
+4. **未折叠条目禁用 `content-visibility: auto`**。屏幕外元素用**估值高度**会让 `scrollHeight` 漂移 → 滚动条跳动、
+   贴底跟随（`scrollTop = scrollHeight`）抖动、刻度轨比例错乱。只对**收起态**（真实高度恒为 0）用 `hidden`；
+   未折叠条目不得用 `auto`。完整虚拟滚动同样被这条挡住——它会同时牵动吸顶 / 吸底跟随 / 轮折叠 / 刻度轨
+   四套依赖真实 DOM 与 `scrollHeight` 的机制。

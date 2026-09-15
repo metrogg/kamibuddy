@@ -3,7 +3,7 @@
  * + 长期记忆记录（MEMORY.md 查看/编辑，spec: rework-settings-layout Task 4）。
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BUILTIN_MEMORY_TASK_ID } from "@shared/automation.ts";
 import { EmptyState, ErrorState, LoadingState } from "../state-views.tsx";
 
@@ -31,16 +31,30 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 	/** 「立即整理」运行中：蒸馏是异步模型调用（约几十秒），不能按 IPC 返回就算完。 */
 	const [distilling, setDistilling] = useState(false);
 
-	useEffect(() => {
-		Promise.all([window.kami.getMemoryEnabled(), window.kami.getProfile()])
-			.then(([memory, result]) => {
-				setEnabled(memory.enabled);
-				setProfile(result.content);
-				setSavedProfile(result.content);
-				setLoaded(true);
-			})
-			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	/*
+	 * 抽成可调用函数：错误态的重试要能真的重拉（原来只在 useEffect 里跑一次）。
+	 * 失败时 Promise.all 整体 reject，一个字段都不会落地 —— 所以重拉时不会
+	 * 覆盖用户已编辑的内容（画像此刻只可能是空的）。
+	 */
+	const load = useCallback(async (): Promise<void> => {
+		try {
+			const [memory, result] = await Promise.all([
+				window.kami.getMemoryEnabled(),
+				window.kami.getProfile(),
+			]);
+			setEnabled(memory.enabled);
+			setProfile(result.content);
+			setSavedProfile(result.content);
+			setLoaded(true);
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
 
 	// 蒸馏完成的精确信号是 runFinished（taskId 匹配内置任务）：成功后重拉画像。
 	useEffect(() => {
@@ -121,12 +135,17 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 				<h2>记忆</h2>
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{enabled === undefined || !loaded ? (
-				<LoadingState text="正在读取记忆设置…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void load()} />
+				) : (
+					<LoadingState text="正在读取记忆设置…" />
+				)
 			) : (
 				<>
+					{/* 开关/保存/重置/立即整理失败的透出位（与内容并存，不与加载态并存）。 */}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="provider-row">
 						<div className="provider-main">
 							<span className="provider-name">生成对话记忆</span>
@@ -226,16 +245,22 @@ function LongTermMemorySection({ busy }: { readonly busy: boolean }): React.JSX.
 	const [editing, setEditing] = useState(false);
 	const [error, setError] = useState<string | undefined>(undefined);
 
-	useEffect(() => {
-		window.kami
-			.getMemory()
-			.then((result) => {
-				setContent(result.content);
-				setSavedContent(result.content);
-				setLoaded(true);
-			})
-			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	// 抽成可调用函数：错误态的重试要能真的重拉（原来只在 useEffect 里跑一次）。
+	const load = useCallback(async (): Promise<void> => {
+		try {
+			const result = await window.kami.getMemory();
+			setContent(result.content);
+			setSavedContent(result.content);
+			setLoaded(true);
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
 
 	const save = (): void => {
 		void window.kami
@@ -259,61 +284,68 @@ function LongTermMemorySection({ busy }: { readonly busy: boolean }): React.JSX.
 				<h2>长期记忆记录</h2>
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{!loaded ? (
-				<LoadingState text="正在读取长期记忆…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void load()} />
+				) : (
+					<LoadingState text="正在读取长期记忆…" />
+				)
 			) : (
-				<div className="profile-block">
-					<div className="profile-block-head">
-						<span className="field-label">MEMORY.md</span>
-						<span className="bar-spacer" />
-						{editing ? (
-							<>
+				<>
+					{/* 保存失败的透出位（与内容并存，不与加载态并存）。 */}
+					{error !== undefined && <ErrorState message={error} />}
+					<div className="profile-block">
+						<div className="profile-block-head">
+							<span className="field-label">MEMORY.md</span>
+							<span className="bar-spacer" />
+							{editing ? (
+								<>
+									<button
+										type="button"
+										className="mini-btn"
+										disabled={busy || content === savedContent}
+										title={content === savedContent ? "内容没有变化" : undefined}
+										onClick={save}
+									>
+										保存
+									</button>
+									<button type="button" className="mini-btn" disabled={busy} onClick={cancel}>
+										取消
+									</button>
+								</>
+							) : (
 								<button
 									type="button"
 									className="mini-btn"
-									disabled={busy || content === savedContent}
-									title={content === savedContent ? "内容没有变化" : undefined}
-									onClick={save}
+									disabled={busy}
+									onClick={() => setEditing(true)}
 								>
-									保存
+									编辑
 								</button>
-								<button type="button" className="mini-btn" disabled={busy} onClick={cancel}>
-									取消
-								</button>
-							</>
-						) : (
-							<button
-								type="button"
-								className="mini-btn"
-								disabled={busy}
-								onClick={() => setEditing(true)}
-							>
-								编辑
-							</button>
-						)}
-					</div>
-					{editing ? (
-						<textarea
-							className="profile-textarea"
-							value={content}
-							disabled={busy}
-							placeholder="一行一条，写下希望 AI 长期记住的偏好与决定。"
-							onChange={(e) => setContent(e.currentTarget.value)}
-						/>
-					) : (
-						/* 查看态复用画像文本框档位：div 挂同一 class，只补 pre-wrap（见 index.css）。 */
-						<div className="profile-textarea profile-view">
-							{savedContent === "" ? (
-								<EmptyState title="暂无内容，点击编辑添加" />
-							) : (
-								savedContent
 							)}
 						</div>
-					)}
-					<p className="settings-foot">AI 主动记下的偏好与决定，可随时修改；保存后下一轮对话生效。</p>
-				</div>
+						{editing ? (
+							<textarea
+								className="profile-textarea"
+								value={content}
+								disabled={busy}
+								placeholder="一行一条，写下希望 AI 长期记住的偏好与决定。"
+								onChange={(e) => setContent(e.currentTarget.value)}
+							/>
+						) : (
+							/* 查看态复用画像文本框档位：div 挂同一 class，只补 pre-wrap（见 index.css）。 */
+							<div className="profile-textarea profile-view">
+								{savedContent === "" ? (
+									<EmptyState title="暂无内容，点击编辑添加" />
+								) : (
+									savedContent
+								)}
+							</div>
+						)}
+						<p className="settings-foot">AI 主动记下的偏好与决定，可随时修改；保存后下一轮对话生效。</p>
+					</div>
+				</>
 			)}
 		</section>
 	);

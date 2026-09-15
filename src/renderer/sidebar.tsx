@@ -32,7 +32,7 @@ import {
 	IconStats,
 	IconTrash,
 } from "./icons.tsx";
-import { EmptyState, LoadingState, Spinner } from "./state-views.tsx";
+import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
 
 /** daemon 连接状态，与 App 里的 Link 同构。侧栏底部常驻显示，试用时一眼定位「发不出消息是不是没连上」。 */
 export type LinkState =
@@ -42,8 +42,15 @@ export type LinkState =
 
 interface SidebarProps {
 	readonly link: LinkState;
-	/** 两区分组结果（App 用 groupSessions 算好）。取代旧的平铺 taskList。 */
-	readonly groups: SessionGroups;
+	/**
+	 * 两区分组结果（App 用 groupSessions 算好）。取代旧的平铺 taskList。
+	 * undefined = 会话列表还没拉到（在途），与「拉到了但一个都没有」分开。
+	 */
+	readonly groups: SessionGroups | undefined;
+	/** 会话列表拉取失败的原因（undefined = 没失败）。失败 ≠ 没有历史任务。 */
+	readonly tasksError: string | undefined;
+	/** 任务区错误态的「重试」：App 侧可重复调用的 listSessions 拉取函数。 */
+	readonly onReloadTasks: () => void;
 	/**
 	 * 未读会话 id 集合（标题前绿点）。渲染进程内存态，重启清零 ——
 	 * 持久化未读是规格书明确留后续的事，这里不兜底。
@@ -101,6 +108,8 @@ const TASKS_COLLAPSED_COUNT = 5;
 export function Sidebar({
 	link,
 	groups,
+	tasksError,
+	onReloadTasks,
 	unreadIds,
 	pendingConfirmIds,
 	onNewTask,
@@ -476,15 +485,35 @@ export function Sidebar({
 	};
 
 	/**
-	 * 任务区数据源。首屏 daemon 还在起（link=connecting）时列表不可知，用 undefined
-	 * 表达「加载中」—— 与「已拿到但确实没有历史任务」（[]）分开。混成一个条件
-	 * （length === 0）会让首屏闪「暂无历史任务」：那不是空，是还没拿到（DESIGN.md §4、§6）。
+	 * 任务区数据源 = 分组结果里有没有「任务」这一份数据。
 	 *
-	 * 只把 connecting 当加载中（不是「非 ready 即加载中」）：daemon 断开时
-	 * taskList 保留着最后一份已知列表，按加载中渲染会把它整片清成转圈，
-	 * 反倒丢掉用户还能看的历史（断开本身由底部状态行如实说明）。
+	 * 口径（Task 1.3）：**「在途」只由数据本身表达**（groups === undefined，
+	 * 即 App 侧会话列表还没落地），不再看 link。原来写的是
+	 * `link.kind === "connecting" ? undefined : groups.tasks`，只在 daemon 尚未
+	 * 就绪时算加载中 —— 而 App 是先置 ready 再拉列表，「ready 之后、列表回来
+	 * 之前」这段窗口被判成空列表，于是闪/停在「暂无历史任务」（本期要修的残留）。
+	 * 既然未就绪已由 undefined 表达，这个 link 判断就是多余的第二个真相源，
+	 * 去掉可少一处两者可能漂移的地方。
+	 *
+	 * 断开（link=down）时列表若已有值仍然照常展示：数据没了才算没数据，
+	 * 断开本身由底部状态行如实说明（不拿转圈把用户还能看的历史清掉）。
 	 */
-	const tasks = link.kind === "connecting" ? undefined : groups.tasks;
+	const tasks = groups?.tasks;
+	const spaces = groups?.spaces ?? [];
+	/**
+	 * 两个区共用的「数据来不了」判据（与「还在路上」区分）。
+	 *
+	 * `groups === undefined` 有两种成因，都会让任务区永远转圈：
+	 *  1. `tasksError` —— 首拉失败，原因由 App 记录；
+	 *  2. `link.kind === "down"` —— 连接已断且列表从未落地。daemon 启动即失败时，
+	 *     App 的 `activate()` 挂在 `onDaemonReady` 上压根没跑，`listSessions()`
+	 *     永远不会返回 —— 旧行为是永久「正在读取…」（与旧版永久「暂无历史任务」
+	 *     同类的误导）。
+	 *
+	 * 两者都在任务区就地呈现一次（断开态与失败态同一个重试入口）；空间区是同一份
+	 * groups 的派生，不重复第二张错误卡 —— 216px 窄栏里叠两个重试按钮只是噪音。
+	 */
+	const groupsUnavailable = tasksError !== undefined || link.kind === "down";
 	const visibleTasks = tasksExpanded
 		? (tasks ?? [])
 		: (tasks ?? []).slice(0, TASKS_COLLAPSED_COUNT);
@@ -543,9 +572,21 @@ export function Sidebar({
 						onClick={() => setTasksCollapsed((prev) => !prev)}
 					>
 						<IconChevronDown size={12} className={tasksCollapsed ? "section-chevron section-chevron-collapsed" : "section-chevron"} />
-						任务 ({tasks?.length ?? 0})
+						{/* 计数只在列表落地后显示：在途时 `(0)` 是「暂无历史任务」的同类误报，
+						    只是藏进了标题（用户读成「一条都没有」）。 */}
+						{tasks === undefined ? "任务" : `任务 (${tasks.length})`}
 					</button>
-					{!tasksCollapsed && (tasks === undefined ? (
+					{/* 四态互斥（DESIGN.md §4）：失败 → 就地错误卡 + 重试（不再静默吞掉，
+					    也不再落到「暂无历史任务」）；连接已断且列表从未落地 → 同一错误卡
+					    （否则会永久停在「正在读取…」）；未就绪 → 加载态；拿到了且为空 → 空态。 */}
+					{!tasksCollapsed && (tasksError !== undefined ? (
+						<ErrorState message={tasksError} onRetry={onReloadTasks} />
+					) : tasks === undefined && groupsUnavailable ? (
+						/* 断开原因（含 daemon 退出码）已在底部状态行如实显示，这里只给短结论：
+						    窄栏里再抄一遍长文本没有信息增量。重试会拿到 daemon 的真实报错
+						    （连接没恢复时立即失败），也是恢复后唯一的重新拉取入口。 */
+						<ErrorState message="连接已断开，未能读取历史任务" onRetry={onReloadTasks} />
+					) : tasks === undefined ? (
 						<LoadingState />
 					) : tasks.length === 0 ? (
 						<EmptyState title="暂无历史任务" />
@@ -573,10 +614,19 @@ export function Sidebar({
 						onClick={() => setSpacesCollapsed((prev) => !prev)}
 					>
 						<IconChevronDown size={12} className={spacesCollapsed ? "section-chevron section-chevron-collapsed" : "section-chevron"} />
-						空间 ({groups.spaces.length})
+						{/* 与任务区同口径：未就绪时 `(0)` 是误报（空间组还没算出来）。 */}
+						{groups === undefined ? "空间" : `空间 (${spaces.length})`}
 					</button>
-					{/* 组由会话派生：没有会话的目录不形成组，所以这里不需要空态文案。 */}
-					{!spacesCollapsed && groups.spaces.map(renderSpaceGroup)}
+					{/* 组由会话派生：没有会话的目录不形成组 —— 空集合并不等于「没有工作空间」
+					    （用户可能已选过目录、只是还没在里面跑过任务），照写空态文案会给出
+					    错误结论，故这里只补「在途」的行内加载位；失败/断开不在这里重复
+					    第二张错误卡，见 groupsUnavailable 的注释。 */}
+					{!spacesCollapsed &&
+						(groups !== undefined ? (
+							spaces.map(renderSpaceGroup)
+						) : groupsUnavailable ? null : (
+							<LoadingState text="正在读取空间…" />
+						))}
 				</div>
 			</div>
 

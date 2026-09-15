@@ -2,7 +2,7 @@
  * 设置「提示词预览」分组（自原平铺页原样搬入）。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StyleConfigInfo } from "@shared/settings.ts";
 import type { ModeDescriptor } from "@shared/session-events.ts";
 import type { ExpertListItem, PromptPreviewResult } from "@shared/ipc.ts";
@@ -57,26 +57,41 @@ export function PromptPreviewSection(): React.JSX.Element {
 	const [nonce, setNonce] = useState(0);
 	const requestSeq = useRef(0);
 
-	useEffect(() => {
-		Promise.all([window.kami.snapshot(), window.kami.getStyle(), window.kami.listExperts()])
-			.then(([snapshot, style, expertList]) => {
-				const scenes = snapshot.availableScenes.filter((s) => s.ready);
-				const modes = snapshot.availableModes.filter((m) => m.ready);
-				setAxes({ scenes, modes });
-				setStyleConfig(style);
-				setExperts(expertList);
-				// 初值跟随当前会话（预览「此刻的提示词」）；
-				// 会话值不在可选清单里时（如 design 占位）回落到第一项。
-				setSceneId(scenes.some((s) => s.id === snapshot.state.sceneId) ? snapshot.state.sceneId : (scenes[0]?.id ?? ""));
-				setModeId(modes.some((m) => m.id === snapshot.state.interactionId) ? snapshot.state.interactionId : (modes[0]?.id ?? ""));
-				// 专家同理跟随会话，但只在清单里存在时采用（专家被删/未拉回 → 不选专家）。
-				const sessionExpert = snapshot.state.expertId;
-				setExpertSel(
-					sessionExpert !== undefined && expertList.some((e) => e.name === sessionExpert) ? sessionExpert : "",
-				);
-			})
-			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	/*
+	 * 资源清单的装载：抽成可调用函数，错误态的重试要能真的重拉
+	 * （原来只在 useEffect 里跑一次）。重拉会连同四轴的初值一起重置 ——
+	 * 这是对的：能走到重试说明清单从来就没到位，用户还没得可选。
+	 */
+	const load = useCallback(async (): Promise<void> => {
+		try {
+			const [snapshot, style, expertList] = await Promise.all([
+				window.kami.snapshot(),
+				window.kami.getStyle(),
+				window.kami.listExperts(),
+			]);
+			const scenes = snapshot.availableScenes.filter((s) => s.ready);
+			const modes = snapshot.availableModes.filter((m) => m.ready);
+			setAxes({ scenes, modes });
+			setStyleConfig(style);
+			setExperts(expertList);
+			// 初值跟随当前会话（预览「此刻的提示词」）；
+			// 会话值不在可选清单里时（如 design 占位）回落到第一项。
+			setSceneId(scenes.some((s) => s.id === snapshot.state.sceneId) ? snapshot.state.sceneId : (scenes[0]?.id ?? ""));
+			setModeId(modes.some((m) => m.id === snapshot.state.interactionId) ? snapshot.state.interactionId : (modes[0]?.id ?? ""));
+			// 专家同理跟随会话，但只在清单里存在时采用（专家被删/未拉回 → 不选专家）。
+			const sessionExpert = snapshot.state.expertId;
+			setExpertSel(
+				sessionExpert !== undefined && expertList.some((e) => e.name === sessionExpert) ? sessionExpert : "",
+			);
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
 
 	useEffect(() => {
 		if (sceneId === "" || modeId === "") return;
@@ -138,12 +153,21 @@ export function PromptPreviewSection(): React.JSX.Element {
 				</button>
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{axes === undefined || styleConfig === undefined ? (
-				<LoadingState text="正在读取提示词资源…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void load()} />
+				) : (
+					<LoadingState text="正在读取提示词资源…" />
+				)
 			) : (
 				<>
+					{/*
+						组装失败的透出位（清单已就绪，不与加载态并存）。它不给重试：
+						恢复出口是页头的「重新生成」/ 改任一选择轴，重拉清单反而会把
+						用户当前的四轴选择重置。
+					*/}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="preview-controls">
 					<div className="preview-field">
 						<span className="preview-field-label">场景</span>

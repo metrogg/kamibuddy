@@ -30,10 +30,15 @@
 ## What Changes
 
 - **折叠体过渡改造**：`.tool-detail-box` 与 `.tool-source-list` 从「`max-height` + padding +
-  margin + border-width 多属性过渡」改为「`grid-template-rows: 0fr↔1fr`」（沿用
-  `.metafold-body` 的既有手法），保留 `opacity` / `transform` / `visibility`。
+  margin + border-width 共 6 项属性过渡」改为「`interpolate-size: allow-keywords` + `height: 0↔auto`」
+  （只动 1 个布局属性），保留 `opacity` / `transform` / `visibility`。
   注意 `.tool-source-list` 展开后**限高 300px 且 `overflow: auto`**（来源可能十几条），
   改造后仍需保留这个内部滚动。
+  **为什么不用 `.metafold-body` 的 `grid-template-rows`**：grid 折叠要求有内层包裹元素
+  （`min-height: 0; overflow: hidden`，见 `.metafold-body-inner`），而这两处均无内层
+  （`.tool-detail-box` 是单个 `<pre>`，且被 `.todo-list-box` 复用），加内层要改 3 处 DOM，
+  风险大于收益。本项目固定 Electron 44（内核远高于 Chromium 129），`interpolate-size` 可用
+  ——`.metafold-body` 的注释本身也写着「WorkBuddy 用 interpolate-size，0fr↔1fr 是宽兼容写法」。
 - **弹层入场统一**：给约 12 个弹层/模态/子菜单加入场（`--dur-base` + `--ease-out`，
   `opacity 0→1` + `translateY(4px→0)` + `scale(.98→1)`），并加 `transform-origin` 对齐
   其触发位置（空间连续性）。
@@ -73,17 +78,19 @@
 
 ## ADDED Requirements
 
-### Requirement: 动效只动合成属性（折叠体）
+### Requirement: 折叠体只动一个布局属性
 
-折叠/展开类过渡 SHALL 只动 `transform` / `opacity` / `visibility`，以及
-`grid-template-rows`（受控例外——它是 `height: auto` 的唯一可靠替代）。
-SHALL NOT 过渡 `max-height` / `padding` / `margin` / `border-width` / `height` / `width`
-（除 `.preview-panel` 的既有宽度过渡）。
+折叠/展开类过渡 SHALL 只动 `transform` / `opacity` / `visibility`，加**至多一个**布局属性：
+`height`（配 `interpolate-size: allow-keywords`）或 `grid-template-rows`（配内层
+`min-height: 0; overflow: hidden`）——两者都是「从 0 到内容高度」这一必需效果的受控例外。
+SHALL NOT 同时过渡 `max-height` + `padding` + `margin` + `border-width` **多个**布局属性
+（那才是逐帧全量重排的来源）。
+`.preview-panel` 的既有 `width` 过渡为全屏切换所需，单独豁免。
 
 #### Scenario: 工具详情开合不掉帧
 
 - **WHEN** 在长会话里反复展开/收起工具详情（`.tool-detail-box`）
-- **THEN** 展开过程只触发合成与 `grid-template-rows` 插值，不再逐帧重排 padding/margin/border
+- **THEN** 展开过程只动 1 个布局属性（`height`），不再逐帧重排 padding/margin/border
 
 #### Scenario: 来源列表保留内部滚动
 
@@ -117,15 +124,25 @@ SHALL NOT 为此新增 token 档位（现有时长三档即是表达手段）。
 - **WHEN** 收起已展开的工具详情
 - **THEN** 收起过渡时长（`--dur-base`）短于展开（`--dur-slow`）
 
-### Requirement: 合成动画替代 paint 动画
+### Requirement: 扫光动画保持现状（技术评估结论，登记为受控例外）
 
-`.text-shimmer` 的扫光 SHALL 用 `transform` 表达，SHALL NOT 动画 `background-position`
-（后者每帧重绘文字区域）。视觉观感 SHALL 与改造前一致。
+`.text-shimmer` 的扫光 SHALL 保持 `background-position` 动画现状，并 SHALL 在
+`DESIGN.md` §5 登记为受控例外。
 
-#### Scenario: 流式扫光不再重绘文字
+**评估结论（原定方案不可行）**：spec 起草时假设「伪元素遮罩 + `transform: translateX`
+可等价复刻」，上手后发现三条硬约束：① 伪元素拿不到文字内容，而"文字明暗流动"必须以
+**文字形状**为裁剪源（`background-clip: text`）；② 若用 `content: attr(data-text)` 复制文字，
+仍需 `mask-position` 移动遮罩——它与 `background-position` 同类，都不是合成属性；
+③ 任何"在文字上盖扫光层"的方案都要求容器可裁剪，而 `.text-shimmer` 用在 8 处**行内 `<span>`**，
+改 `display: inline-block` 会影响行内排版与基线对齐。
 
-- **WHEN** 流式期间观察工具状态字/等待行的扫光
-- **THEN** 扫光动的是伪元素的 `transform`，`background-position` 动画已移除
+**收益复核也不成立**：重绘面积仅限该文字区域（一行或几个字，非整屏）；Chromium 对
+`background-position` 在符合条件的元素上有合成优化；`prefers-reduced-motion` 下已有降级。
+
+#### Scenario: 不再重复尝试
+
+- **WHEN** 后续有人想改造这个扫光
+- **THEN** `index.css` 该块注释与 `DESIGN.md` §5 的例外条目已写明为什么保持现状
 
 ### Requirement: 拖拽期停过渡
 

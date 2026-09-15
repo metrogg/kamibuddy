@@ -68,6 +68,15 @@ import { join, resolve } from "node:path";
 const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 
 /**
+ * 流式 delta 的合批窗口（毫秒），约一帧。
+ *
+ * 一个 token 一次 IPC 会让 renderer 每 token 重跑一遍渲染，长会话线性放大。
+ * 取 16ms：既能把事件数从「每 token」压到「每帧最多一次」，又不超过一帧，
+ * 首 token 的可见延迟感知不到（spec: optimize-stream-rendering）。
+ */
+const DELTA_FLUSH_MS = 16;
+
+/**
  * 工具卡片的状态标签（对齐 WorkBuddy 的 tool.* 词汇表，见 lib-chat-ui 的
  * tool.readFile/listFile/executeCommand 等条目）：每个工具一组「执行中 → 已完成」，
  * write/edit 另按新建/覆盖走 generatingLabel / writeDoneLabel。
@@ -399,6 +408,25 @@ export class SessionHost {
 	private idSeq = 0;
 	/** 当前正在流式输出的助手消息 id。message_start 时生成，message_end 时清空。 */
 	private currentAssistantId: string | undefined;
+	/**
+	 * 流式正文/思考 delta 的时间窗缓冲（spec: optimize-stream-rendering）。
+	 *
+	 * 原先每个 delta 直接 emit，一个 token 就走完整条 daemon → main → renderer 链路
+	 * 并让 renderer 重跑渲染。这里把**连续同类型**的 delta 累积到约一帧再发一条。
+	 *
+	 * 缓冲成立的前提是「同一助手消息内、同类型连续」，所以类型切换、message_end、
+	 * turn_end 与 agent_end（含 abort 收尾）都必须先 flush（见 flushDeltas 的调用点），
+	 * 否则最后一批会丢或与终态校正串序。messageId 一并记下：flush 时
+	 * currentAssistantId 可能已被清（agent_end 路径），不能现读。
+	 */
+	private pendingDeltas:
+		| {
+			readonly kind: "text" | "thinking";
+			readonly messageId: string;
+			text: string;
+			readonly timer: ReturnType<typeof setTimeout>;
+		}
+		| undefined;
 	/** 当前 run 的 id，供 run_error / run_finished 关联。 */
 	private currentRunId: string | undefined;
 	/**
@@ -617,6 +645,11 @@ export class SessionHost {
 		// 压缩是独立的模型调用，abort() 管不到它；停止键在压缩期间也必须有效。
 		// 无压缩进行时这是 no-op。
 		this.session.abortCompaction();
+		// 中断路径也必须 flush（spec: optimize-stream-rendering「不丢半句」）。
+		// pi 的 abort 收尾会照常走 message_end → turn_end → agent_end（见 agent_end 注释），
+		// 那三处已覆盖；这里再主动 flush 一次，保证「已收到但未 flush 的 delta」
+		// 在停止动作返回时就送达，不等 16ms 窗口，也不依赖 pi 的收尾时序。
+		this.flushDeltas();
 	}
 
 	/**
@@ -658,6 +691,13 @@ export class SessionHost {
 	 * cwd 在建会话时一次性注入工具集，不存在「换目录继续聊」。
 	 */
 	dispose(): void {
+		// 缓冲中的 delta 随会话一起作废：清定时器，免得销毁后仍 emit（定时器泄漏，
+		// 且会向已关闭的通道写事件）。**不 flush** —— 会话已终止，补发最后一批
+		// 只会把残句推到已废弃的会话上。
+		if (this.pendingDeltas !== undefined) {
+			clearTimeout(this.pendingDeltas.timer);
+			this.pendingDeltas = undefined;
+		}
 		this.session.dispose();
 	}
 
@@ -818,6 +858,47 @@ export class SessionHost {
 	}
 
 	/**
+	 * 把一条流式 delta 并入缓冲；类型切换或换消息时先把上一批 flush 出去。
+	 *
+	 * 定时器到期是唯一「无外部事件驱动」的 flush 时机；另外三个（类型切换、
+	 * message_end、turn/agent_end）由下面的调用点主动触发，缺一即丢内容。
+	 */
+	private bufferDelta(kind: "text" | "thinking", messageId: string, delta: string): void {
+		const pending = this.pendingDeltas;
+		if (pending !== undefined && (pending.kind !== kind || pending.messageId !== messageId)) {
+			this.flushDeltas();
+		}
+		const current = this.pendingDeltas;
+		if (current === undefined) {
+			this.pendingDeltas = {
+				kind,
+				messageId,
+				text: delta,
+				timer: setTimeout(() => this.flushDeltas(), DELTA_FLUSH_MS),
+			};
+			return;
+		}
+		current.text += delta;
+	}
+
+	/**
+	 * 立即把缓冲的 delta 按原事件类型发出去（无缓冲时 no-op）。
+	 *
+	 * `delta` 是拼接结果，事件类型与字段语义与未合批时完全一致 —— 下游零改动。
+	 */
+	private flushDeltas(): void {
+		const pending = this.pendingDeltas;
+		if (pending === undefined) return;
+		this.pendingDeltas = undefined;
+		clearTimeout(pending.timer);
+		this.options.emit(
+			pending.kind === "text"
+				? { type: "assistant_text_delta", messageId: pending.messageId, delta: pending.text }
+				: { type: "assistant_thinking_delta", messageId: pending.messageId, delta: pending.text },
+		);
+	}
+
+	/**
 	 * pi 事件 → 领域事件。
 	 *
 	 * 用 pi 的真实类型 `AgentSessionEvent` 而不是宽松的 Record —— 这是有意的：
@@ -910,6 +991,9 @@ export class SessionHost {
 			}
 
 			case "agent_end": {
+				// run 终态（含用户 abort 的收尾）必须 flush：这是「不丢最后半句」的
+				// 最后一道闸。放在 willRetry 分支之前，两条路径都覆盖。
+				this.flushDeltas();
 				/*
 				 * 台账的 run 在**每个** agent_end 闭合（willRetry 也是一次真实
 				 * 尝试的失败终态），与 UI 的 run 记账（跨 willRetry 保持流式态）
@@ -1027,6 +1111,10 @@ export class SessionHost {
 			}
 
 			case "turn_end": {
+				// turn 结束（含 abort 收尾）必须 flush：本 turn 最后一批 delta 不能拖到
+				// 窗口到期才发，否则会落到终态之后（内容边界与顺序都错）。正常时序下
+				// message_end 已先 flush，这里是幂等的兜底。
+				this.flushDeltas();
 				const startedAt = this.turnStartedAt;
 				this.turnStartedAt = undefined;
 				// turn_start 缺失（理论上不发生，见 turn_start 注释）就不造条目 ——
@@ -1117,6 +1205,7 @@ export class SessionHost {
 
 				if (inner.type === "text_delta" || inner.type === "thinking_delta") {
 					// TTFT 基准：本 turn 首个正文/思考 delta 的到达时刻（台账 llm_call）。
+					// 必须在缓冲之前记录 —— 它量的是 pi 事件到达时刻，不是 flush 时刻。
 					if (this.turnStartedAt !== undefined && this.turnFirstDeltaAt === undefined) {
 						this.turnFirstDeltaAt = Date.now();
 					}
@@ -1126,17 +1215,9 @@ export class SessionHost {
 				if (id === undefined) return;
 
 				if (inner.type === "text_delta") {
-					emit({
-						type: "assistant_text_delta",
-						messageId: id,
-						delta: inner.delta,
-					});
+					this.bufferDelta("text", id, inner.delta);
 				} else if (inner.type === "thinking_delta") {
-					emit({
-						type: "assistant_thinking_delta",
-						messageId: id,
-						delta: inner.delta,
-					});
+					this.bufferDelta("thinking", id, inner.delta);
 				}
 				// 其余 inner 事件（text_start/end、thinking_start/end、done…）不上传：
 				// 正文与思考靠 delta + assistant_done 终态校正，边界事件对 UI 无信息量。
@@ -1144,6 +1225,9 @@ export class SessionHost {
 			}
 
 			case "message_end": {
+				// 必须在本消息的终态校正（assistant_done / run_error 记账）之前 flush：
+				// 否则最后一批 delta 会晚于 assistant_done 到达，拼接结果与顺序都错。
+				this.flushDeltas();
 				const message = event.message;
 				if (message.role !== "assistant") return;
 

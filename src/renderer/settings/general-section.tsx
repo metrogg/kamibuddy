@@ -38,12 +38,20 @@ function ThinkingLevelSection({ busy }: { readonly busy: boolean }): React.JSX.E
 	const [level, setLevel] = useState<ThinkingLevel | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 
-	useEffect(() => {
-		window.kami
-			.getThinkingLevelDefault()
-			.then((result) => setLevel(result.level))
-			.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+	// 抽成可调用函数（而不是只写在 useEffect 里）：错误态的重试要能真的重拉，
+	// 口径与同文件 WebSearchSection / DefaultWorkspaceSection 一致。
+	const refresh = useCallback(async (): Promise<void> => {
+		try {
+			setLevel((await window.kami.getThinkingLevelDefault()).level);
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
 	}, []);
+
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
 
 	const change = (next: ThinkingLevel): void => {
 		const prev = level;
@@ -65,12 +73,21 @@ function ThinkingLevelSection({ busy }: { readonly busy: boolean }): React.JSX.E
 				<h2>默认推理强度</h2>
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/*
+				三态互斥（DESIGN.md §4）：未就绪时「加载失败」只渲染错误态 + 重试，
+				不叠加加载态。原来两者并存 —— 首拉失败后 level 永远停在 undefined，
+				「正在读取推理强度设置…」与错误条永久同框且没有出口。
+			*/}
 			{level === undefined ? (
-				<LoadingState text="正在读取推理强度设置…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void refresh()} />
+				) : (
+					<LoadingState text="正在读取推理强度设置…" />
+				)
 			) : (
 				<>
+					{/* 写操作失败的透出位：数据已就绪，只与内容并存，不与加载态并存。 */}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="provider-row">
 						<div className="provider-main">
 							<span className="provider-name">新建会话的初始档位</span>
@@ -185,68 +202,85 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 				)}
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-			{testResult !== undefined && (
-				<div className={`test-result${testResult.ok ? " ok" : ""}`}>{testResult.message}</div>
-			)}
+			{/*
+				三态互斥（DESIGN.md §4）：`config` 未回时**不能**渲染下面那一行 ——
+				它给出「未配置 · 工具会提醒你配置」的结论，把「还没读到」说成「确实没配 Key」
+				（与本期在其它分区修掉的同型误报一致）。写法与同文件其余分区同款：
+				未就绪时错误态 + 重拉，否则加载态。
+			*/}
+			{config === undefined ? (
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void refresh()} />
+				) : (
+					<LoadingState text="正在读取联网搜索设置…" />
+				)
+			) : (
+				<>
+					{/* 写操作（保存/清除）失败的透出位：数据已就绪，只与内容并存。 */}
+					{error !== undefined && <ErrorState message={error} />}
+					{testResult !== undefined && (
+						<div className={`test-result${testResult.ok ? " ok" : ""}`}>{testResult.message}</div>
+					)}
 
-			<div className="provider-row">
-				<div className="provider-main">
-					<span className={`provider-dot${hasKey ? " on" : ""}`} />
-					<span className="provider-name">
-						{WEB_SEARCH_PROVIDERS.find((p) => p.id === config?.providerId)?.name ?? "未配置"}
-					</span>
-					<span className="provider-meta">
-						{hasKey ? "已保存 API Key · 对话中的「联网搜索」可直接使用" : "未配置 · 工具会提醒你配置"}
-					</span>
-					<span className="bar-spacer" />
-					<button type="button" className="mini-btn" disabled={busy} onClick={() => setOpen((v) => !v)}>
-						{hasKey ? "更换" : "配置"}
-					</button>
-				</div>
+					<div className="provider-row">
+						<div className="provider-main">
+							<span className={`provider-dot${hasKey ? " on" : ""}`} />
+							<span className="provider-name">
+								{WEB_SEARCH_PROVIDERS.find((p) => p.id === config?.providerId)?.name ?? "未配置"}
+							</span>
+							<span className="provider-meta">
+								{hasKey ? "已保存 API Key · 对话中的「联网搜索」可直接使用" : "未配置 · 工具会提醒你配置"}
+							</span>
+							<span className="bar-spacer" />
+							<button type="button" className="mini-btn" disabled={busy} onClick={() => setOpen((v) => !v)}>
+								{hasKey ? "更换" : "配置"}
+							</button>
+						</div>
 
-				{open && (
-				<div className="key-input">
-					<SelectField
-						ariaLabel="搜索服务商"
-						value={providerId}
-						disabled={busy}
-						placeholder="选择搜索服务商"
-						options={WEB_SEARCH_PROVIDERS.map((p) => ({ value: p.id, label: `${p.name} — ${p.description}` }))}
-						onChange={(value) => setProviderId(value as WebSearchProviderId)}
-					/>
-						<input
-							type="password"
-							value={apiKey}
-							autoComplete="off"
-							placeholder="粘贴 API Key，回车保存"
-							onChange={(e) => setApiKey(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") save();
-								if (e.key === "Escape") {
-									setApiKey("");
-									setOpen(false);
-								}
-							}}
-						/>
-						<button
-							type="button"
-							className="mini-btn"
-							disabled={providerId === "" || apiKey.trim() === ""}
-							title={
-								providerId === ""
-									? "请先选择搜索服务商"
-									: apiKey.trim() === ""
-										? "请填写 API Key"
-										: undefined
-							}
-							onClick={save}
-						>
-							保存
-						</button>
+						{open && (
+						<div className="key-input">
+							<SelectField
+								ariaLabel="搜索服务商"
+								value={providerId}
+								disabled={busy}
+								placeholder="选择搜索服务商"
+								options={WEB_SEARCH_PROVIDERS.map((p) => ({ value: p.id, label: `${p.name} — ${p.description}` }))}
+								onChange={(value) => setProviderId(value as WebSearchProviderId)}
+							/>
+								<input
+									type="password"
+									value={apiKey}
+									autoComplete="off"
+									placeholder="粘贴 API Key，回车保存"
+									onChange={(e) => setApiKey(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") save();
+										if (e.key === "Escape") {
+											setApiKey("");
+											setOpen(false);
+										}
+									}}
+								/>
+								<button
+									type="button"
+									className="mini-btn"
+									disabled={providerId === "" || apiKey.trim() === ""}
+									title={
+										providerId === ""
+											? "请先选择搜索服务商"
+											: apiKey.trim() === ""
+												? "请填写 API Key"
+												: undefined
+									}
+									onClick={save}
+								>
+									保存
+								</button>
+							</div>
+						)}
 					</div>
-				)}
-			</div>
+				</>
+			)}
 		</section>
 	);
 }
@@ -317,12 +351,17 @@ function DefaultWorkspaceSection({ busy }: { readonly busy: boolean }): React.JS
 				)}
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{info === undefined ? (
-				<LoadingState text="正在读取存储路径…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void refresh()} />
+				) : (
+					<LoadingState text="正在读取存储路径…" />
+				)
 			) : (
 				<>
+					{/* 改写/还原失败的透出位。 */}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="provider-row">
 						<div className="provider-main">
 							{/* 路径可能很长，悬停给全量（同 sidebar 空间组头的做法）。 */}
@@ -384,12 +423,17 @@ function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Elem
 				{current === CUSTOM_PRESET && <span className="provider-tag">自定义</span>}
 			</header>
 
-			{error !== undefined && <ErrorState message={error} />}
-
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
 			{info === undefined ? (
-				<LoadingState text="正在读取权限设置…" />
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void refresh()} />
+				) : (
+					<LoadingState text="正在读取权限设置…" />
+				)
 			) : (
 				<>
+					{/* 切换预设失败的透出位。 */}
+					{error !== undefined && <ErrorState message={error} />}
 					<div className="preset-list">
 						{PERMISSION_PRESETS.map((preset) => (
 							<button

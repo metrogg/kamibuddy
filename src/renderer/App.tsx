@@ -31,7 +31,7 @@ import { groupSessions } from "./session-groups.ts";
 import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
-import { ArtifactPanel, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
+import { ArtifactPanel, clampPanelWidth, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
 import { SourcesPanel } from "./sources-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
@@ -131,8 +131,17 @@ export function App(): React.JSX.Element {
 	 * 单槽会覆盖掉后来的，那些工具就永久挂在 daemon 侧等答。
 	 */
 	const [questionnaires, setQuestionnaires] = useState<readonly QuestionnaireRequest[]>([]);
-	/** 侧栏「任务」区的历史会话列表（daemon 组装好 title/current，UI 不推导）。 */
-	const [taskList, setTaskList] = useState<readonly SessionSummary[]>([]);
+	/**
+	 * 侧栏「任务」区的历史会话列表（daemon 组装好 title/current，UI 不推导）。
+	 *
+	 * 初值 undefined = 还没拉回来（未就绪），与「拉回来但确实没有历史任务」（[]）
+	 * 分开（同下方 experts 的口径）。预置 [] 会把 ready 之后、列表返回之前这段
+	 * 窗口判成 length === 0，侧栏于是闪一下/停在「暂无历史任务」—— 那不是空，
+	 * 是还没拿到（DESIGN.md §4、§6）。失败同样不静默：透出到 taskListError，
+	 * 由侧栏就地呈现 + 重试。
+	 */
+	const [taskList, setTaskList] = useState<readonly SessionSummary[] | undefined>(undefined);
+	const [taskListError, setTaskListError] = useState<string | undefined>(undefined);
 	/** 「空间」组的名称覆盖元数据（workspaces.json），组本身由会话派生。 */
 	const [groupMetas, setGroupMetas] = useState<readonly WorkspaceGroupMeta[]>([]);
 	/**
@@ -143,7 +152,9 @@ export function App(): React.JSX.Element {
 	 *
 	 * 初值 undefined = 还没拉回来（未就绪），与「拉回来但库里是空的」（[]）分开 ——
 	 * 否则专家页会把「还没拿到」显示成「搜不到」。失败不再静默：透出到
-	 * expertsError，由专家页就地呈现（失败 ≠ 库为空），子菜单侧按空集降级。
+	 * expertsError，由专家页就地呈现（失败 ≠ 库为空）。undefined 原样下发给
+	 * 对话页/首页与「+」菜单：子菜单自己区分「正在读取专家…」与「还没有可用专家」
+	 *（各调用点在传参处不再 `?? []` 抹平这个区别）。
 	 */
 	const [experts, setExperts] = useState<readonly ExpertListItem[] | undefined>(undefined);
 	const [expertsError, setExpertsError] = useState<string | undefined>(undefined);
@@ -183,6 +194,42 @@ export function App(): React.JSX.Element {
 		window.kami.listWorkspaceGroups().then(setGroupMetas).catch(() => { });
 	}, []);
 
+	/**
+	 * 会话列表首拉 / 重拉（可重复调用：首拉由 activate 调，侧栏错误态里的
+	 * 「重试」也调它）。失败不再静默吞掉 —— 写 taskListError 由侧栏就地呈现；
+	 * 成功必须清空它，否则重试成功后错误条会赖着不走。
+	 */
+	const reloadSessions = useCallback((): void => {
+		window.kami
+			.listSessions()
+			.then((sessions) => {
+				setTaskList(sessions);
+				setTaskListError(undefined);
+			})
+			.catch((error: unknown) => {
+				setTaskListError(error instanceof Error ? error.message : String(error));
+			});
+	}, []);
+
+	/**
+	 * 专家库首拉 / 重拉（与 reloadSessions 同款语义）。
+	 *
+	 * 原先只在 activate 里拉一次、失败即死：专家页两处错误态都没有出口，
+	 * 用户只能重启应用。抽成可重复调用的函数后首拉与重试走同一条路径
+	 * （不会各写一份而漂移），并把函数下发给专家页接 onRetry。
+	 */
+	const reloadExperts = useCallback((): void => {
+		window.kami
+			.listExperts()
+			.then((list) => {
+				setExperts(list);
+				setExpertsError(undefined);
+			})
+			.catch((error: unknown) => {
+				setExpertsError(error instanceof Error ? error.message : String(error));
+			});
+	}, []);
+
 	useEffect(() => {
 		// StrictMode 下 effect 会跑两遍，卸载后的异步回调必须能被丢弃。
 		let disposed = false;
@@ -197,6 +244,12 @@ export function App(): React.JSX.Element {
 		const activate = (): void => {
 			if (disposed || activated) return;
 			activated = true;
+			/*
+			 * 先置 ready 再拉列表：ready 是「引擎已就绪」的解闸信号（首页输入卡
+			 * 等它开门），首屏不该为一次列表往返而延后。这个顺序不再会误报 ——
+			 * 「在途」由 taskList === undefined 表达（见其 state 注释），
+			 * ready 之后、列表返回之前侧栏走加载态而不是「暂无历史任务」。
+			 */
 			setLink({ kind: "ready" });
 			window.kami
 				.snapshot()
@@ -205,14 +258,10 @@ export function App(): React.JSX.Element {
 				})
 				.catch(fail);
 			// 首屏初拉保留：推送通道只推变更，列表初值要自己拉一次。
-			window.kami.listSessions().then(setTaskList).catch(() => { });
-			window.kami.listExperts()
-				.then((list) => setExperts(list))
-				// 拉取失败透出为状态（不再静默吞掉）：专家页要能区分「库为空」与
-				// 「没拉到」，否则失败会显示成「没有找到匹配的专家」。
-				.catch((error: unknown) => {
-					setExpertsError(error instanceof Error ? error.message : String(error));
-				});
+			// 失败透出为状态（不再静默吞掉）：侧栏要能区分「确实没有任务」与
+			// 「没拉到」，后者给重试出口。专家库同理，失败不能显示成「搜不到」。
+			reloadSessions();
+			reloadExperts();
 			refreshGroups();
 			// previewBaseUrl 不在此初始化：快照落地后 state.cwd 就位，
 			// 按 cwd 取 baseUrl 的 effect 会自动触发（见 Task 3.4）。
@@ -254,10 +303,10 @@ export function App(): React.JSX.Element {
 				// 成功/失败文案只能从事件流拿；未读点则由推送翻转检测负责
 				// （覆盖不转发会话事件的 automation run）。
 				if (event.type === "run_finished" && event.outcome === "completed") {
-					const title = taskListRef.current.find((t) => t.id === sessionId)?.title;
+					const title = taskListRef.current?.find((t) => t.id === sessionId)?.title;
 					showToast(title === undefined ? "后台任务已完成" : `任务「${title}」已完成`, "success");
 				} else if (event.type === "run_error") {
-					const title = taskListRef.current.find((t) => t.id === sessionId)?.title;
+					const title = taskListRef.current?.find((t) => t.id === sessionId)?.title;
 					showToast(title === undefined ? "后台任务运行失败" : `任务「${title}」运行失败`, "error");
 				}
 				return;
@@ -286,8 +335,12 @@ export function App(): React.JSX.Element {
 		const offListChanged = window.kami.onTaskListChanged((sessions) => {
 			if (disposed) return;
 			// 翻转检测要在替换列表前做：prev 是上一份推送（渲染期写入 taskListRef）。
-			const finished = detectFinishedRuns(taskListRef.current, sessions);
+			// 尚无上一份（undefined）时按空列表算：判不出「之前在跑」，不补打未读。
+			const finished = detectFinishedRuns(taskListRef.current ?? [], sessions);
 			setTaskList(sessions);
+			// 推送落地即「列表拿到了」：清掉首拉失败的残留错误，否则错误条会
+			// 压在刚推来的列表上（错误分支优先），只能靠手动重试才消失。
+			setTaskListError(undefined);
 			for (const item of finished) {
 				// 正看着它完成（当前会话 + 对话页）就不标未读。
 				if (item.id === visibleSessionIdRef.current && viewRef.current === "chat") continue;
@@ -370,6 +423,45 @@ export function App(): React.JSX.Element {
 			offPermission();
 			offQuestionnaire();
 			offAutomation();
+		};
+	}, []);
+
+	/**
+	 * 拖拽越界兜底（spec: harden-desktop-interactions）。
+	 *
+	 * 全仓此前没有 document 级 dragover/drop 监听：把文件拖到输入卡**之外**
+	 * （消息流、首页空白）会走 Chromium 默认行为——导航到该 file:// URL，
+	 * 整个应用被文件页顶掉（当前会话视觉上消失）。这里在 document 层补上拦截。
+	 *
+	 * 为什么不会吃掉输入卡既有的投递（对照 composer.tsx:250-252 与
+	 * image-attachments.tsx:250-259 的实际接线）：
+	 * - 输入卡把 onDrop/onDragOver/onDragLeave 挂在 `.composer-card` 上；React 的
+	 *   合成事件在 root 容器触发，**先于** document 的冒泡监听，所以这里看到的
+	 *   永远是被输入卡处理过之后的事件。
+	 * - 输入卡的 onDrop 对**含文件**的拖放已 preventDefault（:253）→ 这里读到的
+	 *   event.defaultPrevented 为 true，直接放行（再拦也是幂等空操作）；
+	 *   对**不含文件**的文本拖放它故意提前 return（:252，好让 textarea 原生插入文本），
+	 *   而文本拖放不是「文件导航」威胁，这里也按 types 放行，不误伤。
+	 * - dragover 一律 preventDefault：只把窗口标成合法放置目标，阻止 Chromium
+	 *   把「松开」解读成导航；textarea 本就是合法目标，不受影响。
+	 */
+	useEffect(() => {
+		const onDragOver = (event: DragEvent): void => {
+			event.preventDefault();
+		};
+		const onDrop = (event: DragEvent): void => {
+			// 上游（输入卡）已消费该 drop：保持原样，不重复处理。
+			if (event.defaultPrevented) return;
+			// 只兜底文件拖放；文本/链接拖放的默认行为交给目标元素自理，
+			// 外部链接导航另有主进程 will-navigate 守卫接住。
+			if (event.dataTransfer?.types.includes("Files") !== true) return;
+			event.preventDefault();
+		};
+		document.addEventListener("dragover", onDragOver);
+		document.addEventListener("drop", onDrop);
+		return () => {
+			document.removeEventListener("dragover", onDragOver);
+			document.removeEventListener("drop", onDrop);
 		};
 	}, []);
 
@@ -492,8 +584,26 @@ export function App(): React.JSX.Element {
 	useEffect(() => {
 		refreshPreviewBaseUrl();
 	}, [currentCwd, refreshPreviewBaseUrl]);
-	/** 面板宽度（px，WorkBuddy 默认 440、sash 拖拽 clamp [340, 800]）。 */
+	/**
+	 * 面板宽度（px，WorkBuddy 默认 440）。上下限见 artifact-panel.tsx 的 clampPanelWidth：
+	 * 下限 340 固定，**上限随窗口可用宽动态计算**（不再是硬编码 800），
+	 * 拖拽 / 键盘调宽 / 缩窗回落三条路径共用同一份 clamp。
+	 */
 	const [panelWidth, setPanelWidth] = useState(440);
+	/**
+	 * 窗口缩窄时把面板压回可用宽（spec: harden-desktop-interactions 的最小宽度不溢出）。
+	 *
+	 * 只在拖拽/键盘里 clamp 不够：用户可能在宽窗口把面板拖到上限，再缩小窗口 ——
+	 * 那一刻没人调 setPanelWidth，面板会一直超出视口（`.app` 的 overflow: hidden
+	 * 只能裁掉它，主区仍被挤没了）。挂载时也跑一次，兜住「小窗口 + 初始 440」。
+	 * 走函数式更新，宽度写路径依然只有 setPanelWidth 一条。
+	 */
+	useEffect(() => {
+		const onResize = (): void => setPanelWidth((current) => clampPanelWidth(current));
+		onResize();
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
 	/** 面板全屏态：absolute 覆盖主内容区。 */
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
 	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。默认关闭——用户进入对话后手动展开。 */
@@ -761,7 +871,7 @@ export function App(): React.JSX.Element {
 	 */
 	const resumeTask = useCallback(
 		(path: string) => {
-			const target = taskListRef.current.find((t) => t.path === path);
+			const target = taskListRef.current?.find((t) => t.path === path);
 			window.kami
 				.resumeSession(path)
 				.then(() => {
@@ -808,7 +918,7 @@ export function App(): React.JSX.Element {
 	 */
 	const deleteTask = useCallback(
 		(path: string) => {
-			const target = taskListRef.current.find((t) => t.path === path);
+			const target = taskListRef.current?.find((t) => t.path === path);
 			window.kami
 				.deleteSession(path)
 				.then(() => {
@@ -842,7 +952,7 @@ export function App(): React.JSX.Element {
 	 */
 	const exportTask = useCallback(
 		(path: string) => {
-			const isCurrent = taskList.some((t) => t.path === path && t.current);
+			const isCurrent = taskList?.some((t) => t.path === path && t.current) ?? false;
 			window.kami
 				.exportSession(path)
 				.then(({ outputPath }) => {
@@ -974,7 +1084,7 @@ export function App(): React.JSX.Element {
 	 */
 	const resumeRunSession = useCallback(
 		(sessionId: string) => {
-			const hit = taskList.find((t) => t.id === sessionId);
+			const hit = taskList?.find((t) => t.id === sessionId);
 			if (hit === undefined) {
 				showToast("本次运行的会话已不在列表中（可能已删除）", "warning");
 				return;
@@ -994,9 +1104,12 @@ export function App(): React.JSX.Element {
 	/**
 	 * 侧栏两区分组：组由会话派生（session-groups.ts 头注释有理由），
 	 * groupMetas 只承载显示名覆盖，回退目录 basename。
+	 *
+	 * 列表未就绪时整份传 undefined 而不是空分组：空分组会把「还没拉到」渲染成
+	 * 「一个任务/空间都没有」，与刚刚才分开的在途/空又混成一团（Task 1.1）。
 	 */
 	const sidebarGroups = useMemo(
-		() => groupSessions(taskList, groupMetas),
+		() => (taskList === undefined ? undefined : groupSessions(taskList, groupMetas)),
 		[taskList, groupMetas],
 	);
 	/**
@@ -1034,6 +1147,39 @@ export function App(): React.JSX.Element {
 		[questionnaires, visibleSessionId],
 	);
 
+	/**
+	 * 来源 / 变更聚合（面板数据源）：原来是 JSX 内联调用 —— 对话页每次 App 重渲染
+	 * （面板开合、选文件、toast、审批弹窗…）都要重扫一遍全部 entries。长会话 entries
+	 * 上千条时这是线性成本，按 entries 引用 memo 后只在消息流真变化时重算。
+	 * 注意：流式 delta 会让 entries 换引用，所以流式期间仍按 delta 重算；这里省的是
+	 * 「与消息流无关的重渲染」（折叠开合、面板交互这些在一次会话里同样高频）。
+	 */
+	const sources = useMemo(() => collectSources(conversation.entries), [conversation.entries]);
+	const changes = useMemo(() => collectChanges(conversation.entries), [conversation.entries]);
+
+	/**
+	 * 正文路径徽章点击（WorkBuddy openPath 同口径）：文件进右侧预览面板。
+	 * 两类落外部打开 —— 目录（面板没有目录预览，shell.openPath 开文件管理器）与
+	 * 工作区外文件（静态服务/readArtifact 都有边界，预览必败）。
+	 *
+	 * 必须是 useCallback：这个函数一路传到 Markdown 组件的 onPathClick，是
+	 * React.memo 能否挡住「历史消息重解析」的关键 —— 内联箭头每次渲染换引用，
+	 * 会把 Markdown 的 memo 全部击穿。依赖只有 cwd 与两个稳定的 openXxx；
+	 * 流式期间 cwd 不变，引用因此稳定（切会话换 cwd 时才有新引用，本就要重渲染）。
+	 */
+	const openPath = useCallback((path: string, kind: "file" | "directory") => {
+		const cwd = conversation.state.cwd;
+		const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
+		const inWorkspace = cwd !== undefined && norm(path).startsWith(`${norm(cwd)}/`);
+		if (kind === "directory" || !inWorkspace) {
+			openArtifact(path);
+			return;
+		}
+		setPanelOpen(true);
+		setSourcesOpen(false);
+		openPreview({ kind: "file", path });
+	}, [conversation.state.cwd, openArtifact, openPreview]);
+
 	return (
 		<div className="app">
 			{/* 侧栏常驻、与视图无关（WorkBuddy 的真实布局）：首页与对话页都有，
@@ -1042,6 +1188,8 @@ export function App(): React.JSX.Element {
 				<Sidebar
 					link={link}
 					groups={sidebarGroups}
+					tasksError={taskListError}
+					onReloadTasks={reloadSessions}
 					unreadIds={unreadIds}
 					pendingConfirmIds={pendingConfirmIds}
 					onNewTask={newTask}
@@ -1073,7 +1221,7 @@ export function App(): React.JSX.Element {
 					interactions={conversation.availableModes}
 					interactionId={conversation.state.interactionId}
 					onInteractionChange={changeInteraction}
-					experts={experts ?? []}
+					experts={experts}
 					expertId={conversation.state.expertId}
 					onSelectExpert={selectExpert}
 					prefill={pendingPrefill}
@@ -1097,7 +1245,7 @@ export function App(): React.JSX.Element {
 					onAbort={abort}
 					onInteractionChange={changeInteraction}
 					turnFoldCache={turnFoldCacheRef}
-					experts={experts ?? []}
+					experts={experts}
 					onSelectExpert={selectExpert}
 					onOpenExperts={() => setView("skills")}
 					prefill={pendingPrefill}
@@ -1112,23 +1260,7 @@ export function App(): React.JSX.Element {
 							openPreview({ kind: "file", path });
 						}
 					}}
-					onPathClick={(path, kind) => {
-						// 正文路径徽章（WorkBuddy openPath 同口径）：文件进右侧预览面板。
-						// 两类落外部打开 —— 目录（面板没有目录预览，shell.openPath 开
-						// 文件管理器）与工作区外文件（静态服务/readArtifact 都有边界，
-						// 预览必败）。
-						const cwd = conversation.state.cwd;
-						const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
-						const inWorkspace =
-							cwd !== undefined && norm(path).startsWith(`${norm(cwd)}/`);
-						if (kind === "directory" || !inWorkspace) {
-							openArtifact(path);
-							return;
-						}
-						setPanelOpen(true);
-						setSourcesOpen(false);
-						openPreview({ kind: "file", path });
-					}}
+					onPathClick={openPath}
 					onOpenPanelGroup={(_group) => {
 						// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
 						// 面板概览视图里常驻展示，无需额外展开动作。
@@ -1167,6 +1299,7 @@ export function App(): React.JSX.Element {
 					onToast={showToast}
 					experts={experts}
 					expertsError={expertsError}
+					onRetryExperts={reloadExperts}
 					onUseExpert={useExpert}
 					onCreateExpert={createExpert}
 				/>
@@ -1194,14 +1327,14 @@ export function App(): React.JSX.Element {
 		   sourcesOpen 时渲染 SourcesPanel，关闭即回到产物面板（panelOpen 不动）。 */}
 			{view === "chat" && panelOpen && (sourcesOpen ? (
 				<SourcesPanel
-					sources={collectSources(conversation.entries)}
+					sources={sources}
 					width={panelWidth}
 					onClose={() => setSourcesOpen(false)}
 				/>
 			) : (
 				<ArtifactPanel
 					artifacts={conversation.artifacts}
-					changes={collectChanges(conversation.entries)}
+					changes={changes}
 					cwd={conversation.state.cwd}
 					previewBaseUrl={previewBaseUrl}
 					tabs={previewTabs}

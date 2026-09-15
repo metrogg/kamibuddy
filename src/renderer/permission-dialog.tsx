@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PermissionRequest } from "@shared/ipc.ts";
 import { firstTokenPrefix } from "@shared/permissions.ts";
 import { IconChevronDown } from "./icons.tsx";
+import { useModalFocus } from "./use-modal-focus.ts";
 
 interface PermissionDialogProps {
 	readonly request: PermissionRequest;
@@ -32,15 +33,23 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 	const denyRef = useRef<HTMLButtonElement>(null);
 	const allowRef = useRef<HTMLButtonElement>(null);
 
-	// 高风险时默认焦点给「拒绝」：用户习惯性回车不应该批准一次危险操作。
-	// 请求换了就重新聚焦（同一次会话里可能连续来几条）。
+	// 这里只做状态重置（请求换了就清掉上次的勾选与展开态）。
+	// 焦点不在这里动：打开时的聚焦（含高风险默认给「拒绝」）已由下面的 useModalFocus
+	// 的 initialFocus 承接 —— 两处各 focus 一次会互相打架（后者受 React ref 提交顺序影响）。
 	useEffect(() => {
-		const target = request.risk === "high" ? denyRef.current : allowRef.current;
-		target?.focus();
 		setRemember(false);
 		setRememberRule(false);
 		setOpen(false);
 	}, [request.id, request.risk]);
+
+	/*
+	 * 焦点陷阱 / 焦点归还 / 背景 inert 由共享 hook 负责；打开时的落点用 initialFocus 指定。
+	 * 高风险时默认焦点给「拒绝」：用户习惯性回车不应该批准一次危险操作（该安全默认沿用未变）。
+	 * 宿主按 approvals[0].id 挂 key 重挂载，连来几条请求时 hook 会随新节点重新走一遍「移入」。
+	 */
+	const cardRef = useModalFocus({
+		initialFocus: () => (request.risk === "high" ? denyRef.current : allowRef.current),
+	});
 
 	// Esc 视为拒绝 —— 安全侧默认。不提供「点遮罩关闭」，避免误触批准或悬空。
 	useEffect(() => {
@@ -83,6 +92,7 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 				role="alertdialog"
 				aria-modal="true"
 				aria-labelledby="permission-summary"
+				ref={cardRef}
 			>
 				<div className="permission-head">
 					<span className={`permission-badge risk-${request.risk}`}>{RISK_TEXT[request.risk]}</span>

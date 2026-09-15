@@ -21,6 +21,7 @@ import { formatMessageTime } from "@shared/message-time.ts";
 import { IconBack, IconChevronDown, IconPlus } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 import type { ToastType } from "./toast.tsx";
+import { useModalFocus } from "./use-modal-focus.ts";
 
 interface AutomationsViewProps {
 	/** 当前工作空间（新建表单 cwd 的默认值）。瞬态未就绪时为 undefined。 */
@@ -277,9 +278,15 @@ export function AutomationsView({
 			</header>
 
 			<div className="settings-body">
-				{error !== undefined && <ErrorState message={error} />}
-
-				{tasks === undefined ? (
+				{/*
+				 * 三态互斥（照 skills-view.tsx 的标尺）：失败 → 就地错误卡 + 重试；未就绪 →
+				 * 加载态；数据回来且为空 → 空态。原来错误条与「正在读取…」并存 —— 拉取失败时
+				 * tasks 永远停在 undefined，页面永久卡在加载态，且没有任何恢复出口
+				 *（DESIGN.md §4：失败就地呈现 + 重试动作）。
+				 */}
+				{error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void load()} />
+				) : tasks === undefined ? (
 					<LoadingState />
 				) : tasks.length === 0 ? (
 					<EmptyState
@@ -500,6 +507,9 @@ function AutomationForm({
 }): React.JSX.Element {
 	const patch = (part: Partial<FormDraft>): void => onChange({ ...draft, ...part });
 
+	// 焦点陷阱 / 归还 / 背景 inert 交给共享 hook；落点用默认值（首个可聚焦元素 = 「名称」输入框）。
+	const cardRef = useModalFocus();
+
 	// Esc 关闭：遮罩不响应点击是防误触（表单内容多，误触一次全丢），
 	// 但键盘用户需要一个非指针的退出路径，语义与「取消」按钮一致。
 	// 保存中不关：与「取消」按钮 disabled 同口径，避免请求在途时弹层消失。
@@ -515,7 +525,7 @@ function AutomationForm({
 		// 遮罩不响应点击关闭：表单内容多，误触一次全丢，只能从按钮退出
 		// （与权限弹窗「不许悬空」的考虑一致）。
 		<div className="modal-backdrop">
-			<div className="auto-form-card" role="dialog" aria-modal="true" aria-labelledby="auto-form-title">
+			<div className="auto-form-card" role="dialog" aria-modal="true" aria-labelledby="auto-form-title" ref={cardRef}>
 				<h2 className="save-space-title" id="auto-form-title">
 					{draft.id === undefined ? "新建定时任务" : "编辑定时任务"}
 				</h2>

@@ -433,7 +433,12 @@ function sanitizeFileName(name: string): string {
 
 export function WidgetView({ card }: { readonly card: ToolCard }): React.JSX.Element {
 	// result 优先：终态内容以工具结果 JSON 为准；args（streamArgs）是流式期的兜底。
-	const result = card.detail === undefined ? undefined : parseWidgetResult(card.detail);
+	// JSON.parse 按 [card.detail] memo：终态 widget 卡在长会话里会被每个 delta 的
+	// 父级重渲染带着重挂载，不 memo 等于每次渲染都重新 parse 一遍同一份 JSON。
+	const result = useMemo(
+		() => (card.detail === undefined ? undefined : parseWidgetResult(card.detail)),
+		[card.detail],
+	);
 	const partial = useMemo(
 		() => (card.streamArgs === undefined ? EMPTY_PARTIAL : extractPartialWidgetArgs(card.streamArgs)),
 		[card.streamArgs],

@@ -14,7 +14,7 @@
  * 只要 SessionHost 还透传 pi 的 isStreaming，测试必红。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
@@ -1360,5 +1360,193 @@ describe("request_snapshot（transformContext 钩子）", () => {
 			| Record<string, unknown>
 			| undefined;
 		expect(snap !== undefined && "systemSegments" in snap).toBe(false);
+	});
+});
+
+/* ── 流式 delta 合批（spec: optimize-stream-rendering Task 2）───────────── */
+
+type AssistantStartedEvent = Extract<SessionEvent, { type: "assistant_started" }>;
+type TextDeltaEvent = Extract<SessionEvent, { type: "assistant_text_delta" }>;
+type ThinkingDeltaEvent = Extract<SessionEvent, { type: "assistant_thinking_delta" }>;
+
+/** 驱动一次 message_update 的正文/思考 delta（partial 内容对合批无意义，给空）。 */
+function streamDelta(
+	host: SessionHost,
+	inner: { type: "text_delta" | "thinking_delta"; delta: string },
+): void {
+	translate(host, {
+		type: "message_update",
+		assistantMessageEvent: { ...inner, partial: { content: [] } },
+	} as unknown as AgentSessionEvent);
+}
+
+/** 按到达顺序抽出 delta 事件（类型 + 拼接后的 delta），用于断言分界与顺序。 */
+function deltaTrace(events: readonly SessionEvent[]): readonly (readonly [string, string])[] {
+	return events
+		.filter(
+			(e): e is TextDeltaEvent | ThinkingDeltaEvent =>
+				e.type === "assistant_text_delta" || e.type === "assistant_thinking_delta",
+		)
+		.map((e) => [e.type === "assistant_text_delta" ? "text" : "thinking", e.delta] as const);
+}
+
+/**
+ * 合批正确性的三条不变量：
+ * 1. 连续同类型 delta 合并为一条 emit，`delta` 为拼接结果；
+ * 2. 类型切换 / message_end / turn 结束（含 abort）都必须 flush —— 不丢最后一批、不串序；
+ * 3. 合批后的拼接结果与「逐个 emit」逐字一致（对拍）。
+ */
+describe("流式 delta 合批（16ms 窗口）", () => {
+	/** 每个用例自带假定时器并在 finally 还原，避免污染同文件其它用例。 */
+	function withFakeTimers(run: () => void): void {
+		vi.useFakeTimers();
+		try {
+			run();
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
+	it("连续同类型 delta 在窗口到期时合并为一条 emit，delta 为拼接结果", () => {
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			assistantStart(host);
+			const id = events.find((e): e is AssistantStartedEvent => e.type === "assistant_started")
+				?.messageId;
+
+			streamDelta(host, { type: "text_delta", delta: "你" });
+			streamDelta(host, { type: "text_delta", delta: "好" });
+			streamDelta(host, { type: "text_delta", delta: "呀" });
+
+			// 窗口未到期：一条都不发（合批生效，不是逐 token 上屏）。
+			expect(deltaTrace(events)).toEqual([]);
+
+			vi.advanceTimersByTime(16);
+
+			expect(deltaTrace(events)).toEqual([["text", "你好呀"]]);
+			const emitted = events.find((e): e is TextDeltaEvent => e.type === "assistant_text_delta");
+			// messageId 与 assistant_started 一致：合批不改定位契约。
+			expect(emitted?.messageId).toBe(id);
+		});
+	});
+
+	it("类型切换先 flush：思考与正文的到达顺序与内容边界不变", () => {
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			assistantStart(host);
+
+			streamDelta(host, { type: "thinking_delta", delta: "让我" });
+			streamDelta(host, { type: "thinking_delta", delta: "想想" });
+			streamDelta(host, { type: "text_delta", delta: "答案是" });
+			streamDelta(host, { type: "text_delta", delta: " 42" });
+
+			// 切到正文的那一刻，思考那批立即发出（不等窗口到期）。
+			expect(deltaTrace(events)).toEqual([["thinking", "让我想想"]]);
+
+			vi.advanceTimersByTime(16);
+			expect(deltaTrace(events)).toEqual([
+				["thinking", "让我想想"],
+				["text", "答案是 42"],
+			]);
+		});
+	});
+
+	it("message_end 强制 flush：最后一批不丢，且在终态校正（assistant_done）之前", () => {
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			assistantStart(host);
+			streamDelta(host, { type: "text_delta", delta: "最后半句" });
+
+			// 不推进定时器，直接收消息：必须由 message_end 把最后一批逼出来。
+			assistantEnd(host, "stop", { text: "最后半句" });
+
+			expect(deltaTrace(events)).toEqual([["text", "最后半句"]]);
+			const deltaIdx = events.findIndex((e) => e.type === "assistant_text_delta");
+			const doneIdx = events.findIndex((e) => e.type === "assistant_done");
+			expect(deltaIdx).toBeGreaterThanOrEqual(0);
+			expect(deltaIdx).toBeLessThan(doneIdx);
+		});
+	});
+
+	it("中断路径 flush：aborted 收尾时已缓冲的 delta 仍送达（不丢半句）", () => {
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			runStarted(host);
+			assistantStart(host);
+			streamDelta(host, { type: "thinking_delta", delta: "想了半句" });
+			streamDelta(host, { type: "text_delta", delta: "答了半" });
+
+			// pi 的 abort 收尾：message_end（stopReason=aborted）→ agent_end（判为 cancelled）。
+			assistantEnd(host, "aborted", { errorMessage: "Request was aborted" });
+			agentEnd(host, false, [{ role: "assistant", stopReason: "aborted" }]);
+
+			expect(deltaTrace(events)).toEqual([
+				["thinking", "想了半句"],
+				["text", "答了半"],
+			]);
+			const deltaIdx = events.findIndex((e) => e.type === "assistant_text_delta");
+			const doneIdx = events.findIndex((e) => e.type === "assistant_done");
+			expect(deltaIdx).toBeLessThan(doneIdx);
+			expect(events.find((e) => e.type === "run_finished")).toMatchObject({ outcome: "cancelled" });
+		});
+	});
+
+	it("agent_end 强制 flush：没有配对 message_end 的收尾也不会丢已缓冲的 delta", () => {
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			runStarted(host);
+			assistantStart(host);
+			streamDelta(host, { type: "text_delta", delta: "残留" });
+
+			agentEnd(host, false, []);
+
+			expect(deltaTrace(events)).toEqual([["text", "残留"]]);
+		});
+	});
+
+	it("对拍：合批后按类型拼接的结果与未合批（逐字 delta）逐字一致", () => {
+		const script: readonly { readonly type: "text_delta" | "thinking_delta"; readonly delta: string }[] = [
+			{ type: "thinking_delta", delta: "先" },
+			{ type: "thinking_delta", delta: "想" },
+			{ type: "text_delta", delta: "你" },
+			{ type: "text_delta", delta: "好" },
+			{ type: "thinking_delta", delta: "再" },
+			{ type: "text_delta", delta: "，" },
+			{ type: "text_delta", delta: "世界" },
+		];
+		// 参照实现：逐个 delta 原样拼接（等价于未合批的逐个 emit 在 renderer 侧累积）。
+		const reference = {
+			text: script.filter((d) => d.type === "text_delta").map((d) => d.delta).join(""),
+			thinking: script.filter((d) => d.type === "thinking_delta").map((d) => d.delta).join(""),
+		};
+
+		withFakeTimers(() => {
+			const events: SessionEvent[] = [];
+			const host = createHost(createFakeSession(), (e) => events.push(e));
+			assistantStart(host);
+			for (const d of script) streamDelta(host, d);
+			assistantEnd(host, "stop", { text: reference.text });
+
+			const actual = {
+				text: events
+					.filter((e): e is TextDeltaEvent => e.type === "assistant_text_delta")
+					.map((e) => e.delta)
+					.join(""),
+				thinking: events
+					.filter((e): e is ThinkingDeltaEvent => e.type === "assistant_thinking_delta")
+					.map((e) => e.delta)
+					.join(""),
+			};
+			expect(actual).toEqual(reference);
+
+			// 7 个 delta 被压成 4 条事件（think/text/think/text 四次类型切换）。
+			expect(deltaTrace(events)).toHaveLength(4);
+			expect(deltaTrace(events).length).toBeLessThan(script.length);
+		});
 	});
 });
