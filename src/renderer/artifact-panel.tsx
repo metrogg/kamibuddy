@@ -828,7 +828,9 @@ const MAIN_MIN_WIDTH = 320;
  * 上限必须由「窗口可用宽 - 侧栏 - 主区最小宽」决定。
  *
  * 侧栏宽从 DOM 量（index.css `.sidebar { flex: 0 0 216px }`）而不是在 TS 里再抄一份 216：
- * 侧栏收起时它整个不渲染，量到 0 恰好是对的 —— 抄常量会白占 216px，且与 CSS 双写必然漂移。
+ * 侧栏收起时 `.sidebar` 虽常驻 DOM，但 flex-basis / padding-inline / border 都归零
+ * （见 index.css 的 `[data-sidebar="collapsed"] .sidebar`），量到 0 恰好是对的
+ * —— 抄常量会白占 216px，且与 CSS 双写必然漂移。
  * 结果兜底到 PANEL_MIN_WIDTH：窗口极窄时上限不能低于下限，否则 clamp 上下限自相矛盾。
  */
 export function maxPanelWidth(): number {

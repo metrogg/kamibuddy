@@ -11,10 +11,11 @@
  * 文件内容靠模型的 read 工具去读，命令由 pi 的 prompt 自动展开。
  *
  * 用法：
- *   const ac = useAutocomplete();
- *   <textarea {...ac.textareaProps} value={draft} onChange={...合并...} />
+ *   const ac = useAutocomplete(value, setValue, textareaRef, cwd);
+ *   <textarea value={draft} onChange={ac.bind.onChange} {...ac.bind} />
  *   {ac.menu}
- * 或直接看 home-view / chat-view 的接法。
+ * 或直接看 composer.tsx（home-view / chat-view 共用）的接法——注意
+ * `bind.onCompositionStart/End` 必须接上（理由见 useAutocomplete 里的 composingRef）。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -36,6 +37,9 @@ export interface UseAutocompleteResult {
 		readonly onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 		readonly onSelect: (e: React.SyntheticEvent<HTMLTextAreaElement>) => void;
 		readonly onBlur: () => void;
+		/** IME 组合起止：组合期间不重算候选（必须与 onChange 一起接上，否则守卫恒为 false）。 */
+		readonly onCompositionStart: () => void;
+		readonly onCompositionEnd: (e: React.CompositionEvent<HTMLTextAreaElement>) => void;
 	};
 	/** 下拉元素（未打开时为 null）。 */
 	readonly menu: React.JSX.Element | null;
@@ -130,13 +134,39 @@ export function useAutocomplete(
 	const pickRef = useRef(pick);
 	pickRef.current = pick;
 
+	/**
+	 * IME composition 守卫（抄 experts-view.tsx 的同款语义）：拼音候选期间不重算候选
+	 * —— 候选串不是最终文本，边拼边过滤会让菜单随击键重建、条目不跳。
+	 * 走 ref 不走 state：它在事件处理里同步读，不需要参与渲染。
+	 */
+	const composingRef = useRef(false);
+
 	const onChange = useCallback(
 		(e: React.ChangeEvent<HTMLTextAreaElement>) => {
 			const el = e.target;
 			setValue(el.value);
+			// IME 守卫（与 experts-view.tsx 的 composingRef 同一先例、同一语义）：
+			// 拼音候选串不是最终文本，组合期间每击键都 recompute 会让候选菜单反复重建、
+			// 条目乱跳。组合结束（上屏）时用最终文本算一次（见 onCompositionEnd）。
+			if (composingRef.current) return;
 			recompute(el.value, el.selectionStart ?? el.value.length);
 		},
 		[setValue, recompute],
+	);
+
+	const onCompositionStart = useCallback(() => {
+		composingRef.current = true;
+	}, []);
+
+	const onCompositionEnd = useCallback(
+		(e: React.CompositionEvent<HTMLTextAreaElement>) => {
+			composingRef.current = false;
+			// 这里必算一次：Chromium 在 compositionend 之后补的那个 input 事件
+			// 不一定带 isComposing=false，不能指望 onChange 兜住最后一次。
+			const el = e.currentTarget;
+			recompute(el.value, el.selectionStart ?? el.value.length);
+		},
+		[recompute],
 	);
 
 	const onSelect = useCallback(
@@ -198,5 +228,9 @@ export function useAutocomplete(
 			</div>
 		);
 
-	return { bind: { onChange, onKeyDown, onSelect, onBlur }, menu, isOpen: open !== undefined };
+	return {
+		bind: { onChange, onKeyDown, onSelect, onBlur, onCompositionStart, onCompositionEnd },
+		menu,
+		isOpen: open !== undefined,
+	};
 }

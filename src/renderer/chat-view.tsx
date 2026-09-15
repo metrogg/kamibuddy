@@ -5,7 +5,7 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
 import { formatTokenCount } from "@shared/context-usage.ts";
@@ -262,7 +262,8 @@ function UserBubble({
 								aria-label="查看大图"
 								onClick={() => setPreview(part)}
 							>
-								{/* width/height 只是解码前的占位宽高比（防布局抖动），渲染尺寸由 CSS 决定。 */}
+								{/* width/height 与 CSS 的固定框同值（index.css 的 .user-bubble-images img
+								    为 160×200 定高）：解码前后盒子尺寸不变，横图不会把气泡压矮一次。 */}
 								<img src={imageDataUrl(part)} alt="" draggable={false} width={160} height={200} />
 							</button>
 						))}
@@ -1506,6 +1507,22 @@ export function ChatView({
 	// 无关重渲染；纯函数本身很轻，这处收益有限，列在此处只为口径一致。
 	const pendingLabel = useMemo(() => pendingText(entries), [entries]);
 
+	/*
+		.stream 的整列 reveal（index.css 的 stream-reveal）只在「从空到有内容」这一次播：
+		空会话里第一条消息上屏才算「首次揭示」；带历史返回对话页时 entries 挂载即非空，
+		整列 opacity 0→1 + translateY 对一份上万像素的历史是可见的整列上滑，还会为整棵
+		子树建合成层（与第 3 期 content-visibility 的性能取向相反）。
+		用 render 期比对（而不是 effect 置位）：effect 晚一个 commit，首条消息会先以
+		opacity:1 画一帧、再从 0 重播，反而闪一下。口径与上面 foldMigrationKey 的
+		「render 期派生」写法一致。
+		重置规则：entries 归零（新建/切换会话）时撤回标记，下次从空到有内容时自然会重播。
+	*/
+	const revealRef = useRef({ count: entries.length, reveal: false });
+	if (revealRef.current.count !== entries.length) {
+		revealRef.current = { count: entries.length, reveal: revealRef.current.count === 0 && entries.length > 0 };
+	}
+	const streamReveal = revealRef.current.reveal;
+
 	// 滚动跟随（对标 WorkBuddy）：在底部时新内容自动贴底；用户上滚离开底部
 	// 即停止跟随，浮现「回到底部」按钮；回到底部后恢复跟随。
 	// 跟随状态走 ref（scroll/effect 里同步读），按钮可见性走 state（要触发渲染）。
@@ -1539,8 +1556,13 @@ export function ChatView({
 		跳转同口径）。anchor-space 的 min-height 让吸顶位置与贴底位置在内容
 		不足一屏时收敛 —— 吸顶后跟随接管不会二次跳动（WorkBuddy 同款数学，
 		见 send-anchor.ts 头注）。
+		调度时机用 useLayoutEffect 而非 useEffect：这里写 scrollTop 是「补偿布局」，
+		必须在内容变高的那一帧**绘制之前**落地。IPC 推来的流式 delta 走的不是离散输入
+		事件，被动效果可能排在绘制之后冲刷 —— 那一帧「内容已长高、scrollTop 还是旧值」，
+		底部会先空出一截、下一帧再跳回来。同仓 turn-rail.tsx 的测量也是这个口径。
+		（只改调度时机：判据与三个分支逻辑一字未动。）
 	*/
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const node = scrollRef.current;
 		if (node === null) return;
 		const action = decideScrollAction({
@@ -1965,7 +1987,7 @@ export function ChatView({
 				滚动事件，跟随判定会静默失效。
 			*/}
 			<div className="stream-wrap">
-				<div className="stream" ref={scrollRef} onScroll={handleStreamScroll}>
+				<div className="stream" data-reveal={streamReveal} ref={scrollRef} onScroll={handleStreamScroll}>
 					{/*
 						轮视图渲染：每轮一个 .turn-group 容器，依次是 user 气泡、
 						回合头部（可点的轮折叠开关）、fold plan 各项、取消指示行；

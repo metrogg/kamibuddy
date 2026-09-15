@@ -32,7 +32,7 @@ import {
 	IconStats,
 	IconTrash,
 } from "./icons.tsx";
-import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
+import { EmptyState, ErrorState, LoadingState, Skeleton, Spinner } from "./state-views.tsx";
 
 /** daemon 连接状态，与 App 里的 Link 同构。侧栏底部常驻显示，试用时一眼定位「发不出消息是不是没连上」。 */
 export type LinkState =
@@ -104,6 +104,28 @@ const NAV_ITEMS = [
 
 /** 任务区默认露出的条数，其余收进「查看更多 (N)」。 */
 const TASKS_COLLAPSED_COUNT = 5;
+
+/**
+ * 任务区骨架的标题条宽度（%，相对 `.task-item-title`）。宽窄错落才像真列表，等宽像表格。
+ * 条数取 TASKS_COLLAPSED_COUNT：与真实列表默认露出的条数一致，列表到达时整区高度不变。
+ */
+const TASK_SKELETON_WIDTHS = ["72%", "54%", "84%", "46%", "63%"];
+
+/**
+ * 骨架行里标题位的排版。`.task-item-title` 平时装一行文字，换成骨架条后需要补两件事：
+ *  1. `display:flex + align-items:center`：条要落在行盒中间。真行的文字在 20.8px 行盒里
+ *     居中，条贴顶的话视觉上会整体偏高 4px；
+ *  2. `min-height: 1lh`：把这一格撑到与真实行相同的行盒高度。`1lh` = 该元素自身的行高
+ *     = 13px（`.task-item` 给的 `--text-list`）× 1.6（body 的 line-height）= 20.8px。
+ *     用 `1lh` 而不是手抄 20.8px：行高将来改了，骨架跟着走，不会悄悄错位。
+ * 于是骨架行高 = 20.8 + `.task-item-body` 的上下 padding（--space-1 × 2 = 8px）= 28.8px，
+ * 与真实行逐像素相同（这正是骨架屏「同尺寸」的落点）。
+ */
+const TASK_SKELETON_TITLE_STYLE: React.CSSProperties = {
+	display: "flex",
+	alignItems: "center",
+	minHeight: "1lh",
+};
 
 export function Sidebar({
 	link,
@@ -587,7 +609,24 @@ export function Sidebar({
 						    （连接没恢复时立即失败），也是恢复后唯一的重新拉取入口。 */
 						<ErrorState message="连接已断开，未能读取历史任务" onRetry={onReloadTasks} />
 					) : tasks === undefined ? (
-						<LoadingState />
+						/* 结构已知的等待用骨架（DESIGN.md §4「加载」一列）。行结构与真行同一批
+						   类名、同尺寸（见 TASK_SKELETON_*），所以列表到达时是「同一片区域被填上」，
+						   而不是整块内容被换掉。role="status" 承担骨架条自身 aria-hidden 掉的
+						   「在读取」语义（此前由 LoadingState 的「正在读取…」文字承担）。 */
+						<div className="task-list" role="status" aria-label="正在读取历史任务">
+							{TASK_SKELETON_WIDTHS.map((width) => (
+								<div key={width} className="task-item">
+									<div className="task-item-body">
+										<span className="task-item-title" style={TASK_SKELETON_TITLE_STYLE}>
+											<Skeleton width={width} />
+										</span>
+										<span className="task-item-meta">
+											<Skeleton width={26} />
+										</span>
+									</div>
+								</div>
+							))}
+						</div>
 					) : tasks.length === 0 ? (
 						<EmptyState title="暂无历史任务" />
 					) : (

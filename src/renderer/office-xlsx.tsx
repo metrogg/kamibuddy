@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState, type ComponentProps, type ComponentRef } from "react";
 import { Workbook } from "@fortune-sheet/react";
 import "@fortune-sheet/react/dist/index.css";
-import { ErrorState, LoadingState } from "./state-views.tsx";
+import { ErrorState, Skeleton } from "./state-views.tsx";
 
 type SheetData = ComponentProps<typeof Workbook>["data"];
 type WorkbookHandle = ComponentRef<typeof Workbook>;
@@ -74,6 +74,45 @@ function fileNameOf(url: string): string {
 	const path = url.split(/[?#]/)[0] ?? url;
 	return decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
 }
+
+/**
+ * 解析期表格骨架。与 docx/pdf 的"纸张"骨架不同，这里要对齐的不是纸、而是**满区**：
+ * fortune-sheet 的根节点是 100%×100%（`.office-sheet-host` 只给死尺寸），真实表格是
+ * 铺满内容区的滚动网格，没有纸、没有居中留边、也没有厚度 —— 所以骨架只承诺同一件事：
+ * 一块 `--bg` 白面铺满内容区（白面必须铺满：容器底色是 `--bg-raised` 灰，露灰就不像表格了）。
+ *
+ * 行列数要解析完才知道，故行数写死、格子按列对齐（真实表格的列宽也是常量，列对齐才像表）。
+ * 行高是骨架自己的节奏，不追真实行高：单元格的实际高度由列宽/字号/换行共同决定，且表格到达时
+ * 整块替换（`.office-sheet-host` 是 overflow:hidden 的死尺寸容器），不存在"到达后位移"的面。
+ */
+const SHEET_SKELETON_ROWS = 12;
+const SHEET_ROW_HEIGHT = 24;
+/** 每列一档宽度（px）：同一列等宽，纵向才对得上格子。 */
+const SHEET_COLUMN_WIDTHS = [22, 56, 40, 132];
+
+const SHEET_STYLE: React.CSSProperties = {
+	flex: "1 1 auto",
+	minHeight: 0,
+	overflow: "hidden",
+	background: "var(--bg)",
+	display: "flex",
+	flexDirection: "column",
+};
+
+/** 数据行与列头带共用同一套格子排版，列头带只多一层底色（真实表格的列头就是抬升面）。 */
+const SHEET_ROW_STYLE: React.CSSProperties = {
+	display: "flex",
+	alignItems: "center",
+	gap: "var(--space-5)",
+	height: SHEET_ROW_HEIGHT,
+	padding: "0 var(--space-3)",
+	borderBottom: "1px solid var(--border)",
+};
+
+const SHEET_HEADER_STYLE: React.CSSProperties = {
+	...SHEET_ROW_STYLE,
+	background: "var(--bg-raised)",
+};
 
 export default function XlsxPreview({ url }: { readonly url: string }): React.JSX.Element {
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -150,7 +189,20 @@ export default function XlsxPreview({ url }: { readonly url: string }): React.JS
 		<div ref={hostRef} className="preview-office-content office-sheet-host">
 			{error !== undefined && <ErrorState message={`表格解析失败：${error}`} />}
 			{sheets === undefined && error === undefined && (
-				<LoadingState text="解析表格中…" />
+				<div style={SHEET_STYLE} role="status" aria-label="正在解析表格">
+					<div style={SHEET_HEADER_STYLE}>
+						{SHEET_COLUMN_WIDTHS.map((width) => (
+							<Skeleton key={width} width={width} height={8} />
+						))}
+					</div>
+					{Array.from({ length: SHEET_SKELETON_ROWS }, (_, row) => (
+						<div key={row} style={SHEET_ROW_STYLE}>
+							{SHEET_COLUMN_WIDTHS.map((width, column) => (
+								<Skeleton key={column} width={width} height={8} />
+							))}
+						</div>
+					))}
+				</div>
 			)}
 			{sheets !== undefined && (
 				<Workbook

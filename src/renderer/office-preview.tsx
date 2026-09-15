@@ -58,7 +58,14 @@ export function OfficePreview({
 					<IconOpenExternal size={14} />
 				</button>
 			</div>
-			{/* chunk 加载中的兜底；文件解析中的加载态由子组件自己渲染。 */}
+			{/* chunk 加载中的兜底；文件解析中的加载态由子组件自己渲染。
+			    这一处**故意不用骨架**（本期骨架屏的另一半在子组件里）：等的不是文档内容的形状，
+			    而是渲染器 chunk 本身，而"纸多宽、格子多高"这些几何常量正属于被等待的那个 chunk。
+			    要在 eager 的这一层画出同形骨架，就得把 docx/xlsx 各自的尺寸再抄一份到这里
+			    —— 两份几何必然漂移（同 AGENTS.md §4 防重复），且 pptx 的解析期本来就是文字浮层
+			    （DESIGN.md §4 豁免 ①），同一组件在三种 format 下会出现三种等待语言。
+			    文案也承载信息：「加载渲染器…」与子组件的「解析文档中…」是两种可区分的等待，
+			    前者指向"渲染器没下下来"这个可排查的失败面。 */}
 			<Suspense fallback={<LoadingState text="加载渲染器…" />}>
 				{format === "docx" && <DocxPreview url={url} />}
 				{format === "xlsx" && <XlsxPreview url={url} />}

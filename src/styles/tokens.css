@@ -149,8 +149,13 @@
 	--z-modal: 100;   /* 模态：审批弹窗、确认框（最高业务层） */
 	--z-toast: 200;   /* toast：永远在最上（含模态之上，否则错误看不见） */
 
-	/* ── 字体栈（2 个，沿用 index.css 133/2240 现有栈）───────────────── */
-	--font-body: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+	/* ── 字体栈（2 个，唯一真源）──────────────────────────────────────
+	   界面字体栈只在 --font-body 定义一处，body 引用它（不再各写一份，避免漂移）。
+	   MiSans 随包（@font-face 见 src/renderer/index.css），插在 "PingFang SC" 之后：
+	   macOS 命中苹方，Windows 上苹方/-apple-system/BlinkMacSystemFont 都不在，
+	   落到 MiSans（有真 400/600 字重，避免雅黑合成加粗发虚）；"Segoe UI" 与
+	   "Microsoft YaHei" 是 MiSans 子集未覆盖字符（二级汉字/生僻字）的兜底。 */
+	--font-body: "PingFang SC", "MiSans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
 	--font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 

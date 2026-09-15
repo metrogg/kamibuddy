@@ -25,7 +25,7 @@ import {
 	IconMinus,
 	IconPlus,
 } from "./icons.tsx";
-import { ErrorState, LoadingState } from "./state-views.tsx";
+import { ErrorState, Skeleton } from "./state-views.tsx";
 
 /**
  * 懒启动 worker：模块加载即 `new PdfWorker()` 会让 worker 线程常驻，
@@ -47,6 +47,25 @@ const MIN_SCALE = 0.4;
 const MAX_SCALE = 3;
 /** 页面两侧留边（px），fit 宽度要扣掉它。 */
 const PAGE_MARGIN = 32;
+
+/**
+ * 解析期纸张骨架：与 `.preview-pdf-body .react-pdf__Page` 同宽同比例。
+ * 宽度不设上限（不用 `max-width`）—— fit 模式会把页面等比放大到"容器内容宽 - PAGE_MARGIN"，
+ * 面板越宽纸越大，所以骨架给「两侧各留 PAGE_MARGIN/2 = 16px（--space-5）」、
+ * 其余全占；`.preview-pdf-body` 自己还有一层 16px 内边距，两层相加正好是
+ * 真实页面到面板边缘的距离（PAGE_MARGIN 的口径，见上方常量注释）。
+ * 高度按 A4 比例（210:297）：PDF 实际页面尺寸要等文件解析出来才知道，未知时按最常见的
+ * A4 假设；比例对齐才能保证页脚以下的内容在解析完成时不位移。
+ */
+const PDF_SKELETON_STYLE: React.CSSProperties = {
+	margin: "0 var(--space-5)",
+	aspectRatio: "210 / 297",
+	background: "var(--bg)",
+	padding: "var(--space-6)",
+	display: "flex",
+	flexDirection: "column",
+	gap: "var(--space-4)",
+};
 
 function clampScale(value: number): number {
 	return Math.min(Math.max(value, MIN_SCALE), MAX_SCALE);
@@ -174,7 +193,19 @@ export function PdfPreview({ url }: { readonly url: string }): React.JSX.Element
 			<div className="preview-pdf-body" ref={bodyRef}>
 				<Document
 					file={url}
-					loading={<LoadingState />}
+					loading={
+						/* 纸张骨架：pdf.js 解析 + canvas 首绘是这份预览里最长的一段等待，
+						   形状（A4 白纸）完全可预知，用同尺寸骨架替掉居中转圈。 */
+						<div style={PDF_SKELETON_STYLE} role="status" aria-label="正在解析 PDF">
+							<Skeleton width="30%" height={16} />
+							<Skeleton width="96%" height={10} />
+							<Skeleton width="92%" height={10} />
+							<Skeleton width="97%" height={10} />
+							<Skeleton width="80%" height={10} />
+							<Skeleton width="94%" height={10} />
+							<Skeleton width="48%" height={10} />
+						</div>
+					}
 					error={<ErrorState message="PDF 加载失败，请外部打开查看" />}
 					onLoadSuccess={(pdf) => setNumPages(pdf.numPages)}
 				>

@@ -48,6 +48,14 @@ type View = "home" | "chat" | "settings" | "skills" | "diagnostics" | "stats" | 
 /** 侧栏任务历史与对话页标题共用的截断长度。 */
 const TITLE_MAX = 24;
 
+/**
+ * 窗口 resize 手势的收尾判定窗口（ms）。
+ * 原生标题栏窗口的缩放由 OS 经手，renderer 只收得到 `resize` 事件、拿不到 pointerup，
+ * 「还在拖」只能用事件间隔推断（拖拽期间每个渲染帧都有 resize 事件，间隔远小于本值）。
+ * 取 160ms：松手后过渡只被关住一瞬，用户感知不到。
+ */
+const RESIZE_SETTLE_MS = 160;
+
 /** 产物面板开关图标（右侧栏隐喻：三条竖线，右条加粗表示面板）。随开关按钮从 chat-header 移到 App 层右上角。 */
 function IconPanelRight({ size = 16 }: { readonly size?: number }): React.JSX.Element {
 	return (
@@ -591,18 +599,38 @@ export function App(): React.JSX.Element {
 	 */
 	const [panelWidth, setPanelWidth] = useState(440);
 	/**
+	 * 窗口 resize 手势期间为真 —— 只为让 CSS 停掉 `.preview-panel` 的 `width` 过渡
+	 * （`.app[data-resizing="true"]`，与既有的 `[data-dragging="true"]` 同一手法）。
+	 */
+	const [windowResizing, setWindowResizing] = useState(false);
+	/**
 	 * 窗口缩窄时把面板压回可用宽（spec: harden-desktop-interactions 的最小宽度不溢出）。
 	 *
 	 * 只在拖拽/键盘里 clamp 不够：用户可能在宽窗口把面板拖到上限，再缩小窗口 ——
 	 * 那一刻没人调 setPanelWidth，面板会一直超出视口（`.app` 的 overflow: hidden
 	 * 只能裁掉它，主区仍被挤没了）。挂载时也跑一次，兜住「小窗口 + 初始 440」。
 	 * 走函数式更新，宽度写路径依然只有 setPanelWidth 一条。
+	 *
+	 * 顺带标记 resize 手势：resize 期间面板宽会跟着窗口变，若还带 `--dur-base` 的
+	 * width 过渡，面板就「追」着窗口边缘走、与用户拖拽错拍（与面板 sash 拖宽同一个坑）。
+	 * 标记只在首尾各触发一次渲染 —— 宽度没变时 setPanelWidth 本就 bail out，
+	 * 不该为了这个标记让 App 每个 resize 事件都重渲染一遍。
 	 */
 	useEffect(() => {
-		const onResize = (): void => setPanelWidth((current) => clampPanelWidth(current));
-		onResize();
+		let settleTimer: number | undefined;
+		const onResize = (): void => {
+			setPanelWidth((current) => clampPanelWidth(current));
+			setWindowResizing(true);
+			window.clearTimeout(settleTimer);
+			settleTimer = window.setTimeout(() => setWindowResizing(false), RESIZE_SETTLE_MS);
+		};
+		// 挂载时的这次 clamp 不置标记：首屏不该带着「正在 resize」，否则首次开面板没有过渡。
+		setPanelWidth((current) => clampPanelWidth(current));
 		window.addEventListener("resize", onResize);
-		return () => window.removeEventListener("resize", onResize);
+		return () => {
+			window.removeEventListener("resize", onResize);
+			window.clearTimeout(settleTimer);
+		};
 	}, []);
 	/** 面板全屏态：absolute 覆盖主内容区。 */
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
@@ -1181,34 +1209,42 @@ export function App(): React.JSX.Element {
 	}, [conversation.state.cwd, openArtifact, openPreview]);
 
 	return (
-		<div className="app">
+		<div className="app" data-sidebar={sidebarOpen ? "open" : "collapsed"} data-resizing={windowResizing}>
 			{/* 侧栏常驻、与视图无关（WorkBuddy 的真实布局）：首页与对话页都有，
-		    收起后由窗口左上角的悬浮开关再展开（开关在 App 层，不随本组件卸载）。 */}
-			{sidebarOpen && (
-				<Sidebar
-					link={link}
-					groups={sidebarGroups}
-					tasksError={taskListError}
-					onReloadTasks={reloadSessions}
-					unreadIds={unreadIds}
-					pendingConfirmIds={pendingConfirmIds}
-					onNewTask={newTask}
-					onResumeTask={resumeTask}
-					onRenameTask={renameTask}
-					onDeleteTask={deleteTask}
-					onExportTask={exportTask}
-					onNewTaskInSpace={newTaskInSpace}
-					onRenameWorkspace={renameWorkspace}
-					onRemoveWorkspace={removeWorkspace}
-					onRevealWorkspace={revealWorkspace}
-					onOpenSettings={openSettings}
-					onOpenDiagnostics={openDiagnostics}
-					onOpenStats={openStats}
-					onOpenSkills={() => setView("skills")}
-					onOpenAutomations={openAutomations}
-					onTodo={showTodo}
-				/>
-			)}
+		    收起后由窗口左上角的悬浮开关再展开（开关在 App 层，不随本组件卸载）。
+
+		    折叠用「常驻 DOM + data-sidebar 类切换」而不是条件挂载（`{open && <Sidebar/>}`）：
+		    条件挂载的元素**挂载即终态**，CSS transition 没有「起始态→终态」可跑，折叠只会瞬跳
+		    （第 2 期弹层踩过同一个坑，那边只能退回 animation —— 但那只解决展开方向，
+		    收起方向会随卸载消失，见 DESIGN.md §5 规则 7）。这里要的是两侧都平滑动，
+		    所以选择常驻：折叠 = `.sidebar` 的 flex-basis 216px → 0（index.css 的
+		    `[data-sidebar="collapsed"] .sidebar`，登记为 §5.1 第二条 width 受控例外）。
+		    首屏不播动画：初始态就是终态（展开），transition 只在属性变化时触发。
+		    visibility 随折叠过渡一起走（index.css），收起后侧栏出 Tab 序与 a11y 树。
+		    让位语义不变：主区仍被挤压/舒展，不做浮层覆盖。 */}
+			<Sidebar
+				link={link}
+				groups={sidebarGroups}
+				tasksError={taskListError}
+				onReloadTasks={reloadSessions}
+				unreadIds={unreadIds}
+				pendingConfirmIds={pendingConfirmIds}
+				onNewTask={newTask}
+				onResumeTask={resumeTask}
+				onRenameTask={renameTask}
+				onDeleteTask={deleteTask}
+				onExportTask={exportTask}
+				onNewTaskInSpace={newTaskInSpace}
+				onRenameWorkspace={renameWorkspace}
+				onRemoveWorkspace={removeWorkspace}
+				onRevealWorkspace={revealWorkspace}
+				onOpenSettings={openSettings}
+				onOpenDiagnostics={openDiagnostics}
+				onOpenStats={openStats}
+				onOpenSkills={() => setView("skills")}
+				onOpenAutomations={openAutomations}
+				onTodo={showTodo}
+			/>
 			{view === "home" && (
 				<HomeView
 					ready={link.kind === "ready"}

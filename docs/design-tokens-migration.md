@@ -322,8 +322,11 @@
 
 **④ 开发期性能浮层的开关与取证方式**
 
-- **开关**：单一 key `localStorage.kbPerf`——`"1"` 强开、`"0"` 强关、未设置时 **DEV 开 / 生产关**。
+- **开关**：单一 key `localStorage.kbPerf`——**只有 `"1"` 才开**，未设置 / `"0"` 都不开（**DEV 下亦然**）。
   控制台执行 `localStorage.kbPerf = "1"; location.reload()` 即可。
+  *（2026-09-15 订正：原口径为「`"1"` 强开、`"0"` 强关、未设置时 DEV 开 / 生产关」→ 改为不按构建区分默认值。
+  **改因**：浮层是**主动取证**时才需要的工具（改渲染性能时才量一次），DEV 下默认常驻会遮挡右下角界面、
+  打扰正常开发，不该默认开启。）*
 - **取证**：右下角浮层显示当前 FPS、最近 10s 的 longtask 条数与最长时长；longtask 明细
   （`duration` / `name` / `startTime`）与低 FPS 告警（**带上同窗口的 longtask 明细**，只有一个数字定位不到元凶）
   打在 DevTools Console。FPS 按 1s 档统计；窗口切走造成的「空窗」按 `elapsed >= 2000ms` 丢弃以免误报；
@@ -358,14 +361,16 @@ O(n²) 只在大 widget 的流式期出现、频率低）；滚动跟随 / 刻�
 - 现象：`npm run build` 成功后产物里有 `out/renderer/assets/perf-overlay-<hash>.js`（**4.90 kB**），
   入口产物里也留有 `__vitePreload(() => import("./perf-overlay-…js"), …)`；
   `Select-String -Path out\renderer\assets\*.js -Pattern longtask` 能命中该 chunk。**「生产不打包」不成立。**
-- 根因（产物实证，折叠后源码即）：
+- 根因（产物实证）：守卫读的是**运行时** `localStorage`，不含任何编译期常量——rollup 判定不了该死分支，
+  于是动态 import 与它引出的 chunk 都被保留。现行守卫（源码即产物形态）：
   ```js
   const perfFlag = localStorage.getItem("kbPerf");
-  if (perfFlag === "1" || false) { void __vitePreload(() => import("./perf-overlay-5Nt5SV08.js"), …) }
+  if (perfFlag === "1") { void __vitePreload(() => import("./perf-overlay-<hash>.js"), …) }
   ```
-  守卫写成 `perfFlag === "1" || (import.meta.env.DEV && perfFlag !== "0")`：生产下 `import.meta.env.DEV`
-  确实被折成 `false`（折叠生效了），但剩下的是 `perfFlag === "1" || false`——**仍取决于运行时的 localStorage**，
-  rollup 无法判定该死分支，于是动态 import 与它引出的 chunk 都被保留。
+  *（2026-09-15 订正：本节原引守卫为 Task 1 写法 `perfFlag === "1" || (import.meta.env.DEV && perfFlag !== "0")`，
+  生产下折成 `perfFlag === "1" || false`、残留同样取决于运行时 `localStorage`；该写法已简化为上引的
+  `if (perfFlag === "1")`（见 §8.2 订正，DEV 不再默认开）。**两种写法都拿不掉这个 chunk**，
+  故下方「默认不执行、但 4.9 kB chunk 与入口 import 存根仍在包里」的结论**不变**。）*
 - 现状的实际行为：**默认不执行**（用户没设 `kbPerf` 时 `null === "1"` 为假），但代码**已在包里**
   （4.9 kB chunk + 入口里的 import 存根）。
 - 修复方向（**本期未改代码**：`.tsx` 不在 Task 5 的改动面内）：让 `import.meta.env.DEV` 成为**唯一**的编译期闸门
@@ -373,6 +378,8 @@ O(n²) 只在大 widget 的流式期出现、频率低）；滚动跟随 / 刻�
   代价是放弃「生产用 `kbPerf=1` 强开」——这与既定的「生产关」设计一致。
 - 相关注释（`main.tsx` 尾部、`perf-overlay.tsx` 文件头）当前断言「模块不进生产包」，与实测不符：
   修代码时**一并订正注释**，不要只改注释。
+  *（2026-09-15 订正：该注释订正**已完成**（Task 5.8）——两处注释现已准确写明「生产默认不执行、
+  但该 chunk 仍在包里」。故上句「当前断言…与实测不符」**已失效**，保留作历史记录。）*
 
 ### 8.6 实测性能对比：未完成（需人工）
 
@@ -750,6 +757,166 @@ npm run check        → 通过（上面三项的串联）
   本期只改 renderer 组件的状态分支，**未新增文件、未新增白名单条目**。
 - 本期改动**没有新增自动化测试**：仓库无 DOM 测试基建（`vitest.config.ts` 是 node 环境、无 jsdom、
   `include` 只收 `src/**/*.test.ts`，见 §9.4 第 2 条），状态分支的可见行为只能靠 §10.6 人工验收。
+  未为凑测试去加依赖或改配置（超范围）。
+
+---
+
+## 11. 交互顺滑度与质感打磨（spec #7，本期成果）
+
+> spec：`.trae/specs/polish-interaction-smoothness/spec.md`，分支 `master`（该系列第 6 期）。
+> 前 5 期把 token 地基、动效纪律、流式性能、桌面端硬伤、状态覆盖依次做完了；本期只收口
+> **「用起来顺不顺」**——那些用户能反复感知、但前 5 期没覆盖的跳动与硬切。
+> 另修正了 spec #2 的一处**账目错误**：MiSans 字体接线被打勾「已完成」，代码里从未落地（§11.4）。
+
+### 11.1 本期做了什么
+
+| 事项 | 结果 |
+|---|---|
+| **字体接线（账目修复）** | `index.css` 顶部两条 `@font-face`（400 / 600，`font-display: swap`）；`--font-body` 收敛为字体栈**唯一真源**（`"MiSans"` 插在 `"PingFang SC"` 之后），`body` 改为引用它。产物含两个 woff2（此前是死文件） |
+| 滚动条占位横移 | 5 个主滚动容器加 `scrollbar-gutter: stable`：`.stream` / `.home` / `.settings-body`+`.skills-body`（共用一条选择器）/`.sidebar-scroll`。窄容器（`.thinking-body` / `.user-bubble` / `.pop-menu`）**不加**（判断依据写在文末「滚动条基线」块） |
+| 4 个整页视图硬切 | `.settings` / `.skills` 共用一条 `page-in`（`transform` + `opacity`，`--dur-base` + `--ease-out`），**一条规则覆盖** `stats` / `skills` / `diagnostics` / `automations`；`.home` 复用同一条 keyframes（`settings` 自己的入场仍在 `.settings-card`，不重复） |
+| 全站零骨架屏 | `state-views.tsx` 新增具名导出 `Skeleton`（**不带扫光**；底色 `color-mix(in srgb, var(--text) 8%, transparent)`——`--bg-raised` 铺在侧栏底上只差 5 个灰阶，等于没画）；接线两处收益最高的：侧栏任务区（5 条，行高与真行逐像素对齐）+ 文档预览 3 处（docx / pdf 的「白纸」、xlsx 的**满区滚动网格**——它刻意不是纸） |
+| 侧栏 hover 让位抖动 | 让位宽度**常驻**（`.task-item-body` 72px / 空间组头 48px），操作钮只做 `opacity` 显隐；补 `.task-item-body:has(> .task-rename-input)` 处理重命名编辑态（否则输入框被压到 ~58px） |
+| 侧栏折叠瞬跳 | 改「常驻 DOM + `data-sidebar` 类切换 + transition」（方案 A）——条件挂载的元素**挂载即终态**、`transition` 没有「起始态→终态」可跑，只能瞬跳；改用 `animation` 又只解决展开方向（收起方向随卸载消失）。`DESIGN.md` §5 登记**第二条 width 受控例外**（含实现附则） |
+| 中文 IME 补全抽搐 | `autocomplete.tsx` 加 `composingRef` 守卫（先例：`experts-view.tsx`）：组合期间不 `recompute`，`compositionend` 用最终文本补算一次（Chromium 补的那个 `input` 事件不一定带 `isComposing=false`，不能指望 `onChange` 兜住最后一次） |
+| 流式贴底丢帧 | 贴底调度 `useEffect` → `useLayoutEffect`（对照实测见 §11.2②） |
+| 返回对话页整列上滑 | `.stream` 的 `stream-reveal` 收敛为「从空到有内容」首次揭示（挂在 `[data-reveal="true"]`，由 `chat-view` 在 render 期派生）；`.stream` 不再常驻动画声明 |
+| resize 追手 | resize 手势期间停 `.preview-panel` 的 width 过渡（`[data-resizing="true"]`，160ms debounce 撤销；**未去掉**过渡本身，全屏切换依赖它） |
+| `::selection` 外来蓝 | 改用 `color-mix(in srgb, var(--text) 14%, transparent)` 中性覆盖（不新增档位） |
+| `.settings-card` 阴影偏轻 | `--shadow-md` → `--shadow-lg`（与同级 `.permission-card` 对齐） |
+
+**必要支撑改动**（不是顺手改）：
+
+- `composer.tsx`：IME 的 `onCompositionStart/End` 现在有**两套**守卫各管一件事（`ime-guard` 管 Enter 是否吞、
+  `autocomplete` 管组合期间不重算候选），必须都接上——只接一套时另一套**静默失效**
+  （`autocomplete` 的守卫恒为 `false`，本期的修复等于没做）。
+- `artifact-panel.tsx` 只改注释：`maxPanelWidth()` 的契约从「侧栏收起时不渲染」换成「常驻但盒宽归零」，
+  量到 0 的前提换了实现（见 §11.2③）。
+
+### 11.2 三处关键实测证据
+
+**① 字体是否真的生效**（这一步不能省——「声明了」不等于「生效了」）
+
+产物（`npm run build`）：
+
+```
+out/renderer/assets/MiSans-Regular-EjI9NiHY.woff2    483904 B（483.90 kB）
+out/renderer/assets/MiSans-Semibold-DclYHP1t.woff2   489152 B（489.15 kB）
+```
+
+哈希名出现在产物 CSS（`src: url("./MiSans-Regular-EjI9NiHY.woff2")`）→ vite 确实把 woff2 当资源打包了
+（未接线时这两个文件不进产物，键就在于**只有被 `url()` 引用才会打包**）。
+
+Electron 探针（离屏窗口）：`FontFace.status === "loaded"` —— 字体已下载并解析成功，不是 `unloaded` / `error`。
+
+宽度度量（同一段文本、同一字号、600 字重）：
+
+| 字体 | 实测宽度 |
+|---|---|
+| MiSans 600 | **195.18px** |
+| 微软雅黑 600 | 196.32px |
+
+两者不同 → 命中的是 MiSans 的**真实字形**，而不是回退到雅黑（若未命中，宽度会与雅黑逐像素一致）。
+
+**② 贴底：`useEffect` vs `useLayoutEffect` 对照实验**
+
+同样的流式场景，逐帧统计「底部是否有空隙」：
+
+| 调度时机 | 有底部空隙的帧 | 最大空隙 |
+|---|---|---|
+| `useEffect` | 23 / 145 | 66px（≈3 行） |
+| `useLayoutEffect` | **0 / 145** | — |
+
+结论：不是理论担忧——`useEffect` 下约每 6 帧就有一次可见跳动，合批窗口（16ms）把它放大成规律抖动。
+改 `useLayoutEffect` 后归零（顺带与 `turn-rail.tsx` 的测量口径统一了）。
+
+**③ 侧栏折叠：`border-box` 下只归零 `flex-basis` 量不到 0**
+
+| 折叠态做了什么 | 侧栏盒子实测宽 |
+|---|---|
+| 只写 `flex-basis: 0`（`box-sizing: border-box`） | **24.8px**（≈ `--space-4`×2 + 1px 边框） |
+| 再归零 `padding-inline` + `border-right-width` | **0** |
+
+为什么这 24.8px 是硬伤：`artifact-panel.maxPanelWidth()` 是**从 DOM 量侧栏盒宽**的（有意不抄常量，
+避免与 CSS 双写漂移），量到 24.8px 会让面板上限凭空少 24.8px —— 归零才保住「收起 = 量到 0」的既有契约。
+
+### 11.3 诚实标注（四条，必须写）
+
+1. **Task 3 修正了 spec 的前提**：spec 说用户气泡缩略图会因横图解码从 200px 高掉到 ~90px（气泡收缩、
+   下方内容上移）。实测（Electron 44）**改前并没有这个位移** —— TSX 上 `<img width height>` 的两个属性
+   作为 presentational hint 本就生效，盒子一直稳定在 160×200。本期把 CSS 的 `max-height` 改成定高 `height`
+   是**消除一条隐式依赖**（任何 `img { height: auto }` 口径的重置、或哪天去掉那两个属性，位移才会出现），
+   **不是修一个现存的 bug**。口径按「预防」记，不按「修复」记。
+2. **reveal 有一个已知边界**：判据是「`entries` 从 0 变非 0」。「切视图」与「首条回显」若落进**同一个 React 批**
+   （同一 commit 内挂载 + 首条上屏），这一次就不播。方向是安全的：失手只会「少播一次揭示感」，
+   不会把整列动画误播到长历史上。
+3. **`::selection` 只写一条**：深色主题块（`tokens.css` 的暗色）尚未接线，当前唯一生效主题是亮色，故不另写。
+   `--text` 在暗色下翻成白，覆盖色自动跟着翻、方向不变（暗底上仍是「比底色亮一点」），将来接线时不必补规则。
+4. **侧栏常驻 DOM 的代价**：`Sidebar` 现在随 `App` 每次渲染一起 reconcile（亚毫秒级），换来的是折叠
+   不再丢侧栏内部状态（滚动位置、展开的空间组、重命名编辑态）。若要消掉这点成本可给它上 `React.memo`，
+   但**相对时间文案会因此只在 props 变化时刷新**（列表里的「3 分钟前」会停住）—— 本期选择如实暴露、不 memo。
+
+### 11.4 修正一处账目错误：spec #2 的字体接线
+
+`polish-ui-a11y-and-aesthetics` 把这四步都打了 `[x]`：
+
+- `tasks.md:82`「@font-face 声明（`font-display: swap`）」
+- `tasks.md:83-84`「index.css 字体栈插入（MiSans 在 Segoe UI 之前、雅黑之前），`font-weight: 600` 用真字重」
+- `checklist.md:34-35`「Windows 中文：MiSans @font-face（400/600）+ 字体栈（雅黑兜底），子集 473/478KB ≤2MB」
+
+**但代码里从未落地**：`resources/fonts/README.md:17-18` 描述的接线是**预期做法**，
+`src/` 里 `@font-face` 与 `MiSans` 都是零命中，`body` 与 `--font-body` 各写一份**不含 MiSans** 的栈，
+两个 woff2 是纯死文件（没被 `url()` 引用 ⇒ 不进产物）。后果是 Windows 上数十处 `font-weight: 600`
+一直落在微软雅黑**合成加粗**上（笔画发虚、12-14px 小字号最明显），而团队以为这件事已经做完了。
+
+本期真正接上（§11.1 第一行 + §11.2①），并把「字体栈唯一真源」写进 `DESIGN.md` §2.6 防复发。
+`resources/fonts/README.md` 的描述现在与实现**一致**，无需改动（它当初写的就是对的做法）。
+
+### 11.5 人工验收清单（沙箱无 GUI，需人工确认）
+
+1. **600 字重不再发虚**（Windows）：品牌名、统计数值、按钮文字等 `font-weight: 600` 处笔画应实、不糊。
+2. **对话首次跨过一屏**：不应再有整列文字横向重排（滚动条出现不再吃掉 6px 内容宽）。
+3. **首页 → 统计 / 技能 / 诊断 / 定时任务**：应有柔和入场（不再硬切），且与设置页的入场同族。
+4. **侧栏首屏**：应显示 5 条骨架（灰条错落），列表到达时**不竖向跳动**。
+5. **打开 docx / pdf / xlsx 产物**：解析期应是「白纸」/「满区表格」骨架，不是居中转圈。
+6. **鼠标划过侧栏任一行**：标题的省略号位置**不应跳变**（让位宽度已常驻）。
+7. **中文打 `@` 后拼音检索**：补全菜单不应随候选串逐键重建、条目不应乱跳。
+8. **折叠 / 展开侧栏**：宽度应平滑变化（不再是 216px 瞬跳），主区跟着平滑挤压 / 舒展。
+9. **从设置返回一个长对话**：消息列**不应整列上滑淡入**（直接呈现）。
+10. **拖窗口边缘**（【新增】）：右侧面板宽度**不应追着手走**；松手约 160ms 后过渡恢复。
+11. **选中任意文本**（【新增】）：底色应是中性灰（不再是 Chromium 默认蓝）；深色按钮上的白字选不中属预期。
+
+### 11.6 本期刻意未做（及理由）
+
+| 事项 | 理由 |
+|---|---|
+| 场景 / 模式 / 专家切换改乐观更新 | 已核实 daemon 侧是**纯内存同步**（`session-host.ts` 只是 `setActiveToolsByName + emitState`），本机几毫秒、用户无感；引入本地乐观态反而多一个会漂移的真相源 |
+| `.stream` 关掉 `overflow-anchor` | 默认 `auto` 的浏览器滚动锚定与「内容只在下端增长」方向一致，折叠上方内容时正好补偿。**确认无需改动** |
+| `-webkit-font-smoothing` | macOS-only 属性，Windows 目标下无实际影响 |
+| 内容卡加阴影 / 引入第四档阴影 | 内容卡纯描边无阴影是 WB 口径（有意）；三档阴影语义已站得住，加第四档会撞 `DESIGN.md` §2 的档位纪律 |
+| tab 内容切换过渡 / toast 退场 / 刻度轨 hover 过渡 | 均为打磨项、收益低；本期不动，避免范围膨胀 |
+| 右键菜单 | 属**新增交互**，需先定需求 |
+| `-webkit-app-region` | **确认不适用**：`BrowserWindow` 用的是 Windows 原生标题栏（无 `frame: false`），当前实现正确 |
+| `.capability-chip` 那条 2% 阴影 | 肉眼不可见，但**有 WB 原值依据**、不是违规；删它是零收益的洁癖 |
+| `office-preview` 的 `Suspense fallback` 不接骨架 | 它等的是**渲染器 chunk**，而「纸多宽、格子多高」这些几何常量正属于被等的那个 chunk —— 在这一层画同形骨架要把 docx/xlsx 的尺寸各抄一份（两份几何必然漂移，反 AGENTS.md §4）；且 pptx 解析期本就是文字浮层（`DESIGN.md` §4 豁免①），三种 format 会出现三种等待语言。文案「加载渲染器…」与子组件的「解析文档中…」是两种可区分的等待 |
+
+### 11.7 本期校验结论（Task 5 收官）
+
+```
+npm run typecheck    → 通过（tsc --noEmit 无输出）
+npm run check:deps   → 通过（扫描 258 个文件。依赖方向校验通过。）
+npm run check:tokens → 真违例 0 处 / 白名单命中 77 处 / 豁免 111 处（圆角 29 / 间距 77 / 时长 5）
+npm test             → 95 文件 / 1717 用例全绿
+npm run check        → 通过（上面三项的串联）
+npm run build        → 成功（53.52s）；产物含 MiSans-Regular-EjI9NiHY.woff2 / MiSans-Semibold-DclYHP1t.woff2
+```
+
+- 扫描文件数仍 **258**、白名单仍 **77 条**（**未新增**）：本期只改既有文件的样式与接线，未新增源文件、
+  未加任何例外。
+- 豁免总数由 **107 增至 111**（差 4 全在「间距」类）：内置规则明文跳过的亚间距 / ≥48px 页面级留白
+  （常驻让位的 48 / 72px、折叠态回调等）。**不是新造档位**，也不该收进白名单。
+- 用例数与第 4 / 5 期基线一致（95 / 1717）：本期改的是 CSS、调度时机与守卫接线，
+  仓库无 DOM 测试基建（`vitest.config.ts` 是 node 环境，见 §9.4 第 2 条），可见行为只能靠 §11.5 人工验收。
   未为凑测试去加依赖或改配置（超范围）。
 
 ---

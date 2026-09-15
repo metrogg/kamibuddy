@@ -268,8 +268,16 @@ export function Composer({
 					onSelect={ac.bind.onSelect}
 					onBlur={ac.bind.onBlur}
 					onPaste={img.bind.onPaste}
-					onCompositionStart={ime.bind.onCompositionStart}
-					onCompositionEnd={ime.bind.onCompositionEnd}
+					onCompositionStart={() => {
+						// 两套守卫各管一件事，都要接：ime-guard 管 Enter 是否吞（选词确认不能发送），
+						// autocomplete 管组合期间不重算候选（拼音串不是最终文本）。
+						ime.bind.onCompositionStart();
+						ac.bind.onCompositionStart();
+					}}
+					onCompositionEnd={(e) => {
+						ime.bind.onCompositionEnd();
+						ac.bind.onCompositionEnd(e);
+					}}
 					onKeyDown={handleComposerKeyDown}
 					placeholder={placeholder}
 					disabled={!ready}

@@ -82,21 +82,23 @@ createRoot(root).render(
 /**
  * 开发期性能浮层（spec：optimize-stream-rendering Task 1）——FPS + 主线程 longtask 采集。
  *
- * 开关：`localStorage.kbPerf = "1"` 强制开、`"0"` 强制关。
- * 默认值按构建区分：DEV 开（开发者要的量尺默认就位）、生产关（浮层不是产品 UI）。
- * 生效条件：`kbPerf === "1"`（强开，生产亦然）或 DEV 下且 `kbPerf !== "0"`。
+ * 开关：单一 key `localStorage.kbPerf`——只有 `"1"` 才开，其余（未设置 / `"0"`）都不开。
+ *
+ * 为什么不再按构建区分默认值：原先 DEV 默认开，理由是"开发者要的量尺默认就位"，但实测打扰正常开发
+ * （右下角常驻浮层遮挡界面）。浮层是**主动取证**时才需要的工具——改渲染性能时才量一次，
+ * 平时就该收起来，所以改成只在显式开启时启用，DEV 下亦然。
+ * 仍保留 `"1"` 在生产强开的能力：真机取证要用。
  *
  * 用动态 `import()` 而不是静态 import：模块与它的常驻代码（React 组件、rAF 循环、
  * PerformanceObserver）不落在入口 chunk 里，默认也不会被求值。
  * 注意：生产构建**仍会包含**该模块（约 4.9 kB 的独立 chunk）与这条动态 import 存根——
- * `import.meta.env.DEV` 在生产被折成 `false` 后，守卫只剩 `perfFlag === "1" || false`，
- * 结果取决于运行时 localStorage，rollup 判定不了该死分支，于是原样保留。
+ * 守卫读的是运行时 `localStorage`，rollup 判定不了该死分支，于是原样保留。
  * 默认行为仍是"不执行"（未设 `kbPerf` 时 `null === "1"` 为假），符合 spec 要求的"不加载"。
  * 留着生产强开入口是有意的：真机取证需要它，代价就是那 4.9 kB。
- * 若要彻底剔除该 chunk（同时失去生产强开取证的能力），需把 `import.meta.env.DEV` 提为
- * 唯一编译期闸门，写成 `if (import.meta.env.DEV && perfFlag !== "0")`。
+ * 若要彻底剔除该 chunk（同时失去生产强开取证的能力），得让守卫成为编译期常量
+ * （如 `import.meta.env.DEV` 作闸门）——但这与"生产可强开"直接冲突，故不采用。
  */
 const perfFlag = localStorage.getItem("kbPerf");
-if (perfFlag === "1" || (import.meta.env.DEV && perfFlag !== "0")) {
+if (perfFlag === "1") {
 	void import("./perf-overlay.tsx").then((module) => module.mountPerfOverlay());
 }

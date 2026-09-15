@@ -1,5 +1,5 @@
 /**
- * 共享状态组件：空 / 加载 / 错误 / 转圈（DESIGN.md §4 状态矩阵）。
+ * 共享状态组件：空 / 加载 / 骨架 / 错误 / 转圈（DESIGN.md §4 状态矩阵）。
  *
  * 为什么抽：此前空态有 13 种类名（`settings-*` / `skills-*` / `ex-*` / `ws-*` 那一批，
  * 按前缀各写一份）、转圈有 5 套各自一份 CSS 与局部 reduced-motion patch、
@@ -26,6 +26,49 @@ import type { ReactNode } from "react";
 export function Spinner({ size = 12 }: { readonly size?: number }): React.JSX.Element {
 	// aria-hidden：转圈是「进行中」的装饰，语义由相邻文字承担（DESIGN.md §7.6）。
 	return <span className="spinner" style={{ width: size, height: size }} aria-hidden="true" />;
+}
+
+/**
+ * 骨架条。给**结构可预知**的等待占位（文档预览的"白纸"、侧栏任务列表）——
+ * 转圈只说「在忙」，骨架还告诉用户「东西马上出现在这里、多大一块」。
+ *
+ * 为什么没有扫光/脉冲动画：全站唯一的扫光 `.text-shimmer` 语义是「内容正在被生成」
+ * （流式打字）。骨架也扫光，两种完全不同的等待（等数据到达 vs 等模型输出）就长得一样了。
+ * 不带动画另外换来两件事：`prefers-reduced-motion` 下零损失（不需要为此再写兜底），
+ * 以及列表里 10 条骨架不会变成 10 个常驻动画。
+ *
+ * 底色不用 `--bg-raised`：它在侧栏底（`--bg-sidebar` #f2f2f2）上几乎不可见（两者只差
+ * 5 个灰阶），骨架等于没画。取 `--text` 的 8% 半透明叠加 —— 在 `--bg`(#fff) /
+ * `--bg-raised`(#f7f7f7) / `--bg-sidebar`(#f2f2f2) 三种底上都读作「占位灰」；
+ * 与 `--bg-hover`（5% 黑）同族、只重一档（它是静态底色，没有 hover 语义要区分）。
+ *
+ * 尺寸由调用点给：骨架必须与真实内容同尺寸，否则内容到达时会跳动；而尺寸是各容器
+ * 既有的排版量（不在 DESIGN.md §2 的任何档位表里），硬塞进档位只会破坏对齐
+ * —— 与上面 Spinner 的取向一致。
+ */
+export function Skeleton({
+	width = "100%",
+	height = 12,
+	radius = "var(--radius-sm)",
+}: {
+	readonly width?: number | string;
+	readonly height?: number | string;
+	readonly radius?: number | string;
+}): React.JSX.Element {
+	// span + display:block 而不是 div：骨架要能塞进行内元素里（如 `.task-item-title` 这个 span）。
+	// aria-hidden：骨架是「还没到」的装饰，语义由外层容器的 role="status" / 相邻文字承担。
+	return (
+		<span
+			aria-hidden="true"
+			style={{
+				display: "block",
+				width,
+				height,
+				borderRadius: radius,
+				background: "color-mix(in srgb, var(--text) 8%, transparent)",
+			}}
+		/>
+	);
 }
 
 /** 空态。`action` 是可选的「引导下一步」槽位（无出口的空态等于死路）。 */

@@ -8,6 +8,40 @@
 
 @import "../styles/tokens.css";
 
+/*
+ * MiSans 随包字体接线（@font-face 必须在 @import 之后的顶层位置，见文件头的说明）。
+ *
+ * 为什么随包：Windows 上数十处 `font-weight: 600` 会落到微软雅黑——雅黑没有真 600
+ * 字重，只能合成加粗，笔画发虚（12-14px 小字号最明显）。MiSans 有真 Semibold 且针对
+ * 小字号屏显优化，故随包作为 Windows 中文 UI 字体；macOS 仍优先系统苹方，雅黑兜底。
+ *
+ * 字重对应（与 resources/fonts/README.md 一致，勿凭记忆改）：
+ *   MiSans-Regular.woff2  → 400
+ *   MiSans-Semibold.woff2 → 600
+ *
+ * 路径：url() 相对本文件解析，renderer 以 src/renderer 为构建根，故 ./fonts/ 指向同目录
+ * 的 woff2。这一步是「字体是否真的进产物」的关键——**只有被 url() 引用，vite 才会把
+ * 文件当资源打包**；光把 woff2 放在仓里不进产物，@font-face 引不到文件等于没接。
+ *
+ * font-display: swap：字体未就绪时先用回退字体渲染，避免首屏空白（短时间内的字重不匹配
+ * 比"文字不可见"更可接受）。
+ */
+@font-face {
+	font-family: "MiSans";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("./fonts/MiSans-Regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "MiSans";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("./fonts/MiSans-Semibold.woff2") format("woff2");
+}
+
 /* 根部错误边界：渲染异常时的错误卡（白屏无反馈是体验缺陷，ErrorBoundary 是最后防线）。 */
 .error-boundary {
 	display: flex;
@@ -59,10 +93,12 @@ body {
 	margin: 0;
 	background: var(--bg);
 	color: var(--text);
-	/* WorkBuddy 全局字体栈原值（"PingFang SC" 在 macOS 生效，Windows 落到
-	   Segoe UI；"Microsoft YaHei" 是我们保留的 CJK 兜底，WB 栈里没有，
-	   但没有它 Windows 中文渲染依赖系统隐式回退，不确定性更高）。 */
-	font: 14px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+	/* 字体栈的唯一真源是 tokens.css 的 --font-body，这里只引用、不再各写一份。
+	   为什么要收敛到一处：此前 body 与 --font-body 各写了一份一模一样的栈，
+	   加字体/调顺序要改两处、极容易只改一处——上一期「MiSans 声明接了但两处都没接」
+	   的账目错误就是这种漂移的直接后果。栈本身（含 "PingFang SC"/"Segoe UI" 的
+	   取舍理由）见 tokens.css 的 --font-body 注释。 */
+	font: 14px/1.6 var(--font-body);
 }
 
 button {
@@ -93,6 +129,19 @@ textarea:focus-visible {
 	outline-offset: 2px;
 }
 
+/* 选中文本底色：此前全站走 Chromium 默认蓝 —— 那是全站唯一一处「外来色」，
+   与 .markdown a 的 --accent 蓝并存时是两套互不相干的蓝。改用 --text 的 14%
+   中性覆盖，与滚动条 thumb 同值（两者同为「中性叠加层」，不新造档位）。
+   只给底色不给 color：选区内文字保持原色，链接/代码块里不丢语义色。
+   为什么一条就够（不按主题分开写）：--text 在暗色主题下翻成白（tokens.css），
+   覆盖色自动跟着翻，暗底上仍是「比底色亮一点」的同一方向；浅色主题的三种底
+   （--bg 白 / --bg-sidebar #f2f2f2 / --bg-raised #f7f7f7）上，14% 黑的覆盖块
+   与黑字对比都在 4.5:1 以上。已知边界：--primary 那种深色底上的白字，选中块
+   几乎看不出来 —— 那些位置基本都是 <button>（Chromium 默认不可选中），不为此加档。 */
+::selection {
+	background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
 .app {
 	/* 定位基准：左上角的侧栏开关（.sidebar-toggle-btn）与右上角的
 	   产物面板开关（.panel-toggle-btn）都 absolute 钉在这里。 */
@@ -119,6 +168,28 @@ textarea:focus-visible {
 	border-right: 1px solid var(--border);
 	/* 滚动职责移交给 .sidebar-scroll（任务+空间区），导航项固定不动。 */
 	overflow: hidden;
+	/* 折叠过渡：`flex-basis` 是 DESIGN.md §5.1 的**第二条 width 受控例外**（理由见下条规则）。
+	   元素常驻 DOM（App.tsx 的 data-sidebar 状态，不再条件挂载）才有「起始态→终态」可跑 ——
+	   条件挂载的元素挂载即终态，transition 不触发（第 2 期弹层踩过同一个坑）。
+	   visibility 只服务 a11y：它参与过渡时，折叠过程中保持 visible 到动画结束（离散属性
+	   的插值规则：两端只要有一端是 visible 就按 visible 算），展开时则立刻可见。 */
+	transition: flex-basis var(--dur-base) var(--ease-out), visibility var(--dur-base);
+}
+
+/* 侧栏折叠态：让位宽度归零（主区跟着变宽，不是浮层覆盖 —— 语义不变）。
+   为什么必须动 width 类属性：折叠是「让位」语义，`transform` 表达不了（它不改变布局宽，
+   只能做浮层覆盖，而侧栏是推开内容的常驻栏）。
+   padding-inline / border-right-width 在 t=0 就归零、不参与过渡：border-box 下 flex-basis
+   会被内边距与边框顶住（只归零 flex-basis 时，理论值 25px = --space-4×2 + 1px 边框，
+   实测渲染盒 24.8px，而不是 0 —— 口径与 DESIGN.md §5 受控例外 ④ 一致），
+   而 artifact-panel 的 maxPanelWidth 正是量这个盒子 —— 归零才能保住「收起时量到 0」的既有契约。
+   visibility: hidden 把侧栏移出 Tab 序与 a11y 树（条件挂载时代这件事由卸载承担）。
+   代价：折叠期间侧栏内容随宽度重排（约 12 帧布局），已知并接受。 */
+.app[data-sidebar="collapsed"] .sidebar {
+	flex-basis: 0;
+	padding-inline: 0;
+	border-right-width: 0;
+	visibility: hidden;
 }
 
 .sidebar-brand {
@@ -187,6 +258,9 @@ textarea:focus-visible {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
+	/* 滚动条常驻占位：列表从 5 条涨到 6 条时滚动条出现，否则会吃掉 6px 可用宽、
+	   标题跟着重排一次。取舍标准（为什么只有这 5 个容器加）见文末「滚动条基线」块。 */
+	scrollbar-gutter: stable;
 	scrollbar-width: thin;
 	scrollbar-color: transparent transparent;
 	transition: scrollbar-color var(--dur-base) ease;
@@ -363,17 +437,36 @@ textarea:focus-visible {
 	align-items: center;
 	gap: var(--space-2);
 	width: 100%;
+	/* **不预留让位宽度**。hover 浮现的操作钮（.task-item-ops，absolute; right: 6px）与时间戳
+	   （.task-item-meta）走「同位置交叉淡化」：meta 常驻占位、hover 只降到 opacity: 0，
+	   于是标题可用宽在两种态下逐像素相同（不跳字，「hover 不得改变布局」仍满足），
+	   而右侧不留任何空白。
+	   为什么**不**预留 padding-right（本行曾写 72px，已删）：那是把**两种态都缩窄**——
+	   216px 侧栏里 72(让位) + 时间戳常驻 ~60–90 全被吃掉，标题只剩 ~20px，
+	   任何标题都被压成一个字加省略号（"你…"/"用"）。
+	   为什么**不**改回"hover 才让位"（更早的写法，同样不许回去）：hover 瞬间标题可用宽少
+	   72px，省略号位置跳变、整列在抖 —— 那正是当初改成常驻的原因。
+	   两种写法错在同一个前提上（"给操作钮腾地方"）；正解是让右侧那两样东西**轮值同一格**。 */
 	padding: var(--space-1) var(--space-3);
 	text-align: left;
-}
-
-.task-item:hover .task-item-body {
-	padding-right: 72px;
 }
 
 /* hover 浮现的操作钮。 */
 .task-item:hover {
 	background: var(--bg-hover);
+}
+
+/* 骨架行复用 .task-item 是为了拿「同尺寸」的结构性保证（sidebar.tsx 的 TASK_SKELETON_*），
+   于是会继承列表行的 hover/active 底色 —— 骨架不可点，划过/按住却有反馈，观感不对。
+   骨架列表以 role="status" 标识（aria-label「正在读取历史任务」），在容器这一层抑制。 */
+.task-list[role="status"] .task-item:hover,
+.task-list[role="status"] .task-item:active {
+	background: none;
+}
+
+/* 骨架没有操作钮能顶上那一格，划过时不该把时间条淡掉（列表在途时指针常已在侧栏里）。 */
+.task-list[role="status"] .task-item:hover .task-item-meta {
+	opacity: 1;
 }
 
 /* 当前活动会话：常驻底色 + 标题加重，与 hover 的临时反馈区分开。 */
@@ -394,7 +487,7 @@ textarea:focus-visible {
 	text-overflow: ellipsis;
 }
 
-/* 时间右对齐常驻：与标题同排，不被 hover 操作钮遮住（flex 布局天然让位）。 */
+/* 时间右对齐常驻：与标题同排，与操作钮同位置交叉淡化（见下一条）。 */
 .task-item-meta {
 	flex: none;
 	font-size: var(--text-meta);
@@ -402,9 +495,25 @@ textarea:focus-visible {
 	white-space: nowrap;
 	/* 比例宽数字随时间推移变位数/字形宽度会抖行宽，等宽数字消除抖动。 */
 	font-variant-numeric: tabular-nums;
+	/* 交叉淡化的一半（另一半在 .task-item-ops）：基类写"淡回"用 --dur-fast、
+	   hover/focus 态写"淡出"用 --dur-base，与 .entry-toolbar 的既有出入场口径一致
+	   （DESIGN.md §5.8 进出场不对称——用户已决定离开时收得快，两处 hover 浮起元素同规矩）。 */
+	transition: opacity var(--dur-fast) var(--ease-standard);
 }
 
-/* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。 */
+/* hover 时时间戳把同一格让给操作钮：只降 opacity、**保留占位**（flex 那一格宽度不变），
+   所以标题可用宽恒定、不跳字，而右侧没有为它单独留过空白。
+   选择器要精确对齐操作钮的显现条件：写成 `.task-item:focus-within` 是错的 ——
+   body 本身就是 <button>，Tab 到行主体时时间戳会凭空消失而操作钮并不出现。 */
+.task-item:hover .task-item-meta,
+.task-item:has(> .task-item-ops:focus-within) .task-item-meta {
+	opacity: 0;
+	transition: opacity var(--dur-base) var(--ease-standard);
+}
+
+/* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。
+   绝对定位压在时间戳那一格上（right: 6px ≈ meta 的 --space-3 右内边距），
+   于是 hover 读作"时间戳原地变成操作钮"，而不是"右侧又挤进来一排按钮"。 */
 .task-item-ops {
 	position: absolute;
 	top: 6px;
@@ -413,12 +522,16 @@ textarea:focus-visible {
 	gap: 2px;
 	opacity: 0;
 	visibility: hidden;
+	/* 与 meta 同时长，两样东西才不会一先一后闪（visibility 必须参与过渡：可见→隐藏若立即生效，
+	   opacity 的淡出会看不见，操作钮就成了硬闪）。 */
+	transition: opacity var(--dur-fast) var(--ease-standard), visibility var(--dur-fast);
 }
 
 .task-item:hover .task-item-ops,
 .task-item-ops:focus-within {
 	opacity: 1;
 	visibility: visible;
+	transition: opacity var(--dur-base) var(--ease-standard), visibility var(--dur-base);
 }
 
 .task-op-btn {
@@ -526,12 +639,12 @@ textarea:focus-visible {
 	gap: var(--space-1);
 	min-width: 0;
 	padding: var(--space-1) var(--space-2);
+	/* **不预留让位宽度**（理由同 .task-item-body）：组头的「+」「⋯」两个操作钮是普通
+	   flex 子项（.space-group-actions，只切 opacity/visibility，**不脱离排版**），
+	   宽度本来就常驻，hover 不会改变主按钮的可用宽 —— 这里再写 48px padding-right 是
+	   **第二重让位**：组名可用宽被扣两次（216px 侧栏算下来只剩 ~50px，约 3~4 字，
+	   所以被截成 ".kami…"/"给肉…"）。右侧没有常驻元信息要保护（组计数早已不渲染），删掉即可。 */
 	text-align: left;
-}
-
-/* hover 操作钮会占右侧宽度，主按钮提前让位，避免计数被压住。 */
-.space-group-header:hover .space-group-header-main {
-	padding-right: 48px;
 }
 
 /* 折叠箭头：展开朝下，收起旋转 -90°，纯 CSS 过渡。 */
@@ -664,6 +777,11 @@ textarea:focus-visible {
 	overflow-y: auto;
 	/* WorkBuddy 首页主区纯白（--wb-home-bg-secondary = #fff），无装饰光晕。 */
 	background: var(--bg);
+	/* 滚动条常驻占位（取舍标准见文末「滚动条基线」块）：首页内容跨过一屏时
+	   hero 与案例槽不横向重排。 */
+	scrollbar-gutter: stable;
+	/* 整页壳入场：与 .settings / .skills 同口径同一条 keyframes（见那边的注释）。 */
+	animation: page-in var(--dur-base) var(--ease-out);
 }
 
 .home-inner {
@@ -1542,6 +1660,13 @@ textarea:focus-visible {
 	padding-left: var(--space-4);
 }
 
+/* 侧栏折叠：`.sidebar` 常驻 DOM 后 `~` 兄弟选择器不再区分开合（恒命中上一条），
+   故折叠态另给一条更高特异性的回调，把让位左内边距还给左上角的悬浮开关
+   （48 是让位偏移不是间距档值：40px 开关占位 + 8px 间隙）。 */
+.app[data-sidebar="collapsed"] .chat .chat-header {
+	padding-left: 48px;
+}
+
 .chat-title {
 	flex: 1 1 auto;
 	font-weight: 500;
@@ -1564,19 +1689,31 @@ textarea:focus-visible {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: var(--space-5) var(--space-6);
+	/* 滚动条常驻占位：这是「跨过一屏整列横移」的正解 —— 滚动条从无到有会吃掉 6px 内容宽，
+	   而 .stream > * 的 832px 列是 margin-inline: auto 居中的：内容盒窄 6px ⇒ 整列左移 3px，
+	   用户看到的是「打字打到一半整片消息左右横移」。取舍标准见文末「滚动条基线」块。 */
+	scrollbar-gutter: stable;
 	/* 普通块流而非 flex 纵向：flex 子项的 min-height:auto 对 overflow:hidden
 	   元素（工具卡）计算为 0，长输出被压到 0px 整卡裁没 —— 「工具调用挤没」
 	   的根因。WorkBuddy 消息流同为块流；间距改由各元素自管 margin
 	   （用户 32 / 回合头 12 / 助手 8 / 工具 4），统一 gap 表达不了这套节奏。 */
 	display: block;
-	/* 整列 hydration reveal（对标 WorkBuddy __content--hydrating → --revealed：
-	   cubic-bezier(0.34,1.56,0.64,1) 带回弹）。.stream 不随消息更新重建，
-	   动画天然只在挂载时跑一次。fill-mode 用 backwards 而非 both：both 会让终帧
-	   translateY(0) 常驻，常驻 transform 使 .stream 成为 fixed 后代的包含块，
-	   图片放大预览（.image-preview-overlay，position:fixed）就被压回消息流盒内；
-	   backwards 只补起始帧，动画结束元素回归无 transform。
-	   时长归档为 --dur-slow(280ms)；缓动是带回弹的第三档缓动（DESIGN.md §2.8 只列
-	   两个），去掉回弹会变成普通淡入，故保留原曲线、登记为 token 例外。 */
+}
+
+/* 整列 hydration reveal（对标 WorkBuddy __content--hydrating → --revealed：
+   cubic-bezier(0.34,1.56,0.64,1) 带回弹）。
+   为什么挂在 [data-reveal="true"] 而不是 .stream 本身：.stream 随 ChatView 挂载/卸载，
+   常驻声明会让「从首页/设置/统计返回对话页」也重跑一次整列 opacity 0→1 + translateY(10px)
+   —— 对一份上万像素的历史是可见的整列上滑，且为整棵子树建合成层（与第 3 期
+   content-visibility 的性能取向相反），其原注释只论证了「为什么不常驻 transform」，
+   没论证「为什么每次重挂载都要跑」。改由 chat-view 在「entries 从 0 变非 0」时置位，
+   只在空会话的第一条消息上屏那一次播（判定与重置见 chat-view.tsx 的 revealRef）。
+   fill-mode 用 backwards 而非 both：both 会让终帧 translateY(0) 常驻，常驻 transform
+   使 .stream 成为 fixed 后代的包含块，图片放大预览（.image-preview-overlay，position:fixed）
+   就被压回消息流盒内；backwards 只补起始帧，动画结束元素回归无 transform。
+   时长归档为 --dur-slow(280ms)；缓动是带回弹的第三档缓动（DESIGN.md §2.8 只列
+   两个），去掉回弹会变成普通淡入，故保留原曲线、登记为 token 例外。 */
+.stream[data-reveal="true"] {
 	animation: stream-reveal var(--dur-slow) cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 }
 
@@ -1592,9 +1729,10 @@ textarea:focus-visible {
 	}
 }
 
-/* 与全局其他动效同一约定：减少动态偏好下直接呈现。 */
+/* 与全局其他动效同一约定：减少动态偏好下直接呈现。
+   特异度要对齐上面那条（[data-reveal="true"] 多一个属性选择器，写 .stream 压不住）。 */
 @media (prefers-reduced-motion: reduce) {
-	.stream {
+	.stream[data-reveal="true"] {
 		animation: none;
 	}
 }
@@ -2004,10 +2142,18 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 }
 
+/* 缩略图统一按 4:5 定框（160×200）+ cover：把占位与落位写成同一个尺寸，而不是
+   「宽定死、高随原图比例」。实测（Electron 44）：只有 `width:160px` 时，TSX 上
+   `<img width height>` 的两个属性会作为 presentational hint 生效，横图（16:9）的盒子
+   仍是 160×200、解码后不变；但那是一条**隐式依赖** —— 任何 `img { height: auto }` 口径的
+   重置、或哪天去掉属性，横图就会按原始比例出 ~90px 高，气泡随之收缩、下方内容上移一次。
+   写死 height 后这条路径不存在：解码前后、任意原图比例下盒子恒定，4:5 之外由 cover 裁掉，
+   完整内容点开大图看（本块既有的出口，见 .image-preview-overlay）。
+   TSX 上保留同值的 width/height 属性：它们兼作解码前的尺寸声明。 */
 .user-bubble-images img {
 	display: block;
 	width: 160px;
-	max-height: 200px;
+	height: 200px;
 	object-fit: cover;
 	border-radius: var(--radius-md);
 }
@@ -3303,6 +3449,17 @@ textarea:focus-visible {
 	transition: none;
 }
 
+/* 窗口 resize 手势期间同样停过渡（与上一条同一个坑、同一手法）。
+   为什么：App.tsx 的 resize 监听会走 clampPanelWidth 改面板宽（窗口缩窄时把面板压回
+   可用宽），带 --dur-base 的 width 过渡时面板会「追」着窗口边缘走、与用户拖拽错拍，
+   触到 clamp 上下限那一刻最明显。标记由 App.tsx 的 windowResizing 给出，
+   松手后 RESIZE_SETTLE_MS 自动撤销。
+   **过渡本身不能去掉** —— 面板全屏切换依赖它（受控例外 ③）。
+   全屏态 .fullscreen 本就是 transition: none，不受影响。 */
+.app[data-resizing="true"] .preview-panel {
+	transition: none;
+}
+
 /* 全屏：absolute 覆盖主内容区，宽由定位撑满（非 width，避免与 transition 打架）。 */
 .preview-panel.fullscreen {
 	position: absolute;
@@ -4202,6 +4359,29 @@ textarea:focus-visible {
 	flex-direction: column;
 	overflow: hidden;
 	background: var(--bg);
+	/* 整页视图入场：stats / diagnostics / automations（都挂 .settings）与 skills（.skills）
+	   四个视图共用这一条规则，不逐视图各写一份（settings 本身是模态卡 .settings-card，
+	   入场在那边，不在本列）。条件挂载的视图挂载即终态 → 只能走 animation，
+	   与 .settings-card 的 pop-layer-in 同款取舍；同族（transform + opacity、
+	   --dur-base + --ease-out），只去掉 scale —— 整页壳不是浮层，整页缩放会让
+	   边框与滚动条一起闪动，层替关系改用 translateY 表达。
+	   .home 用同一条 keyframes（首页也是整页壳，同口径）。 */
+	animation: page-in var(--dur-base) var(--ease-out);
+}
+
+/* 整页壳入场：translateY 8px 表达「新页从下方顶上来」。不写 fill-mode，
+   动画结束即回归无 transform —— 常驻 transform 会让本容器成为 fixed 后代的包含块
+   （.stream 的 stream-reveal 为同一个坑把 fill 定为 backwards/无 fill）。 */
+@keyframes page-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
 }
 
 .settings-head {
@@ -4223,6 +4403,12 @@ textarea:focus-visible {
 	padding-left: var(--space-5);
 }
 
+/* 折叠态回调（同 .chat-header 那条的理由：`.sidebar` 常驻 DOM 后 `~` 不再区分开合）。 */
+.app[data-sidebar="collapsed"] .settings .settings-head,
+.app[data-sidebar="collapsed"] .skills .skills-head {
+	padding-left: 48px;
+}
+
 .settings-head h1 {
 	margin: 0;
 	font-size: var(--text-emphasis);
@@ -4233,6 +4419,9 @@ textarea:focus-visible {
 .skills-body {
 	flex: 1 1 auto;
 	overflow-y: auto;
+	/* 滚动条常驻占位（取舍标准见文末「滚动条基线」块）：分区内容跨过一屏时
+	   900px 居中列不横向重排。 */
+	scrollbar-gutter: stable;
 	padding: var(--space-5) var(--space-6) var(--space-7);
 	max-width: 900px;
 	width: 100%;
@@ -4251,7 +4440,9 @@ textarea:focus-visible {
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-md);
+	/* 与同级的 .permission-card 一致（--shadow-lg）：两者都是居中模态、同一抬升感。
+	   原 --shadow-md 是「卡片/菜单」档，用在带背板的模态上偏轻、与审批弹窗不同层。 */
+	box-shadow: var(--shadow-lg);
 	overflow: hidden;
 	/* 入场：设置弹层组件由父层按开关条件挂载，挂载即终态 → 走 animation。 */
 	animation: pop-layer-in var(--dur-base) var(--ease-out);
@@ -7915,6 +8106,15 @@ textarea:focus-visible {
  *   - 唯一的全局观感变化就是「原生滚动条从粗变细、常态更淡」——正是基线要的效果。
  *   - `*:hover` 只影响被悬停元素自身的滚动条；对不滚动的元素是空操作。
  *     它不会盖过 .sidebar-scroll:hover（后者多一个类，特异性更高）。
+ *
+ * 滚动条占位（scrollbar-gutter: stable）在这里逐条判断 —— 只给「页面级主滚动容器」加：
+ *   - 加：.stream / .home / .settings-body / .skills-body / .sidebar-scroll。它们的父不滚、
+ *     内容宽由自身内容盒决定，滚动条从无到有会直接改内容可用宽 —— 前四个的内容列都是
+ *     margin-inline: auto 居中（窄 6px 就整列横移），后者会把标题挤到折行。加 stable 后
+ *     滚动条出现/消失不改内容宽，代价是常态也留一条 6px 空槽（白底上不可见）。
+ *   - 不加：.thinking-body（限高 200px 的推导过程）/ .user-bubble（宽由 70% 上限决定，
+ *     超长消息内部滚动）/ .pop-menu 一类菜单浮层（宽由内容撑）。这些是**宽度紧张的局部
+ *     滚动区**，常驻空槽会在小盒子里白占位，而它们的内容本来不靠宽度对齐 —— 收益为负。
  */
 * {
 	scrollbar-width: thin;

@@ -82,6 +82,13 @@
 字重只有两档语义：**常规 400 / 强调 600**，无 token（直写）；500 并入 600。
 行高基准：正文 1.6、列表 1.5、展示标题随容器；无 token。
 
+**字体族（唯一真源）**：界面字体栈**只在** `tokens.css` 的 `--font-body` 定义一处，`body` 引用它。
+新增字体**必须**走 `@font-face` + 该变量，**不得**就地写 `font-family` 字面值（组件里、`body` 里都不行）。
+理由两条：① 此前 `body` 与 `--font-body` 各写了一份一模一样的栈，加字体/调顺序要改两处，于是出现
+「`MiSans` 声称已接、实际两处都没接」的账目错误（见
+[docs/design-tokens-migration.md](docs/design-tokens-migration.md) §11）；② 字体文件**只有被 CSS `url()`
+引用**才会进 renderer 产物（无 `publicDir`），光放进仓里等于死文件 —— 声明与引用必须成对。
+
 ### 2.7 圆角（4 档）+ 阴影（3 级）
 
 | Token | 值 | 用途 |
@@ -229,7 +236,7 @@
 1. **只动 `transform` / `opacity` / `visibility`**。禁止过渡/动画这些属性：
    `width`、`height`、`max-height`、`min-height`、`padding`、`margin`、`border-width`、
    `font-weight`、`background-position`、`top`/`left`（非 transform 写法）、`grid-template-rows`。
-   （三条**受控例外**见本节末，明确不属于违规。）
+   （四条**受控例外**见本节末，明确不属于违规。）
 2. **折叠展开的合法写法**：「从 0 到内容高度」只有两条可靠路径 —— `grid-template-rows: 0fr ↔ 1fr`
    （配内层 `min-height: 0; overflow: hidden`，参考 `.metafold-body` 手法）或
    `interpolate-size: allow-keywords` + `height: 0 ↔ auto`（参考 `.tool-detail-box` 手法，
@@ -264,6 +271,16 @@
    仅限文字区域（非整屏），改造收益不成立。
 ③ **`.preview-panel` 的 `width` 过渡**：全屏切换需要（WB 同参数）；拖拽期间由
    `[data-dragging="true"]` 置 `transition: none` 禁用（见规则 5）。
+④ **`.sidebar` 的 `flex-basis` 过渡（侧栏折叠）**：折叠是「**让位**」语义——主区必须跟着
+   变宽/收窄，这个效果 `transform` 表达不了（transform 不改变布局宽度，只能做浮层覆盖，
+   而侧栏是推开内容的常驻栏，不是浮层）。属**第二条 `width` 类受控例外**，与 ③ 性质不同
+   （③ 是同栏在全屏与常规之间切，本条是全局导航栏的收起/展开）。时长取 `--dur-base`，
+   缓动 `--ease-out`；**代价**：折叠期间侧栏内容随宽度重排（约 12 帧布局），已知并接受。
+   实现附则：折叠态把 `padding-inline` / `border-right-width` 直接归零（**不**参与过渡）——
+   `border-box` 下 `flex-basis` 会被内边距与边框顶住（只归零 `flex-basis` 时**实测盒子宽 24.8px**
+   ≈ `--space-4`×2 + 1px 边框，而不是 0），而
+   `artifact-panel` 的 `maxPanelWidth()` 正是量这个盒子，归零才保住「收起时量到 0」的契约；
+   `visibility` 参与过渡以承担收起后的 Tab 序/a11y 移出（见规则 7 的条件挂载口径）。
 
 ## 6. 禁止清单
 
