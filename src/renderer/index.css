@@ -5753,6 +5753,54 @@ textarea:focus-visible {
 	flex: 0 0 84px;
 }
 
+/* 模型条目：主行（id/名称/开关）+ 调参行（数字 + 快捷档位）。 */
+.model-block {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2) 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.model-tuning {
+	display: flex;
+	gap: var(--space-4);
+	flex-wrap: wrap;
+}
+
+.num-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.num-chips {
+	display: flex;
+	gap: var(--space-1);
+	flex-wrap: wrap;
+}
+
+.num-chip {
+	padding: 2px var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	color: var(--text-muted);
+	font: inherit;
+	font-size: var(--text-meta);
+	cursor: pointer;
+}
+
+.num-chip:hover {
+	border-color: var(--text-faint);
+}
+
+.num-chip.active {
+	border-color: var(--primary);
+	background: var(--bg-raised);
+	color: var(--text);
+}
+
 /* ── 侧栏底部 ─────────────────────────────────────────────────── */
 
 .footer-text {

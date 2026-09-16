@@ -168,12 +168,27 @@ const EMPTY_CUSTOM: CustomProviderInput = {
 	name: "",
 	baseUrl: "",
 	api: "openai-completions",
-	models: [{ id: "", name: "", contextWindow: 128000, maxTokens: 8192, reasoning: false, vision: false }],
+	models: [{ id: "", name: "", contextWindow: 128000, maxTokens: 32768, reasoning: false, vision: false }],
 };
+
+/** 数字字段的快捷档位：点选代替手打，值与竞品对齐（上下文到 1M、输出到 64k）。 */
+const CONTEXT_WINDOW_CHIPS = [
+	{ label: "128k", value: 131_072 },
+	{ label: "256k", value: 262_144 },
+	{ label: "512k", value: 524_288 },
+	{ label: "1M", value: 1_048_576 },
+] as const;
+
+const MAX_TOKENS_CHIPS = [
+	{ label: "8k", value: 8_192 },
+	{ label: "16k", value: 16_384 },
+	{ label: "32k", value: 32_768 },
+	{ label: "64k", value: 65_536 },
+] as const;
 
 const API_OPTIONS = [
 	{ value: "openai-completions", label: "OpenAI 兼容", hint: "多数国产网关、Ollama、vLLM" },
-	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Claude 官方或代理" },
+	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Claude 官方或代理；基址填到端点根（SDK 自动拼 /v1/messages）" },
 	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Gemini / AI Studio" },
 ] as const;
 
@@ -298,63 +313,115 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 				</div>
 			)}
 
+			{form.api === "anthropic-messages" && (
+				<div className="field">
+					<span className="field-label">认证方式</span>
+					{/* 对齐 Claude Code 的 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN 之分：
+					    中转网关（CC switch 一类）按 ANTHROPIC_AUTH_TOKEN 语义校验
+					    Authorization: Bearer，官方 key 则用 x-api-key。 */}
+					<label className="check">
+						<input
+							type="checkbox"
+							checked={form.authHeader === true}
+							onChange={(e) => patch({ authHeader: e.target.checked ? true : undefined })}
+						/>
+						用 Authorization: Bearer 发送认证（Claude 中转/代理网关勾选）
+					</label>
+					<span className="field-hint">默认用 x-api-key（Anthropic 官方）。密钥仍只存 auth.json，pi 运行时组装请求头。</span>
+				</div>
+			)}
+
 			<div className="field">
 				<span className="field-label">模型</span>
 				{form.models.map((model, index) => (
 					// 用索引作 key：模型 id 在编辑过程中会变（用户正在打字），用 id 会导致输入框失焦。
-					<div key={index} className="model-row">
-						<input
-							className="model-id"
-							value={model.id}
-							placeholder="模型 ID，如 glm-4.7"
-							onChange={(e) => patchModel(index, { id: e.target.value })}
-						/>
-						<input
-							className="model-name"
-							value={model.name}
-							placeholder="显示名（可留空）"
-							onChange={(e) => patchModel(index, { name: e.target.value })}
-						/>
-						<input
-							className="model-num"
-							type="number"
-							value={model.contextWindow}
-							title="上下文窗口"
-							onChange={(e) => patchModel(index, { contextWindow: Number(e.target.value) })}
-						/>
-						<input
-							className="model-num"
-							type="number"
-							value={model.maxTokens}
-							title="单次最大输出"
-							onChange={(e) => patchModel(index, { maxTokens: Number(e.target.value) })}
-						/>
-						<label className="check compact" title="支持思考档位">
+					<div key={index} className="model-block">
+						<div className="model-row">
 							<input
-								type="checkbox"
-								checked={model.reasoning}
-								onChange={(e) => patchModel(index, { reasoning: e.target.checked })}
+								className="model-id"
+								value={model.id}
+								placeholder="模型 ID，如 glm-4.7"
+								onChange={(e) => patchModel(index, { id: e.target.value })}
 							/>
-							思考
-						</label>
-						<label className="check compact" title="支持图片输入">
 							<input
-								type="checkbox"
-								checked={model.vision}
-								onChange={(e) => patchModel(index, { vision: e.target.checked })}
+								className="model-name"
+								value={model.name}
+								placeholder="显示名（可留空）"
+								onChange={(e) => patchModel(index, { name: e.target.value })}
 							/>
-							看图
-						</label>
-						{form.models.length > 1 && (
-							<button
-								type="button"
-								className="bar-btn"
-								aria-label="删除该模型"
-								onClick={() => patch({ models: form.models.filter((_, i) => i !== index) })}
-							>
-								<IconClose size={14} />
-							</button>
-						)}
+							<label className="check compact" title="支持思考档位">
+								<input
+									type="checkbox"
+									checked={model.reasoning}
+									onChange={(e) => patchModel(index, { reasoning: e.target.checked })}
+								/>
+								思考
+							</label>
+							<label className="check compact" title="支持图片输入">
+								<input
+									type="checkbox"
+									checked={model.vision}
+									onChange={(e) => patchModel(index, { vision: e.target.checked })}
+								/>
+								看图
+							</label>
+							{form.models.length > 1 && (
+								<button
+									type="button"
+									className="bar-btn"
+									aria-label="删除该模型"
+									onClick={() => patch({ models: form.models.filter((_, i) => i !== index) })}
+								>
+									<IconClose size={14} />
+								</button>
+							)}
+						</div>
+						<div className="model-tuning">
+							<div className="num-field">
+								<input
+									className="model-num"
+									type="number"
+									value={model.contextWindow}
+									title="上下文窗口"
+									onChange={(e) => patchModel(index, { contextWindow: Number(e.target.value) })}
+								/>
+								<div className="num-chips">
+									{CONTEXT_WINDOW_CHIPS.map((chip) => (
+										<button
+											key={chip.label}
+											type="button"
+											className={`num-chip${model.contextWindow === chip.value ? " active" : ""}`}
+											title={`上下文窗口设为 ${chip.label}`}
+											onClick={() => patchModel(index, { contextWindow: chip.value })}
+										>
+											{chip.label}
+										</button>
+									))}
+								</div>
+							</div>
+							<div className="num-field">
+								<input
+									className="model-num"
+									type="number"
+									value={model.maxTokens}
+									title="单次最大输出（写长文件会受此限制，太小会让模型写长内容时被截断）"
+									onChange={(e) => patchModel(index, { maxTokens: Number(e.target.value) })}
+								/>
+								<div className="num-chips">
+									{MAX_TOKENS_CHIPS.map((chip) => (
+										<button
+											key={chip.label}
+											type="button"
+											className={`num-chip${model.maxTokens === chip.value ? " active" : ""}`}
+											title={`单次最大输出设为 ${chip.label}`}
+											onClick={() => patchModel(index, { maxTokens: chip.value })}
+										>
+											{chip.label}
+										</button>
+									))}
+								</div>
+							</div>
+						</div>
 					</div>
 				))}
 				<button
@@ -364,7 +431,7 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 						patch({
 							models: [
 								...form.models,
-								{ id: "", name: "", contextWindow: 128000, maxTokens: 8192, reasoning: false, vision: false },
+								{ id: "", name: "", contextWindow: 128000, maxTokens: 32768, reasoning: false, vision: false },
 							],
 						})
 					}
@@ -547,10 +614,10 @@ function ModelPicker({ models, providers, activeModelId, busy, onPick, onRefresh
 
 /* ── 添加模型弹层 ────────────────────────────────────────────────── */
 
-/** 弹层里的选择：某个预置服务商，或「自定义（OpenAI 兼容）」。 */
+/** 弹层里的选择：某个预置服务商，或「自定义」（三种协议在表单里选）。 */
 type AddTarget = { kind: "preset"; provider: ProviderInfo } | { kind: "custom" };
 
-const CUSTOM_LABEL = "自定义（OpenAI 兼容）";
+const CUSTOM_LABEL = "自定义";
 
 interface ProviderSelectProps {
 	readonly providers: readonly ProviderInfo[];
@@ -662,7 +729,7 @@ const EMPTY_MODEL: CustomModelInput = {
 	id: "",
 	name: "",
 	contextWindow: 128000,
-	maxTokens: 8192,
+	maxTokens: 32768,
 	reasoning: false,
 	vision: false,
 };

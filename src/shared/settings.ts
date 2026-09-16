@@ -128,6 +128,16 @@ export interface CustomProviderInput {
 	/** 完整基址，如 https://api.deepseek.com/v1。 */
 	readonly baseUrl: string;
 	readonly api: CustomApi;
+	/**
+	 * 认证头形态（对齐 Claude Code 的 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN 之分）。
+	 *
+	 * 省略 = `x-api-key`（Anthropic 官方默认）。`bearer` = `Authorization: Bearer <key>`
+	 * —— Claude Code 中转/代理网关按这个头校验。pi 的 provider 配置原生支持
+	 * （`authHeader: true`，见 model-config schema）：key 照旧走 auth.json 运行时
+	 * 解析，pi 自己组装 Bearer，密钥不落第二份盘。
+	 * 仅对 anthropic-messages 有意义；openai-completions 天然 Bearer，无需此项。
+	 */
+	readonly authHeader?: boolean;
 	readonly models: readonly CustomModelInput[];
 	/**
 	 * OpenAI 兼容服务的兼容性开关。

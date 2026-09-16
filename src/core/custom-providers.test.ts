@@ -153,6 +153,26 @@ describe("写入", () => {
 		expect(providers["claude-proxy"]?.["compat"]).toBeUndefined();
 	});
 
+	it("authHeader 仅对 anthropic-messages 且为 true 时落盘，回填往返一致", () => {
+		// openai-completions 天然 Bearer，标了也不写（pi schema 之外的多余标记）。
+		upsertCustomProvider(path, { ...input(), authHeader: true });
+		expect((readRaw()["providers"] as Record<string, Record<string, unknown>>)["my-gateway"]?.["authHeader"]).toBeUndefined();
+
+		// anthropic + true：Claude 中转（ANTHROPIC_AUTH_TOKEN 语义）的落盘形态。
+		upsertCustomProvider(path, { ...input(), id: "claude-proxy", api: "anthropic-messages", authHeader: true });
+		expect((readRaw()["providers"] as Record<string, Record<string, unknown>>)["claude-proxy"]?.["authHeader"]).toBe(true);
+
+		// anthropic + 未标：默认 x-api-key，不写标记。
+		upsertCustomProvider(path, { ...input(), id: "claude-official", api: "anthropic-messages" });
+		expect((readRaw()["providers"] as Record<string, Record<string, unknown>>)["claude-official"]?.["authHeader"]).toBeUndefined();
+
+		// 回填：编辑表单拿到的形状与写入的一致（编辑再保存不丢标记）。
+		expect(readCustomProvider(path, "claude-proxy")?.authHeader).toBe(true);
+		// 非 anthropic / 未标：字段不出现（回填形状与表单输入一致）。
+		expect(readCustomProvider(path, "claude-official")?.authHeader).toBeUndefined();
+		expect(readCustomProvider(path, "my-gateway")?.authHeader).toBeUndefined();
+	});
+
 	it("重复 upsert 覆盖自己的条目", () => {
 		upsertCustomProvider(path, input());
 		upsertCustomProvider(path, { ...input(), name: "改名了" });

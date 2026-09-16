@@ -29,6 +29,12 @@ export interface ModelProbeTarget {
 	readonly apiKey?: string;
 	/** pi Model.headers（服务商要求的额外头，如 anthropic-version 之外的特殊头）。 */
 	readonly extraHeaders?: Record<string, string>;
+	/**
+	 * 仅 anthropic-messages：true = 认证走 `Authorization: Bearer <key>`
+	 * （Claude 中转的 ANTHROPIC_AUTH_TOKEN 语义），false/省略 = `x-api-key`。
+	 * 与 pi 的 provider `authHeader` 配置同义，探测必须与真实会话同头。
+	 */
+	readonly authHeader?: boolean;
 }
 
 const TIMEOUT_MS = 10_000;
@@ -70,13 +76,28 @@ function buildRequest(target: ModelProbeTarget): { url: string; init: RequestIni
 		};
 	}
 	if (target.api === "anthropic-messages") {
+		/*
+		 * URL 必须与 pi 真实会话一致：pi 走 Anthropic SDK（baseURL + /v1/messages）。
+		 * 此前这里少了一层 /v1 —— 用户按 Claude Code 习惯填的基址（.../api/）
+		 * 探测会打 .../api/messages 拿 404，而真实会话打 .../api/v1/messages，
+		 * 测试按钮误报与真实行为脱节。
+		 *
+		 * 认证头按 authHeader 分叉，与 pi 运行时（withConfiguredAuth）同义：
+		 * Bearer = Claude 中转的 ANTHROPIC_AUTH_TOKEN 语义。
+		 */
+		const auth: Record<string, string> =
+			key === undefined
+				? {}
+				: target.authHeader === true
+					? { authorization: `Bearer ${key}` }
+					: { "x-api-key": key };
 		return {
-			url: `${base}/messages`,
+			url: `${base}/v1/messages`,
 			init: {
 				method: "POST",
 				headers: {
 					...headers,
-					...(key === undefined ? {} : { "x-api-key": key }),
+					...auth,
 					"anthropic-version": "2023-06-01",
 				},
 				body: JSON.stringify({
