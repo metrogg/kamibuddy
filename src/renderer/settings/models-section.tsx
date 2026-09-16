@@ -173,7 +173,7 @@ const EMPTY_CUSTOM: CustomProviderInput = {
 
 const API_OPTIONS = [
 	{ value: "openai-completions", label: "OpenAI 兼容", hint: "多数国产网关、Ollama、vLLM" },
-	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Claude 官方或代理" },
+	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Claude 官方或代理；基址填到端点根（SDK 自动拼 /v1/messages）" },
 	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Gemini / AI Studio" },
 ] as const;
 
@@ -295,6 +295,24 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 						/>
 						不支持 reasoning_effort 参数
 					</label>
+				</div>
+			)}
+
+			{form.api === "anthropic-messages" && (
+				<div className="field">
+					<span className="field-label">认证方式</span>
+					{/* 对齐 Claude Code 的 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN 之分：
+					    中转网关（CC switch 一类）按 ANTHROPIC_AUTH_TOKEN 语义校验
+					    Authorization: Bearer，官方 key 则用 x-api-key。 */}
+					<label className="check">
+						<input
+							type="checkbox"
+							checked={form.authHeader === true}
+							onChange={(e) => patch({ authHeader: e.target.checked ? true : undefined })}
+						/>
+						用 Authorization: Bearer 发送认证（Claude 中转/代理网关勾选）
+					</label>
+					<span className="field-hint">默认用 x-api-key（Anthropic 官方）。密钥仍只存 auth.json，pi 运行时组装请求头。</span>
 				</div>
 			)}
 
@@ -547,10 +565,10 @@ function ModelPicker({ models, providers, activeModelId, busy, onPick, onRefresh
 
 /* ── 添加模型弹层 ────────────────────────────────────────────────── */
 
-/** 弹层里的选择：某个预置服务商，或「自定义（OpenAI 兼容）」。 */
+/** 弹层里的选择：某个预置服务商，或「自定义」（三种协议在表单里选）。 */
 type AddTarget = { kind: "preset"; provider: ProviderInfo } | { kind: "custom" };
 
-const CUSTOM_LABEL = "自定义（OpenAI 兼容）";
+const CUSTOM_LABEL = "自定义";
 
 interface ProviderSelectProps {
 	readonly providers: readonly ProviderInfo[];

@@ -3580,6 +3580,8 @@ const handlers: Record<string, Handler> = {
 					modelId: model.id,
 					apiKey,
 					extraHeaders: model.headers,
+					// 认证头形态与真实会话同源（models.json 的 authHeader 标记）。
+					authHeader: catalog.readCustomProvider(parsed.providerId)?.authHeader === true,
 				}),
 				15_000,
 			);

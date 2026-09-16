@@ -30,6 +30,8 @@ interface ModelsJsonProvider {
 	name?: string;
 	baseUrl?: string;
 	api?: string;
+	/** pi 原生：true = 用 Authorization: Bearer 发认证（Claude 中转的 ANTHROPIC_AUTH_TOKEN 语义）。 */
+	authHeader?: boolean;
 	compat?: Record<string, boolean>;
 	models?: ModelsJsonModel[];
 	/** 我们从不写这个键，但读回来要原样保留（用户可能手工加过）。 */
@@ -163,6 +165,15 @@ export function upsertCustomProvider(path: string, input: CustomProviderInput): 
 		),
 	};
 
+	// 认证头形态（对齐 Claude Code 的 ANTHROPIC_AUTH_TOKEN 语义）。仅 anthropic
+	// 需要选择：openai-completions 天然 Bearer、google 用自己的 query/key 头。
+	// 只写布尔标记，key 照旧走 auth.json 运行时解析——pi 运行时自己把
+	// auth.apiKey 组装成 Authorization: Bearer（见 model-runtime 的
+	// withConfiguredAuth），密钥不落第二份盘。
+	if (input.api === "anthropic-messages" && input.authHeader === true) {
+		entry.authHeader = true;
+	}
+
 	// compat 只对 OpenAI 兼容接口有意义；其他协议写了会被 schema 的 union 拒掉。
 	if (input.api === "openai-completions" && input.compat !== undefined) {
 		const compat: Record<string, boolean> = {};
@@ -238,10 +249,14 @@ export function readCustomProvider(path: string, providerId: string): CustomProv
 	if (entry === undefined || !isOwned(entry)) return undefined;
 
 	const api = entry.api;
+	const isAnthropic = api === "anthropic-messages";
 	return {
 		id: providerId,
 		name: entry.name ?? providerId,
 		baseUrl: entry.baseUrl ?? "",
+		// 回填形状与表单输入一致：非 anthropic（或未标）不出现该字段，
+		// 「编辑再保存」才不会把 undefined 固化成 false。
+		...(isAnthropic && entry.authHeader === true ? { authHeader: true as const } : {}),
 		// 落盘的 api 是自由字符串，回填时收窄到界面支持的三种，未知一律当 OpenAI 兼容。
 		api:
 			api === "anthropic-messages" || api === "google-generative-ai" || api === "openai-completions"

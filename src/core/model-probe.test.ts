@@ -38,15 +38,31 @@ describe("buildRequest 契约", () => {
 		expect(body.stream).toBe(false);
 	});
 
-	it("anthropic-messages：x-api-key + anthropic-version，而不是 Bearer", async () => {
+	it("anthropic-messages：x-api-key + anthropic-version，URL 是 base + /v1/messages（与 pi SDK 一致）", async () => {
 		const { fetchImpl, calls } = fakeFetch();
-		await probeModel({ ...BASE, api: "anthropic-messages" }, fetchImpl);
+		// anthropic 协议的基址语义是「SDK baseURL」：不带 /v1，SDK 自己拼 /v1/messages。
+		await probeModel({ ...BASE, api: "anthropic-messages", baseUrl: "https://api.example.com" }, fetchImpl);
 
 		expect(calls[0]?.url).toBe("https://api.example.com/v1/messages");
 		const headers = calls[0]?.init.headers as Record<string, string>;
 		expect(headers["x-api-key"]).toBe("test-key");
 		expect(headers["anthropic-version"]).toBe("2023-06-01");
 		expect(headers.authorization).toBeUndefined();
+	});
+
+	it("anthropic-messages + authHeader：Authorization Bearer（Claude 中转的 ANTHROPIC_AUTH_TOKEN 语义）", async () => {
+		const { fetchImpl, calls } = fakeFetch();
+		await probeModel(
+			{ ...BASE, api: "anthropic-messages", baseUrl: "https://proxy.example.com/api/", authHeader: true },
+			fetchImpl,
+		);
+
+		// 与真实会话同路径：尾斜杠被吃掉，/v1/messages 由协议层拼上。
+		expect(calls[0]?.url).toBe("https://proxy.example.com/api/v1/messages");
+		const headers = calls[0]?.init.headers as Record<string, string>;
+		expect(headers.authorization).toBe("Bearer test-key");
+		expect(headers["x-api-key"]).toBeUndefined();
+		expect(headers["anthropic-version"]).toBe("2023-06-01");
 	});
 
 	it("google-generative-ai：模型 id 进 URL 并编码，x-goog-api-key 头", async () => {

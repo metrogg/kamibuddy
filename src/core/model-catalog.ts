@@ -139,7 +139,14 @@ export class ModelCatalog {
 		// 让 pi 重读 models.json，新 provider 才会出现在目录里。
 		await this.runtime.refresh({ allowNetwork: false });
 
+		/*
+		 * key 必须走与 setApiKey 相同的两段式：auth.json 落盘 + 运行时同步。
+		 * 此前只调 setRuntimeApiKey——那是个进程内 Map（pi 自述 non-persistent），
+		 * daemon 一重启 key 就丢；而测试按钮读的是 auth.json 文件，于是出现
+		 * 「服务商行显示已保存、点测试却说凭据不可用」的分裂（2026-09-16 实测）。
+		 */
 		if (apiKey !== undefined && apiKey.trim() !== "") {
+			writeApiKey(getAuthPath(), input.id, apiKey.trim());
 			await this.runtime.setRuntimeApiKey(input.id, apiKey.trim());
 		}
 	}
