@@ -10,18 +10,10 @@
  * 于是本文件既不认识 parentPort 也不认识 Electron，可以脱离宿主测试。
  */
 
-import { isAbsolute } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
-import { LOCAL_READ_TOOLS, type PermissionSettings } from "../shared/permissions.ts";
-import {
-	decide,
-	isPathInside,
-	rememberKey,
-	type PermissionDecision,
-	type PolicyPaths,
-	type ToolCallFacts,
-} from "./permission-policy.ts";
+import { type PermissionSettings } from "../shared/permissions.ts";
+import { decide, rememberKey, type PolicyPaths, type ToolCallFacts } from "./permission-policy.ts";
 import type { PermissionRule } from "./permission-rules.ts";
 
 export interface PermissionGateOptions {
@@ -44,6 +36,18 @@ export interface PermissionGateOptions {
 	 * 省略 = 无规则，powershell 维持逐次高风险询问（引入规则前的行为）。
 	 */
 	readonly getRules?: () => readonly PermissionRule[];
+	/**
+	 * 本会话工作区的沙箱写约束**是否确实在生效**（spec: 沙箱三期 · 审批放松）。
+	 *
+	 * 与 getSettings 同为 getter：预热是会话建立时异步启动的，构造时取快照会
+	 * 永久停在 `false`（那样放松就永不生效）；而工作区所在卷、ACL 授权结果都
+	 * 可能在会话存续期间变化。
+	 *
+	 * 省略 = 按不生效处理（**fail-closed**）：审批放松的依据就是沙箱存在，
+	 * 不确定时必须继续逐次询问。注意这与一期「沙箱不可用就降级执行」是**相反**
+	 * 的判据方向 —— 那时降级只是「没有改善」，这里放松却是「减少人工把关」。
+	 */
+	readonly isSandboxReady?: () => boolean;
 	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
 	// sessionId 由注入方（daemon 接线闭包）补 —— 扩展不认识会话桶。
 	readonly requestApproval: (
@@ -75,36 +79,6 @@ function extractFacts(toolName: string, input: Record<string, unknown>): ToolCal
 }
 
 /**
- * 区外读弹窗的路径写回资格（spec: extend-permission-rules-to-paths Task 2）。
- *
- * 「目标在凭据/配置目录内不显示写回选项」需要禁区路径知识，renderer 拿不到 ——
- * 由 daemon 侧判定后把可写回的路径放进 PermissionRequest.writeBackPath，
- * renderer 只做展示、勾选后原样回填。这里复核禁区是纵深防御：判定链阶段 1
- * 已把禁区内目标直拒（走不到 ask），但 writeBackPath 进了弹窗就是「daemon
- * 认可这条路径值得写规则」的声明，判定链将来若变动不该让它漏出去。
- * daemon 回程的 rememberRuleFromApproval 会用同一套禁区再复核一次
- * （不信任 IPC，两道闸）。
- *
- * details 就是 policy 区外读分支解析后的绝对目标路径；risk 限定 low 是与
- * 「区外读弹窗」特征对齐 —— 别的分支（写工具 medium、shell high）即使将来
- * 变动撞上前两个条件，也不该长出路径写回选项。
- */
-function readWriteBackTarget(
-	facts: ToolCallFacts,
-	decision: Extract<PermissionDecision, { readonly kind: "ask" }>,
-	paths: PolicyPaths,
-): string | undefined {
-	if (decision.risk !== "low") return undefined;
-	if (!LOCAL_READ_TOOLS.has(facts.toolName)) return undefined;
-	if (!isAbsolute(decision.details)) return undefined;
-	if (isPathInside(paths.configDir, decision.details)) return undefined;
-	for (const dir of paths.protectedDirs ?? []) {
-		if (isPathInside(dir, decision.details)) return undefined;
-	}
-	return decision.details;
-}
-
-/**
  * 创建权限门扩展。
  *
  * 返回 pi 的 ExtensionFactory，交给 DefaultResourceLoader 的 extensionFactories。
@@ -122,7 +96,15 @@ export function createPermissionGate(options: PermissionGateOptions) {
 	return (pi: ExtensionAPI): void => {
 		pi.on("tool_call", async (event) => {
 			const facts = extractFacts(event.toolName, event.input);
-			const decision = decide(facts, options.paths, options.cwd, options.getSettings?.(), options.getRules?.());
+			const decision = decide(
+				facts,
+				options.paths,
+				options.cwd,
+				options.getSettings?.(),
+				options.getRules?.(),
+				// 每次调用现读：预热是异步的，构造时取快照会永久停在 false。
+				{ sandboxReady: options.isSandboxReady?.() === true },
+			);
 
 			if (decision.kind === "allow") return undefined;
 
@@ -157,13 +139,17 @@ export function createPermissionGate(options: PermissionGateOptions) {
 			const key = rememberKey(facts, options.cwd);
 			if (remembered.has(key)) return undefined;
 
-			const writeBackPath = readWriteBackTarget(facts, decision, options.paths);
+			/*
+			 * writeBackPath 通道随区外读询问的撤除而停用（2026-09-16 对齐水位）：
+			 * 它只挂在「read 家族区外读的 ask low」上，那个判定已改为放行。
+			 * powershell 的首词写回不受影响（命令询问仍在）；IPC 字段与 renderer
+			 * 的展示逻辑保留（收不到字段 = 永不显示），待 renderer 死代码一并清理。
+			 */
 			const response = await options.requestApproval({
 				toolName: facts.toolName,
 				summary: decision.summary,
 				details: decision.details,
 				risk: decision.risk,
-				...(writeBackPath === undefined ? {} : { writeBackPath }),
 			});
 
 			if (response.decision === "allow") {

@@ -11,7 +11,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CommandOutcome } from "../extensions/powershell-tool.ts";
+import type {
+	CommandBlocked,
+	CommandOutcome,
+	CommandRunResult,
+} from "../extensions/powershell-tool.ts";
 import type { PermissionSettings, SandboxMode } from "../shared/permissions.ts";
 import {
 	createSandboxedRunner,
@@ -30,6 +34,29 @@ function settings(sandbox: SandboxMode): PermissionSettings {
 /** 成功的执行结果（形状与真实 CommandOutcome 一致）。 */
 function ok(stdout: string): CommandOutcome {
 	return { stdout, stderr: "", exitCode: 0, timedOut: false };
+}
+
+/**
+ * 断言这次调用**真的执行了命令**，并把联合类型收窄成执行结果。
+ *
+ * 执行器的返回是「跑过了」与「被拦下」的联合（提权被拒时命令一行都不跑）。
+ * 用这个辅助而不是类型断言：它顺带把「本用例预期命令确实跑了」这个前提
+ * 变成一句会失败的断言 —— 若将来某条路径意外变成「拦下」，
+ * 报错会指出被拦的原因，而不是在某个属性上得到 undefined。
+ */
+function ran(result: CommandRunResult): CommandOutcome & { readonly note?: string } {
+	if ("blocked" in result) {
+		throw new Error(`预期命令被执行，实际被拦下（${result.category}）：${result.reason}`);
+	}
+	return result;
+}
+
+/** 反过来：断言这次调用**被拦下**（命令未执行）。 */
+function wasBlocked(result: CommandRunResult): CommandBlocked {
+	if (!("blocked" in result)) {
+		throw new Error(`预期命令被拦下，实际执行了：exitCode=${String(result.exitCode)}`);
+	}
+	return result;
 }
 
 interface Recorded {
@@ -106,7 +133,7 @@ describe("档位映射", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(h.recorded.sandboxCalls).toEqual(["echo hi"]);
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(outcome.stdout).toBe("sandboxed");
@@ -124,7 +151,7 @@ describe("档位映射", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
 		expect(h.recorded.sandboxCalls).toEqual([]);
 		expect(outcome.note).toBeUndefined();
@@ -132,7 +159,13 @@ describe("档位映射", () => {
 		expect(h.recorded.probeCalls).toEqual([]);
 	});
 
-	it("read-only 不进沙箱（门已全拒，不假装受限）", async () => {
+	it("read-only 进**只读沙箱**跑（四期翻转；旧代码对它是无沙箱全权限跑）", async () => {
+		/*
+		 * 旧分支 `mode !== workspace-write → fallback` 对 read-only 意味着
+		 * 无沙箱全权限执行 —— 此前靠权限门在阶段 3 全拒 shell 掩盖着。
+		 * 门放行只读沙箱执行后，这里必须进沙箱（mode: "read-only"，
+		 * 受限列表无任何写能力），且**不 prepare**（只读不需要 ACE）。
+		 */
 		const h = harness();
 		const run = createSandboxedRunner({
 			getSettings: () => settings("read-only"),
@@ -141,8 +174,9 @@ describe("档位映射", () => {
 			sandbox: h.facade,
 		});
 		await run("echo hi", 120);
-		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
-		expect(h.recorded.sandboxCalls).toEqual([]);
+		expect(h.recorded.sandboxCalls).toEqual(["echo hi"]);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(h.recorded.prepareCalls).toEqual([]); // 只读不需要授权
 	});
 
 	it("档位是每次调用读的，改档后立即生效", async () => {
@@ -174,7 +208,7 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		// 命令仍然执行（不倒退），但必须说明沙箱未生效
 		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
 		expect(outcome.note).toContain("未受操作系统级写入约束");
@@ -194,7 +228,7 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(outcome.note).toContain("未受操作系统级写入约束");
 		expect(h.recorded.diagnostics[0]).toMatchObject({ available: false, reason: "ffi-load-failed" });
 	});
@@ -213,7 +247,7 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(h.recorded.sandboxCalls).toEqual([]);
 		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
 		expect(outcome.note).toContain("未受操作系统级写入约束");
@@ -233,7 +267,7 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
 		expect(outcome.note).toContain("未受操作系统级写入约束");
 		expect(h.recorded.diagnostics[0]).toMatchObject({ reason: "token-creation-failed" });
@@ -260,7 +294,7 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = await run("Set-Content C:\\Windows\\x.txt", 120);
+		const outcome = ran(await run("Set-Content C:\\Windows\\x.txt", 120));
 		// 绝不能出现 fallback 重跑
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(outcome.exitCode).toBe(1);
@@ -280,7 +314,7 @@ describe("降级纪律", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = await run("Start-Sleep 999", 1);
+		const outcome = ran(await run("Start-Sleep 999", 1));
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(outcome.timedOut).toBe(true);
 		expect(outcome.exitCode).toBeNull();
@@ -455,7 +489,7 @@ describe("等待提示（授权慢才出声）", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = await run("echo hi", 120, (text) => notices.push(text));
+		const outcome = ran(await run("echo hi", 120, (text) => notices.push(text)));
 		await vi.advanceTimersByTimeAsync(5_000);
 
 		expect(notices).toEqual([]);
@@ -493,7 +527,7 @@ describe("等待提示（授权慢才出声）", () => {
 		expect(notices).toHaveLength(1);
 
 		rejectPrepare?.(new Error("SetEntriesInAclW 失败"));
-		const outcome = await pending;
+		const outcome = ran(await pending);
 
 		expect(vi.getTimerCount()).toBe(0);
 		expect(outcome.note).toContain("未受操作系统级写入约束");
@@ -507,7 +541,7 @@ describe("等待提示（授权慢才出声）", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = await run("echo hi", 120);
+		const outcome = ran(await run("echo hi", 120));
 		expect(outcome.stdout).toBe("sandboxed");
 	});
 
@@ -524,6 +558,387 @@ describe("等待提示（授权慢才出声）", () => {
 		await run("second", 120, (text) => notices.push(text));
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(notices).toEqual([]);
+	});
+});
+
+describe("提权申请", () => {
+	/** 装一个记录调用的审批器。 */
+	function approver(answer: boolean): {
+		readonly ask: NonNullable<Parameters<typeof createSandboxedRunner>[0]["requestEscalation"]>;
+		readonly asked: { toMode: string; justification: string; command: string }[];
+	} {
+		const asked: { toMode: string; justification: string; command: string }[] = [];
+		return {
+			asked,
+			ask: async (request) => {
+				asked.push({ ...request });
+				return answer;
+			},
+		};
+	}
+
+	it("用户批准 → 这一次不进沙箱，且如实说明只此一次", async () => {
+		const h = harness();
+		const a = approver(true);
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const outcome = ran(
+			await run("Set-Content D:\\out\\x.txt", 120, undefined, {
+				toMode: "danger-full-access",
+				justification: "用户要求把报告导出到 D 盘交付目录",
+			}),
+		);
+		expect(h.recorded.sandboxCalls).toEqual([]);
+		expect(h.recorded.fallbackCalls).toEqual(["Set-Content D:\\out\\x.txt"]);
+		expect(outcome.note).toContain("已批准本次提权");
+		expect(outcome.note).toContain("只对本次调用有效");
+		// 审批弹窗必须拿到命令原文与理由 —— 用户得看见自己在给什么放行。
+		expect(a.asked).toEqual([
+			{
+				toMode: "danger-full-access",
+				justification: "用户要求把报告导出到 D 盘交付目录",
+				command: "Set-Content D:\\out\\x.txt",
+			},
+		]);
+	});
+
+	it("用户拒绝 → 命令**一行都不跑**", async () => {
+		const h = harness();
+		const a = approver(false);
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const result = wasBlocked(
+			await run("Set-Content D:\\x.txt", 120, undefined, {
+				toMode: "danger-full-access",
+				justification: "需要写 D 盘",
+			}),
+		);
+		/*
+		 * 关键：既不能进沙箱，也不能走 fallback。若这里合成一个「退出码 1」
+		 * 返回，模型会去调试自己的命令 —— 而真正的原因是用户没批准。
+		 */
+		expect(h.recorded.sandboxCalls).toEqual([]);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(result.category).toBe("escalation-denied");
+		expect(result.reason).toContain("用户拒绝");
+	});
+
+	it("不严格变宽的申请直接拒，**不惊动用户**", async () => {
+		/*
+		 * 为什么「不弹窗」本身是要求：否则模型可以靠刷不合法的申请来骚扰用户，
+		 * 直到对方随手点了允许。合法性检查必须在弹窗之前。
+		 */
+		const h = harness();
+		const a = approver(true);
+		const run = createSandboxedRunner({
+			getSettings: () => settings("danger-full-access"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const result = wasBlocked(
+			await run("whatever", 120, undefined, {
+				toMode: "workspace-write",
+				justification: "想要更窄的档位",
+			}),
+		);
+		expect(a.asked).toEqual([]);
+		expect(result.reason).toContain("严格变宽");
+		expect(h.recorded.fallbackCalls).toEqual([]);
+	});
+
+	it("没有审批通道 → 拒（没人能批准时「批准」不能凭空发生）", async () => {
+		const h = harness();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			// 不传 requestEscalation —— 子代理今天就是这个形态
+		});
+		const result = wasBlocked(
+			await run("Set-Content D:\\x.txt", 120, undefined, {
+				toMode: "danger-full-access",
+				justification: "需要写 D 盘",
+			}),
+		);
+		expect(result.reason).toContain("没有可用的审批通道");
+		expect(h.recorded.fallbackCalls).toEqual([]);
+	});
+
+	it("审批策略为「不询问」→ 拒，且不弹窗（无人值守下「不问」= 「不做」）", async () => {
+		const h = harness();
+		const a = approver(true);
+		const run = createSandboxedRunner({
+			getSettings: () => ({ sandbox: "workspace-write", approval: "never" }),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const result = wasBlocked(
+			await run("Set-Content D:\\x.txt", 120, undefined, {
+				toMode: "danger-full-access",
+				justification: "需要写 D 盘",
+			}),
+		);
+		expect(a.asked).toEqual([]);
+		expect(result.reason).toContain("不询问");
+		expect(h.recorded.fallbackCalls).toEqual([]);
+	});
+
+	it("批准到 workspace-write 时**仍然进沙箱**（不能借提权变成无约束）", async () => {
+		/*
+		 * 这条守的是一个很容易写错的地方：若按「有没有提权」决定走不走 fallback，
+		 * 那么「批准提权到工作区可写」就会变成「完全放开」—— 比用户批准的更宽。
+		 * 判据必须看提权**后的档位**。
+		 *
+		 * read-only → workspace-write 这条阶梯今天走不到（权限门在 read-only 档
+		 * 把 shell 全拒了），但判据得写对，不能依赖上游恰好挡住。
+		 */
+		const h = harness();
+		const a = approver(true);
+		const run = createSandboxedRunner({
+			getSettings: () => settings("read-only"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const outcome = ran(
+			await run("npm run build", 120, undefined, {
+				toMode: "workspace-write",
+				justification: "构建需要写 dist 目录",
+			}),
+		);
+		expect(h.recorded.sandboxCalls).toEqual(["npm run build"]);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		// 沙箱仍然生效，所以不该说「未受约束」
+		expect(outcome.note).toBeUndefined();
+	});
+
+	it("不带提权申请时行为完全不变（回归）", async () => {
+		const h = harness();
+		const a = approver(true);
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: a.ask,
+		});
+		const outcome = ran(await run("echo hi", 120));
+		expect(a.asked).toEqual([]);
+		expect(h.recorded.sandboxCalls).toEqual(["echo hi"]);
+		expect(outcome.note).toBeUndefined();
+	});
+});
+
+describe("拒写识别", () => {
+	/** 造一个「被写约束拒了」的执行结果。文本取自真实探针输出。 */
+	function deniedRun(stderr: string): SandboxFacade["run"] {
+		return async () => ({ stdout: "", stderr, exitCode: 1, timedOut: false });
+	}
+
+	/*
+	 * 这两段都是 scripts/probe-denial-text.ts 在中文 Windows 11 上取到的**真实**
+	 * stderr。第一段是乱码：PowerShell 按 GBK 输出，runSandboxed 按 UTF-8 解码 ——
+	 * 这正是模型今天实际看到的形态，所以签名必须能在它上面命中。
+	 */
+	const GARBLED =
+		"Set-Content : ��·����C:\\outside\\denied.txt���ķ��ʱ��ܾ���\n" +
+		"    + CategoryInfo          : PermissionDenied: (C:\\outside\\denied.txt:String) [Set-Content], Unauthorized \n" +
+		"   AccessException";
+	const ENGLISH =
+		"Set-Content : Access to the path 'C:\\outside\\denied.txt' is denied.\n" +
+		"    + CategoryInfo          : PermissionDenied: [Set-Content], UnauthorizedAccessException";
+
+	function runnerWith(
+		stderr: string,
+		extra: Partial<Parameters<typeof createSandboxedRunner>[0]> = {},
+	): {
+		readonly run: ReturnType<typeof createSandboxedRunner>;
+		readonly recorded: Recorded;
+	} {
+		const h = harness({ run: deniedRun(stderr) });
+		return {
+			recorded: h.recorded,
+			run: createSandboxedRunner({
+				getSettings: () => settings("workspace-write"),
+				workspaceDir: WORKSPACE,
+				fallback: h.fallback,
+				sandbox: h.facade,
+				requestEscalation: async () => false,
+				...extra,
+			}),
+		};
+	}
+
+	it("中文 Windows 的**乱码** stderr 也能识别（ASCII 签名穿过编码错乱）", async () => {
+		/*
+		 * 这条是整个签名表存在的理由。照搬 dsh 的英文方言在这段文本上永不命中，
+		 * 改匹配中文文案也不行（到我们手里已经是乱码）——
+		 * 只有 .NET 异常类型名与 PowerShell 错误类别是 ASCII，活得下来。
+		 */
+		const r = runnerWith(GARBLED);
+		const outcome = ran(await r.run("Set-Content C:\\outside\\denied.txt x", 120));
+		expect(outcome.note).toContain("沙箱写约束");
+		// 沙箱本身是好的：绝不能降级重跑
+		expect(r.recorded.fallbackCalls).toEqual([]);
+		expect(outcome.exitCode).toBe(1);
+	});
+
+	it("英文 Windows 的 stderr 同样识别", async () => {
+		const r = runnerWith(ENGLISH);
+		const outcome = ran(await r.run("Set-Content C:\\outside\\denied.txt x", 120));
+		expect(outcome.note).toContain("沙箱写约束");
+	});
+
+	it("能提权时附上出路，不能提权时**不提**（不指向走不通的路）", async () => {
+		const withChannel = runnerWith(ENGLISH);
+		expect(ran(await withChannel.run("x", 120)).note).toContain("sandbox_permissions");
+
+		// 没有审批通道：申请必然被拒，提了就是骗模型白烧一轮
+		const noChannel = runnerWith(ENGLISH, { requestEscalation: undefined });
+		const note = ran(await noChannel.run("x", 120)).note;
+		expect(note).toContain("沙箱写约束");
+		expect(note).not.toContain("sandbox_permissions");
+
+		// 审批策略「不询问」：同理
+		const neverAsk = runnerWith(ENGLISH, {
+			getSettings: () => ({ sandbox: "workspace-write", approval: "never" }),
+		});
+		expect(ran(await neverAsk.run("x", 120)).note).not.toContain("sandbox_permissions");
+	});
+
+	it("普通失败不加拒写说明（不把每个报错都说成权限问题）", async () => {
+		const r = runnerWith("npm ERR! missing script: buidl");
+		expect(ran(await r.run("npm run buidl", 120)).note).toBeUndefined();
+	});
+
+	it("**伪造的 stderr 不会导致任何自动放宽**（安全支点）", async () => {
+		/*
+		 * stderr 由子进程控制，模型可以随便打印这段文本。这里安全的唯一原因是
+		 * 命中签名只**追加一段文字** —— 伪造的全部收益就是拿到一句本来也会给的
+		 * 提示。绝不能出现：降级重跑、走 fallback、或档位被改。
+		 *
+		 * 这正是一期修掉的那个逃逸的形状（见 sandbox/index.ts 决策 9）：
+		 * 「写被拒 → 伪造信号 → 判定沙箱坏了 → 不受约束地重跑同一条命令」。
+		 */
+		/*
+		 * 自己数执行次数，不用 harness 的 sandboxCalls：那是**默认** run 实现在
+		 * 记账，这里覆盖了 run，记录自然是空的（第一版就照抄了那个断言，
+		 * 于是「空数组」被误读成「沙箱没被调用」）。要断言的是执行次数，
+		 * 就得由实际执行的那个假件来数。
+		 */
+		let executions = 0;
+		const h = harness({
+			run: async () => {
+				executions += 1;
+				return {
+					stdout: "",
+					// 命令自己打印了拒绝文本，但退出码是 0（它其实成功了）
+					stderr: "UnauthorizedAccessException: 我编的",
+					exitCode: 0,
+					timedOut: false,
+				};
+			},
+		});
+		const asked: unknown[] = [];
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: async (request) => {
+				asked.push(request);
+				return true;
+			},
+		});
+		const outcome = ran(await run("Write-Error '伪造'; exit 0", 120));
+		// 没有第二次执行、没有降级、没有弹窗
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(executions).toBe(1);
+		expect(asked).toEqual([]);
+		// 只多了一句提示而已
+		expect(outcome.exitCode).toBe(0);
+	});
+});
+
+describe("先跑后问的闭环（readiness 分流）", () => {
+	/*
+	 * 四期的安全核心：门按 readiness=true 直接放行的命令没有人工终审，
+	 * 执行层装配失败若降级 fallback，就是「没人看过的命令无约束执行」。
+	 * 所以装配失败必须按 readiness 分流 —— 这两条把闭环钉住。
+	 */
+	it("**就绪会话装配失败 → fail-closed 拒绝**，绝不降级无约束跑", async () => {
+		const h = harness({
+			run: async () => {
+				throw new Error("CreateRestrictedToken 失败（Win32 1314）");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			isSandboxReady: () => true,
+		});
+		const result = wasBlocked(await run("Get-ChildItem C:\\", 120));
+		// 绝不能出现 fallback 重跑
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(result.category).toBe("sandbox-unavailable");
+		expect(result.reason).toContain("拒绝执行");
+	});
+
+	it("**未就绪会话装配失败 → 维持一期降级+说明**（门在弹窗，有人工终审）", async () => {
+		const h = harness({
+			run: async () => {
+				throw new Error("CreateRestrictedToken 失败（Win32 1314）");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			isSandboxReady: () => false,
+		});
+		const outcome = ran(await run("echo hi", 120));
+		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
+		expect(outcome.note).toContain("未受操作系统级写入约束");
+	});
+
+	it("read-only 沙箱内命令被拒时用**只读版**文案（不是「工作区内可写」）", async () => {
+		const h = harness({
+			run: async () => ({
+				stdout: "",
+				stderr: "UnauthorizedAccessException",
+				exitCode: 1,
+				timedOut: false,
+			}),
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("read-only"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+		});
+		const outcome = ran(await run("Set-Content .\\x.txt", 120));
+		expect(outcome.note).toContain("只读沙箱");
+		// read-only 连工作区内都写不了，workspace-write 版文案会误导模型
+		expect(outcome.note).not.toContain("只允许写工作目录内");
 	});
 });
 

@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { describeSelfCheckFailure } from "./index.ts";
+import { describeSelfCheckFailure, isAclCapableFileSystem } from "./index.ts";
 
 /** 造一个自检结果。缺省是「非预期退出码」这条最常见的失败形态。 */
 function outcome(patch: {
@@ -82,5 +82,43 @@ describe("describeSelfCheckFailure", () => {
 	it("输出过长时截断，不让日志被一条记录撑爆", () => {
 		const text = describeSelfCheckFailure(outcome({ exitCode: 1, stdout: "A".repeat(5_000) }));
 		expect(text.length).toBeLessThan(600);
+	});
+});
+
+/**
+ * 文件系统判据。
+ *
+ * 为什么这几行值得单测：它守的是**假边界** —— exFAT 上授权会「成功」但毫无效果，
+ * 判错的后果是界面显示沙箱生效而实际什么都没约束住。而三期的审批放松要拿
+ * 「沙箱可用」当依据，那时判错就等于「在没有写约束的地方免审批执行命令」。
+ */
+describe("isAclCapableFileSystem", () => {
+	it("NTFS 与 ReFS 支持 ACL", () => {
+		expect(isAclCapableFileSystem("NTFS")).toBe(true);
+		expect(isAclCapableFileSystem("ReFS")).toBe(true);
+	});
+
+	it("FAT 家族一律不支持（授权会静默无效）", () => {
+		for (const name of ["FAT32", "exFAT", "FAT"]) {
+			expect(isAclCapableFileSystem(name), name).toBe(false);
+		}
+	});
+
+	it("**大小写不敏感** —— 这是这个判据的失效点", () => {
+		/*
+		 * 名单是全大写的，而 GetVolumeInformationW 回什么形态不由我们决定。
+		 * 漏一次归一化就把 NTFS 判成「不支持」（沙箱在正常卷上永久不可用），
+		 * 而把归一化写反则会把 exfat 判成「支持」（假边界，更糟）。
+		 */
+		expect(isAclCapableFileSystem("ntfs")).toBe(true);
+		expect(isAclCapableFileSystem("NtFs")).toBe(true);
+		expect(isAclCapableFileSystem("exfat")).toBe(false);
+		expect(isAclCapableFileSystem("EXFAT")).toBe(false);
+	});
+
+	it("未知文件系统按不支持处理（fail-closed）", () => {
+		// 网络盘的某些实现、以及将来出现的新文件系统：不认识就不假装能约束。
+		expect(isAclCapableFileSystem("NFS")).toBe(false);
+		expect(isAclCapableFileSystem("")).toBe(false);
 	});
 });

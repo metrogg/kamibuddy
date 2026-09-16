@@ -83,31 +83,52 @@ export interface SandboxRunOutcome {
 
 /* ── 探测 ────────────────────────────────────────────────────────── */
 
-let cachedAvailability: SandboxAvailability | undefined;
+/**
+ * 启动自检的结论。**与工作区无关**，所以进程级缓存一次就够
+ * （它在自建的临时目录里跑，见 selfCheck）。
+ */
+let cachedSelfCheck: SandboxAvailability | undefined;
+
+/**
+ * 文件系统结论，**按工作区缓存**。
+ *
+ * 【2026-09-16 修一个真 bug】原先整个探测结论存在一个进程级单值里，
+ * 但探测包含一步**与工作区有关**的判断（卷的文件系统能不能承载 ACL）——
+ * 而 daemon 的每个会话桶都用自己的 cwd 调本函数（切换工作区、临时任务会话、
+ * 子代理都会产生不同的工作区）。于是第一个工作区的结论被后续所有工作区复用，
+ * 两个方向都错：
+ *
+ *   NTFS 工作区探测过后切到 exFAT U 盘 → 仍报「可用」，而那里的授权毫无效果
+ *     （**正是探测本该拦住的那个假边界**）；
+ *   反过来先探到 exFAT → 整个进程里沙箱永久「不可用」，NTFS 工作区也被连坐。
+ *
+ * 当时的后果有限（exFAT 上授权无效 = 区内写也被拒，是 fail-closed 方向的
+ * 功能故障）。但**审批放松要拿「沙箱可用」当依据** —— 那时一个跨工作区的陈旧
+ * `available: true` 就直接等于「在没有写约束的工作区里免审批执行命令」。
+ * 所以这条必须在放松之前修掉。
+ *
+ * 键按小写路径：Windows 路径大小写不敏感，不归一会让同一目录存成两份。
+ * 条目数由用户行为界定（几个工作区），不需要淘汰策略。
+ */
+const cachedFileSystemByWorkspace = new Map<string, SandboxAvailability>();
 
 /**
  * 探测沙箱是否可用。幂等且缓存 —— 反复问不会反复付 FFI 加载与卷查询的代价。
  *
  * **只做"环境够不够"的判断，不做授权**：授权是 prepare 的事（有传播开销，
  * 必须由调用方在会话建立阶段显式触发）。
+ *
+ * 缓存分两级，因为两部分的作用域不同（见上面两个缓存的注释）：
+ * 与工作区无关的启动自检只跑一次（~40ms，为首响延迟优化过，别改成每工作区一次）；
+ * 与工作区有关的文件系统判断按工作区各算一次（只是几次 Win32 调用，不起进程）。
  */
 export async function probeSandbox(workspaceDir: string): Promise<SandboxAvailability> {
-	if (cachedAvailability !== undefined) return cachedAvailability;
-	cachedAvailability = await runProbe(workspaceDir);
-	return cachedAvailability;
-}
-
-/** 仅供测试：清掉探测缓存。 */
-export function resetSandboxProbeForTest(): void {
-	cachedAvailability = undefined;
-}
-
-async function runProbe(workspaceDir: string): Promise<SandboxAvailability> {
 	if (process.platform !== "win32") {
 		return { available: false, reason: "not-windows", detail: `当前平台是 ${process.platform}` };
 	}
 	let api: Win32Bindings;
 	try {
+		// loadWin32 自带缓存，重复调用只是一次 map 查找。
 		api = await loadWin32();
 	} catch (error) {
 		// FfiUnavailableError 与其他异常都归到这里：对上层来说都是「FFI 用不了」。
@@ -118,18 +139,49 @@ async function runProbe(workspaceDir: string): Promise<SandboxAvailability> {
 			detail: error instanceof FfiUnavailableError ? detail : `未预期的加载失败：${detail}`,
 		};
 	}
+
+	/*
+	 * 先判文件系统（便宜、按工作区），再判启动自检（贵、进程级）。
+	 * 这个顺序让「第一个工作区就在 exFAT 上」的情况完全不必付自检的钱。
+	 */
+	const fileSystem = probeFileSystem(api, workspaceDir);
+	if (!fileSystem.available) return fileSystem;
+
+	if (cachedSelfCheck === undefined) {
+		// 真跑一次，确认受限令牌下进程起得来（理由见 selfCheck）。
+		cachedSelfCheck = await selfCheck(api);
+	}
+	return cachedSelfCheck;
+}
+
+/** 工作区所在卷能不能承载 ACL。按工作区缓存，理由见 cachedFileSystemByWorkspace。 */
+function probeFileSystem(api: Win32Bindings, workspaceDir: string): SandboxAvailability {
+	const key = workspaceDir.toLowerCase();
+	const cached = cachedFileSystemByWorkspace.get(key);
+	if (cached !== undefined) return cached;
+	const verdict = readFileSystemVerdict(api, workspaceDir);
+	cachedFileSystemByWorkspace.set(key, verdict);
+	return verdict;
+}
+
+function readFileSystemVerdict(api: Win32Bindings, workspaceDir: string): SandboxAvailability {
 	// FAT/exFAT 没有 ACL，授权会"成功"但毫无效果 —— 这正是最该报出来的
 	// 假边界，不能让界面显示沙箱生效。
 	const fileSystem = readFileSystemName(api, workspaceDir);
-	if (fileSystem !== undefined && !ACL_CAPABLE_FILE_SYSTEMS.has(fileSystem.toUpperCase())) {
+	if (fileSystem !== undefined && !isAclCapableFileSystem(fileSystem)) {
 		return {
 			available: false,
 			reason: "unsupported-filesystem",
 			detail: `工作区所在卷的文件系统是 ${fileSystem}，不支持 ACL`,
 		};
 	}
-	// 最后一步：真跑一次，确认受限令牌下进程起得来（理由见 selfCheck）。
-	return selfCheck(api);
+	return { available: true };
+}
+
+/** 仅供测试：清掉两级探测缓存。 */
+export function resetSandboxProbeForTest(): void {
+	cachedSelfCheck = undefined;
+	cachedFileSystemByWorkspace.clear();
 }
 
 /**
@@ -247,6 +299,17 @@ function errorDetail(error: unknown): string {
 
 /** 支持 ACL 的文件系统。其余（FAT32/exFAT/网络盘的某些实现）一律视为不支持。 */
 const ACL_CAPABLE_FILE_SYSTEMS: ReadonlySet<string> = new Set(["NTFS", "REFS"]);
+
+/**
+ * 卷的文件系统名能不能承载 ACL。
+ *
+ * 大小写归一收在这里而不是留给调用方：名单是全大写的，
+ * 而 `GetVolumeInformationW` 回的形态不由我们决定 —— 漏一次 `toUpperCase()`
+ * 就等于把 exFAT 判成「支持」，那正是这道检查要拦的假边界。
+ */
+export function isAclCapableFileSystem(name: string): boolean {
+	return ACL_CAPABLE_FILE_SYSTEMS.has(name.toUpperCase());
+}
 
 /**
  * 读取路径所在卷的文件系统名。查不到返回 undefined（**不当作失败**）——

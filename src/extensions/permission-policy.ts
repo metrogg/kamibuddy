@@ -53,7 +53,8 @@
  * 高风险询问，且先于「工作区内放行」判定（appDir 也可能就是工作目录）。
  */
 
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
+import { canonicalizePath, isPathContained } from "../core/path-containment.ts";
 import {
 	DEFAULT_PERMISSIONS,
 	LOCAL_READ_TOOLS,
@@ -62,6 +63,7 @@ import {
 	type SandboxMode,
 } from "../shared/permissions.ts";
 import { evaluateCommand, evaluatePathRules, type PermissionRule } from "./permission-rules.ts";
+import { classifySafeCommand, commandTouchesConfigAsCode, isConfigAsCodePath } from "./safe-commands.ts";
 
 /** 判定结果。ask 时需要弹窗，deny 时直接拒绝并把 reason 回给模型。 */
 export type PermissionDecision =
@@ -115,6 +117,25 @@ export interface PolicyPaths {
 	 * 可选：不传则这条规则不生效；daemon 必传。
 	 */
 	readonly resourcesDir?: string;
+}
+
+/**
+ * 判定时的运行期事实（与路径布局无关，所以不并进 PolicyPaths）。
+ *
+ * 独立成参而不是塞进 `PolicyPaths`：那个类型是**目录布局**（静态配置），
+ * 而这里是**运行期状态**（会随探测与授权结果变化）。混在一起会让调用方
+ * 以为它也是启动时定死的，从而缓存一份陈旧的值 —— 那正是 fail-closed 判据
+ * 最不能出的错。
+ */
+export interface PolicyContext {
+	/**
+	 * 本次调用的工作区里，沙箱写约束**是否确实在生效**。
+	 *
+	 * `undefined` / `false` 都按「不生效」处理（fail-closed）。
+	 * 它必须蕴含「ACL 授权已成功」，不能只是「探测通过」——
+	 * 理由见 daemon/index.ts 的 isSandboxReadyFor。
+	 */
+	readonly sandboxReady?: boolean;
 }
 
 /**
@@ -235,10 +256,20 @@ export function isPathInside(base: string, target: string): boolean {
 	return isInside(base, target);
 }
 
+/**
+ * 目录归属判定。实现在 `core/path-containment.ts`（**会解析 junction/symlink**）。
+ *
+ * 2026-09-16 之前这里是纯词法判定（只 `resolve()`），可被 NTFS junction 绕过 ——
+ * `scripts/probe-junction-containment.ts` 在真实文件系统上实测：工作区内建一个
+ * 指向区外的 junction，写它判定 `allow`（文件落到区外且不弹窗）；指向凭据目录时
+ * 读它也判定 `allow`（本该「任何模式都不放行」的禁区被绕过）。junction
+ * **不需要管理员权限**就能建，所以这是模型真走得通的路径。
+ *
+ * 保持这个包装函数而不是各处直接调 core：判定链里有十几个调用点，
+ * 留一层薄包装让「本层的归属语义」只有一处定义。
+ */
 function isInside(base: string, target: string): boolean {
-	const rel = relative(resolve(base), resolve(target));
-	// 空串表示就是 base 自身；".." 开头或绝对路径都说明跑到外面去了。
-	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+	return isPathContained(base, target);
 }
 
 /**
@@ -267,6 +298,13 @@ function isMemoryPath(target: string, configDir: string, cwd: string): boolean {
 	return isInside(join(cwd, ".kamibuddy", "memory"), target);
 }
 
+/*
+ * 「配置即代码」名单与判定（isConfigAsCodePath）住在 safe-commands.ts ——
+ * 四期加「命令文本侧」闸门（commandTouchesConfigAsCode）时两边必须共享
+ * 同一份名单，而本模块已 import 那边，所以名单跟着逻辑走。
+ * isConfigAsCodePath 的调用点在下方 MUTATING 分支。
+ */
+
 /**
  * 判定一次工具调用。
  *
@@ -287,8 +325,9 @@ export function decide(
 	cwd: string,
 	settings: PermissionSettings = DEFAULT_PERMISSIONS,
 	rules?: readonly PermissionRule[],
+	context?: PolicyContext,
 ): PermissionDecision {
-	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules);
+	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules, context);
 
 	// 审批策略只作用在「要问」的结果上 —— allow / deny 都已是终局。
 	if (decision.kind !== "ask") return decision;
@@ -309,16 +348,28 @@ function decideUnderMode(
 	cwd: string,
 	mode: SandboxMode,
 	rules?: readonly PermissionRule[],
+	context?: PolicyContext,
 ): PermissionDecision {
 	const { toolName, path: rawPath, command } = facts;
 
-	// 相对路径按会话 cwd 解析，与 pi 的 resolveToCwd 行为一致。
+	/*
+	 * 相对路径按会话 cwd 解析，与 pi 的 resolveToCwd 行为一致；
+	 * 随后**归一化到真实位置**（解析 junction/symlink，见 core/path-containment.ts）。
+	 *
+	 * 为什么连 `details` 也用归一化后的值（它就是 target）：details 是审批弹窗
+	 * 给用户看的路径。若只归一化判定而把链接原样展示，弹窗就会**隐瞒文件的真实
+	 * 去处** —— 用户以为在批准「写工作区里的某个文件」，实际批准的是写区外。
+	 * 那比不归一化更糟：它把一次知情同意变成了误导。
+	 *
+	 * 连带的两处一致性（都靠这里的同一个值保证）：
+	 *   `writeBackPath` —— 写回的路径规则记的是真实目录，而不是某个链接名；
+	 *   `rememberKey`  —— 同一目标两次调用必须得到同一个会话记忆键
+	 *                     （所以那边也做同样的归一化）。
+	 */
 	const target =
 		rawPath === undefined || rawPath === ""
 			? undefined
-			: isAbsolute(rawPath)
-				? resolve(rawPath)
-				: resolve(cwd, rawPath);
+			: canonicalizePath(isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath));
 
 	/*
 	 * 阶段 0：记忆文件白名单 —— 文件工具（读 / 写）对三层记忆路径一律放行，
@@ -391,50 +442,51 @@ function decideUnderMode(
 	 *
 	 * 无本地路径概念的（web_search / web_fetch / present_files / automation_list /
 	 * questionnaire / read_me / show_widget）一律放行。
-	 * 有路径概念的（read / read_document / find / grep / ls）按归属判：
-	 *   工作区内（或无路径参数，如 ls 列 cwd）→ 放行；
-	 *   工作区外 → 低风险询问；danger-full-access 不受限，与写侧语义一致。
-	 * read-only 档同样询问 —— 读的边界就是那个模式的全部语义。
-	 * 为什么区外读也要问：见文件头【2026-09-09 事故条目】。
+	 * 有路径概念的（read / read_document / find / grep / ls）：凭据/配置 deny
+	 *   （阶段 1）与用户 deny 规则照旧，其余**一律放行** —— 含工作区外。
+	 *
+	 * 【2026-09-16 二次翻转（对齐水位）】区外读曾因【2026-09-09 事故条目】
+	 * 从放行改成低风险询问（教训：读侧漫游是写越界的必经入口）。四期把它
+	 * 翻回放行，两个前提变了：
+	 *   1. **询问已不构成边界**：先跑后问放行了 shell，`Get-Content <区外路径>`
+	 *      不弹窗 —— 同一份文件用 read 工具问、用 powershell 不问，只剩不一致
+	 *      而没有更严（用户实测撞上的就是它）；
+	 *   2. **三家读侧全部自由**（codex/dsh/WorkBuddy，见四期对比），用户明确
+	 *      「不用比他们严格，齐平就行」。我们仍保留凭据目录 deny + 用户
+	 *      deny 规则（WorkBuddy 的 no_access 同级）。
+	 * 事故教训本身仍然成立，但它的对位防线变了：写越界现在由 OS 沙箱兜
+	 * （当时没有），外发由检查器+（将来的）网络隔离兜。
 	 */
 	if (READ_ONLY.has(toolName)) {
 		if (!LOCAL_READ_TOOLS.has(toolName)) return { kind: "allow" };
 		if (target === undefined) return { kind: "allow" };
 		/*
-		 * 路径前缀规则（spec: extend-permission-rules-to-paths）：判定一次，
-		 * deny 与 allow 在判定链上各就各位 ——
-		 *   deny 先于「工作区内放行」：用户明示禁读的目录，就算在工作区内也拒
-		 *     （最严获胜，与 powershell 规则阶段同口径）；
-		 *   allow 在「区外低风险询问」之前：命中免问（用户信任的容器目录场景）。
-		 * 凭据禁区仍在阶段 1，规则无法越过（.ssh 写 allow 也放不进）。
-		 * 与 powershell 规则阶段的位置差异是有意的：那边排在 danger-full-access
-		 * 放行之后（完全访问就是完全访问），这边 deny 在最前 —— 禁读目录是
-		 * 用户明示的「别碰」，比档位更强。
+		 * 路径前缀规则（spec: extend-permission-rules-to-paths）：deny 先于
+		 * 放行 —— 用户明示禁读的目录比档位更强（与 powershell 规则阶段同
+		 * 口径）。凭据禁区仍在阶段 1，规则无法越过。allow 规则在放行世界
+		 * 里已冗余（不问就是放），保留判定只为 deny 单侧。
 		 */
 		const verdict = rules === undefined ? undefined : evaluatePathRules(target, rules);
 		if (verdict !== undefined && verdict.kind === "deny") {
 			return { kind: "deny", reason: verdict.reason };
 		}
-		if (isInside(paths.workspaceDir, target)) return { kind: "allow" };
-		// 应用内置资源（技能/模板/tokens/引擎）只读放行，见 PolicyPaths.resourcesDir。
-		if (paths.resourcesDir !== undefined && isInside(paths.resourcesDir, target)) {
-			return { kind: "allow" };
-		}
-		if (mode === "danger-full-access") return { kind: "allow" };
-		if (verdict !== undefined && verdict.kind === "allow") return { kind: "allow" };
-		return {
-			kind: "ask",
-			risk: "low",
-			summary: "读取工作目录之外的文件或目录",
-			details: target,
-		};
+		return { kind: "allow" };
 	}
 
-	// 阶段 3：只读模式下，一切改动与命令执行都拒 —— 这是模式的全部含义。
-	if (mode === "read-only") {
+	/*
+	 * 阶段 3：只读模式下，一切改动都拒 —— 这是模式的全部含义。
+	 *
+	 * 【四期起 shell 不再在此一刀切】read-only 的命令交给下方 SHELL 分支：
+	 * 沙箱就绪时进**只读沙箱**执行（受限列表 [登录 SID, Everyone]，无任何写
+	 * 能力 —— 写不进任何位置，连 .git/config 都不行，fsmonitor 链在 OS 层
+	 * 就断了）。这与 dsh 的 read-only 同语义：命令能跑，文件动不了。
+	 * 沙箱未就绪时 SHELL 分支兜底回到「拒」（见下方尾部）。
+	 * 其余工具（写 / automation / MCP / 未知）照旧拒 —— 它们没有 OS 约束可依。
+	 */
+	if (mode === "read-only" && !SHELL.has(toolName)) {
 		return {
 			kind: "deny",
-			reason: "当前权限为「只读」，不能修改文件或执行命令。需要动手请切换权限预设。",
+			reason: "当前权限为「只读」，不能修改文件。需要动手请切换权限预设。",
 		};
 	}
 
@@ -480,6 +532,104 @@ function decideUnderMode(
 			if (verdict.kind === "allow") return { kind: "allow" };
 			if (verdict.kind === "deny") return { kind: "deny", reason: verdict.reason };
 		}
+
+		/*
+		 * 内置安全名单（spec: 沙箱三期 · 审批放松）。**位置是语义的一部分**：
+		 *
+		 *   在用户规则**之后** —— 用户写的 `deny: npm` 必须能盖掉内置的 `npm run`
+		 *     （最严获胜；用户的明示意图强于我们的默认名单）；
+		 *   在 danger-full-access 放行之后、read-only 拒绝（阶段 3）之后 ——
+		 *     两个档位的语义都不该由本期悄悄改；
+		 *   在兜底高风险询问**之前** —— 这就是它起作用的地方。
+		 *
+		 * 只对 powershell 生效，bash 不参与：bash 没有配危险命令检查器
+		 * （见上方 SHELL 分支的 fail-closed 说明），不该在它身上放松。
+		 *
+		 * 两层判据（详见 safe-commands.ts）：
+		 *   always    只读自省类，无条件免审批（沙箱在不在都一样安全）；
+		 *   sandboxed 构建类 = 任意代码执行，**只在沙箱确实生效时**免审批。
+		 *
+		 * `sandboxReady` 缺省 false（**fail-closed，方向不能反**）：这与一期
+		 * 「探测失败就降级执行」是**相反**的判据 —— 那时降级只是「没有改善」，
+		 * 而这里放松的**依据本身**就是沙箱存在，所以不确定时必须继续询问。
+		 * 判据来源见 daemon/index.ts 的 isSandboxReadyFor：它蕴含「ACL 授权已成功」，
+		 * 不只是「探测通过」（否则会出现「免审批放行 → 授权失败 → 执行层降级成
+		 * 无约束执行，而没人批准过」）。
+		 *
+		 * **名单成立的前提是「配置即代码」文件的写入需要审批**（见下方 MUTATING
+		 * 分支的 isConfigAsCodePath）：否则模型可以静默改写 .git/config 或
+		 * package.json，让一条「名单内的安全命令」执行任意代码。两者是一套东西。
+		 */
+		if (toolName === "powershell" && command !== undefined) {
+			const tier = classifySafeCommand(command);
+			// 名单先于文本闸：名单内都是只读命令，`git log .git/config` 这类
+			// 「读到配置路径」无害，不该被文本闸拦成弹窗。
+			if (tier === "always") return { kind: "allow" };
+			if (tier === "sandboxed" && context?.sandboxReady === true) return { kind: "allow" };
+
+			/*
+			 * 配置文本闸（spec: 沙箱四期）：先跑后问模式下名单外命令不再逐次
+			 * 弹窗，而沙箱**只约束写** —— `.git/config`、`package.json`、
+			 * `.pi/extensions/**` 都在工作区内（沙箱允许写）。没有这道闸，
+			 * 一句 `Set-Content .git\config ...` 就把三期的 fsmonitor 链
+			 * 重新打开。命中 → 高风险弹窗（与 write/edit 的配置即代码判定
+			 * 同一份名单，见 safe-commands.ts）。
+			 *
+			 * **防字面量不防变量拼接**（`$p = Join-Path ".git" "config"` 穿得过
+			 * 文本闸）—— 与 dsh（连字面量都不看）相比是净增强；语义级解析
+			 * （tree-sitter）是下一期方向。read-only 档不需要这道闸：只读沙箱
+			 * 连工作区都写不进（见下方的直接放行分支）。
+			 */
+			if (commandTouchesConfigAsCode(command)) {
+				return {
+					kind: "ask",
+					risk: "high",
+					summary: "命令涉及会被自动执行的配置文件",
+					details: command,
+				};
+			}
+
+			/*
+			 * 先跑后问（spec: 沙箱四期，对齐 dsh / codex 的默认方向）：
+			 * 沙箱就绪时，名单外的命令**直接进沙箱跑**，不再逐次弹窗 ——
+			 * 写范围由 OS 兜住（区外写被拒），被拒时模型会看到 denial 提示
+			 * 并可申请一次性提权（daemon/sandbox-runner.ts）。
+			 *
+			 * **结构（管道/链式/子表达式/注入旗标）在这里不拦**（对齐水位）：
+			 * 结构闸门只作用于上面的名单层（管「未就绪时谁免问」）。就绪后
+			 * 所有形态与单段同水位 —— codex 对 `git -c core.fsmonitor=evil
+			 * status` 都是直接放行（unmatched 非危险 → Allow），dsh 连判定都
+			 * 没有；用户实测管道弹窗后明确「不用比他们严格，齐平就行」。
+			 * 已知的同水位代价：`-c core.fsmonitor=evil` 这类注入旗标免审批
+			 * 跑，任意代码可在沙箱内读密钥+外发（读/网无 OS 约束）——
+			 * codex/dsh 同样如此。凭据文本模式（.ssh 等）仍由检查器在
+			 * 工具层拦（那条防线先于门，不受此影响）。
+			 *
+			 * read-only 档在这里放行是安全的：只读沙箱无任何写能力；
+			 * workspace-write 档的安全闭环（门放行 ⟹ 执行必受约束）见
+			 * daemon/sandbox-runner.ts —— 装配失败按 readiness 分流，
+			 * 就绪会话 fail-closed 拒绝而不是降级无约束跑。
+			 *
+			 * readiness 未知/false 时**不得**走到这里（弹窗兜底）—— 放松的
+			 * 依据就是沙箱存在，方向不能反（三期的同一条纪律）。
+			 */
+			if (context?.sandboxReady === true) return { kind: "allow" };
+			// 未就绪：落到下方兜底（read-only 档拒、其余询问）—— 没有 OS 约束
+			// 可依时人工终审，名单层已放过它认为安全的形态。
+		}
+
+		// 走到这里 = 没有 OS 约束可依（bash 全档；readiness 未知的 powershell）。
+		// read-only 档回到「拒」—— 没有只读沙箱时执行命令就是完全无约束，
+		// 旧语义保持（阶段 3 注释）。
+		if (mode === "read-only") {
+			return {
+				kind: "deny",
+				reason:
+					"当前权限为「只读」，且命令执行环境（只读沙箱）当前不可用，不能执行命令。" +
+					"需要动手请切换权限预设。",
+			};
+		}
+
 		return {
 			kind: "ask",
 			risk: "high",
@@ -495,6 +645,52 @@ function decideUnderMode(
 
 		// 完全访问模式：不再做范围约束（凭据目录已在阶段 1 拦掉）。
 		if (mode === "danger-full-access") return { kind: "allow" };
+
+		/*
+		 * 「配置即代码」文件：**高风险询问，先于工作区放行判定**
+		 * （spec: add-windows-acl-sandbox 三期前置）。
+		 *
+		 * 【2026-09-16 实测的缺口，scripts/probe-config-write-exec.ts】
+		 * 工作区内的写入本来免审批（下面那行 allow），于是模型可以**静默**写下
+		 * 这批文件，而它们的内容会变成被执行的代码：
+		 *
+		 *   .pi/extensions/*.ts  → pi 从工作目录加载项目级扩展，**以本进程权限
+		 *                          执行任意代码**、且在**会话建立时加载即执行** ——
+		 *                          权限门在它之后，根本拦不到（project-trust.ts
+		 *                          的文件头称之为「唯一在工具层之前的攻击面」，
+		 *                          而项目信任对我们自己的工作区是自动信任的）；
+		 *   .git/config          → core.fsmonitor / alias 让 `git status`、
+		 *                          `git diff` 执行任意命令（git 2.55 实测）；
+		 *   .git/hooks/*         → **用户自己**下次提交时执行（逃出我们进程的持久化）；
+		 *   package.json         → scripts 让 `npm run` / `npm test` 执行任意命令；
+		 *   .github/workflows/*  → 逃到 CI runner 上执行。
+		 *
+		 * **判据（新增条目请照它判，不要凭感觉堆）**：这个文件的内容会变成被执行
+		 * 的行为，而**没有任何命令点名它**。所以 `evil.ps1` **不在**名单里 ——
+		 * `powershell ./evil.ps1` 点了它的名，那条路仍由 shell 的逐次审批把关；
+		 * 而 `git status` 不点 `.git/config` 的名，用户看不出风险在哪。
+		 *
+		 * 为什么是 ask-high 而不是 deny：让模型给 package.json 加一条 script
+		 * 是完全正常的请求，deny 会让正常工作撞墙。high 同时带来两个必要性质 ——
+		 * 弹窗默认焦点在「拒绝」，且**不提供「本次会话记住」**
+		 * （permission-dialog.tsx 对高风险不给该选项），否则用户一次勾选就把
+		 * 整个目录变成免检。
+		 *
+		 * 为什么排在 danger-full-access 之后：那个档位的语义是用户明示的
+		 * 「不再逐次询问」，与 appDir 判定同一位置、同一理由。
+		 *
+		 * **这不是完备的**：「配置即代码」是开放集合（还有 Makefile 的变体、
+		 * 各种 *.config.js、编辑器与 CI 的其他约定）。这里覆盖已知的高价值项，
+		 * 不声称穷尽 —— 所以它是纵深防御的一层，不是可以依赖的边界。
+		 */
+		if (isConfigAsCodePath(target)) {
+			return {
+				kind: "ask",
+				risk: "high",
+				summary: "修改会被自动执行的配置文件",
+				details: target,
+			};
+		}
 
 		/*
 		 * 应用目录：写 KamiBuddy 自身永远高风险询问，**先于工作区放行判定** ——
@@ -598,8 +794,14 @@ function parseMcpToolName(toolName: string): { readonly server: string; readonly
  */
 export function rememberKey(facts: ToolCallFacts, cwd: string): string {
 	if (facts.path === undefined || facts.path === "") return facts.toolName;
-	const target = isAbsolute(facts.path) ? resolve(facts.path) : resolve(cwd, facts.path);
-	// 取父目录：resolve 后用 sep 切掉最后一段。
+	/*
+	 * 与 decideUnderMode 的 target **同一口径**（含真实路径归一化）：
+	 * 键若按链接路径记，用户批准过的目录换个链接名进来就又被问一遍；
+	 * 反过来，两个不同链接指向同一目录时也该共用一次批准。
+	 * 两处的归一化必须一起改 —— 不一致的后果是会话记忆静默失效（很难查）。
+	 */
+	const target = canonicalizePath(isAbsolute(facts.path) ? facts.path : resolve(cwd, facts.path));
+	// 取父目录：归一化后用 sep 切掉最后一段。
 	const at = target.lastIndexOf(sep);
 	const dir = at <= 0 ? target : target.slice(0, at);
 	return `${facts.toolName}:${dir}`;

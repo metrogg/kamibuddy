@@ -204,22 +204,21 @@ check(
 	`新增询问 ${approvalLog.length - before} 次；${evidence(verdict)}`,
 );
 
-// 3. 区外 read（默认档）：询问 low → 允许（记住）→ 放行
+// 3. 区外 read（默认档）：放行且不询问（2026-09-16 对齐水位——区外读不再询问）
 respond = () => ({ id: "stub", decision: "allow", remember: true });
 before = approvalLog.length;
 verdict = await fire("read", { path: join(outsideDir, "a.txt") });
-ask = approvalLog.at(-1);
 check(
-	"区外 read（默认档）：询问 low，允许后放行",
-	approvalLog.length === before + 1 && ask?.risk === "low" && verdict === undefined,
-	`新增询问 ${approvalLog.length - before} 次，risk=${ask?.risk ?? "(无)"}；${evidence(verdict)}`,
+	"区外 read（默认档）：放行且未询问",
+	approvalLog.length === before && verdict === undefined,
+	`新增询问 ${approvalLog.length - before} 次；${evidence(verdict)}`,
 );
 
-// 4. 同目录再读（换一个文件名）：「记住」按目录生效，不再询问
+// 4. 同目录再读（换一个文件名）：同样放行（读侧无询问通道，也无「记住」可谈）
 before = approvalLog.length;
 verdict = await fire("read", { path: join(outsideDir, "b.txt") });
 check(
-	"区外 read（同目录第二次）：记住生效，未再询问",
+	"区外 read（同目录第二次）：仍放行未询问",
 	approvalLog.length === before && verdict === undefined,
 	`新增询问 ${approvalLog.length - before} 次；${evidence(verdict)}`,
 );

@@ -23,6 +23,7 @@
 import { spawn } from "node:child_process";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { ESCALATION_TARGETS, validateEscalationArgs } from "../shared/permissions.ts";
 import { checkCommand } from "./command-guard.ts";
 
 export interface PowershellToolOptions {
@@ -60,7 +61,43 @@ export type CommandRunner = (
 	 * 所以它是瞬时的：命令跑完就消失，不会污染最终结果。
 	 */
 	onProgress?: (text: string) => void,
-) => Promise<CommandOutcome & { readonly note?: string }>;
+	/**
+	 * 模型对**这一次调用**申请的提权（可选）。工具只做透传，不做判断 ——
+	 * 「能不能提、要不要问人」是策略，住 daemon/sandbox-runner.ts。
+	 */
+	escalation?: CommandEscalationRequest,
+) => Promise<CommandRunResult>;
+
+/** 一次提权申请。两个字段成对出现（校验在 shared/permissions.ts）。 */
+export interface CommandEscalationRequest {
+	/** 申请的目标档位，必须严格宽于本次调用的有效档位。 */
+	readonly toMode: string;
+	/** 模型给的一句话理由，**原样**展示在审批弹窗里。 */
+	readonly justification: string;
+}
+
+/**
+ * 执行器的返回：**要么真跑了一次，要么明确没跑**。
+ *
+ * 为什么要这个联合而不是塞进 CommandOutcome：提权被拒时命令**一行都没执行**，
+ * 若拿一个合成的「退出码 1」去表示，那是在谎报「命令跑了并失败了」——
+ * 模型会去调试自己的命令，而真正的原因是用户没批准。
+ * 形状与工具已有的 `blocked` / `category` 对齐（危险命令检查器就是这么报的）。
+ */
+export type CommandRunResult = (CommandOutcome & { readonly note?: string }) | CommandBlocked;
+
+/** 命令未执行。reason 直接回给模型，让它知道下一步该怎么走。 */
+export interface CommandBlocked {
+	readonly blocked: true;
+	/** 拦截类别，进 details 供界面与日志区分。 */
+	readonly category: string;
+	readonly reason: string;
+}
+
+/** 类型收窄：区分「跑过了」与「被拦下」。 */
+function isBlocked(result: CommandRunResult): result is CommandBlocked {
+	return "blocked" in result;
+}
 
 /** 单次返回给模型的输出上限（字符），与 web-fetch / doc-extract 的 24k 同口径。 */
 const MAX_OUTPUT_CHARS = 24_000;
@@ -243,6 +280,31 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 						description: `超时秒数，默认 ${DEFAULT_TIMEOUT_SECONDS}，最大 ${MAX_TIMEOUT_SECONDS}。`,
 					}),
 				),
+				/*
+				 * 提权申请（spec: add-windows-acl-sandbox 二阶段）。字段名照 dsh 逐字
+				 * （sandbox_permissions + justification），不自创方言。
+				 *
+				 * **常驻广告，不按当前档位裁剪**：schema 是注册期全局的，有效模式是
+				 * 每次调用的真相（shared/permissions.ts 的 WIDER_MODES 注释）。
+				 * 严格变宽的校验发生在**执行期**。
+				 */
+				sandbox_permissions: Type.Optional(
+					Type.Union(
+						ESCALATION_TARGETS.map((mode) => Type.Literal(mode)),
+						{
+							description:
+								"仅在命令确实被沙箱写约束拦住时使用：为**这一次**执行申请更宽的权限（需用户批准）。" +
+								"取最窄的够用档位。必须同时给 justification。",
+						},
+					),
+				),
+				justification: Type.Optional(
+					Type.String({
+						minLength: 1,
+						description:
+							"一句话说明为什么这条命令需要更宽的权限（会原样展示给用户审批）。只能与 sandbox_permissions 一起给。",
+					}),
+				),
 			}),
 			/*
 			 * 第 4 参数 onUpdate 是 pi 的执行中进度通道（与 task-tool 同一用法）：
@@ -285,30 +347,76 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 						},
 					};
 				}
+				/*
+				 * 提权入参的成对校验（schema 表达不了的那部分）。
+				 * 返回原因而不 throw —— 与上面危险命令检查器同一条约定：
+				 * 这不是执行失败，模型要拿着原因改写调用。
+				 */
+				const malformed = validateEscalationArgs(params.sandbox_permissions, params.justification);
+				if (malformed !== undefined) {
+					return {
+						content: [{ type: "text", text: `命令未执行：${malformed}` }],
+						details: {
+							blocked: true,
+							category: "escalation-malformed",
+							exitCode: undefined,
+							truncated: false,
+						},
+					};
+				}
 				const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
 				/*
 				 * 缺省执行器 = 直接 spawn（今天的行为）；daemon 会注入沙箱版本。
 				 * 显式标注类型而不是让它推成联合：note 是可选字段，所以不带 note 的
 				 * runCommand 也满足 CommandRunner —— 这样 CommandOutcome 能保持
 				 * 与 sandbox 层 SandboxRunOutcome 逐字段对应的纯净形状。
+				 *
+				 * 提权申请只做**透传**：能不能提、要不要问人、问谁，全是策略，
+				 * 住 daemon/sandbox-runner.ts（那里有权限设置与审批通道）。
+				 * 缺省的 runCommand 忽略这个参数 —— 它本来就没有沙箱可提权，
+				 * 而 daemon 的两个装配点都注入了沙箱执行器。
 				 */
 				const run: CommandRunner = options?.runner ?? runCommand;
-				const outcome = await run(params.command, timeoutSeconds, (text) => {
-					/*
-					 * details 必须给全量字段（与终态同形）：pi 的
-					 * AgentToolResult<TDetails> 按分支联合推断，缺字段会让形状漂移。
-					 * 这里的取值表示「还在执行中、未被拦截」。
-					 */
-					onUpdate?.({
-						content: [{ type: "text" as const, text }],
+				const result = await run(
+					params.command,
+					timeoutSeconds,
+					(text) => {
+						/*
+						 * details 必须给全量字段（与终态同形）：pi 的
+						 * AgentToolResult<TDetails> 按分支联合推断，缺字段会让形状漂移。
+						 * 这里的取值表示「还在执行中、未被拦截」。
+						 */
+						onUpdate?.({
+							content: [{ type: "text" as const, text }],
+							details: {
+								blocked: false,
+								category: undefined,
+								exitCode: undefined,
+								truncated: false,
+							},
+						});
+					},
+					params.sandbox_permissions === undefined || params.justification === undefined
+						? undefined
+						: { toMode: params.sandbox_permissions, justification: params.justification },
+				);
+				/*
+				 * 被拦下（提权未获批准等）：命令**一行都没执行**，如实这么说。
+				 * 不合成一个「退出码 1」—— 那是谎报「命令跑了并失败了」，
+				 * 模型会去调试自己的命令，而真正的原因是用户没批准。
+				 */
+				if (isBlocked(result)) {
+					return {
+						content: [{ type: "text", text: `命令未执行：${result.reason}` }],
 						details: {
-							blocked: false,
-							category: undefined,
+							blocked: true,
+							category: result.category,
 							exitCode: undefined,
 							truncated: false,
 						},
-					});
-				});
+					};
+				}
+				const outcome = result;
 				const { text, truncated } = formatOutcome(outcome, timeoutSeconds, outcome.note);
 				return {
 					content: [{ type: "text", text }],

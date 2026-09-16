@@ -16,7 +16,8 @@
  * 本模块是纯函数：不读盘、不碰 pi、不碰 IPC，可脱离宿主单测。
  */
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import { isPathContained } from "../core/path-containment.ts";
 import {
 	LOCAL_READ_TOOLS,
 	firstTokenPrefix,
@@ -88,16 +89,16 @@ export function evaluateCommand(
 }
 
 /*
- * 与 permission-policy.ts 的 isInside 同款实现。复制而非 import 的原因：
- * policy 已 import 本模块（evaluateCommand），反向 import 会构成循环依赖。
- * 边界条件（".." 前缀、同名前缀兄弟目录不算内部、Windows 大小写不敏感靠
- * path 模块行为）由本文件的测试钉住 —— 两处若将来要改语义必须一起改。
+ * 归属判定委托给 `core/path-containment.ts`（与 permission-policy.ts 的 isInside
+ * 同一个实现）。
+ *
+ * 这里原本抄了一份 policy 的 isInside，注释写的是「policy 已 import 本模块，
+ * 反向 import 会构成循环依赖」，并留了一句「两处若将来要改语义必须一起改」——
+ * 2026-09-16 加真实路径归一化时就是那个「将来」。与其同步两份，不如把实现
+ * 移到两侧都能 import 的 core 层（extensions → core 是允许方向），
+ * 重复就此消掉：语义只有一处，不会再漂移。
  */
-function isInsidePath(base: string, target: string): boolean {
-	const rel = relative(resolve(base), resolve(target));
-	// 空串表示就是 base 自身；".." 开头或绝对路径都说明跑到外面去了。
-	return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
+const isInsidePath = isPathContained;
 
 /**
  * 路径前缀规则判定（spec: extend-permission-rules-to-paths）。

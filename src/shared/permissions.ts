@@ -122,7 +122,8 @@ export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
 	{
 		id: "readonly",
 		label: "只读",
-		description: "只看不改：可以读取与搜索，任何写入、修改、删除都会被拒绝。",
+		description:
+			"只看不改：可以读取与搜索；命令可在只读沙箱中执行（无法写入任何位置）。任何写入、修改、删除都会被拒绝。",
 		sandbox: "read-only",
 		approval: "ask",
 	},
@@ -219,6 +220,42 @@ export const WIDER_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> 
 /** 从 `from` 提权到 `to` 是否合法（必须严格变宽）。 */
 export function canEscalate(from: SandboxMode, to: SandboxMode): boolean {
 	return WIDER_MODES[from].includes(to);
+}
+
+/**
+ * 可申请的提权目标（工具 schema 用）。
+ *
+ * `read-only` 是地板，没有东西会提权**到**它 —— 照 dsh 的 ESCALATION_TARGETS。
+ * schema 常驻广告这一整套取值，**不按当前档位裁剪**：schema 是注册期全局的，
+ * 而有效模式是每次调用的真相（WIDER_MODES 注释里的同一条理由）。
+ * 裁剪会让「当前档位之下的会话」看到一个空 enum，等于没有提权杠杆。
+ */
+export const ESCALATION_TARGETS: readonly SandboxMode[] = ["workspace-write", "danger-full-access"];
+
+/**
+ * 校验提权入参的成对关系（schema 表达不了的那部分，照 dsh 的 validateEscalationArgs）。
+ *
+ * 返回错误原因字符串；合法时返回 undefined。**不抛异常**是有意的，与
+ * 危险命令检查器同一条约定（powershell-tool.ts）：这不是执行失败，
+ * 模型要拿着原因改写调用，`isError` 反而诱导它原样重试。
+ *
+ * 三条规则：申请提权必须带理由（没理由的审批弹窗是让用户盲签）；
+ * 理由不能孤立出现（那是驱动不了任何东西的噪音）；理由不能是空白。
+ */
+export function validateEscalationArgs(
+	sandboxPermissions: string | undefined,
+	justification: string | undefined,
+): string | undefined {
+	if (sandboxPermissions !== undefined && justification === undefined) {
+		return "申请提权（sandbox_permissions）必须同时给出 justification —— 审批弹窗要把理由原样展示给用户。";
+	}
+	if (justification !== undefined && sandboxPermissions === undefined) {
+		return "justification 只能与 sandbox_permissions 一起使用。";
+	}
+	if (justification !== undefined && justification.trim() === "") {
+		return "justification 不能为空，请用一句话说明为什么这条命令需要更宽的权限。";
+	}
+	return undefined;
 }
 
 /* ── 审批策略的应用 ──────────────────────────────────────────────── */

@@ -1007,8 +1007,19 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 		"它能拦住助手主动的读写与命令，但不能约束已运行程序的行为。" +
 		"凭据目录（.ssh/.gnupg/.aws 等）在任何档位下都禁止读写。";
 
-	// 沙箱状态是进程级事实（这台机器上能不能用），与具体档位无关。
-	const sandbox = sandboxDiagnostics;
+	/*
+	 * 沙箱状态：读**最近一次**的结论，与具体档位无关。
+	 *
+	 * 为什么这里只能是「最近一次」而不是「当前工作区」：权限设置是全局的，
+	 * 设置页也不属于任何一个会话 —— 本函数没有「当前是哪个工作区」的上下文。
+	 * 多工作区并存时（切换工作区、临时任务），这段文案可能说的是另一个工作区
+	 * 的情况。这是**展示文案**可以接受的近似。
+	 *
+	 * **判据不能这么读**：审批放松一律走 isSandboxReadyFor(cwd) 按工作区问 ——
+	 * 读全局值就是 2026-09-16 修掉的那个 bug 的形状（陈旧的 available:true
+	 * = 在没有写约束的工作区里免审批执行命令）。
+	 */
+	const sandbox = latestSandboxDiagnostics;
 	let sandboxNote = "";
 	if (sandbox !== undefined) {
 		sandboxNote = sandbox.available
@@ -1037,12 +1048,52 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 }
 
 /**
- * 沙箱可用性诊断（进程级）。
+ * 沙箱可用性诊断，**按工作区**记。
  *
- * `undefined` = 尚未探测。存模块级而不是按会话：「这台机器能不能用受限令牌」
- * 与会话无关，与 activePermissions 同一范式。
+ * 【2026-09-16 修一个真 bug】这里原本是一个模块级单值，注释写着「『这台机器能不能
+ * 用受限令牌』与会话无关」—— 那句话**不成立**：可用性还取决于工作区所在卷能不能
+ * 承载 ACL（FAT/exFAT 上授权会「成功」但毫无效果），以及该目录的 ACL 授权是否
+ * 真的成功。而 daemon 里同时存在多个工作区（切换工作区、临时任务会话、子代理），
+ * 于是后一个会话的结论会覆盖前一个。
+ * （`sandbox/index.ts` 的 probe 缓存是同一个根源的同一个 bug，一起修的。）
+ *
+ * 当时的后果只是设置页显示不准。但**审批放松要拿这个事实当判据** —— 那时读到
+ * 跨工作区的陈旧 `available: true`，就等于「在没有写约束的工作区里免审批执行命令」。
+ *
+ * 键按小写路径（Windows 大小写不敏感）。条目数由用户行为界定（几个工作区）。
  */
-let sandboxDiagnostics: SandboxDiagnostics | undefined;
+const sandboxDiagnosticsByWorkspace = new Map<string, SandboxDiagnostics>();
+
+/**
+ * 最近一次的诊断结论，**仅供设置页的全局文案**。
+ *
+ * 为什么还留一个全局值：`buildPermissionInfo` 没有「当前是哪个工作区」的上下文
+ * （权限设置是全局的，设置页也不属于某个会话）。所以那段文案只能表达
+ * 「最近一次探测到的情况」—— 多工作区并存时它可能指的是另一个工作区。
+ * **判据不能读它**（那正是上面那个 bug 的形状）：判据一律走
+ * `isSandboxReadyFor(cwd)`，按工作区问。
+ */
+let latestSandboxDiagnostics: SandboxDiagnostics | undefined;
+
+/**
+ * 某个工作区的沙箱**是否确实可用**（写约束真的在生效）。
+ *
+ * 这是审批放松的唯一判据，两条纪律：
+ *
+ * 1. **未知 = 不可用**。预热是会话建立时异步启动的，判定可能早于它完成 ——
+ *    那时按 fail-closed 走询问。会自愈（后续命令就免审批了），代价是最初
+ *    一两条命令仍会问，这个方向是对的。
+ * 2. **它蕴含「ACL 授权已成功」**，不只是「探测通过」。`warmUpSandbox` 先 probe
+ *    再 `ensurePrepared`，只有两步都成才报 `available: true`（授权失败会以
+ *    `acl-grant-failed` 上报）。这一点是判据成立的关键：探测通过但授权失败时，
+ *    执行层会降级成无约束执行 —— 若判据只看探测，就会出现
+ *    「免审批放行 → 授权失败 → 无约束执行，且没人批准过」。
+ *    而 `ensurePrepared` 按目录 memoize，预热成功过的目录在执行时命中同一个
+ *    promise，不会再失败。所以「门看到 ready」与「执行层装配得起来」是同一个事实。
+ */
+function isSandboxReadyFor(cwd: string): boolean {
+	return sandboxDiagnosticsByWorkspace.get(cwd.toLowerCase())?.available === true;
+}
 
 /** 原因枚举 → 给用户看的一句话。不把枚举名直接抛给界面。 */
 function describeSandboxReason(reason: SandboxUnavailableReason | undefined): string {
@@ -1073,8 +1124,15 @@ function describeSandboxReason(reason: SandboxUnavailableReason | undefined): st
  * 各自去重也会在多会话时重复刷日志。
  */
 function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string): void {
-	const previous = sandboxDiagnostics;
-	sandboxDiagnostics = diagnostics;
+	const key = cwd.toLowerCase();
+	/*
+	 * 去重也按工作区（原先是全局比较）：否则工作区 A 的结论会把工作区 B 的
+	 * 首次结论压掉 —— 而那两条恰恰可能不同（一个 NTFS、一个 U 盘），
+	 * 日志里就永远看不到后者。
+	 */
+	const previous = sandboxDiagnosticsByWorkspace.get(key);
+	sandboxDiagnosticsByWorkspace.set(key, diagnostics);
+	latestSandboxDiagnostics = diagnostics;
 	if (
 		previous !== undefined &&
 		previous.available === diagnostics.available &&
@@ -1275,6 +1333,8 @@ const subagentRunner = createSubagentRunner({
 	getModelKey: () => activeModelKey,
 	resources: RESOURCES,
 	getPermissions: () => activePermissions,
+	// 审批放松的判据（按工作区问，理由见 isSandboxReadyFor 与子代理装配处注释）。
+	isSandboxReady: isSandboxReadyFor,
 	// 全局默认推理强度（现读偏好，理由同 automation 装配处）：子代理会话
 	// 每次新建、逐会话还原不适用，全局默认即口径。
 	getThinkingLevel: () => readPreferences().thinkingLevel,
@@ -1551,6 +1611,15 @@ async function createHost(
 				// 前缀规则同 getSettings 的 getter 范式：批准写回（appendRule）后，
 				// 已建好的宿主下一次工具调用即按新规则免问/直拒。
 				getRules: () => activePermissionRules,
+				/*
+				 * 审批放松的判据（spec: 沙箱三期）。**按本会话的工作区问**，
+				 * 不读那个全局的「最近一次」值 —— 后者在多工作区并存时可能说的是
+				 * 另一个工作区，拿它当放松依据就是 2026-09-16 修掉的那个 bug 的形状。
+				 *
+				 * getter 而非快照：预热是会话建立时异步启动的，构造时取值会永久
+				 * 停在 false（放松永不生效）。
+				 */
+				isSandboxReady: () => isSandboxReadyFor(cwd),
 				// 审批按桶计数：有待答审批的桶豁免 LRU 回收 ——
 				// 用户在答的框不能随宿主一起消失。
 				// sessionId 在此注入（唯一注入点）：审批归属发起它的会话桶，
@@ -1672,7 +1741,45 @@ async function createHost(
 					workspaceDir: cwd,
 					// 降级路径就是今天在跑的那条 spawn，不另写一遍。
 					fallback: runCommand,
+					// 先跑后问的闭环判据（四期）：与权限门同源，按工作区问。
+					isSandboxReady: () => isSandboxReadyFor(cwd),
 					onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, cwd),
+					/*
+					 * 一次性提权审批（spec: add-windows-acl-sandbox 二阶段）。
+					 *
+					 * 走**与权限门同一条** requestApproval 通道：用户面对的是同一种弹窗，
+					 * 审计日志里也是同一类记录。sessionId 与 pendingApprovals 的处理
+					 * 照抄权限门那边（见下方 createPermissionGate 的注释）——
+					 * 有待答审批的桶必须豁免 LRU 回收，否则用户正在看的框会随宿主消失。
+					 *
+					 * `risk: "high"` 不只是显示强调：审批弹窗对高风险**不提供**
+					 * 「本次会话记住」选项（permission-dialog.tsx），而权限门回程也
+					 * 对高风险忽略 remember —— 正好落实「提权只对本次调用有效」。
+					 * 跳过沙箱是我们能给出的最宽授权，不该有任何形式的免检。
+					 */
+					requestEscalation: async ({ toMode, justification, command }) => {
+						const sessionId = adoptedSessionId(bucket);
+						bucket.pendingApprovals += 1;
+						try {
+							const response = await requestApproval(
+								{
+									toolName: "powershell",
+									summary:
+										toMode === "danger-full-access"
+											? "跳过沙箱写入约束执行这条命令（本次有效）"
+											: `把这条命令的权限放宽到「${toMode}」（本次有效）`,
+									// 理由与命令原文都要给：用户得知道模型想干什么、以及为什么。
+									details: `模型给出的理由：${justification}\n\n命令：${command}`,
+									risk: "high",
+								},
+								sessionId,
+							);
+							return response.decision === "allow";
+						} finally {
+							bucket.pendingApprovals -= 1;
+							evictIdleHosts();
+						}
+					},
 				}),
 			}),
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具

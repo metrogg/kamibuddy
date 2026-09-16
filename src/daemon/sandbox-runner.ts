@@ -22,7 +22,13 @@
  * 所以那时探测不可用必须继续逐次询问，不得放松。
  */
 
-import type { CommandOutcome, CommandRunner } from "../extensions/powershell-tool.ts";
+import type {
+	CommandBlocked,
+	CommandEscalationRequest,
+	CommandOutcome,
+	CommandRunResult,
+	CommandRunner,
+} from "../extensions/powershell-tool.ts";
 import {
 	classifyFailure,
 	prepareSandbox,
@@ -30,7 +36,13 @@ import {
 	runSandboxed,
 	type SandboxAvailability,
 } from "../sandbox/index.ts";
-import type { PermissionSettings, SandboxUnavailableReason } from "../shared/permissions.ts";
+import {
+	canEscalate,
+	isSandboxMode,
+	type PermissionSettings,
+	type SandboxMode,
+	type SandboxUnavailableReason,
+} from "../shared/permissions.ts";
 
 /**
  * 授权超过这个时长才提示。
@@ -51,6 +63,169 @@ const PREPARE_NOTICE =
 const DEGRADED_NOTE =
 	"注意：本次执行未受操作系统级写入约束（沙箱不可用）。" +
 	"写入范围仅由 KamiBuddy 的权限判定把关，请严格只写工作目录内的文件。";
+
+/* ── 拒写识别（让「被策略拒了」对模型可见） ────────────────────── */
+
+/**
+ * 沙箱拒写的签名。**必须与语言无关**，这一条是实测结论，不是偏好。
+ *
+ * 2026-09-16 用 `scripts/probe-denial-text.ts` 走真实沙箱取到的原文
+ * （中文 Windows 11、Windows PowerShell 5.1）：
+ *
+ *   PowerShell 按控制台代码页（中文机器是 936/GBK）输出 stderr，而
+ *   `runSandboxed` 按 **UTF-8** 解码 —— 于是本地化的那句「对路径…的访问被拒绝」
+ *   到我们手里是**乱码**（`��·����…���ķ��ʱ��ܾ���`）。
+ *
+ * 所以两条直觉做法都不可行：照搬 dsh 的英文方言
+ * （`access is denied` / `access to the path` / `permission denied`，
+ * 见 `sandbox-local/src/index.ts:211`）在中文机器上永不命中；
+ * 改匹配中文文案则匹配的是乱码前的文本，同样永不命中。
+ *
+ * 可靠的信号是乱码里**活下来的 ASCII**：.NET 异常类型名与 PowerShell 的
+ * 错误类别。GBK 与 UTF-8 对 ASCII 字节完全一致，所以它们穿过编码错乱后原样可见
+ * （实测同一段输出里 `PermissionDenied:` 与 `UnauthorizedAccessException` 完好）。
+ * 这比本地化文案更强：中文版、英文版、任何语言版都一样命中。
+ *
+ * 仍然保留 dsh 的三条英文签名：英文版 Windows 上没有编码错乱，
+ * 且 node（EACCES）与部分 cmdlet 只给出那种措辞。
+ *
+ * **已知漏网**（写在明处，不假装全覆盖）：cmd.exe 的重定向失败给的是
+ * 「文件名、目录名或卷标语法不正确」，一个 ASCII 标记都没有 —— 那条识别不了。
+ * 影响很小：本层只跑 `powershell.exe`，cmd 只在模型自己从 PowerShell 里调起时出现；
+ * 且漏报的后果仅仅是少一句提示，不影响任何约束。
+ */
+const DENIAL_SIGNATURES: readonly string[] = [
+	// 与语言无关（ASCII，编码错乱也能活）—— 中文机器上唯一可命中的一组。
+	"unauthorizedaccessexception",
+	"permissiondenied",
+	// dsh 的英文方言：英文版 Windows、node EACCES、部分 cmdlet。
+	"access is denied",
+	"access to the path",
+	"permission denied",
+];
+
+/**
+ * 这次执行看起来是被写约束拒了吗？只看 stderr。
+ *
+ * **安全支点，别改成「据此自动放宽」**（与 sandbox/index.ts 决策 9 同一条理由）：
+ * stderr 完全由子进程控制，模型可以随便打印
+ * `[Console]::Error.WriteLine('UnauthorizedAccessException')` 来伪造这个信号。
+ * 这里安全的**唯一原因**是命中它只会**追加一段文字** —— 伪造的全部收益就是
+ * 拿到一句本来也会给的提示，而真正的加宽必须经用户点头（requestEscalation）。
+ * 谁若将来让它自动降级重跑，就是在重造一期修掉的那个逃逸：
+ * 「写被拒 → 伪造信号 → 判定沙箱坏了 → 不受约束地重跑同一条命令」。
+ *
+ * 不用退出码把关（dsh 的 runner 规则会 gate 在特定退出码上）：那是为它的
+ * 独立 runner 进程设计的（runner 自己的失败码与被包命令的退出码要分开），
+ * 我们在进程内直接 spawn，没有这层歧义；而 PowerShell 的非终止错误退出码并不
+ * 稳定，gate 上去只会漏报。
+ */
+function looksDenied(stderr: string): boolean {
+	const haystack = stderr.toLowerCase();
+	return DENIAL_SIGNATURES.some((signature) => haystack.includes(signature));
+}
+
+/**
+ * 拒写时追加给模型的说明：**认得出是策略拒绝** + 有一条正规出路。
+ *
+ * 为什么两句都要有（照 dsh 把 denial marker 与 escalation hint 放在同一处的理由）：
+ * 只说「被拒了」，模型会去反复改写命令（它以为是自己写错了）；
+ * 只给出路而不点明原因，它又不知道何时该用。提示放在**决策点**上，
+ * 不依赖模型回想工具描述里的某一行。
+ */
+const DENIAL_MARKER =
+	"提示：上面的失败看起来是**沙箱写约束**拒绝了写入（不是命令语法问题）——" +
+	"当前档位只允许写工作目录内的文件。若目标本应在工作目录内，请检查路径。";
+
+/**
+ * 提权提示。**只在真的能提权时才附上** —— 这是与 dsh 一致的取舍
+ * （它也只在「composition advertises the escalation fields」时给这个 hint）。
+ *
+ * 理由：没有审批通道、或审批策略是「不询问」时，让模型去申请提权是**骗它**——
+ * 那条申请必然被拒，白烧一轮，还让模型以为自己找到了出路。
+ */
+const ESCALATION_HINT =
+	"若确实需要写到工作目录之外，可以带 sandbox_permissions + justification 重试**同一条命令**一次，" +
+	"由用户决定是否批准。";
+
+/**
+ * 按**提权前的档位**给 denial 文案。read-only 沙箱连工作区内都写不了，
+ * workspace-write 版的「只允许写工作目录内」会误导模型去重写一个区内路径。
+ */
+function denialNoteFor(mode: SandboxMode, canAsk: boolean): string {
+	const marker =
+		mode === "read-only"
+			? "提示：上面的失败看起来是**只读沙箱**拒绝了写入（不是命令语法问题）——" +
+				"当前档位不允许写入任何位置。"
+			: DENIAL_MARKER;
+	return canAsk ? `${marker}${ESCALATION_HINT}` : marker;
+}
+
+/** 用户批准提权后追加的说明。让模型知道这一次的约束确实放宽了，别再申请一遍。 */
+const ESCALATED_NOTE =
+	"注意：用户已批准本次提权，这条命令**未受操作系统级写入约束**。" +
+	"批准只对本次调用有效，后续命令仍回到原档位。";
+
+/* ── 提权判定 ────────────────────────────────────────────────────── */
+
+/** 提权判定的结果：要么给出本次生效的档位，要么拦下（命令一行都不跑）。 */
+type EscalationVerdict =
+	| { readonly kind: "granted"; readonly mode: SandboxMode }
+	| { readonly kind: "blocked"; readonly blocked: CommandBlocked };
+
+function blocked(reason: string): EscalationVerdict {
+	return { kind: "blocked", blocked: { blocked: true, category: "escalation-denied", reason } };
+}
+
+/**
+ * 判定一次提权申请。**有序的 fail-closed 序列**（照 dsh 的 approveEscalation）：
+ * 先查严格变宽 → 再查审批通道 → 再查审批策略 → 最后才问用户。
+ *
+ * 顺序本身就是语义：不合法的申请**不该惊动用户**（否则模型可以靠刷弹窗
+ * 来骚扰用户，直到对方随手点了允许）。
+ */
+async function resolveEscalation(
+	request: CommandEscalationRequest,
+	command: string,
+	settings: PermissionSettings,
+	ask: SandboxRunnerOptions["requestEscalation"],
+): Promise<EscalationVerdict> {
+	const { toMode, justification } = request;
+	// schema 已把取值钉死，这里再验一遍：入参来自模型，运行期不信任声明类型。
+	if (!isSandboxMode(toMode)) {
+		return blocked(`「${toMode}」不是有效的权限档位。`);
+	}
+	/*
+	 * 严格变宽：在**执行期**对本次调用的有效档位校验，不烧进 schema
+	 * （schema 是注册期全局的，有效模式是每次调用的真相 ——
+	 * shared/permissions.ts 的 WIDER_MODES 注释）。
+	 * 不变宽的申请直接拦，**不弹窗**。
+	 */
+	if (!canEscalate(settings.sandbox, toMode)) {
+		return blocked(
+			`不能从当前档位「${settings.sandbox}」提权到「${toMode}」——提权必须严格变宽。` +
+				(settings.sandbox === "danger-full-access"
+					? "当前档位本来就没有文件范围约束，这条命令不需要提权。"
+					: ""),
+		);
+	}
+	if (ask === undefined) {
+		// 没有审批通道时「批准」不能凭空发生（子代理与无人值守都可能落到这里）。
+		return blocked("当前会话没有可用的审批通道，无法申请提权。");
+	}
+	/*
+	 * approval === "never" 一律拒，**不弹窗** —— 与 resolveAsk 同一口径：
+	 * 无人值守下「不问」必须等于「不做」，否则这个开关就成了完全敞开的后门。
+	 */
+	if (settings.approval === "never") {
+		return blocked(
+			"当前审批策略为「不询问」，需要用户批准的提权会被直接拒绝。请改用工作目录内的路径完成。",
+		);
+	}
+	const approved = await ask({ toMode, justification, command });
+	if (!approved) return blocked(`用户拒绝了本次提权申请（${toMode}）。`);
+	return { kind: "granted", mode: toMode };
+}
 
 /** 上报给 daemon 的一次性诊断（用于设置页与日志）。 */
 export interface SandboxDiagnostics {
@@ -75,10 +250,48 @@ export interface SandboxRunnerOptions {
 	 * 两处对「哪儿是工作区」的答案分歧，是比僵化更难查的 bug。
 	 */
 	readonly workspaceDir: string;
-	/** 直接 spawn 的执行器（工具的缺省实现），降级时用它。 */
-	readonly fallback: CommandRunner;
+	/**
+	 * 直接 spawn 的执行器（工具的缺省实现 `runCommand`），降级时用它。
+	 *
+	 * 类型故意**窄于** `CommandRunner`：它只回执行结果，回不了「被拦下」——
+	 * 因为这条路没有策略层（就是拉起 powershell.exe 跑），没有任何东西可以
+	 * 在这一层拒绝命令。让类型承载这个不变式，而不是靠注释约定：
+	 * 否则 degrade 里 spread 它的返回值就可能悄悄合成出一个既 blocked
+	 * 又带 stdout 的畸形结果。
+	 */
+	readonly fallback: (command: string, timeoutSeconds: number) => Promise<CommandOutcome>;
 	/** 诊断变化时回调（探测结论、降级原因）。同一结论只报一次。 */
 	readonly onDiagnostics?: (diagnostics: SandboxDiagnostics) => void;
+	/**
+	 * 本工作区的沙箱**是否确实在生效**（与权限门同一判据源：daemon 的
+	 * isSandboxReadyFor）。四期「先跑后问」的闭环关键：
+	 *
+	 * 门按 readiness=true 直接放行的命令（没有人工终审），若执行层装配失败
+	 * 还走旧降级（fallback 无约束跑），就变成「没人看过的命令无约束执行」。
+	 * 所以装配失败按 readiness 分流：true → fail-closed 拒绝；false/undefined →
+	 * 维持一期降级+说明（那些会话的门在逐次弹窗，有人看过命令）。
+	 *
+	 * getter 而非快照：readiness 随预热/授权结果在会话存续期间变化。
+	 */
+	readonly isSandboxReady?: () => boolean;
+	/**
+	 * 发起一次提权审批。**省略 = 没有审批通道**，于是任何提权申请都被拒
+	 * （fail-closed：没人能批准的时候「批准」不能凭空发生）。
+	 *
+	 * 结构化回调而不是审批服务类型（照 dsh 的 EscalationApprover）：
+	 * 本层因此不必认识 IPC 或会话桶，也保住了现有的可注入测试范式 ——
+	 * 「用户批准后确实不进沙箱」这条判断必须能在任何平台上被测到。
+	 *
+	 * resolve `true` = 用户批准了**这一次**。
+	 */
+	readonly requestEscalation?: (request: {
+		/** 申请的目标档位。 */
+		readonly toMode: SandboxMode;
+		/** 模型给的理由，原样展示给用户。 */
+		readonly justification: string;
+		/** 要执行的命令原文 —— 用户要看见自己在给什么放行。 */
+		readonly command: string;
+	}) => Promise<boolean>;
 	/**
 	 * 沙箱门面。缺省是真实实现；**注入是为了让降级逻辑能被平台无关地测试**。
 	 *
@@ -216,12 +429,40 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		return { ...outcome, note: DEGRADED_NOTE };
 	};
 
-	return async (command, timeoutSeconds, onProgress) => {
+	return async (command, timeoutSeconds, onProgress, escalation) => {
 		const settings = options.getSettings();
-		// 不该进沙箱的档位：直接跑，且**不加降级说明** ——
-		// danger-full-access 下「没有写入约束」是用户选的语义，不是故障。
-		if (settings.sandbox !== "workspace-write") {
-			return options.fallback(command, timeoutSeconds);
+
+		/*
+		 * 提权申请先判定，且**先于任何执行** —— 被拒时命令一行都不跑。
+		 * 判定本身不执行命令，只决定「这一次按哪个档位跑」。
+		 */
+		let mode: SandboxMode = settings.sandbox;
+		let escalated = false;
+		if (escalation !== undefined) {
+			const verdict = await resolveEscalation(
+				escalation,
+				command,
+				settings,
+				options.requestEscalation,
+			);
+			if (verdict.kind === "blocked") return verdict.blocked;
+			mode = verdict.mode;
+			escalated = true;
+		}
+
+		/*
+		 * danger-full-access（用户选择或一次性提权获批）是唯一走 fallback 的档：
+		 * 「没有写入约束」就是该档的语义。用户自己选的不加说明（说了是撒谎）；
+		 * 提权获批的加 ESCALATED_NOTE（让模型知道放宽了、且只此一次）。
+		 *
+		 * **read-only 绝不走这条路**（四期翻转）：旧代码 `mode !== workspace-write
+		 * → fallback` 对 read-only 意味着「无沙箱全权限跑」，此前靠权限门在
+		 * 阶段 3 全拒 shell 掩盖着（防御性死代码）；门放行只读沙箱执行后，
+		 * 命令真的会到这里 —— 必须进沙箱，见下方 read-only 分支。
+		 */
+		if (mode === "danger-full-access") {
+			const outcome = await options.fallback(command, timeoutSeconds);
+			return escalated ? { ...outcome, note: ESCALATED_NOTE } : outcome;
 		}
 
 		const { workspaceDir } = options;
@@ -233,6 +474,37 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		}
 		if (!probe.available) {
 			return degrade(command, timeoutSeconds, probe.reason, probe.detail);
+		}
+
+		/*
+		 * read-only：不 prepare（只读沙箱不需要任何 ACE，warmUp 本就只预热
+		 * workspace-write），直接以无写能力的受限令牌跑。命令写**任何位置**
+		 * 都会被 OS 拒（含工作区内），denial note 用只读版文案。
+		 */
+		if (mode === "read-only") {
+			try {
+				const outcome = await sandbox.run({
+					command: "powershell.exe",
+					args: ["-NoProfile", "-NonInteractive", "-Command", command],
+					cwd: workspaceDir,
+					workspaceDir,
+					writableDirs: [],
+					timeoutMs: timeoutSeconds * 1000,
+					mode: "read-only",
+				});
+				report({ available: true });
+				if (looksDenied(outcome.stderr)) {
+					const canAsk =
+						options.requestEscalation !== undefined && settings.approval !== "never";
+					return {
+						...outcome,
+						note: denialNoteFor(mode, canAsk),
+					};
+				}
+				return outcome;
+			} catch (error) {
+				return sandboxAssemblyFailure(command, timeoutSeconds, error);
+			}
 		}
 
 		try {
@@ -256,16 +528,60 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				mode: "workspace-write",
 			});
 			report({ available: true });
+			/*
+			 * 沙箱**是好的**，命令自己被拒了 —— 如实回传结果（不降级、不重跑），
+			 * 只追加一段让模型看得懂的说明。
+			 *
+			 * 这里绝不能改成「据此自动放宽后重跑」：stderr 由子进程控制，
+			 * 模型可以伪造这个信号（详见 looksDenied 的注释）。
+			 */
+			if (looksDenied(outcome.stderr)) {
+				/*
+				 * 提权提示只在**真的能提权**时附上：没有审批通道、或审批策略是
+				 * 「不询问」时，让模型去申请等于骗它白烧一轮（那条申请必然被
+				 * resolveEscalation 拒掉）。判据与 resolveEscalation 的前置检查
+				 * 保持一致 —— 两处若分歧，模型就会被指向一条走不通的路。
+				 */
+				const canAsk =
+					options.requestEscalation !== undefined &&
+					settings.approval !== "never" &&
+					canEscalate(mode, "danger-full-access");
+				return { ...outcome, note: denialNoteFor(mode, canAsk) };
+			}
 			return outcome;
 		} catch (error) {
-			/*
-			 * 走到这里说明沙箱**装配**失败（令牌派生、spawn 本身），
-			 * 不是命令执行失败 —— 后者会以 outcome 形式正常返回。
-			 * 装配失败降级并说明，与探测失败同口径。
-			 */
-			return degrade(command, timeoutSeconds, classifyFailure(error), errorDetail(error));
+			return sandboxAssemblyFailure(command, timeoutSeconds, error);
 		}
 	};
+
+	/**
+	 * 沙箱**装配**失败（令牌派生、spawn 本身；不是命令执行失败 —— 后者以
+	 * outcome 形式正常返回）。按 readiness 分流（四期闭环不变式）：
+	 *
+	 * readiness=true：门按「沙箱在约束」直接放行了这条命令（先跑后问，
+	 *   没有人工终审）。若降级 fallback，就是「没人看过的命令无约束执行」
+	 *   —— fail-closed 拒绝，把原因回给模型。这是 dsh SANDBOX_UNAVAILABLE
+	 *   的同款语义。
+	 * readiness=false/undefined：门对名单外命令在逐次弹窗（有人看过命令），
+	 *   维持一期降级纪律（降级 = 没有改善，不等于打开一个洞）。
+	 */
+	async function sandboxAssemblyFailure(
+		command: string,
+		timeoutSeconds: number,
+		error: unknown,
+	): Promise<CommandRunResult> {
+		if (options.isSandboxReady?.() === true) {
+			return {
+				blocked: true,
+				category: "sandbox-unavailable",
+				reason:
+					`命令未执行：沙箱装配失败（${classifyFailure(error)}：${errorDetail(error)}）。` +
+					"为避免在没有操作系统写入约束的情况下执行命令，本次拒绝执行。" +
+					"请改用文件工具完成，或请用户检查沙箱环境后重试。",
+			};
+		}
+		return degrade(command, timeoutSeconds, classifyFailure(error), errorDetail(error));
+	}
 }
 
 /**

@@ -97,17 +97,17 @@ describe("放行路径", () => {
 		expect(asked).toHaveLength(0);
 	});
 
-	it("只读工具出工作区要询问（用户允许后不拦）", async () => {
+	it("只读工具出工作区放行（2026-09-16 二次翻转：对齐水位）", async () => {
 		/*
-		 * 这条用例**翻转过**（2026-09-09）。原先区外读不询问直接放行；
-		 * 当天事故证明读侧漫游是写越界的必经入口，判定链已把区外 read/find/grep/ls
-		 * 改为低风险询问（详见 permission-policy.ts 文件头事故条目）。
+		 * 这条用例翻转过**两次**：2026-09-09 事故后从放行改成询问（读侧漫游
+		 * 是写越界的必经入口）；2026-09-16 翻回放行 —— 先跑后问放行了 shell
+		 * （`Get-Content <区外路径>` 不问），询问已不构成边界只剩不一致；
+		 * 且三家读侧全部自由，用户明确齐平即可。凭据/配置 deny 仍在（阶段 1）。
 		 */
-		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+		const { call, asked } = mount({});
 		const result = await call({ toolName: "read", input: { path: join(HOME, "任意.txt") } });
 
-		expect(asked).toHaveLength(1);
-		expect(asked[0]).toMatchObject({ toolName: "read", risk: "low" });
+		expect(asked).toHaveLength(0);
 		expect(result).toBeUndefined();
 	});
 
@@ -406,7 +406,12 @@ describe("powershell 前缀规则（getRules 透传）", () => {
 	it("allow 规则命中：不弹窗直接放行", async () => {
 		const { call, asked } = mount({ rules: [{ tool: "powershell", prefix: "git", action: "allow" }] });
 
-		const result = await call({ toolName: "powershell", input: { command: "git status --short" } });
+		/*
+		 * 样本曾是 `git status --short`（2026-09-16 沙箱三期改掉）：它进了内置
+		 * 安全名单、没规则也放行，这条就测不出「规则生效」了。换成名单外、
+		 * 仍被 prefix "git" 命中的命令，意图才完整。
+		 */
+		const result = await call({ toolName: "powershell", input: { command: "git remote -v" } });
 
 		expect(result).toBeUndefined();
 		expect(asked).toHaveLength(0);
@@ -435,13 +440,19 @@ describe("powershell 前缀规则（getRules 透传）", () => {
 		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
 	});
 
-	it("read-only 档下 allow 规则不生效（规则阶段在只读拒绝之后）", async () => {
+	it("read-only 档且沙箱未就绪：名单外命令仍拒（只读沙箱不可用 = 不执行命令）", async () => {
+		/*
+		 * 四期翻转后 read-only 档的名单内命令、就绪下的名单外命令都放行
+		 * （只读沙箱兜着）。这条守住未就绪的旧语义：没有 OS 约束可依时，
+		 * 只读档仍然拒 —— 样本用名单外命令（git status 在名单内会放行）。
+		 * gate 未注入 isSandboxReady → sandboxReady=false → 走兜底拒绝。
+		 */
 		const { call, asked } = mount({
 			settings: { sandbox: "read-only", approval: "ask" },
 			rules: [{ tool: "powershell", prefix: "git", action: "allow" }],
 		});
 
-		const result = await call({ toolName: "powershell", input: { command: "git status" } });
+		const result = await call({ toolName: "powershell", input: { command: "Get-ChildItem" } });
 
 		expect(result?.block).toBe(true);
 		expect(asked).toHaveLength(0);
@@ -453,7 +464,9 @@ describe("powershell 前缀规则（getRules 透传）", () => {
 		// 的边界：免问效果来自规则本身，不是记住了什么。
 		const { call, asked } = mount({ rules: [{ tool: "powershell", prefix: "git", action: "allow" }] });
 
-		await call({ toolName: "powershell", input: { command: "git status" } });
+		// powershell 用名单外的 `git fetch`：`git status` 现在进内置名单、
+		// 没规则也放行，那样这条就测不出「放行来自规则而不是 remembered」了。
+		await call({ toolName: "powershell", input: { command: "git fetch" } });
 		await call({ toolName: "bash", input: { command: "git status" } });
 
 		expect(asked).toHaveLength(1); // 只有 bash 弹了窗
@@ -477,8 +490,15 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 			approve: () => ({ id: "x", decision: "allow", rememberPrefix: "git" }),
 		});
 
+		/*
+		 * 样本曾是 `git log --oneline` / `git diff`（2026-09-16 沙箱三期改掉）：
+		 * 两条都进了内置安全名单，第一条不再弹窗、第二条没规则也放行 ——
+		 * 这条端到端就什么都测不出了。换成名单外的 git 命令：
+		 * `git commit` 触发高风险弹窗，`git push` 靠写回的 "git" 规则免问 ——
+		 * 「写回即刻生效」测的仍然是规则，不是名单。
+		 */
 		// 第一次：无规则，高风险弹窗；用户勾「以后都允许「git」开头的命令」并允许。
-		const first = await call({ toolName: "powershell", input: { command: "git log --oneline" } });
+		const first = await call({ toolName: "powershell", input: { command: 'git commit -m "初始化"' } });
 		expect(first).toBeUndefined();
 		expect(asked).toHaveLength(1);
 		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
@@ -490,7 +510,7 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 		setRules(appendPermissionRule(rule, []));
 
 		// 后续同类命令命中 allow 规则，免弹窗 —— 「写回即刻生效」由 getRules getter 保证。
-		const second = await call({ toolName: "powershell", input: { command: "git diff" } });
+		const second = await call({ toolName: "powershell", input: { command: "git push" } });
 		expect(second).toBeUndefined();
 		expect(asked).toHaveLength(1);
 	});
@@ -519,28 +539,20 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 });
 
 /* ── 区外读弹窗的路径写回（writeBackPath，spec: extend-permission-rules-to-paths Task 2） ── */
+/*
+ * 【2026-09-16】区外读询问随「对齐水位」撤除（read 家族区外放行），
+ * 路径写回的两条端到端用例随之删除 —— writeBackPath 通道不再有触发场景
+ * （gate 的 readWriteBackTarget 依赖 ask low，永不满足）。
+ * powershell 首词写回不受影响（命令询问仍在）。
+ */
 
 describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
-	it("区外读的低风险询问带 writeBackPath（= 解析后的绝对目标路径）", async () => {
-		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
-		// 容器目录场景：工作区的父级，正是 spec 要免问的动机。
-		const target = join(HOME, "KamiBuddy-other", "notes");
-
-		await call({ toolName: "ls", input: { path: target } });
-
-		expect(asked).toHaveLength(1);
-		expect(asked[0]).toMatchObject({
-			toolName: "ls",
-			risk: "low",
-			details: resolve(target),
-			writeBackPath: resolve(target),
-		});
-	});
 
 	it("powershell 询问不带 writeBackPath（命令写回走首词通道，与路径写回互斥）", async () => {
 		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
 
-		await call({ toolName: "powershell", input: { command: "git status" } });
+		// `git status` 进了内置安全名单不再询问，换成名单外的样本（沙箱三期）。
+		await call({ toolName: "powershell", input: { command: "git push" } });
 
 		expect(asked).toHaveLength(1);
 		expect(asked[0]?.writeBackPath).toBeUndefined();
@@ -555,11 +567,10 @@ describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
 		expect(asked[0]?.writeBackPath).toBeUndefined();
 	});
 
-	it("读凭据/配置目录内的目标走不到弹窗 —— 阶段 1 直拒，禁区内路径永不出现在写回载荷里", async () => {
+	it("读凭据/配置目录内的目标走不到弹窗 —— 阶段 1 直拒不放行", async () => {
 		/*
-		 * writeBackPath 的禁区复核（readWriteBackTarget）是纵深防御：真实链路里
-		 * 这类目标在 policy 阶段 1 就已 deny，根本到不了 ask。这里钉住的是
-		 * 链路灯本身 —— 保证「禁区内目标不弹窗」这个前提不被将来改动悄悄破坏。
+		 * 区外读放行后这条仍是边界：凭据/配置目录的 deny 在阶段 1，
+		 * 永远先于任何放行。
 		 */
 		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
 
@@ -567,41 +578,5 @@ describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
 
 		expect(denied?.block).toBe(true);
 		expect(asked).toHaveLength(0);
-	});
-
-	it("写回链路：勾选并允许后产出 tool:read 规则，同目录树的后续读取（含换家族工具）免弹窗", async () => {
-		/*
-		 * daemon/index.ts 无法直接单测，这里复现其审批回程的同款纯函数链路：
-		 *   弹窗载荷的 writeBackPath → renderer 原样回填 rememberPrefix
-		 *   → rememberRuleFromApproval 带禁区复核构造规则 → appendPermissionRule
-		 *   幂等并入 → 门的 getRules 下一次调用即按新规则判。
-		 * 与 powershell 套件同构；钉的是 Task 2 特有的接缝：ls 上批准的写回
-		 * 产出 tool:"read" 规则，对换用 grep 的同类读取同样免问（家族语义）。
-		 */
-		const target = join(HOME, "KamiBuddy-other", "notes");
-		let writeBack = "";
-		const { call, asked, setRules } = mount({
-			approve: (request) => {
-				writeBack = request.writeBackPath ?? "";
-				return { id: "x", decision: "allow", rememberPrefix: writeBack };
-			},
-		});
-
-		// 第一次：无规则，低风险弹窗；用户勾「以后都允许读取此路径（及子目录）」并允许。
-		const first = await call({ toolName: "ls", input: { path: target } });
-		expect(first).toBeUndefined();
-		expect(asked).toHaveLength(1);
-		expect(writeBack).toBe(resolve(target));
-
-		// daemon 回程同款：禁区校验（configDir 必在其中）→ 构造规则 → 幂等并入内存规则集。
-		const rule = rememberRuleFromApproval("ls", { decision: "allow", rememberPrefix: writeBack }, [CONFIG]);
-		expect(rule).toEqual({ tool: "read", prefix: resolve(target), action: "allow" });
-		if (rule === undefined) throw new Error("应产出规则");
-		setRules(appendPermissionRule(rule, []));
-
-		// 后续读同目录树免弹窗；换家族工具（grep）同样命中 tool:read 规则。
-		expect(await call({ toolName: "read", input: { path: join(target, "a.md") } })).toBeUndefined();
-		expect(await call({ toolName: "grep", input: { path: join(target, "sub") } })).toBeUndefined();
-		expect(asked).toHaveLength(1);
 	});
 });
