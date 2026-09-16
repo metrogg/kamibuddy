@@ -26,6 +26,7 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
 import { ChildAgentsProjection, CHILD_AGENTS_DETAILS_KEY } from "../shared/child-agents.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 /** 一个成员的 spawn 计划行（agent 名已由装配层校验存在于 agents 库）。 */
 export interface TeamMemberPlan {
@@ -103,6 +104,9 @@ interface ToolResult {
 const emptyDetails: TeamToolDetails = { teamName: "", [CHILD_AGENTS_DETAILS_KEY]: [] };
 
 export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["team_create", "team_send", "team_status", "team_delete"]);
 	return (pi: ExtensionAPI): void => {
 		// 开关关闭时不注册：craft 白名单里的名字对 pi 静默忽略（docx_convert 先例），
 		// 模型看不到团队能力，成本为零。

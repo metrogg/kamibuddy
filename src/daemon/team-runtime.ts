@@ -34,6 +34,12 @@ export interface TeamMember {
 	turns: number;
 	/** 最近一条动作行（进度/诊断，展示用）。 */
 	lastActivity: string;
+	/** 累计工具调用次数（批 8：成员事件流计数回填）。 */
+	toolCalls: number;
+	/** 累计 token 用量（各轮 totalTokens 之和）。 */
+	tokens: number;
+	/** 累计费用（美元）。 */
+	cost: number;
 }
 
 export interface Team {
@@ -85,6 +91,9 @@ export class TeamRegistry {
 				status: "spawning",
 				turns: 0,
 				lastActivity: "",
+				toolCalls: 0,
+				tokens: 0,
+				cost: 0,
 			});
 		}
 		this.teamsByLeader.set(leaderSessionId, team);
@@ -125,6 +134,33 @@ export class TeamRegistry {
 		const member = this.requireMember(leaderSessionId, memberName);
 		member.turns += turnsDelta;
 		if (activity !== "") member.lastActivity = activity;
+	}
+
+	/**
+	 * 按成员会话 id 回填计数增量（spec: add-team-foundations 批 8）：
+	 * 成员执行器的 onEvent 只知道自己的 sessionId，用反向索引找归属成员累加。
+	 * 返回领导 id（调用方据此发 team_member_progress）；成员未归属（spawn
+	 * ack 前的零星事件）→ undefined，调用方跳过。
+	 */
+	recordCountersBySession(
+		memberSessionId: string,
+		deltas: { toolCalls: number; tokens: number; cost: number },
+	): string | undefined {
+		const leaderId = this.leaderByMemberSession.get(memberSessionId);
+		const team = leaderId === undefined ? undefined : this.teamsByLeader.get(leaderId);
+		if (team === undefined || leaderId === undefined) return undefined;
+		let member: TeamMember | undefined;
+		for (const candidate of team.members.values()) {
+			if (candidate.sessionId === memberSessionId) {
+				member = candidate;
+				break;
+			}
+		}
+		if (member === undefined) return undefined;
+		member.toolCalls += deltas.toolCalls;
+		member.tokens += deltas.tokens;
+		member.cost += deltas.cost;
+		return leaderId;
 	}
 
 	requireMember(leaderSessionId: string, memberName: string): TeamMember {

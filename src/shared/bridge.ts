@@ -246,6 +246,10 @@ export interface KamiBridge {
 	readonly getAgentTeamsEnabled: () => Promise<{ enabled: boolean }>;
 	/** 写团队协作开关；只影响之后新建的会话（工具注册发生在会话建立时）。 */
 	readonly setAgentTeamsEnabled: (enabled: boolean) => Promise<void>;
+	/** 向成员会话投一条消息（followUp 语义）；成员视图的发送与 @直接路由共用。 */
+	readonly memberPrompt: (memberSessionId: string, text: string) => Promise<void>;
+	/** 中止成员当前轮（成员视图的停止键）。 */
+	readonly memberAbort: (memberSessionId: string) => Promise<void>;
 	/** 读用户画像全文（PROFILE.md；文件不存在回空串）。 */
 	readonly getProfile: () => Promise<{ content: string }>;
 	/** 覆盖写用户画像全文；下一轮对话生效。 */

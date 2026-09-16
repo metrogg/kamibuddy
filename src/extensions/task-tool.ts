@@ -32,6 +32,7 @@ import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
 import { ChildAgentsProjection } from "../shared/child-agents.ts";
 import type { SubagentStatus } from "../shared/session-events.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 /** 委派给执行器的一次子代理运行（cwd 由 daemon 装配时补注入）。 */
 export interface SubagentRunRequest {
@@ -106,6 +107,9 @@ function formatReport(report: SubtaskReport): string {
 }
 
 export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["task"]);
 	// 工具描述里的子代理简介动态生成：agents 是数据，用户可同名覆盖内置
 	// （~/.kamibuddy/agents/），写死简介会与实际生效的定义漂移。
 	const agentLines = options

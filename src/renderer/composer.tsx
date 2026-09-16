@@ -74,6 +74,11 @@ interface ComposerProps {
 	/** 就地轻提示（附件格式/大小被拒等）。 */
 	readonly onError: (message: string) => void;
 	/**
+	 * 团队成员补全候选（spec: add-team-foundations 批 8）：并入 @ 下拉。
+	 * 由调用方从最近一张 team 卡派生；空/缺省 = 无团队，行为不变。
+	 */
+	readonly memberItems?: readonly { readonly label: string; readonly insert: string; readonly hint?: string }[];
+	/**
 	 * 按 key 持久草稿（input-history 模块级 Map）：提供时输入即存，
 	 * 挂载与值变化时还原并复位历史导航态。chat 传 sessionId，home 不传。
 	 */
@@ -102,6 +107,7 @@ export function Composer({
 	rows,
 	cwd,
 	modelId,
+	memberItems,
 	onSubmit,
 	onError,
 	draftKey,
@@ -131,7 +137,7 @@ export function Composer({
 	// 输入长度余量（input-limit.ts 纯函数判定）：接近上限才显示，超限禁发。
 	const chars = charCountState(draft.length);
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
-	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd);
+	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd, memberItems);
 
 	useImperativeHandle(
 		ref,

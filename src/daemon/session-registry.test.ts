@@ -182,3 +182,26 @@ describe("spawnBudget 注入（spec: add-team-foundations 防线参数化）", (
 		expect(bucket.spawnBudgetRemaining).toBe(20);
 	});
 });
+
+describe("hasTeam 豁免（spec: add-team-foundations 批 6）", () => {
+	it("hasTeam=true 的空闲桶不被回收（切走任务不能丢团队）", () => {
+		const current = hostedBucket("current");
+		const leader = hostedBucket("leader", { hasTeam: true, lastUsedAt: 1 });
+		const idle = Array.from({ length: MAX_IDLE_HOSTS }, (_, i) =>
+			hostedBucket(`idle-${i}`, { lastUsedAt: 2 + i }),
+		);
+		const evicted = pickEvictions([current, leader, ...idle], current);
+		expect(evicted).toEqual([]);
+		expect(evicted).not.toContain(leader);
+	});
+
+	it("hasTeam 解除后恢复参与回收（team_delete 释放豁免位）", () => {
+		const current = hostedBucket("current");
+		const leader = hostedBucket("leader", { hasTeam: false, lastUsedAt: 1 });
+		const idle = Array.from({ length: MAX_IDLE_HOSTS }, (_, i) =>
+			hostedBucket(`idle-${i}`, { lastUsedAt: 2 + i }),
+		);
+		const evicted = pickEvictions([current, leader, ...idle], current);
+		expect(evicted).toContain(leader);
+	});
+});

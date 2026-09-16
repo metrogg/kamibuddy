@@ -92,6 +92,12 @@ export interface SessionBucket<THost> {
 	worktree: WorktreeInfo | undefined;
 	/** 是否有正在进行的 run（run_started / run_finished / 折叠后的 isStreaming 维护）。 */
 	running: boolean;
+	/**
+	 * 领导桶的团队存续标记（spec: add-team-foundations 批 6）。
+	 * true 时豁免 LRU 回收 —— 逐出领导宿主会解散团队（成员产出断了回投线），
+	 * 用户切走任务回来不能发现队伍被静默清除。team_delete / 删除会话时清位。
+	 */
+	hasTeam: boolean;
 	/** 该会话在途的权限审批/问卷等待数。>0 时豁免回收 —— 用户在答的框不能随宿主一起消失。 */
 	pendingApprovals: number;
 	/** 剩余的子代理 spawn 预算（task 工具逐次扣减，见 SPAWN_BUDGET_PER_SESSION）。 */
@@ -143,6 +149,7 @@ export function createBucket<THost>(options: CreateBucketOptions): SessionBucket
 		pendingWorktreeBranch: undefined,
 		worktree: undefined,
 		running: false,
+		hasTeam: false,
 		pendingApprovals: 0,
 		spawnBudgetRemaining: options.spawnBudget ?? SPAWN_BUDGET_PER_SESSION,
 		pendingOps: 0,
@@ -196,6 +203,9 @@ export function pickEvictions<THost>(
 	for (const bucket of buckets) {
 		if (bucket === current) continue;
 		if (bucket.hostPromise === undefined) continue;
+		// hasTeam：领导桶豁免（spec: add-team-foundations 批 6）——
+		// 逐出领导 = 解散团队，会静默杀掉正在跑/待唤醒的成员。
+		if (bucket.hasTeam) continue;
 		if (bucket.running || bucket.pendingApprovals > 0 || bucket.pendingOps > 0) continue;
 		idle.push(bucket);
 	}

@@ -3153,6 +3153,34 @@ textarea:focus-visible {
 	overflow-wrap: anywhere;
 }
 
+/* 成员计数行（spec 批 8）：轮数/工具/token/费用，meta 小字次级色。 */
+.task-agent-meta {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+}
+
+/* 成员聚焦横幅（spec 批 8）：可见会话是团队成员时钉在头部下方，
+   标注 + 返回主会话。底色用抬升面与消息区分层，不造新档。 */
+.member-focus-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-5);
+	background: var(--bg-raised);
+	border-bottom: 1px solid var(--border);
+}
+
+.member-focus-text {
+	color: var(--text);
+	font-size: var(--text-list);
+}
+
+.member-focus-note {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+}
+
 /* 成功勾绿（--ok）/ 失败叉红（--danger），与 tool-dot 终态同色系。 */
 .task-agent-check {
 	color: var(--ok);

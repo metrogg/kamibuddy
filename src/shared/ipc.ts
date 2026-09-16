@@ -330,6 +330,13 @@ export const INVOKE = {
 	/** 写团队协作开关。只影响之后新建的会话（工具注册发生在会话建立时）。 */
 	setAgentTeamsEnabled: "settings:set-agent-teams-enabled",
 
+	/* ── 团队成员会话操作（spec: add-team-foundations 批 8） ───────── */
+
+	/** 向成员会话投一条消息（followUp 语义：idle 唤醒 / running 排队）。 */
+	memberPrompt: "team:member-prompt",
+	/** 中止成员当前轮（聚焦成员视图的停止键）。 */
+	memberAbort: "team:member-abort",
+
 	/** 读用户画像全文（PROFILE.md）。文件不存在回空串 —— 新用户本来就没有画像，不是错误。 */
 	getProfile: "settings:get-profile",
 	/** 覆盖写用户画像全文。下一轮对话生效（画像在 compose 时现读）。 */
@@ -877,6 +884,8 @@ export interface InvokeMap {
 	[INVOKE.setMemoryEnabled]: { args: [enabled: boolean]; result: void };
 	[INVOKE.getAgentTeamsEnabled]: { args: []; result: { enabled: boolean } };
 	[INVOKE.setAgentTeamsEnabled]: { args: [enabled: boolean]; result: void };
+	[INVOKE.memberPrompt]: { args: [memberSessionId: string, text: string]; result: void };
+	[INVOKE.memberAbort]: { args: [memberSessionId: string]; result: void };
 	[INVOKE.getProfile]: { args: []; result: { content: string } };
 	[INVOKE.setProfile]: { args: [content: string]; result: void };
 	[INVOKE.resetProfile]: { args: []; result: void };

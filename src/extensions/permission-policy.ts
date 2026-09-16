@@ -141,32 +141,26 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
 }
 
 /**
- * 只读工具：不改变任何状态。
+ * 只读工具：不改变任何状态。两个登记来源（2026-09-16 起分层）：
  *
- * 其中 web_search / web_fetch / present_files / automation_list / questionnaire
- * 没有本地路径概念，维持一律放行：不写本地、不改任何状态，且数据不是密钥。
- * 不可信内容的风险由工具层（web-tools.ts）的标记 + 本门对「后续写操作」的
- * 拦截共同兜住。
- * present_files 同理：stat 文件大小（限工作区）+ 发交付事件，不写盘。
- * automation_list 同理：读的是 KamiBuddy 自己的任务库（automations.json），
- * 与 web_search 同类——不涉及用户文件系统，也没有路径参数可判。
- * questionnaire 同理：它只是把问题递给 UI 等用户作答，输入全部来自用户本人，
- * 不触文件系统、不改任何状态 —— read-only 档下也同样放行（问用户一个问题
- * 不构成「修改文件或执行命令」）。
- * read_me / show_widget 同理（内联可视化，spec: add-inline-widgets）：
- * read_me 返回 resources/visualizer/ 下随应用分发的设计指南文本（读的是
- * 应用自带数据，不是用户文件）；show_widget 把 SVG/HTML 片段交给 UI 内联
- * 渲染，不触文件系统、不改任何状态 —— 与 questionnaire 同口径放行。
- * conversation_search 同理（spec: add-memory-system）：读的是 KamiBuddy 自己的
- * 会话库（sessions/*.jsonl，daemon 内部读盘不经工具入参），与 automation_list
- * 同档 —— 不涉及用户文件系统，也没有路径参数可判。
- * todo_write 同理（任务清单，spec: add-todo-task-list-panel）：只更新会话内
- * 待办清单的展示状态，不触文件系统、不改应用数据 —— 与 questionnaire 同口径。
- * task 同理（子代理委派）：它本身只做编排，真正的敏感操作发生在子代理内部，
- * 由 subagent-runner 自带的权限门（同一套 PermissionSettings，含 read-only
- * 档拒绝写）逐次判定 —— 主会话对「发起委派」再弹一次窗是纯打扰
- * （2026-09-11 用户实测：todo_write 未登记落 fail-safe 被弹窗，
- * WorkBuddy 对这类无本地副作用的工具不询问）。
+ * 1. **中心登记**（下方集合的字面量）：有本地路径语义的工具（read /
+ *    read_document / find / grep / ls）——它们的判定逻辑带路径归属
+ *    （工作区放行 / 区外询问，LOCAL_READ_TOOLS 家族），档位与路径规则
+ *    互相纠缠，留在中心一处维护。
+ *
+ * 2. **自声明**（declareReadOnlyTools，扩展工厂在注册工具的同一处调用）：
+ *    编排类、无本地路径、无副作用的扩展工具。**这是结构性的修法** ——
+ *    此前新工具必须记得来这个中心文件登记，忘了就落 fail-safe 询问，
+ *    「不询问」策略下直接拒绝：todo_write（2026-09-11）与 team 四件套
+ *    （2026-09-16）踩的是同一个坑。把声明挪到工具定义处（WorkBuddy/
+ *    CodeBuddy 的「注册即带权限元数据」同构），写工具的人在注册点顺手
+ *    声明，不再有另一处要记得更新的清单。
+ *
+ * 自声明只开放只读档：MUTATING / SHELL / 带路径语义的档位判定逻辑复杂
+ * （docx_convert 锚定产物路径、automation_* 改应用数据），错误自声明的
+ * 代价是绕过询问 —— 那些必须走中心登记的显式修改，评审时看得见。
+ *
+ * 未登记的工具（MCP 工具、未来忘了声明的）→ fail-safe 询问，不静默放行。
  *
  * read / read_document / find / grep / ls 有本地路径概念，**出工作区要询问**
  * （LOCAL_READ_TOOLS，见文件头【2026-09-09 事故条目】）——「只读」不再等于「随便读」。
@@ -179,17 +173,19 @@ const READ_ONLY = new Set([
 	"find",
 	"grep",
 	"ls",
-	"web_search",
-	"web_fetch",
-	"present_files",
-	"automation_list",
-	"questionnaire",
-	"read_me",
-	"show_widget",
-	"conversation_search",
-	"todo_write",
-	"task",
 ]);
+
+/**
+ * 扩展工厂的只读自声明通道（见 READ_ONLY 注释的分层说明）。
+ * 在工厂里、紧挨 registerTool 调用；幂等（Set.add），重复声明无害。
+ * 声明的语义承诺：该工具不触文件系统、不改任何状态、没有路径参数 ——
+ * 敏感操作若发生在工具派生的子会话里，由子会话自带的权限门逐次判定。
+ */
+export function declareReadOnlyTools(toolNames: readonly string[]): void {
+	for (const name of toolNames) {
+		READ_ONLY.add(name);
+	}
+}
 
 /**
  * 会改文件的内置工具。

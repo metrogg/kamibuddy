@@ -40,6 +40,55 @@ export interface ChildAgentPlanEntry {
 	readonly model?: string;
 }
 
+/** @提及命中的成员引用（直接路由的寻址结果）。 */
+export interface TeamMemberRef {
+	readonly sessionId: string;
+	readonly name: string;
+}
+
+/** 归位协议的条目形状（结构化最小面，避免牵入完整会话条目类型）。 */
+export interface TeamCardEntryLike {
+	readonly role: string;
+	readonly toolName?: string;
+	readonly subagents?: readonly SubagentStatus[];
+}
+
+/**
+ * 从会话条目里取**最近一张 team 卡**的成员投影（归位协议与 reducer 一致：
+ * 只看最近一张，更早的团不参与）。没有 team 卡 → undefined。
+ */
+export function latestTeamMembers(
+	entries: readonly TeamCardEntryLike[],
+): readonly SubagentStatus[] | undefined {
+	for (let i = entries.length - 1; i >= 0; i -= 1) {
+		const entry = entries[i];
+		if (entry === undefined) continue;
+		if (entry.role === "tool" && entry.toolName === "team_create") {
+			return entry.subagents;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * 解析 @提及到团队成员（spec: add-team-foundations 批 8 直接路由）。
+ * 名字大小写不敏感；成员必须已有会话 id（spawning 中的不可寻址）。
+ * 只在最近一张 team 卡里找 —— 与归位协议同一口径。
+ */
+export function findTeamMemberByMention(
+	entries: readonly TeamCardEntryLike[],
+	mentionName: string,
+): TeamMemberRef | undefined {
+	const members = latestTeamMembers(entries);
+	if (members === undefined) return undefined;
+	for (const member of members) {
+		if (member.agent.toLowerCase() === mentionName.toLowerCase() && member.sessionId !== undefined) {
+			return { sessionId: member.sessionId, name: member.agent };
+		}
+	}
+	return undefined;
+}
+
 /**
  * 时间线封顶：只保留最后 12 条**真实动作行**，溢出在最前面补「前 N 条已省略」
  * 标记——标记不占槽位，N 按累计丢弃数算（若标记也计入，下一轮追加会把

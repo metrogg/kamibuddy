@@ -245,3 +245,67 @@ team_delete 解散团队并中止全部成员。成员会话 SHALL NOT 注册 te
 
 - **WHEN** agentTeamsEnabled 为 false
 - **THEN** 四个工具不注册，模型看不到团队能力
+
+## 与 WorkBuddy 的差距清单（2026-09-16 盘点，v1 闭环真机通过后）
+
+**已对齐**：自然语言建团、fire-and-forget 后台执行、@all 广播、idle 成员收消息
+自动唤醒、实时成员状态卡（team_member_progress → 活动卡 live 刷新）、单团队/
+禁嵌套/深度锁、团队豁免 LRU、工具面按专家/模式声明、权限门全链路。
+
+**差距（按体验影响排序，后续批次从这里取）**：
+- P0 成员可见性：成员焦点导航（查看成员完整对话与实时进度）、输入框 @补全、
+  每成员实时 token/工具调用计数 —— 用户现在“看不见”成员在工作。
+- P1 协调效率：单成员优雅关闭（shutdown_request/_response，现只有全解散）、
+  共享任务列表（三态+依赖+自主认领，即 v1.1）、委派模式（领导只协调不干活）、
+  成员计划审批（plan_approval）、成员权限请求带成员归属标注（现在是全局闸）。
+- P2 健壮性：团队配置与信箱落盘（重启存活，WorkBuddy 落 teams/*/inboxes/）、
+  team_create 暴露每成员模型选择、团队人格专家包（expertType:“team” 等价物）。
+- P3 低优：成员 hook 事件、常驻状态栏（活动卡已覆盖主场景）、会话恢复
+  （WorkBuddy 自认无恢复，双方不做）。
+
+## 批 8：P0 成员可见性三件套（2026-09-16 立项）
+
+### Requirement: 每成员实时计数
+
+成员投影 SHALL 携带累计 toolCalls / tokens（totalTokens 和）/ cost；成员执行器
+从事件流计数（tool_started 计工具、assistant_done.usage 计 token 与费用），
+经注册表回填后随 team_member_progress 推送；团队卡成员行展示计数行。
+task 卡的 subagents 不写这些键（缺省不渲染）。
+
+#### Scenario: 卡上看到成员消耗
+
+- **WHEN** 成员执行若干轮后
+- **THEN** 领导会话的团队卡成员行实时显示「N 轮 · M 次工具 · X tok · 」
+
+### Requirement: @成员补全与直接路由
+
+composer 的 @ 补全 SHALL 在团队成员存在时把成员名并入候选（与文件候选同一
+过滤排序）；发送以 @成员名 开头的消息 SHALL 直接投递给该成员（剥离 @提及，
+经 followUp 通路），不经过领导模型中转。未知成员名不路由（走正常 prompt）。
+
+#### Scenario: @补全
+
+- **WHEN** 当前会话存在团队且用户输入 @
+- **THEN** 下拉同时给出成员名与文件候选，成员项带状态副标题
+
+#### Scenario: 直接路由
+
+- **WHEN** 用户发送「@sc1 再补充一点」且 sc1 是当前团队成员
+- **THEN** 「再补充一点」作为 followUp 消息直达 sc1 的会话，领导不消耗轮次
+
+### Requirement: 成员会话查看（焦点导航 v1）
+
+成员的会话事件 SHALL 以成员 sessionId 为信封键转发 renderer（复用后台会话
+折叠管线）；点击团队卡成员行的「查看」 SHALL 把可见视图切换到该成员会话
+（顶部横幅标注「正在查看成员」+ 返回主会话）；聚焦期间 composer 发送路由
+到该成员（同 @路由语义）、停止键中止该成员当前轮。
+
+#### Scenario: 聚焦成员
+
+- **WHEN** 用户点击团队卡成员行的「查看」
+- **THEN** 可见视图切换为该成员的完整对话（实时流式），横幅提供返回主会话
+
+#### Scenario: 聚焦期间发送
+
+- **WHEN** 聚焦成员期间在输入框发送消息
+- **THEN** 消息直达该成员会话（followUp 语义），不出现在领导对话

@@ -48,6 +48,12 @@ export interface MemberHooks {
 	readonly onComplete: (memberName: string, output: string, turns: number) => void;
 	/** 失败/被中止：诊断文本。 */
 	readonly onFailed: (memberName: string, message: string) => void;
+	/**
+	 * 成员会话事件转发（spec: add-team-foundations 批 8 焦点导航）：以成员
+	 * sessionId 为信封键转发 renderer，用户可聚焦查看成员完整对话。首参在
+	 * 宿主建成前为空串——建会话窗口期的零星事件没有消费者，直接丢弃。
+	 */
+	readonly onEvent?: (memberSessionId: string, event: SessionEvent) => void;
 }
 
 export interface MemberRunnerDeps {
@@ -99,6 +105,9 @@ export async function spawnMember(
 	let lastText = "";
 	let runError: string | undefined;
 	let cancelled = false;
+	// 宿主建成前事件不可信（translate 尚未接线，实际不会触发）；建成即回填，
+	// onEvent 转发的信封键从这一刻起有真值。
+	let sessionIdRef = { current: "" };
 	const emit = (event: SessionEvent): void => {
 		if (event.type === "assistant_done") {
 			turns += 1;
@@ -111,6 +120,7 @@ export async function spawnMember(
 		}
 		if (event.type === "run_error" && runError === undefined) runError = event.message;
 		if (event.type === "run_finished" && event.outcome === "cancelled") cancelled = true;
+		if (sessionIdRef.current !== "") hooks.onEvent?.(sessionIdRef.current, event);
 	};
 
 	const host = await SessionHost.create({
@@ -146,6 +156,7 @@ export async function spawnMember(
 	host.markTeamMemberRun(memberName);
 
 	const sessionId = host.state.sessionId;
+	sessionIdRef.current = sessionId;
 	const finalizeOutput = (text: string): string => {
 		const truncated =
 			text.length > MEMBER_OUTPUT_MAX_CHARS ? `${text.slice(0, MEMBER_OUTPUT_MAX_CHARS)}\n\n（内容过长，已截断）` : text;

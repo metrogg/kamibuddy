@@ -121,6 +121,10 @@ const bridge: KamiBridge = {
 	getAgentTeamsEnabled: () => ipcRenderer.invoke(INVOKE.getAgentTeamsEnabled),
 	setAgentTeamsEnabled: (enabled) =>
 		ipcRenderer.invoke(INVOKE.setAgentTeamsEnabled, enabled),
+
+	memberPrompt: (memberSessionId, text) =>
+		ipcRenderer.invoke(INVOKE.memberPrompt, memberSessionId, text),
+	memberAbort: (memberSessionId) => ipcRenderer.invoke(INVOKE.memberAbort, memberSessionId),
 	getProfile: () => ipcRenderer.invoke(INVOKE.getProfile),
 	setProfile: (content) => ipcRenderer.invoke(INVOKE.setProfile, content),
 	resetProfile: () => ipcRenderer.invoke(INVOKE.resetProfile),

@@ -59,6 +59,7 @@ import { computeChatContentWidth } from "./chat-content-width.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
 import { SourceFavicon } from "./sources-panel.tsx";
 import { TaskAgentCard } from "./task-agent-card.tsx";
+import { latestTeamMembers } from "@shared/child-agents.ts";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import { projectTodoList, windowTodos } from "./todo-projection.ts";
 import {
@@ -149,6 +150,15 @@ interface ChatViewProps {
 	 * 会话视图态，不落盘（spec: add-turn-fold-and-anchor）。
 	 */
 	readonly turnFoldCache: { readonly current: Map<string, TurnFoldMap> };
+	/**
+	 * 成员聚焦视图（spec: add-team-foundations 批 8）：定义时可见会话是某
+	 * 团队成员，顶部显示聚焦横幅（返回主会话走 onBackToLeader）。
+	 */
+	readonly memberView?: { readonly name: string };
+	/** 点击团队卡成员行的「查看」：App 切换可见视图到该成员的实时对话。 */
+	readonly onFocusMember?: (memberSessionId: string, memberName: string) => void;
+	/** 从成员聚焦横幅返回聚焦前的会话（App 层路由）。 */
+	readonly onBackToLeader?: () => void;
 }
 
 /* ── 思考块 ────────────────────────────────────────────────────── */
@@ -1461,6 +1471,9 @@ export function ChatView({
 	onQuestionnaireSubmit,
 	onQuestionnaireSkip,
 	turnFoldCache,
+	memberView,
+	onFocusMember,
+	onBackToLeader,
 }: ChatViewProps): React.JSX.Element {
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
@@ -1539,6 +1552,23 @@ export function ChatView({
 	 * 在这里先窄化 `queued`，回调里就不用 `!`（窄化穿不过 useCallback 闭包）。
 	 */
 	const queued = conversation.queued;
+	// 最近一张 team 卡的成员（spec: add-team-foundations 批 8）：
+	// @补全候选与成员聚焦导航的共用数据源。旧格式会话 / 无团队 → 空。
+	const teamMembers = useMemo(
+		() => latestTeamMembers(conversation.entries) ?? [],
+		[conversation.entries],
+	);
+	const memberItems = useMemo(
+		() =>
+			teamMembers
+				.filter((m) => m.sessionId !== undefined)
+				.map((m) => ({
+					label: `@${m.agent}`,
+					insert: `@${m.agent} `,
+					hint: `团队成员 · ${m.status === "running" ? "工作中" : m.status === "queued" ? "启动中" : m.status === "done" ? "已完成" : m.status === "failed" ? "失败" : "就绪"}`,
+				})),
+		[teamMembers],
+	);
 	const queuedItems = useMemo(
 		() =>
 			queued === undefined
@@ -1929,10 +1959,13 @@ export function ChatView({
 			if (entry.toolName === "todo_write") {
 				return <TodoListCard key={entry.id} card={entry} defaultOpen={entry.id === lastEntry?.id} />;
 			}
-			// task 工具带子代理投影时走分组活动卡（spec: add-subagent-live-activity）；
-			// 无投影的旧会话 task 卡回退普通工具卡（向后兼容）。
-			if (entry.toolName === "task" && entry.subagents !== undefined) {
-				return <TaskAgentCard key={entry.id} card={entry} />;
+			// task / team_create 带子代理投影时走分组活动卡（spec:
+			// add-subagent-live-activity + add-team-foundations 批 7/8）；
+			// team_create 缺席这里会把活卡降级成普通工具行 —— 成员分组、
+			// 实时计数与「查看」入口全部不可见（2026-09-16 用户实测回归）。
+			// 无投影的旧会话卡回退普通工具卡（向后兼容）。
+			if ((entry.toolName === "task" || entry.toolName === "team_create") && entry.subagents !== undefined) {
+				return <TaskAgentCard key={entry.id} card={entry} onFocusMember={onFocusMember} />;
 			}
 			return <ToolEntry key={entry.id} card={entry} showChangeDetails={personalization.showChangeDetails} />;
 		}
@@ -2248,6 +2281,21 @@ export function ChatView({
 				/>
 			</header>
 
+			{/* 成员聚焦横幅（spec 批 8）：可见会话是团队成员时标注，提供返回主会话。
+			    控制类操作（模型/专家/模式）此刻仍作用于主会话 —— 横幅文案提醒。 */}
+			{memberView !== undefined && onBackToLeader !== undefined && (
+				<div className="member-focus-bar" role="status">
+					<span className="member-focus-text">
+						正在查看成员「{memberView.name}」的实时会话
+					</span>
+					<span className="bar-spacer" />
+					<span className="member-focus-note">发送将直达该成员</span>
+					<button type="button" className="mini-btn" onClick={onBackToLeader}>
+						返回主会话
+					</button>
+				</div>
+			)}
+
 			{/*
 				stream-wrap 只提供定位基准：「回到底部」按钮要钉在滚动视口底部，
 				若直接放 .stream 里会随内容一起滚走（absolute 相对的是滚动内容盒）。
@@ -2428,12 +2476,15 @@ export function ChatView({
 								ready
 									? streaming
 										? "回车排队等待，点「立即插入」插进当前这轮"
-										: "继续追问…"
+										: memberView !== undefined
+											? `发送给成员「${memberView.name}」…`
+											: "继续追问…"
 									: "正在准备…"
 							}
 							rows={2}
 							cwd={conversation.state.cwd}
 							modelId={conversation.state.modelId}
+							memberItems={memberItems}
 							onSubmit={handleComposerSubmit}
 							onError={onError}
 							draftKey={sessionId}

@@ -71,6 +71,12 @@ export function useAutocomplete(
 	 * 调用方传当前 cwd 即可；新建任务后组件随父级重挂载，也会自然刷新。
 	 */
 	refreshKey?: unknown,
+	/**
+	 * 团队成员候选（spec: add-team-foundations 批 8）：并入 @ 候选
+	 * （与文件项同一过滤排序，成员项在前缀命中时自然靠前）。
+	 * 由调用方从最近一张 team 卡派生；空数组/缺省 = 无团队，行为不变。
+	 */
+	memberItems: readonly CompletionItem[] = [],
 ): UseAutocompleteResult {
 	const [data, setData] = useState<CompletionData | undefined>(undefined);
 	const [open, setOpen] = useState<OpenState | undefined>(undefined);
@@ -102,14 +108,19 @@ export function useAutocomplete(
 				close();
 				return;
 			}
-			const items = filterItems(buildItems(data, query.kind), query.query);
+			const items = filterItems(
+				query.kind === "file"
+					? [...memberItems, ...buildItems(data, "file")]
+					: buildItems(data, "command"),
+				query.query,
+			);
 			if (items.length === 0) {
 				close();
 				return;
 			}
 			setOpen({ query, items, active: 0, cursorPos: pos });
 		},
-		[data, close],
+		[data, memberItems, close],
 	);
 
 	/** 选中一项：替换触发片段为新文本，光标落在插入内容后。 */

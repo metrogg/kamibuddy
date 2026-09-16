@@ -17,6 +17,7 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ConversationSearchHit } from "../shared/session-events.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 export interface ConversationSearchToolDeps {
 	/** 检索历史会话，返回按会话新旧排序的命中（由 daemon 注入实现）。 */
@@ -59,6 +60,9 @@ function formatHits(hits: readonly ConversationSearchHit[]): string {
 export function conversationSearchExtensionFactory(
 	deps: ConversationSearchToolDeps,
 ): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["conversation_search"]);
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "conversation_search",

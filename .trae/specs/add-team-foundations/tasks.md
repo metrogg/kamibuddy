@@ -42,6 +42,20 @@
 
 - [x] 5.7 设置页通用分组加「智能体团队（实验）」开关（get/setAgentTeamsEnabled 全链路：ipc/bridge/preload/daemon/general-section，记忆开关模式复刻）
 
+
+## 批 8（P0 成员可见性三件套）
+
+- [x] 8.1 SubagentStatus 扩展 sessionId/toolCalls/tokens/cost（缺省缺席，task 卡不写）
+- [x] 8.2 team-runtime：成员计数回填 + leaderOfMember 反查 + 单测
+- [x] 8.3 member-runner：事件转发钩子 onEvent（信封=成员 sessionId）
+- [x] 8.4 daemon：emitMemberEvent 裸推送 + memberPrompt/memberAbort 通道（ipc/bridge/preload）
+- [x] 8.5 计数回填接线（daemon onEvent → 注册表 → emitTeamProgress）
+- [x] 8.6 renderer：@补全并入成员候选（composer/autocomplete）+ @直接路由（chat-view）
+- [x] 8.7 renderer：成员行「查看」按钮 + 聚焦横幅 + 返回主会话（App 焦点态）
+- [x] 8.8 卡片计数行渲染 + css
+
+- [x] 8.9 回归修复：chat-view 渲染门只认 task 不认 team_create，活卡被降级成普通工具行——成员分组/实时计数/查看入口全部不可见（2026-09-16 用户实测发现，条件改为 task ∪ team_create）
+
 ## 验证
 
 - [x] v.1 `tsc --noEmit` ✓

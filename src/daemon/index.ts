@@ -211,6 +211,7 @@ import {
 	type SessionEvent,
 	type SessionEventEnvelope,
 	type SessionState,
+	type SubagentStatus,
 } from "../shared/session-events.ts";
 import { requireBranchName } from "../shared/worktree.ts";
 import type { CustomModelInput, CustomProviderInput, SkillInfo } from "../shared/settings.ts";
@@ -1355,9 +1356,17 @@ const teamMailbox = new SessionMailbox();
 /**
  * 向目标会话投递一条消息并排队唤醒它。
  *
- * 通路：入箱 → 排进目标桶互斥链 → drain 合成一条 prompt →
- * `host.prompt(composed, "followUp")`。followUp 与「缺省排队」的产品决策
- * 同口径（INVOKE.prompt 的缺省分支）：目标正在 run 中不打断，跑完接着消费。
+ * 通路分两条，都是 followUp 语义（不打断、排队消费），差异只在排哪儿：
+ * - 目标**正在 run 中** → 走 run 中旁路直呼 `host.prompt(composed, "followUp")`，
+ *   消息进入当前 run 的下一轮 —— 与 INVOKE.prompt 的 run 中分支、用户的
+ *   「排队消息」同一通道。冒烟实测（2026-09-16）的教训：回投若排互斥链，
+ *   会被压到领导整个 run 结束后才投（实测延迟 3-4 分钟，被模型误判为
+ *   「未回投」）—— 旁路消掉这个人为延迟。
+ * - 目标空闲 → 排进目标桶互斥链（链上消费可能攒到多条，合成一条投递）。
+ *
+ * 两条路的终点都是 `host.prompt(·, "followUp")`：session-host 对流式中的
+ * 会话自动入 followUp 队列，所以「检查时空闲、进链前恰好起跑」的竞态
+ * 也是安全的 —— 不会出现绕过互斥链的裸 run。
  *
  * @param fromLabel 来源显示名（成员名/会话标题，批 5 的路由层有这个知识）；
  *        缺省回落 fromSessionId。
@@ -1378,12 +1387,26 @@ function deliverSessionMessage(
 		throw new Error("目标会话还没有建立对话，无法接收消息");
 	}
 	teamMailbox.deliver(toSessionId, fromSessionId, text, fromLabel);
-	return enqueue(target, async () => {
+	const composeFromMailbox = async (): Promise<string> => {
 		const messages = teamMailbox.drain(toSessionId);
-		if (messages.length === 0) return;
-		const composed = messages
+		return messages
 			.map((message) => `[来自会话「${message.fromLabel ?? message.fromSessionId}」的消息]\n${message.text}`)
 			.join("\n\n---\n\n");
+	};
+	// run 中旁路：见函数头注释。信箱只作记账（deliver/drain 配对保均衡），
+	// 本条消息的正文以入参为准，不依赖箱内攒批。
+	if (target.running) {
+		return (async () => {
+			const host = await target.hostPromise;
+			if (host === undefined) return; // 不可达（上方已判），窄化守卫
+			teamMailbox.drain(toSessionId);
+			const composed = `[来自会话「${fromLabel ?? fromSessionId}」的消息]\n${text}`;
+			await host.prompt(composed, "followUp");
+		})();
+	}
+	return enqueue(target, async () => {
+		const composed = await composeFromMailbox();
+		if (composed === "") return;
 		const host = await target.hostPromise;
 		if (host === undefined) return; // 不可达（上方已判），窄化守卫
 		await host.prompt(composed, "followUp");
@@ -1402,6 +1425,54 @@ export const teamMessaging = { mailbox: teamMailbox, deliver: deliverSessionMess
 const teamRegistry = new TeamRegistry();
 /** 成员会话句柄（sessionId → handle）。宿主生命周期在接线层，注册表只管身份。 */
 const memberHandlesBySession = new Map<string, MemberHandle>();
+
+/**
+ * 把当前团队成员状态折成投影并推给领导会话（spec: add-team-foundations 批 7）。
+ *
+ * 归位协议见 session-events.ts 的 team_member_progress 注释：不带 toolCallId、
+ * reducer 找最近一张 team 卡整体替换。注册表（TeamMember）→ 投影（SubagentStatus）
+ * 的字段映射：spawning→queued / running→running / idle→done（已完成，可被
+ * team_send 唤醒）/ failed→failed / closed→done（解散中，卡即将随团队消失）。
+ */
+function emitTeamProgress(leaderSessionId: string): void {
+	const team = teamRegistry.getTeam(leaderSessionId);
+	if (team === undefined) return;
+	const statusMap: Record<string, SubagentStatus["status"]> = {
+		spawning: "queued",
+		running: "running",
+		idle: "done",
+		failed: "failed",
+		closed: "done",
+	};
+	const members = [...team.members.values()].map(
+		(member): SubagentStatus => ({
+			kind: "team",
+			agent: member.name,
+			task: member.task,
+			status: statusMap[member.status] ?? "running",
+			activity: member.lastActivity,
+			turns: member.turns,
+			...(member.sessionId === undefined ? {} : { sessionId: member.sessionId }),
+			...(member.toolCalls > 0 ? { toolCalls: member.toolCalls } : {}),
+			...(member.tokens > 0 ? { tokens: member.tokens } : {}),
+			...(member.cost > 0 ? { cost: member.cost } : {}),
+		}),
+	);
+	const bucket = bucketsById.get(leaderSessionId);
+	if (bucket === undefined) return;
+	emitSessionEvent(bucket, { type: "team_member_progress", members });
+}
+
+/**
+ * 成员会话事件的裸推送（spec: add-team-foundations 批 8 焦点导航）：
+ * 信封键 = 成员自己的 sessionId，renderer 按后台会话管线折叠进成员桶，
+ * 聚焦成员时复用既有的会话切换机制上屏。不走 emitSessionEvent —— 成员
+ * 没有桶，daemon 侧不折叠、不进观测聚合（成员消耗已在注册表按投影回填）。
+ */
+function emitMemberEvent(memberSessionId: string, event: SessionEvent): void {
+	const envelope: SessionEventEnvelope = { sessionId: memberSessionId, event };
+	post({ kind: "push", channel: PUSH.sessionEvent, payload: envelope });
+}
 
 /** 团队开关（缺省关闭：对齐 WorkBuddy 把 Agent Teams 当实验特性的立场）。 */
 function isAgentTeamsEnabled(): boolean {
@@ -1427,6 +1498,9 @@ async function disbandTeamOf(leaderSessionId: string): Promise<void> {
 		}
 	}
 	teamRegistry.disband(leaderSessionId);
+	// 豁免随团队解除：领导桶重新参与 LRU 回收。
+	const bucket = bucketsById.get(leaderSessionId);
+	if (bucket !== undefined) bucket.hasTeam = false;
 }
 
 /**
@@ -1896,6 +1970,12 @@ async function createHost(
 				// 注册表校验先行（单团队/重名/数量）；预算逐成员扣，失败即解散
 				// —— 不留半支队伍（半死的成员产出无处回投，只会烧钱）。
 				teamRegistry.createTeam(leaderId, plan.name, plan.members);
+				// 领导桶豁免 LRU 逐出（spec 批 6 v1 决策修订）：团队存续期间
+				// 领导宿主不可回收——逐出即解散会静默杀掉正在跑的成员，且用户
+				// 切走任务回不来就发现队伍没了。豁免的风险面 = 多占一个宿主，
+				// team_delete / 删除会话随时可释放。
+				bucket.hasTeam = true;
+				emitTeamProgress(leaderId);
 				const acks: { name: string; sessionId: string }[] = [];
 				try {
 					for (const member of plan.members) {
@@ -1913,10 +1993,12 @@ async function createHost(
 							{
 								onProgress: (name, text) => {
 									teamRegistry.recordProgress(leaderId, name, 0, text);
+									emitTeamProgress(leaderId);
 									hooks.onProgress(name, text);
 								},
 								onComplete: (name, output, turns) => {
 									teamRegistry.markStatus(leaderId, name, "idle", `已完成 ${turns} 轮`);
+									emitTeamProgress(leaderId);
 									void deliverSessionMessage(
 										teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId ?? "",
 										leaderId,
@@ -1932,6 +2014,7 @@ async function createHost(
 								},
 								onFailed: (name, message) => {
 									teamRegistry.markStatus(leaderId, name, "failed", message);
+									emitTeamProgress(leaderId);
 									const memberSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
 									if (memberSession === undefined) return;
 									void deliverSessionMessage(memberSession, leaderId, `成员任务失败：${message}`, name).catch(
@@ -1944,10 +2027,30 @@ async function createHost(
 										},
 									);
 								},
+								// 事件转发（焦点导航）+ 计数回填（批 8）：转发以成员 sessionId
+								// 为信封键，renderer 按后台会话折叠；计数增量回注册表后推投影。
+								onEvent: (memberSessionId, event) => {
+									emitMemberEvent(memberSessionId, event);
+									let toolCalls = 0;
+									let tokens = 0;
+									let cost = 0;
+									if (event.type === "tool_started") toolCalls = 1;
+									if (event.type === "assistant_done" && event.message.usage !== undefined) {
+										tokens = event.message.usage.totalTokens;
+										cost = event.message.usage.cost;
+									}
+									const leader = teamRegistry.recordCountersBySession(memberSessionId, {
+										toolCalls,
+										tokens,
+										cost,
+									});
+									if (leader !== undefined && (toolCalls > 0 || tokens > 0)) emitTeamProgress(leader);
+								},
 							},
 						);
 						memberHandlesBySession.set(handle.sessionId, handle);
 						teamRegistry.markSpawned(leaderId, member.name, handle.sessionId);
+						emitTeamProgress(leaderId);
 						acks.push({ name: member.name, sessionId: handle.sessionId });
 					}
 				} catch (error) {
@@ -3514,6 +3617,27 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.setAgentTeamsEnabled]: async ([enabled]) => {
 		const value = enabled === true;
 		writePreferences({ ...readPreferences(), agentTeamsEnabled: value });
+	},
+
+	/* ── 团队成员会话操作（spec: add-team-foundations 批 8） ───────── */
+
+	// 聚焦成员视图的发送与 @直接路由共用：按成员 sessionId 找句柄直投
+	// （followUp 语义在 handle.prompt 内部）。找不到句柄 = 成员已解散，
+	// 响亮报错让上层的错误卡如实呈现，不静默丢消息。
+	[INVOKE.memberPrompt]: async ([memberSessionId, text]) => {
+		const handle = memberHandlesBySession.get(memberSessionId as string);
+		if (handle === undefined) {
+			throw new Error("该成员已不在团队中（可能已解散），无法接收消息");
+		}
+		const textValue = text as string;
+		if (textValue.trim() === "") throw new Error("消息不能为空");
+		await handle.prompt(textValue);
+	},
+
+	[INVOKE.memberAbort]: async ([memberSessionId]) => {
+		const handle = memberHandlesBySession.get(memberSessionId as string);
+		if (handle === undefined) return; // 已解散 = 无可中止，空操作（同 abort 对无宿主桶）
+		await handle.abort();
 	},
 
 	/* ── 用户画像（spec: add-memory-system） ────────────────────── */

@@ -24,6 +24,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { getResourcesDir } from "../core/config-paths.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 /** v1 支持的可视化模块（spec：mockup/interactive/art 明确不做）。 */
 type VisualizerModule = "diagram" | "chart";
@@ -230,6 +231,9 @@ function fail(message: string): { content: [{ type: "text"; text: string }]; det
 }
 
 export function visualizerExtensionFactory(): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["read_me", "show_widget"]);
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "read_me",

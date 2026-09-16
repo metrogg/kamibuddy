@@ -31,6 +31,7 @@ import { groupSessions } from "./session-groups.ts";
 import { detectFinishedRuns } from "./task-status.ts";
 import { HomeView } from "./home-view.tsx";
 import { ChatView } from "./chat-view.tsx";
+import { findTeamMemberByMention } from "@shared/child-agents.ts";
 import { ArtifactPanel, clampPanelWidth, sameSelection, type PreviewSelection } from "./artifact-panel.tsx";
 import { IconActivity } from "./icons.tsx";
 import { SourcesPanel } from "./sources-panel.tsx";
@@ -152,6 +153,16 @@ export function App(): React.JSX.Element {
 	 */
 	const [taskList, setTaskList] = useState<readonly SessionSummary[] | undefined>(undefined);
 	const [taskListError, setTaskListError] = useState<string | undefined>(undefined);
+	/**
+	 * 成员聚焦态（spec: add-team-foundations 批 8）：undefined = 看主会话；
+	 * 有值 = 可见会话是某团队成员（焦点导航）。returnTo 是聚焦前的可见会话
+	 * （「返回主会话」的落点）。切换会话/新建任务时清空。
+	 */
+	const [memberFocus, setMemberFocus] = useState<
+		{ readonly sessionId: string; readonly name: string; readonly returnTo: string } | undefined
+	>(undefined);
+	const memberFocusRef = useRef(memberFocus);
+	memberFocusRef.current = memberFocus;
 	/** 「空间」组的名称覆盖元数据（workspaces.json），组本身由会话派生。 */
 	const [groupMetas, setGroupMetas] = useState<readonly WorkspaceGroupMeta[]>([]);
 	/**
@@ -520,6 +531,25 @@ export function App(): React.JSX.Element {
 			whileStreaming?: "steer" | "followUp",
 		): Promise<void> => {
 			if (link.kind !== "ready") return Promise.resolve();
+			// 聚焦成员视图：发送直达该成员（WorkBuddy「输入框切换为向成员发送」语义）。
+			const focus = memberFocusRef.current;
+			if (focus !== undefined) {
+				return window.kami.memberPrompt(focus.sessionId, text).catch((error: unknown) => {
+					setLastError(error instanceof Error ? error.message : String(error));
+				});
+			}
+			// @直接路由（spec 批 8）：首 token 命中当前团队成员 → 剥离 @提及，
+			// 消息直投成员会话（followUp），不经领导模型中转。未知名字走正常 prompt。
+			const mention = /^@([\w-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+			if (mention !== null && mention[1] !== undefined) {
+				const member = findTeamMemberByMention(conversationRef.current.entries, mention[1]);
+				const body = (mention[2] ?? "").trim();
+				if (member !== undefined && body !== "") {
+					return window.kami.memberPrompt(member.sessionId, body).catch((error: unknown) => {
+						setLastError(error instanceof Error ? error.message : String(error));
+					});
+				}
+			}
 			setLastError(undefined);
 			setView("chat");
 			// 空数组与缺省同义：不带 images / whileStreaming 字段，payload 与无图版本完全一致。
@@ -804,6 +834,8 @@ export function App(): React.JSX.Element {
 		stashVisibleView(nextId);
 		visibleSessionIdRef.current = nextId;
 		viewCacheRef.current.delete(nextId);
+		// 可见会话易位即退出成员聚焦（resync/newTask 的统一收口）。
+		setMemberFocus(undefined);
 		dispatch({ type: "snapshot", snapshot });
 		// stashVisibleView 只碰 ref，不随渲染变化，无需入依赖。
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -830,11 +862,40 @@ export function App(): React.JSX.Element {
 		stashVisibleView(targetId);
 		viewCacheRef.current.delete(targetId);
 		visibleSessionIdRef.current = targetId;
+		// 切换可见会话即退出成员聚焦（焦点成员自己切换时由调用方重设）。
+		setMemberFocus(undefined);
 		// ConversationView 与 SessionSnapshot 字段同构（两端共用同一折叠结果）。
 		dispatch({ type: "snapshot", snapshot: bucket });
 		return true;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
+	/**
+	 * 聚焦成员会话（spec: add-team-foundations 批 8）：把可见视图切到成员
+	 * 的实时对话（事件自 spawn 起就按成员 sessionId 折叠在桶里，现场完整）。
+	 * 桶缺失（成员还没产出任何消息）时提示而非白屏。
+	 */
+	const focusMember = useCallback(
+		(memberSessionId: string, memberName: string): void => {
+			const returnTo = visibleSessionIdRef.current;
+			if (!restoreFromBucket(memberSessionId)) {
+				showToast(`成员「${memberName}」还没有产生消息，稍后再看`);
+				return;
+			}
+			setMemberFocus({ sessionId: memberSessionId, name: memberName, returnTo });
+		},
+		[restoreFromBucket, showToast],
+	);
+
+	/** 从成员视图返回聚焦前的会话（通常 = 主会话）。 */
+	const backToLeader = useCallback((): void => {
+		const focus = memberFocusRef.current;
+		setMemberFocus(undefined);
+		if (focus !== undefined && !restoreFromBucket(focus.returnTo)) {
+			resyncSnapshot();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [restoreFromBucket]);
 
 	/**
 	 * 以服务端快照重同步（桶缺失时的兜底路径；也是 newTask / 保存转正 /
@@ -1334,10 +1395,23 @@ export function App(): React.JSX.Element {
 					title={title ?? "新任务"}
 					onBack={() => setView("home")}
 					onSubmit={submit}
-					onAbort={abort}
+					onAbort={() => {
+						// 聚焦成员时停止键作用于成员当前轮（不是领导会话）。
+						const focus = memberFocusRef.current;
+						if (focus !== undefined) {
+							window.kami.memberAbort(focus.sessionId).catch((error: unknown) => {
+								showToast(error instanceof Error ? error.message : String(error));
+							});
+							return;
+						}
+						abort();
+					}}
 					onQueueRewrite={rewriteQueue}
 					onInteractionChange={changeInteraction}
 					turnFoldCache={turnFoldCacheRef}
+					memberView={memberFocus === undefined ? undefined : { name: memberFocus.name }}
+					onFocusMember={focusMember}
+					onBackToLeader={backToLeader}
 					experts={experts}
 					onSelectExpert={selectExpert}
 					onOpenExperts={() => setView("skills")}
