@@ -36,6 +36,7 @@ import {
 	type LedgerItem,
 	type LedgerRun,
 } from "./run-timeline.ts";
+import { SnapshotBreakdown } from "./snapshot-breakdown.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 /* ── 格式化小工具 ────────────────────────────────────────────────── */
@@ -251,80 +252,6 @@ function llmTitle(d: LlmCallData): string {
 	if (d.stopReason !== undefined) parts.push(`停止 ${d.stopReason}`);
 	if (d.errorMessage !== undefined) parts.push(`错误 ${d.errorMessage}`);
 	return parts.join(" · ");
-}
-
-/** 快照分段占条的配色：循环复用上下文成分条的既有五色，不新增色值。 */
-const SEG_PALETTE = [
-	"comp-system",
-	"comp-user",
-	"comp-assistant",
-	"comp-thinking",
-	"comp-tools",
-] as const;
-
-/** 一轮请求的真实上下文拆分（request_snapshot：分段 provenance + 消息分类）。 */
-function SnapshotBreakdown({
-	snapshot,
-}: {
-	snapshot: RequestSnapshotData;
-}): React.JSX.Element {
-	const segs = snapshot.systemSegments ?? [];
-	const segTotal = segs.reduce((sum, s) => sum + s.chars, 0);
-	const msg = snapshot.messages;
-	const msgParts = [
-		{ key: "user", label: "用户消息", stat: msg.user },
-		{ key: "assistant", label: "助手回复", stat: msg.assistant },
-		{ key: "toolResult", label: "工具结果", stat: msg.toolResult },
-		{ key: "other", label: "其他", stat: msg.other },
-	];
-	const msgTotal = msgParts.reduce((sum, p) => sum + p.stat.chars, 0);
-
-	return (
-		<div className="snap-detail">
-			{segs.length > 0 && segTotal > 0 && (
-				<>
-					<p className="stat-hint">
-						系统提示词分段（真实计数，共 {segTotal.toLocaleString("en-US")} 字符）
-					</p>
-					<div className="comp-bar" role="img" aria-label="系统提示词分段占比">
-						{segs.map((s, i) => (
-							<div
-								key={`${s.source}-${i}`}
-								className={`comp-seg ${SEG_PALETTE[i % SEG_PALETTE.length]}`}
-								style={{ width: `${(s.chars / segTotal) * 100}%` }}
-								title={`${s.source}：${s.chars.toLocaleString("en-US")} 字符（${((s.chars / segTotal) * 100).toFixed(1)}%）`}
-							/>
-						))}
-					</div>
-					<ul className="comp-legend">
-						{segs.map((s, i) => (
-							<li key={`${s.source}-${i}`}>
-								<span className={`comp-dot ${SEG_PALETTE[i % SEG_PALETTE.length]}`} />
-								{s.source} {((s.chars / segTotal) * 100).toFixed(1)}%
-							</li>
-						))}
-					</ul>
-				</>
-			)}
-			<p className="stat-hint">消息组成（条数 / 字符数 / 字符占比）</p>
-			<table className="stat-table">
-				<tbody>
-					{msgParts.map((p) => (
-						<tr key={p.key}>
-							<td>{p.label}</td>
-							<td>{p.stat.count} 条</td>
-							<td>{p.stat.chars.toLocaleString("en-US")} 字符</td>
-							<td>
-								{msgTotal === 0
-									? "—"
-									: `${((p.stat.chars / msgTotal) * 100).toFixed(1)}%`}
-							</td>
-						</tr>
-					))}
-				</tbody>
-			</table>
-		</div>
-	);
 }
 
 /** 选中一轮模型调用后的详情：计时五要素 + usage 五字段 + 请求快照拆分。 */

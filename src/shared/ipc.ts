@@ -17,7 +17,7 @@ import type { AutomationTask, Schedule } from "./automation.ts";
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot, RunLedgerEntry } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type {
 	CustomModelInput,
@@ -84,6 +84,11 @@ export const INVOKE = {
 	prompt: "session:prompt",
 	/** 中断当前 run。 */
 	abort: "session:abort",
+	/**
+	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
+	 * 传入的就是**重排后**的完整队列 —— daemon 清空后按序重入队。
+	 */
+	queueRewrite: "session:queue-rewrite",
 	/** 新建任务：作废旧会话、开全新会话。 */
 	newTask: "session:new-task",
 	/**
@@ -776,6 +781,7 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: [sessionId?: string]; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
+	[INVOKE.queueRewrite]: { args: [QueuedMessages]; result: void };
 	/**
 	 * 新建任务。cwd 缺省 = 空串 = 未选工作空间（待分配，首次执行才分配自动目录）——
 	 * 侧栏「新建任务」走这条，选择被重置（对齐 WorkBuddy 的 taskStarterCwd$("")）。

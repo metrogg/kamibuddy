@@ -14,6 +14,10 @@
  * - **run 外事件不丢**：手动 /compact、无 run 期间的条目落进一个合成
  *   「run 外事件」桶（runId 为空串），时刻用第一条孤儿条目的 at，不编造归属。
  * - queue 条目不进时间线（排队是指示不是泳道步骤），由 fold 丢弃。
+ *
+ * 两级 fold，服务两个粒度：`foldRunLedger` 出「轮」（run），
+ * `foldRunSteps` 再把一轮的条目切成「步」（一次模型调用 + 它之后的条目）。
+ * 后者也按位置推归属，理由同上（台账没记「这个工具属于哪一步」）。
  */
 
 import type {
@@ -166,6 +170,60 @@ export function foldRunLedger(entries: readonly RunLedgerEntry[]): LedgerRun[] {
 		}
 	}
 	return runs;
+}
+
+/**
+ * 挂在某一步之下的条目（工具 / 重试 / 压缩）——**不含 llm**。
+ *
+ * 这个排除不是修饰：`foldRunSteps` 用「遇到 llm 就开新组」的规则切分，
+ * 所以 rest 里结构上不可能出现 llm；把保证写进类型，消费方（面板的 RestRow）
+ * 才不用在渲染时再判一次、也就不会有人顺手在 rest 里塞一个 llm 行。
+ */
+export type LedgerStepItem = Exclude<LedgerItem, { readonly kind: "llm" }>;
+
+/**
+ * 一步（一次模型调用）及其后随条目。
+ *
+ * 为什么不直接用 `LedgerRun.items` 平铺：工具属于「发出它的那次模型调用」，
+ * 平铺后 27 步的 run 里工具行会在步与步之间飘着，看不出归属。
+ */
+export interface LedgerStep {
+	/**
+	 * 该步的模型调用。undefined = 台账截尾（daemon 只保留最新 N 条）后，
+	 * 工具行前面没有对应的 llm_call —— 无主条目照常展示，不编造归属
+	 *（同 foldRunLedger 的「run 外事件不丢」纪律）。
+	 */
+	readonly call: LlmCallData | undefined;
+	/** call 之后、下一步之前的条目（工具 / 重试 / 压缩），保持台账顺序。 */
+	readonly rest: readonly LedgerStepItem[];
+}
+
+/**
+ * 一条泳道行 → 按步归组。
+ *
+ * **归属按位置推**：台账里 `tool_call` 只带工具自己的 `toolCallId`，不带它属于
+ * 哪一轮模型调用 —— pi 的工具执行总发生在某次模型调用之后、下一次之前，所以
+ * 「前一个 llm_call」是唯一可推的归属。这与 foldRunLedger 判定 run 归属的手法
+ * 同源（runId 是进程内自增、跨 daemon 代际会撞名，只能看位置）。
+ *
+ * 重试 / 压缩跟着「当前步」走：它们的时刻本来就在该步之后、下一步之前，
+ * 挪到轮级展示会打乱先后顺序（一次重试发生在第 3 步失败之后，
+ * 就该出现在第 3 步之后）。
+ */
+export function foldRunSteps(items: readonly LedgerItem[]): readonly LedgerStep[] {
+	const steps: { call: LlmCallData | undefined; rest: LedgerStepItem[] }[] = [];
+
+	for (const item of items) {
+		if (item.kind === "llm") {
+			steps.push({ call: item.data, rest: [] });
+			continue;
+		}
+		const last = steps[steps.length - 1];
+		if (last === undefined) steps.push({ call: undefined, rest: [item] });
+		else last.rest.push(item);
+	}
+
+	return steps;
 }
 
 /**

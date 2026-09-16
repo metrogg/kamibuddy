@@ -8,13 +8,14 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
+import { removeQueuedMessage } from "@shared/conversation.ts";
 import { formatTokenCount } from "@shared/context-usage.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
-import type { CompactionReason, ConversationEntry, ModeDescriptor, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import type { CompactionReason, ConversationEntry, ModeDescriptor, QueuedMessages, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
@@ -33,6 +34,7 @@ import {
 	IconSkill,
 	IconAssistant,
 	IconWeb,
+	IconTrash,
 } from "./icons.tsx";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
@@ -86,6 +88,11 @@ interface ChatViewProps {
 	 */
 	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	readonly onAbort: () => void;
+	/**
+	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
+	 * 传入的是**重排后**的完整队列；daemon 清空后按序重入队（session:queue-rewrite）。
+	 */
+	readonly onQueueRewrite: (queued: QueuedMessages) => void;
 	readonly onInteractionChange: (interactionId: string) => void;
 	/**
 	 * 专家列表（「+」菜单专家子菜单与 composer-bar 当前专家 chip 的数据源，App 层统一下发）。
@@ -560,8 +567,11 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 			: undefined;
 	const avatars = useMemo(() => (webSources === undefined ? [] : pickSiteFavicons(webSources)), [webSources]);
 	const hasDetail = card.detail !== undefined && card.detail !== "";
+	// summaryTitle 也要求可展开：卡头被模型自描述顶替后，真命令只在这条提示里
+	// （hover 要悬停才看得见，审计「到底跑了什么」得有个能常驻的位置）。
+	const hasCommandLine = card.summaryTitle !== undefined;
 	// sources 也是可展开内容：detail 缺席（旧会话/提取失败）时来源行列表仍要够得着。
-	const expandable = hasDetail || webSources !== undefined;
+	const expandable = hasDetail || hasCommandLine || webSources !== undefined;
 	// 执行中（outcome 未落定）或生成中（write 参数还在流式输出）→ 状态字扫光；
 	// 完成后摘类回归静态 —— 扫光是全局唯一「进行中」语言（对标 WorkBuddy）。
 	const running = card.outcome === undefined || card.generating === true;
@@ -586,7 +596,11 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 				{/* 标签是状态词（生成中/已生成/读取中/已读取…），由适配层按
 				    WorkBuddy 词汇表给出，UI 不做映射（契约见 session-events.ts）。 */}
 				<span className={running ? "tool-label text-shimmer" : "tool-label"}>{card.label}</span>
-				<span className="tool-summary">{card.summary}</span>
+				{/* 摘要被 hover 提示时是「卡头显示的是描述、真命令行藏在提示里」
+				    的分工（WorkBuddy primaryTitle 同款，见 core/session-rebuild.ts 的
+				    summarizeArgs —— live 与历史重建共用同一份表）；
+				    ToolCard 不填 summaryTitle 时属性缺席，行为与之前一致。 */}
+				<span className="tool-summary" title={card.summaryTitle}>{card.summary}</span>
 				{/* web_search 卡头来源区：头像组是纯装饰（语义在计数文本上）；
 				    计数取 sources 总数 —— 它是不去重的结果数，与 SourcesPanel 标题同口径。 */}
 				{webSources !== undefined && (
@@ -637,7 +651,16 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 					})}
 				</div>
 			)}
-			{hasDetail && <pre className={open ? "tool-detail-box open" : "tool-detail-box"}>{card.detail}</pre>}
+			{(hasDetail || hasCommandLine) && (
+				<pre className={open ? "tool-detail-box open" : "tool-detail-box"}>
+					{/* 展开区第一行放真命令（WorkBuddy 的 tool-exec__command 同分工）：
+					    卡头被模型自描述顶替后，命令不能只活在 hover 提示里 —— 提示要悬停
+					    才看得到，用户核对「刚才到底跑了什么」得有个能选中、能复制的常驻位置。
+					    独占一行而不进 detail：detail 是工具结果原文，混进去会污染既有语义。 */}
+					{card.summaryTitle === undefined ? "" : `${card.summaryTitle}\n\n`}
+					{card.detail}
+				</pre>
+			)}
 		</div>
 	);
 }
@@ -1413,6 +1436,7 @@ export function ChatView({
 	onBack,
 	onSubmit,
 	onAbort,
+	onQueueRewrite,
 	onInteractionChange,
 	experts,
 	onSelectExpert,
@@ -1502,6 +1526,22 @@ export function ChatView({
 	}, []);
 	const streaming = conversation.state.isStreaming;
 	const sessionId = conversation.state.sessionId;
+	/**
+	 * 排队 chips 的行数据：steering 在前（先被消费）、followUp 在后。
+	 * `rest` 是摘掉本条后的剩余队列 —— 删除/编辑都走它（session:queue-rewrite）。
+	 * 在这里先窄化 `queued`，回调里就不用 `!`（窄化穿不过 useCallback 闭包）。
+	 */
+	const queued = conversation.queued;
+	const queuedItems = useMemo(
+		() =>
+			queued === undefined
+				? []
+				: [...queued.steering, ...queued.followUp].map((text) => ({
+						text,
+						rest: removeQueuedMessage(queued, text),
+					})),
+		[queued],
+	);
 	// 当前专家（绑定专家才有值，与交互模式正交）：composer-bar chip、起手 chips
 	// 与「+」菜单勾选共用这份查找。expertId 是 session_state 的权威值，列表只是
 	// 展示映射；列表尚未拉回（undefined）/专家被删时 chip 与起手 chips 不渲染
@@ -2075,10 +2115,8 @@ export function ChatView({
 						<span className="text-shimmer">{pendingLabel}</span>
 					</div>
 				))}
-			{/* steer/followUp 排队指示（queue_changed 折叠）：只给计数不展示队列内容。 */}
-			{streaming && conversation.queueCount !== undefined && conversation.queueCount > 0 && (
-				<div className="stream-queue">{conversation.queueCount} 条消息排队中</div>
-			)}
+			{/* 排队消息的可见反馈移到了输入卡上方（排队 chips，见 footer）——
+			    消息离输入行为越近，用户越容易确认「发出去的东西在哪」。 */}
 			{/*
 			产物卡片区：present_files 交付的文件（文件名 + 大小，对齐
 			WorkBuddy 的 snake.html 7.3 KB 卡片）。流式期间不显示 ——
@@ -2282,8 +2320,47 @@ export function ChatView({
 				)}
 			</div>
 
-			<footer className="chat-composer">
-				{pendingQuestionnaire !== undefined ? (
+		<footer className="chat-composer">
+			{/*
+				排队 chips（WorkBuddy 同位同语义）：steer/followUp 发出去之后、
+				被 pi 消费之前的「已发出、待生效」消息就挂在这里 —— 文本可读、
+				可编辑（填回草稿并从队列摘除）、可删除。数据是 queue_changed 事件
+				携带的队列内容（pi _steeringMessages / _followUpMessages 的快照），
+				消息被消费时 pi 自己出队并推新快照，chips 随之消失。
+			*/}
+			{queuedItems.map(({ text, rest }) => (
+				<div key={text} className="queued-chip">
+					<span className="queued-chip-label">待发送</span>
+					<span className="queued-chip-text" title={text}>
+						{text}
+					</span>
+					<button
+						type="button"
+						className="queued-chip-btn"
+						aria-label="编辑这条排队消息"
+						title="编辑"
+						onClick={() => {
+							// 摘出后填回草稿：改完由用户自己重新发送（仍是 steer 语义）。
+							composerRef.current?.fillText(text);
+							if (rest !== queued) onQueueRewrite(rest);
+						}}
+					>
+						<IconEdit size={13} />
+					</button>
+					<button
+						type="button"
+						className="queued-chip-btn"
+						aria-label="删除这条排队消息"
+						title="删除"
+						onClick={() => {
+							if (rest !== queued) onQueueRewrite(rest);
+						}}
+					>
+						<IconTrash size={13} />
+					</button>
+				</div>
+			))}
+			{pendingQuestionnaire !== undefined ? (
 					/*
 					问卷浮层替换输入区（WorkBuddy CBChat 的 hasQuestionFloating 语义：
 					答题期间 composer 让位，答完/跳过后 composer 恢复）。key 按请求 id

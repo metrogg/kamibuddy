@@ -44,7 +44,10 @@ import {
 } from "../shared/artifacts.ts";
 import type { LoadedResources } from "./resources.ts";
 import type { RunLedger } from "./run-ledger.ts";
-import { toTokenUsage } from "./session-rebuild.ts";
+// toTokenUsage / summarizeArgs 是 live 与恢复路径的共同出口，都住在
+// session-rebuild.ts（本文件反向 import）：同一张卡的两条产出路径必须同源，
+// 因而入参摘要字段表只有那一份（见 summarizeArgs 注释）。
+import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import type { SystemSegmentStat } from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
@@ -198,29 +201,6 @@ export function restoredToolLabel(toolName: string, outcome: ToolOutcome): strin
 	if (toolName === "write") return writeDoneLabel("created", "ok");
 	if (toolName === "edit") return writeDoneLabel("modified", "ok");
 	return doneLabel(toolName, "ok");
-}
-
-/** 从工具入参里挑一个最能说明「在对什么东西操作」的值作为摘要。 */
-function summarizeArgs(args: unknown): string {
-	if (typeof args !== "object" || args === null) return "";
-	const record = args as Record<string, unknown>;
-	// 顺序即优先级：路径类最有信息量，其次是查询/命令。
-	for (const key of [
-		"path",
-		"file_path",
-		"filePath",
-		"pattern",
-		"query",
-		"command",
-		"dir",
-	]) {
-		const value = record[key];
-		if (typeof value === "string" && value !== "") return value;
-	}
-	// present_files 的 files 是数组：摘要是数量而不是某个路径。
-	const files = record.files;
-	if (Array.isArray(files)) return `${files.length} 个文件`;
-	return "";
 }
 
 /** pi 的消息内容可能是字符串或分块数组，统一取纯文本。 */
@@ -638,7 +618,36 @@ export class SessionHost {
 			else await this.session.steer(text, piImages);
 			return;
 		}
+		if (whileStreaming !== undefined) {
+			// daemon 旁路进来的排队意图撞上「run 恰好收尾」的竞态：消息不能丢，
+			// 也不能裸调 prompt（pi 对流式会话无 streamingBehavior 会响亮拒绝）。
+			// AgentSession.prompt 自带 streamingBehavior 选项，把排队意图原样交给 pi
+			// —— run 真已结束就是普通发送，万一边缘并发也按同一语义排队。
+			await this.session.prompt(text, {
+				...(piImages === undefined ? {} : { images: piImages }),
+				streamingBehavior: whileStreaming,
+			});
+			return;
+		}
 		await this.session.prompt(text, piImages === undefined ? undefined : { images: piImages });
+	}
+
+	/**
+	 * 重排等待队列：删除 / 编辑排队消息的底层动作。
+	 *
+	 * pi 只有整队清空（AgentSession.clearQueue），没有按条删除 —— 这里用
+	 * 「清空 + 按序重入队」合成按条语义：重入队的就是删除/编辑后剩下的条目。
+	 * 两个代价，都有界：
+	 *   - **图片丢失**：clearQueue 只回文字（pi 的 _steeringMessages 是 string[]），
+	 *     带图排队一旦被删除/编辑过一次，重入队的就是纯文本；
+	 *   - **清空 → 重入队之间有个无队列窗口**：若 run 恰在此间收尾，重入队的消息
+	 *     会挂在队列上等下一次 run 才被消费（agent 循环只在 run 内清队列）——
+	 *     chips 仍显示、不丢，只是晚一轮生效。
+	 */
+	async rewriteQueue(steering: readonly string[], followUp: readonly string[]): Promise<void> {
+		this.session.clearQueue();
+		for (const text of steering) await this.session.steer(text);
+		for (const text of followUp) await this.session.followUp(text);
 	}
 
 	async abort(): Promise<void> {
@@ -1277,11 +1286,12 @@ export class SessionHost {
 				// 生成阶段已上屏的同 id 卡片会被 reducer 原位翻转（upsert）；
 				// at 沿用生成开始的时间 —— 卡片的寿命从「开始生成」算起，不是「开始执行」。
 				const existing = this.toolCards.get(event.toolCallId);
+				const argSummary = summarizeArgs(event.args);
 
 				// 台账 tool_call 记账（执行期口径的起点，注释见 ToolCallData）。
 				this.openLedgerTools.set(event.toolCallId, {
 					toolName: event.toolName,
-					summary: summarizeArgs(event.args),
+					summary: argSummary.summary,
 					startedAt: Date.now(),
 				});
 
@@ -1315,9 +1325,11 @@ export class SessionHost {
 						stash !== undefined
 							? generatingLabel(event.toolName, stash.changeType)
 							: runningLabel(event.toolName),
-					summary: summarizeArgs(event.args),
+					summary: argSummary.summary,
 					outcome: undefined,
 					detail: undefined,
+					// 摘要顶掉入参原值（shell 的描述顶掉命令）时把原值带上，卡头 hover 才看得到。
+					...(argSummary.title === undefined ? {} : { summaryTitle: argSummary.title }),
 					// show_widget：reducer 的 tool_started 是整卡替换，生成期累积的
 					// streamArgs 会被丢掉，而执行结果（detail）还没回来 —— 渲染层在
 					// 这个窗口仍靠 streamArgs 出图，用完整 args 回填一次。
@@ -1406,6 +1418,8 @@ export class SessionHost {
 						summary: started?.summary ?? "",
 						outcome,
 						detail: detail === "" ? undefined : detail,
+						// hover 提示从执行态卡继承（summarizeArgs 只在 start 拿到 args）。
+						...(started?.summaryTitle === undefined ? {} : { summaryTitle: started.summaryTitle }),
 						// 失败的写入不产生变更（文件可能只写了一半，统计会误导）。
 						...(outcome === "ok" && stash?.change !== undefined ? { change: stash.change } : {}),
 						// todo_write 的清单从执行态卡继承（args 在 execution_start 解析，

@@ -20,8 +20,6 @@ import {
 	IconBrand,
 	IconChart,
 	IconChevronDown,
-	IconEdit,
-	IconExport,
 	IconFolder,
 	IconLibrary,
 	IconMore,
@@ -30,7 +28,6 @@ import {
 	IconSettings,
 	IconSkill,
 	IconStats,
-	IconTrash,
 } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState, Skeleton, Spinner } from "./state-views.tsx";
 
@@ -162,23 +159,27 @@ export function Sidebar({
 	const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(new Set());
 	/** 空间组头的三种行内态：⋯ 菜单 / 重命名 / 移除确认。与任务行同款的单条互斥。 */
 	const [menuCwd, setMenuCwd] = useState<string | undefined>(undefined);
+	/** 任务行的 ⋯ 菜单（同样记 path，同时至多一个开着）。 */
+	const [menuPath, setMenuPath] = useState<string | undefined>(undefined);
 	const [renamingCwd, setRenamingCwd] = useState<string | undefined>(undefined);
 	const [removingCwd, setRemovingCwd] = useState<string | undefined>(undefined);
 	/** 任务区/空间区组头折叠：会话内存态，重开侧栏恢复展开。WorkBuddy 同款交互。 */
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
 	const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
-	// 空间组 ⋯ 菜单的 Esc 关闭。该菜单只有透明 backdrop（管指针）：纯键盘用户
-	// 展开后既点不到 backdrop，也没有别的退出方式。同 model-menu / permission-menu
-	// 的既有写法（effect 依赖 menuCwd，无弹层时不挂监听）。
+	// 行内 ⋯ 菜单（空间组头 / 任务行）的 Esc 关闭。这些菜单只有透明 backdrop（管指针）：
+	// 纯键盘用户展开后既点不到 backdrop，也没有别的退出方式。同 model-menu /
+	// permission-menu 的既有写法（effect 依赖两个菜单态，都没有弹层时不挂监听）。
 	useEffect(() => {
-		if (menuCwd === undefined) return;
+		if (menuCwd === undefined && menuPath === undefined) return;
 		const onKey = (event: KeyboardEvent): void => {
-			if (event.key === "Escape") setMenuCwd(undefined);
+			if (event.key !== "Escape") return;
+			setMenuCwd(undefined);
+			setMenuPath(undefined);
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [menuCwd]);
+	}, [menuCwd, menuPath]);
 
 	/**
 	 * 会话行渲染：任务区与空间组内共用同一份（标题/meta/当前高亮/hover
@@ -276,74 +277,106 @@ export function Sidebar({
 					{/* 标题+时间同排：标题左对齐省略，时间右对齐常驻（WorkBuddy 同款紧凑行）。 */}
 					<span className="task-item-meta">{meta}</span>
 				</button>
+				{/*
+					行内操作 = **一个「⋯」入口 + 菜单**，不是一排图标按钮。
+					此前这里并排四个 20px 图标（打开文件夹 / 导出 / 重命名 / 删除，gap 2px）：
+					216px 窄栏里挤成一团、glyph 之间只隔 2px 看着像叠在一起，而且整簇
+					压在右侧时间戳那一格上。WorkBuddy 的做法是行尾只留一个「⋯」，动作全收进菜单
+					（其菜单：打开文件夹 / 重命名 / 保存到工作空间 / 分享任务 / 删除任务）。
+					菜单卡片与条目复用空间组头那一套（.pop-menu + .space-menu-item），
+					只多一条 .task-op-menu 的锚点定位。
+				*/}
 				<span className="task-item-ops">
-					{/*
-						打开该任务的工作目录。未选工作空间的任务 cwd 是它的自动目录
-						（时间戳命名），用户只能靠这个入口在文件系统里找到产物。
-						空 cwd 是历史 playground 会话（没有真实目录），此时不渲染 ——
-						与本文件其他可选 affordance（转圈/未读点/待确认徽章）同为条件渲染，
-						留个点了没反应的按钮更差。复用空间组同一条 onRevealWorkspace 通道。
-					*/}
-					{task.cwd !== "" && (
-						<button
-							type="button"
-							className="task-op-btn"
-							aria-label="打开文件夹"
-							title="打开文件夹"
-							onClick={() => {
-								// 与导出同口径：先收掉其他行的操作态，避免残留态语义脏。
-								setEditingPath(undefined);
-								setConfirmingPath(undefined);
-								onRevealWorkspace(task.cwd);
-							}}
-						>
-							<IconFolder size={13} />
-						</button>
-					)}
-					{/*
-						历史会话的导出会让 daemon 先恢复该会话（当前上下文被切走），
-						这个语义必须在 tooltip 上可见，否则用户不知道点完对话就换了。
-						编辑态/删除确认态下整行被替换，本钮自然不响应（与行点击的互斥一致）。
-					*/}
 					<button
 						type="button"
 						className="task-op-btn"
-						aria-label="导出"
-						title={task.current ? "导出为 HTML" : "恢复此会话并导出 HTML"}
+						aria-label="更多操作"
+						aria-expanded={menuPath === task.path}
+						title="更多操作"
 						onClick={() => {
-							// 顺带收掉其他行开着的操作态：导出后列表会刷新，残留态语义脏。
+							// 与行点击同口径：开菜单即收掉本行/其他行的编辑与删除确认态。
 							setEditingPath(undefined);
 							setConfirmingPath(undefined);
-							onExportTask(task.path);
+							setMenuPath((prev) => (prev === task.path ? undefined : task.path));
 						}}
 					>
-						<IconExport size={13} />
-					</button>
-					<button
-						type="button"
-						className="task-op-btn"
-						aria-label="重命名"
-						title="重命名"
-						onClick={() => {
-							setConfirmingPath(undefined);
-							setEditingPath(task.path);
-						}}
-					>
-						<IconEdit size={13} />
-					</button>
-					<button
-						type="button"
-						className="task-op-btn"
-						aria-label="删除"
-						title="删除"
-						onClick={() => {
-							setEditingPath(undefined);
-							setConfirmingPath(task.path);
-						}}
-					>
-						<IconTrash size={13} />
+						<IconMore size={15} />
 					</button>
 				</span>
+				{menuPath === task.path && (
+					<>
+						{/* 透明 backdrop 管点外关闭（同空间组头的 ⋯）；Esc 另有全局监听。 */}
+						<button
+							type="button"
+							className="ws-backdrop"
+							aria-label="关闭"
+							onClick={() => setMenuPath(undefined)}
+						/>
+						<div className="pop-menu space-menu task-op-menu">
+							{/*
+								打开该任务的工作目录。未选工作空间的任务 cwd 是它的自动目录
+								（时间戳命名），用户只能靠这个入口在文件系统里找到产物。
+								空 cwd 是历史 playground 会话（没有真实目录），此时不渲染 ——
+								留个点了没反应的动作更差。复用空间组同一条 onRevealWorkspace 通道。
+							*/}
+							{task.cwd !== "" && (
+								<button
+									type="button"
+									className="space-menu-item"
+									onClick={() => {
+										setMenuPath(undefined);
+										setEditingPath(undefined);
+										setConfirmingPath(undefined);
+										onRevealWorkspace(task.cwd);
+									}}
+								>
+									打开文件夹
+								</button>
+							)}
+							{/*
+								历史会话的导出会让 daemon 先恢复该会话（当前上下文被切走），
+								这个语义必须在 tooltip 上可见，否则用户不知道点完对话就换了。
+								编辑态/删除确认态下整行被替换，本项自然不响应（与行点击的互斥一致）。
+							*/}
+							<button
+								type="button"
+								className="space-menu-item"
+								title={task.current ? "导出为 HTML" : "恢复此会话并导出 HTML"}
+								onClick={() => {
+									// 顺带收掉其他行开着的操作态：导出后列表会刷新，残留态语义脏。
+									setMenuPath(undefined);
+									setEditingPath(undefined);
+									setConfirmingPath(undefined);
+									onExportTask(task.path);
+								}}
+							>
+								导出
+							</button>
+							<button
+								type="button"
+								className="space-menu-item"
+								onClick={() => {
+									setMenuPath(undefined);
+									setConfirmingPath(undefined);
+									setEditingPath(task.path);
+								}}
+							>
+								重命名
+							</button>
+							<button
+								type="button"
+								className="space-menu-item space-menu-danger"
+								onClick={() => {
+									setMenuPath(undefined);
+									setEditingPath(undefined);
+									setConfirmingPath(task.path);
+								}}
+							>
+								删除
+							</button>
+						</div>
+					</>
+				)}
 			</div>
 		);
 	};

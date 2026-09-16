@@ -202,7 +202,8 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 				"适合环境检查（看版本、列目录、查进程）、构建与测试（npm run build/test）、文档格式转换等本地操作。" +
 				"安全约束：命令先过危险命令检查器——动态执行、下载执行、递归强制删除、读取凭据目录、破坏系统这五类会被直接拒绝；" +
 				"权限预设可能要求每次执行都经用户批准。" +
-				"使用建议：一次只执行一条命令；不要用交互式命令（会话没有 stdin，会挂到超时被终止）；默认 120 秒超时。",
+				"使用建议：一次只执行一条命令；不要用交互式命令（会话没有 stdin，会挂到超时被终止）；默认 120 秒超时；" +
+				"每次调用都填 description 写清这条命令要做什么。",
 			promptSnippet:
 				"powershell: 执行单条 PowerShell 命令（环境检查、构建、格式转换等）；危险命令会被检查器拦截，交互式命令不要用",
 			promptGuidelines: [
@@ -210,12 +211,31 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 				"不要用交互式命令（等待输入、打开窗口的）——会话没有 stdin，进程会挂起到超时被杀。",
 				"输出超过 24k 字符会被截断；预期大输出时重定向到文件，再用 read 工具分段读取。",
 				"被检查器拦截时按返回的改法重写命令；编码、拆字符串、起别名都绕不过检查器，反而浪费轮次。",
+				"每次都填 description：一句简短中文说清这条命令要做什么（面向用户，如「核对侧栏的内边距」）。" +
+					"界面卡头显示的是这句话，命令原文只在悬浮提示与展开区可见。",
 			],
 			parameters: Type.Object({
 				command: Type.String({
 					minLength: 1,
 					description: "要执行的 PowerShell 命令，一条。",
 				}),
+				/*
+				 * 工具自描述（对齐 WorkBuddy：其 bash/execute_command 的 description 入参）。
+				 * 卡头显示的是这句话，命令原文退到 hover 提示（ToolCard.summaryTitle）
+				 * 与展开的输出区 —— 所以它必须是一句「人读得懂的动作」，不是命令的复述。
+				 * 字段名与 WorkBuddy 逐字对齐（它的渲染器直接读 args.description，
+				 * 见 docs/WorkBuddy-reference/.../ui-docs-viewer-*.js:334679），不新造词。
+				 * 不设 maxLength：WorkBuddy 也不限长，卡头超出走省略号 + hover 提示，
+				 * 加硬约束只会让模型为凑长度多花轮次。
+				 */
+				description: Type.Optional(
+					Type.String({
+						minLength: 1,
+						description:
+							"一句简短中文，说清这条命令要做什么（面向用户，如「核对侧栏的内边距」）。" +
+							"它会替代命令原文显示在界面上；命令原文在悬浮提示与展开区仍可看到。",
+					}),
+				),
 				timeoutSeconds: Type.Optional(
 					Type.Integer({
 						minimum: 1,

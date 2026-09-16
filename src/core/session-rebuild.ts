@@ -43,7 +43,6 @@ type PiMessage = SessionMessageEntry["message"];
 type PiUserMessage = Extract<PiMessage, { role: "user" }>;
 type PiAssistantMessage = Extract<PiMessage, { role: "assistant" }>;
 type PiToolResultMessage = Extract<PiMessage, { role: "toolResult" }>;
-type PiToolCall = Extract<PiAssistantMessage["content"][number], { type: "toolCall" }>;
 type PiUsage = PiAssistantMessage["usage"];
 
 /** ToolCard.detail 的截断阈值。大输出 pi 侧已处理过一轮，这里只兜底恢复视图的超长文本。 */
@@ -108,14 +107,64 @@ export function toTokenUsage(usage: NonNullable<PiUsage>): TokenUsage {
 	};
 }
 
-/** 工具卡的一行摘要：参数里的路径类字段最能说明「在对什么操作」，没有则退回工具名。 */
-function summarizeCall(call: PiToolCall): string {
-	const args: Record<string, unknown> = call.arguments;
-	for (const key of ["path", "filePath"] as const) {
-		const value = args[key];
-		if (typeof value === "string" && value !== "") return value;
+/** 入参摘要：卡头显示的一行字 + 可选的 hover 提示。 */
+export interface ArgSummary {
+	/** 折叠态卡头显示的文本（ToolCard.summary 的唯一来源）。 */
+	readonly summary: string;
+	/** 摘要顶掉了入参原值时的原值（仅 shell 的命令），作 hover 提示；无需提示则缺席。 */
+	readonly title?: string;
+}
+
+/**
+ * 从工具入参里挑一个最能说明「在对什么东西操作」的值作为摘要。
+ *
+ * `description` 排在 `command` 之前是照 WorkBuddy 的口径：模型给 shell 写的一句
+ * 自描述顶替命令原文挂在卡头上，命令本体退成 hover 提示。实证是它的
+ * execute_command convert —— `headerText: args.description?.trim() || command`
+ * 配 `primaryTitle: data.command`（docs/WorkBuddy-reference/.../lib-chat-ui-*.js:230138/230203）。
+ * 位置放在 path/pattern/query 之后：其余工具的入参里没有 description，
+ * 这个键只有 shell 类会给（我们唯一带它的工具是 powershell）。
+ *
+ * **为什么放在本文件而不是 session-host**：实时卡片（session-host 的
+ * tool_execution_start）与历史重建（本文件的 buildConversationEntries）是
+ * 同一张卡的两条产出路径，入参字段表必须**同源**。重建路径曾经自持一份更弱的
+ * 表（只认 path / filePath、否则退回工具名），实测症状：powershell 卡实时显示
+ * 「核对侧栏的内边距」（description）、刷新或重开历史会话后变回「powershell」，
+ * 同一张卡前后两副面孔；summaryTitle 一并丢失会让原命令从恢复视图里彻底消失
+ * （描述把它顶掉了，没有 hover 就再也看不到命令）。
+ * 与 toTokenUsage 同理，翻译函数作为 live 与恢复的共同出口放在本文件 ——
+ * 本文件保持只有类型依赖的叶子（AGENTS.md §1），session-host 反向 import。
+ */
+export function summarizeArgs(args: unknown): ArgSummary {
+	if (typeof args !== "object" || args === null) return { summary: "" };
+	const record = args as Record<string, unknown>;
+	// 顺序即优先级：路径类最有信息量，其次是查询/自描述/命令。
+	for (const key of [
+		"path",
+		"file_path",
+		"filePath",
+		"pattern",
+		"query",
+		"description",
+		"command",
+		"dir",
+	]) {
+		const value = record[key];
+		if (typeof value !== "string" || value === "") continue;
+		// 自描述顶替命令原文，但命令不能在界面上消失 —— 转成 hover 提示带着走
+		// （WorkBuddy 的 primaryTitle 同款分工；长命令在卡头本来也是省略号截断的）。
+		if (key === "description") {
+			const command = record["command"];
+			if (typeof command === "string" && command !== "") {
+				return { summary: value, title: command };
+			}
+		}
+		return { summary: value };
 	}
-	return call.name;
+	// present_files 的 files 是数组：摘要是数量而不是某个路径。
+	const files = record.files;
+	if (Array.isArray(files)) return { summary: `${files.length} 个文件` };
+	return { summary: "" };
 }
 
 /**
@@ -215,14 +264,26 @@ export function buildConversationEntries(
 					block.name === "web_search" && result !== undefined
 						? parseSources(result.details)
 						: undefined;
+				/*
+				 * 摘要与 hover 提示走 live 路径的同一份字段表（本文件的 summarizeArgs）：
+				 * 落盘的 toolCall 块自带完整 arguments（pi session-format.md 的
+				 * ToolCall.arguments），所以恢复视图能拿到与 tool_execution_start
+				 * 等价的入参 —— 不需要第二份更弱的表，也不需要从结果反推。
+				 * 取不到任何字段时摘要是空串，与 realtime 卡同形态（不是退回工具名：
+				 * 那条本路径独有的规则本身就是「刷新后换一副面孔」的来源）。
+				 */
+				const argSummary = summarizeArgs(block.arguments);
 				const card: ToolCard = {
 					id: block.id,
 					role: "tool",
 					toolName: block.name,
 					label: resolveToolLabel?.(block.name, outcome) ?? block.name,
-					summary: summarizeCall(block),
+					summary: argSummary.summary,
 					outcome,
 					detail: result === undefined ? undefined : detailOf(result, block.name),
+					// 摘要顶掉了入参原值（shell 的描述顶掉命令）时把原值带上，卡头 hover
+					// 才看得到 —— 与 live 路径逐字一致（session-host 的 tool_started）。
+					...(argSummary.title === undefined ? {} : { summaryTitle: argSummary.title }),
 					...(todos === undefined ? {} : { todos }),
 					...(sources === undefined ? {} : { sources }),
 					at,

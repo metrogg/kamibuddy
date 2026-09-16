@@ -20,7 +20,7 @@ import type {
 	WorkspaceGroupMeta,
 } from "@shared/ipc.ts";
 import type { ImagePart } from "@shared/image.ts";
-import type { SessionEventEnvelope, SessionSnapshot } from "@shared/session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot, QueuedMessages } from "@shared/session-events.ts";
 import {
 	conversationReducer,
 	initialConversation,
@@ -495,6 +495,17 @@ export function App(): React.JSX.Element {
 			window.setTimeout(() => dismissToast(id), 2200);
 		},
 		[dismissToast],
+	);
+
+	/** 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。 */
+	const rewriteQueue = useCallback(
+		(queued: QueuedMessages) => {
+			if (link.kind !== "ready") return;
+			void window.kami.rewriteQueue(queued).catch((error: unknown) => {
+				setLastError(error instanceof Error ? error.message : String(error));
+			});
+		},
+		[link.kind],
 	);
 
 	const showTodo = useCallback((feature: string) => {
@@ -1295,6 +1306,7 @@ export function App(): React.JSX.Element {
 					onBack={() => setView("home")}
 					onSubmit={submit}
 					onAbort={abort}
+					onQueueRewrite={rewriteQueue}
 					onInteractionChange={changeInteraction}
 					turnFoldCache={turnFoldCacheRef}
 					experts={experts}
@@ -1382,6 +1394,7 @@ export function App(): React.JSX.Element {
 				<TaskDiagnosticsPanel
 					sessionId={conversation.state.sessionId}
 					stats={conversation.sessionStats}
+					usageDetail={conversation.usageDetail}
 					width={panelWidth}
 					onClose={() => setTaskDiagOpen(false)}
 				/>

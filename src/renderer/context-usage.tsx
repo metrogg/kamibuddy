@@ -1,12 +1,15 @@
 /**
- * 上下文用量圆环：输入条上的常驻指示器（对标 WorkBuddy 的 ContextUsageDisplay）。
+ * 上下文用量的两个展示位：
+ *   - `ContextUsageRing`：输入条上的常驻圆环（对标 WorkBuddy 的 ContextUsageDisplay）；
+ *   - `ContextUsageBreakdown`：分类读数 + 占比条 + 图例（圆环浮层与任务诊断面板共用）。
  *
  * 数据口径（shared/context-usage.ts 的注释是契约）：
  *   - 圆环与百分比用 used/total —— pi 的 getContextUsage() 精确值；
- *   - 点击弹出的分类拆分是**估算值**，每行数字前加 ~，底部固定标注「估算」。
+ *   - 分类拆分是**估算值**，每行数字前加 ~，底部固定标注「估算」。
  *
  * 圆环常驻但浮层按需：一次任务可能几十轮，用户多数时候只要一眼饱和度，
- * 分类只有「上下文怎么满了」时才需要看。
+ * 分类只有「上下文怎么满了」时才需要看。任务诊断面板则相反 —— 它是诊断面，
+ * 分类常驻可见，所以两处共用同一份 Breakdown 而不是各写一套。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -29,6 +32,68 @@ function buildRows(detail: ContextUsageDetail): readonly CategoryRow[] {
 		{ key: "conversation", label: "对话消息", value: detail.byCategory.conversation },
 		{ key: "tools", label: "工具结果", value: detail.byCategory.toolResults },
 	];
+}
+
+/**
+ * 占用百分比（0–100，钳位）。圆环的描边与拆分块的读数共用这一处 ——
+ * 两处各写一遍，圆环画 87.5% 而文字写 88% 这类不一致迟早出现。
+ */
+export function contextUsagePercent(detail: ContextUsageDetail): number {
+	if (detail.total <= 0) return 0;
+	return Math.min(100, Math.max(0, (detail.used / detail.total) * 100));
+}
+
+/**
+ * 上下文用量的拆分视图：占比读数 + 分类条 + 图例 + 估算标注。
+ *
+ * 为什么单独导出：圆环浮层（本文件下方）与任务诊断面板的「上下文占用」区是
+ * 两个并列的展示位，展示的必须是同一份口径、同一套标注 —— 每行 `~` 前缀与
+ * 「分类为估算值，总量为实际值」这句是口径的一部分，不是排版细节，
+ * 抄一份到面板里就等于埋一个口径漂移点（同 shared/context-usage.ts 文件头的纪律）。
+ * 圆环那侧的 `cu-popover` 只负责外壳（定位 / 标题 / 关闭），内容由这里提供。
+ *
+ * **它展示的是「现在」**：used/total 是最近一次请求后的实时值。面板里与它并列的
+ * 「该轮入模拆分」（request_snapshot）是「当时」的快照，两者含义不同，
+ * 不许互相替代（见 task-diagnostics-panel.tsx 中两个区的文案）。
+ */
+export function ContextUsageBreakdown({
+	detail,
+}: {
+	readonly detail: ContextUsageDetail;
+}): React.JSX.Element {
+	const percent = contextUsagePercent(detail);
+	const rows = buildRows(detail);
+	const segTotal = rows.reduce((sum, r) => sum + r.value, 0);
+
+	return (
+		<>
+			<div className="cu-stats">
+				<span className="cu-percent">{percent.toFixed(1)}%</span>
+				<span className="cu-used">
+					已使用 {formatTokenCount(detail.used)} / {formatTokenCount(detail.total)}
+				</span>
+			</div>
+			<div className="cu-bar" role="presentation">
+				{rows.map((row) => (
+					<span
+						key={row.key}
+						className={`cu-seg cu-seg-${row.key}`}
+						style={{ width: `${segTotal > 0 ? (row.value / segTotal) * 100 : 0}%` }}
+					/>
+				))}
+			</div>
+			<div className="cu-legend">
+				{rows.map((row) => (
+					<div key={row.key} className="cu-row">
+						<span className={`cu-swatch cu-swatch-${row.key}`} />
+						<span className="cu-row-name">{row.label}</span>
+						<span className="cu-row-value">~{formatTokenCount(row.value)}</span>
+					</div>
+				))}
+			</div>
+			<footer className="cu-note">分类占比为估算值，总量为实际值</footer>
+		</>
+	);
 }
 
 export function ContextUsageRing({
@@ -63,11 +128,9 @@ export function ContextUsageRing({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [open]);
 
-	const percent = detail.total > 0 ? Math.min(100, Math.max(0, (detail.used / detail.total) * 100)) : 0;
+	const percent = contextUsagePercent(detail);
 	const percentText = percent.toFixed(1);
 	const tooltip = `${percentText}% · ${formatTokenCount(detail.used)} / ${formatTokenCount(detail.total)} 上下文已用`;
-	const rows = buildRows(detail);
-	const segTotal = rows.reduce((sum, r) => sum + r.value, 0);
 
 	return (
 		<span className="cu-wrap" ref={wrapRef}>
@@ -98,31 +161,7 @@ export function ContextUsageRing({
 							×
 						</button>
 					</header>
-					<div className="cu-stats">
-						<span className="cu-percent">{percentText}%</span>
-						<span className="cu-used">
-							已使用 {formatTokenCount(detail.used)} / {formatTokenCount(detail.total)}
-						</span>
-					</div>
-					<div className="cu-bar" role="presentation">
-						{rows.map((row) => (
-							<span
-								key={row.key}
-								className={`cu-seg cu-seg-${row.key}`}
-								style={{ width: `${segTotal > 0 ? (row.value / segTotal) * 100 : 0}%` }}
-							/>
-						))}
-					</div>
-					<div className="cu-legend">
-						{rows.map((row) => (
-							<div key={row.key} className="cu-row">
-								<span className={`cu-swatch cu-swatch-${row.key}`} />
-								<span className="cu-row-name">{row.label}</span>
-								<span className="cu-row-value">~{formatTokenCount(row.value)}</span>
-							</div>
-						))}
-					</div>
-					<footer className="cu-note">分类占比为估算值，总量为实际值</footer>
+					<ContextUsageBreakdown detail={detail} />
 				</div>
 			)}
 		</span>

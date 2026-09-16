@@ -17,6 +17,7 @@ import type {
 	CompactionState,
 	ConversationEntry,
 	MessageId,
+	QueuedMessages,
 	RunRetryState,
 	SessionEvent,
 	SessionSnapshot,
@@ -69,10 +70,11 @@ export interface ConversationView {
 	 */
 	readonly retry?: RunRetryState;
 	/**
-	 * steer / followUp 排队条数（queue_changed 折叠而来）。
-	 * 缺省/0 都不渲染徽标（两条同义，区别只在有没有收到过 queue_changed）。
+	 * steer / followUp 排队中的消息（queue_changed 折叠而来，数组即 pi 的队列内容）。
+	 * 排队 chips 据此渲染文本、删除/编辑据此重排（session:queue-rewrite）。
+	 * 缺省 = 没有排队（含「队列被清空」——与「没收到过事件」在 UI 上同义）。
 	 */
-	readonly queueCount?: number;
+	readonly queued?: QueuedMessages;
 	/**
 	 * 进行中的上下文压缩（compaction_started 折叠而来；协议见 session-events.ts）。
 	 *
@@ -105,9 +107,32 @@ export const initialConversation: ConversationView = {
 	cancelledTurns: [],
 	artifacts: [],
 	retry: undefined,
-	queueCount: undefined,
+	queued: undefined,
 	compacting: undefined,
 };
+
+/**
+ * 从等待队列里摘掉**第一条**与 text 相同的消息（steering 优先）。
+ *
+ * 供排队 chips 的「删除 / 编辑」用：pi 只能整队清空（session:queue-rewrite
+ * 的底层就是清空 + 按序重入队），所以删一条 = 先在本地算出剩下的队列，再把
+ * 剩下的整体重排。只摘第一条 —— 同文本可以排队多条，按内容删必须一条一条来，
+ * 否则一次会摘掉两根相同的 chip。
+ */
+export function removeQueuedMessage(queued: QueuedMessages, text: string): QueuedMessages {
+	const dropFirst = (list: readonly string[]): readonly string[] | undefined => {
+		const index = list.indexOf(text);
+		return index === -1 ? undefined : [...list.slice(0, index), ...list.slice(index + 1)];
+	};
+	// steering 命中就只动 steering：同一文本同时出现在两个队列时不双重删除。
+	const steering = dropFirst(queued.steering);
+	if (steering !== undefined) return { steering, followUp: queued.followUp };
+	const followUp = dropFirst(queued.followUp);
+	if (followUp !== undefined) return { steering: queued.steering, followUp };
+	// 两边都没有（陈旧 chip 点了已消费的消息）：原样返回，调用方据同一对象
+	// 跳过这次重排，不必白发一条 IPC。
+	return queued;
+}
 
 /** 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。 */
 function replaceEntry(
@@ -223,7 +248,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			cancelledTurns: action.snapshot.cancelledTurns ?? [],
 			artifacts: action.snapshot.artifacts,
 			retry: action.snapshot.retry,
-			queueCount: action.snapshot.queueCount,
+			queued: action.snapshot.queued,
 			// 压缩态**不随快照恢复**：它是运行期瞬态、不属于会话事实，重挂载后
 			// 若快照没有在途压缩就不该凭空冒出一条状态行（幽灵态）。这里刻意不读
 			// snapshot 的 compacting —— 新视图对象不列该键即回落 undefined。
@@ -248,7 +273,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				cancelledTurns: [],
 				artifacts: [],
 				retry: undefined,
-				queueCount: undefined,
+				queued: undefined,
 				// 压缩态同属运行现场，一并清零（历史都清了，不该还挂着「正在压缩」）。
 				compacting: undefined,
 			};
@@ -484,10 +509,11 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			return { ...view, retry: undefined };
 
 		case "queue_changed": {
-			// 队列全空时用 undefined 而不是 0：「没有排队」与「队列是 0」在 UI 上同义，
-			// 统一成缺省键让消费方只有一个判定口径（同 retry 字段的取舍）。
-			const queueCount = event.steering.length + event.followUp.length;
-			return { ...view, queueCount: queueCount === 0 ? undefined : queueCount };
+			// 队列全空时用 undefined 而不是空数组：「没有排队」与「队列是 0」在 UI 上
+			// 同义，统一成缺省键让消费方只有一个判定口径（同 retry 字段的取舍）。
+			const queued: QueuedMessages = { steering: event.steering, followUp: event.followUp };
+			const empty = queued.steering.length === 0 && queued.followUp.length === 0;
+			return { ...view, queued: empty ? undefined : queued };
 		}
 
 		case "compaction_started":

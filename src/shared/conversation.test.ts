@@ -21,6 +21,7 @@ import {
 	artifactsFromEntries,
 	conversationReducer,
 	initialConversation,
+	removeQueuedMessage,
 	type ConversationView,
 } from "./conversation.ts";
 
@@ -767,33 +768,63 @@ describe("run_retry 重试态", () => {
 	});
 });
 
-describe("queue_changed 排队计数", () => {
-	it("steering + followUp 计数折叠进视图", () => {
+describe("queue_changed 排队内容", () => {
+	it("steering / followUp 数组原样折叠进视图", () => {
 		const view = apply([
 			{ type: "queue_changed", steering: ["插一句"], followUp: ["排队一", "排队二"] },
 		]);
-		expect(view.queueCount).toBe(3);
+		expect(view.queued).toEqual({ steering: ["插一句"], followUp: ["排队一", "排队二"] });
 	});
 
-	it("队列清空时回落 undefined（与「没有排队」同口径，徽标消失）", () => {
+	it("队列清空时回落 undefined（与「没有排队」同口径，chips 消失）", () => {
 		const view = apply([
 			{ type: "queue_changed", steering: ["插一句"], followUp: [] },
 			{ type: "queue_changed", steering: [], followUp: [] },
 		]);
-		expect(view.queueCount).toBeUndefined();
+		expect(view.queued).toBeUndefined();
 	});
 
-	it("snapshot 恢复排队计数", () => {
+	it("snapshot 恢复排队内容", () => {
 		const snapshot: SessionSnapshot = {
 			state: initialConversation.state,
 			entries: [],
 			availableScenes: [],
 			availableModes: [],
 			artifacts: [],
-			queueCount: 2,
+			queued: { steering: ["一", "二"], followUp: [] },
 		};
 		const view = conversationReducer(initialConversation, { type: "snapshot", snapshot });
-		expect(view.queueCount).toBe(2);
+		expect(view.queued).toEqual({ steering: ["一", "二"], followUp: [] });
+	});
+});
+
+describe("removeQueuedMessage（排队 chips 的删除/编辑底层）", () => {
+	const queued = { steering: ["甲", "乙"], followUp: ["丙"] };
+
+	it("摘掉 steering 里第一条匹配，其余原样", () => {
+		expect(removeQueuedMessage(queued, "甲")).toEqual({ steering: ["乙"], followUp: ["丙"] });
+	});
+
+	it("steering 没有就摘 followUp 的", () => {
+		expect(removeQueuedMessage(queued, "丙")).toEqual({ steering: ["甲", "乙"], followUp: [] });
+	});
+
+	it("同文本多条只摘第一条", () => {
+		expect(removeQueuedMessage({ steering: ["甲", "甲"], followUp: [] }, "甲")).toEqual({
+			steering: ["甲"],
+			followUp: [],
+		});
+	});
+
+	it("同文本跨两个队列时只摘 steering（不双重删除）", () => {
+		expect(removeQueuedMessage({ steering: ["甲"], followUp: ["甲"] }, "甲")).toEqual({
+			steering: [],
+			followUp: ["甲"],
+		});
+	});
+
+	it("没找到就原样返回（不造新数组，调用方可据此跳过重排）", () => {
+		expect(removeQueuedMessage(queued, "不存在")).toBe(queued);
 	});
 });
 

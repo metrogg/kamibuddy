@@ -275,17 +275,77 @@ describe("buildConversationEntries · 工具卡配对", () => {
 		expect(asTool(out[1]!).detail).toBeUndefined();
 	});
 
-	it("summary：path 优先，filePath 次之，都没有退回工具名", () => {
+	/*
+	 * 摘要字段表是全仓唯一一份（core/session-rebuild.ts 的 summarizeArgs，live 的
+	 * tool_execution_start 与这里共用）：同一张卡实时/刷新后必须是同一行字。
+	 * 2026-09 的既有不一致就出在这里 —— 重建路径曾自持一份只认 path/filePath、
+	 * 否则退回工具名的弱表，powershell 卡实时显示模型自描述、刷新后变回工具名。
+	 */
+	it("summary：复用 live 的字段表（path 优先，query 次之，取不到为与实时同形的空串）", () => {
 		const out = buildConversationEntries([
 			assistantEntry("a1", [
 				call("c1", "read", { path: "p.md", filePath: "fp.md" }),
-				call("c2", "edit", { filePath: "fp.md" }),
+				call("c2", "edit", { file_path: "f.md" }),
 				call("c3", "web_search", { query: "q" }),
+				// 一个字段都对不上 → 空串（live 卡同形态）。不再是「退回工具名」：
+				// 那条本路径独有的规则正是刷新前后换一副面孔的来源。
+				call("c4", "todo_write", { todos: [] }),
 			]),
 		]);
 		expect(asTool(out[1]!).summary).toBe("p.md");
-		expect(asTool(out[2]!).summary).toBe("fp.md");
-		expect(asTool(out[3]!).summary).toBe("web_search");
+		expect(asTool(out[2]!).summary).toBe("f.md");
+		expect(asTool(out[3]!).summary).toBe("q");
+		expect(asTool(out[4]!).summary).toBe("");
+	});
+
+	it("summary 的字段优先级与 live 逐项一致（含 description/command/dir 与 present_files 计数）", () => {
+		const keys = ["path", "file_path", "filePath", "pattern", "query", "description", "command", "dir"] as const;
+		const out = buildConversationEntries([
+			assistantEntry(
+				"a1",
+				keys.map((key, index) => call(`k${index}`, "probe", { [key]: `v-${key}` })),
+			),
+			assistantEntry("a2", [call("c9", "present_files", { files: [{}, {}, {}] })]),
+		]);
+		keys.forEach((key, index) => {
+			// description 只在同时给出 command 时才附带 hover 提示（见 powershell 用例），
+			// 这里 command 缺席，摘要仍是本字段值。
+			expect(asTool(out[index + 1]!).summary).toBe(`v-${key}`);
+		});
+		expect(asTool(out[keys.length + 2]!).summary).toBe("3 个文件");
+	});
+
+	/*
+	 * 恢复视图的 powershell 卡（spec: 摘要与 hover 提示）。
+	 * 期望值与 session-host.test.ts 的实时用例同值 —— 两边必须同时改才说明口径漂移，
+	 * summaryTitle 尤其不能漏：描述把命令顶掉后，hover 提示是历史上唯一还能看到
+	 * 原命令的地方，恢复视图丢了它等于命令永久消失。
+	 */
+	it("powershell：description 顶替命令挂卡头，原命令进 summaryTitle（与实时卡逐字一致）", () => {
+		const command = "Get-ChildItem -Recurse | Select-Object Name";
+		const out = buildConversationEntries([
+			assistantEntry("a1", [
+				call("c1", "powershell", { command, description: "列出目录下的所有文件" }),
+			]),
+			toolResultEntry("r1", "c1", "命令执行完成，退出码 0。"),
+		]);
+		const card = asTool(out[1]!);
+		expect(card.summary).toBe("列出目录下的所有文件");
+		expect(card.summaryTitle).toBe(command);
+	});
+
+	it("powershell：无 description / description 为空串时摘要就是命令，summaryTitle 键缺席", () => {
+		const without = buildConversationEntries([
+			assistantEntry("a1", [call("c1", "powershell", { command: "node -v" })]),
+		]);
+		expect(asTool(without[1]!).summary).toBe("node -v");
+		expect("summaryTitle" in asTool(without[1]!)).toBe(false);
+
+		const empty = buildConversationEntries([
+			assistantEntry("a1", [call("c1", "powershell", { command: "node -v", description: "" })]),
+		]);
+		expect(asTool(empty[1]!).summary).toBe("node -v");
+		expect("summaryTitle" in asTool(empty[1]!)).toBe(false);
 	});
 
 	it("label：resolveToolLabel 收到工具名与 outcome，没有则回落工具名", () => {

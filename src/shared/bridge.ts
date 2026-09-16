@@ -38,7 +38,7 @@ import type {
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel } from "./session-events.ts";
+import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { WorktreeBranchList } from "./worktree.ts";
 import type {
 	CustomModelInput,
@@ -66,6 +66,12 @@ export interface KamiBridge {
 	readonly snapshot: (sessionId?: string) => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
+	/**
+	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
+	 * 传入的是**重排后**的完整队列：daemon 清空后按序重入队。
+	 * 仅在 run 进行中有意义；run 已结束时清空即完成、重入队挂到下一轮（不丢）。
+	 */
+	readonly rewriteQueue: (queued: QueuedMessages) => Promise<void>;
 	/**
 	 * 新建任务：作废旧会话、开一个全新会话。
 	 * cwd 缺省 = 未选工作空间（待分配，首次执行才分配自动目录）——「新建任务」重置选择；

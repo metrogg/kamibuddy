@@ -1,15 +1,22 @@
 /**
  * 任务诊断面板 —— 诊断对应任务（右侧栏第三态）。
  *
- * 信息架构（2026-09-15 重排）：
- *   - 本面板 = **单个任务**的微观诊断：这一轮、这一步到底发生了什么
- *   - 统计页 = 跨会话宏观：热力图、模型 / 工具排行、费用
- *   - 诊断页 = 机器级环境自检：热键、docx venv、观测健康
+ * 信息架构（2026-09-15 重排，09-16 补齐 ②③④）：
+ *   ① 会话总览     —— 这个任务一共多少轮 / 多少步 / 花了多少（会话级累计）
+ *   ② 上下文占用   —— **现在**占了多少、被谁占着（pi 精确值 + 分类估算）
+ *   ③ 轮 / 步台账  —— 时间序的条目流水，工具挂在自己那一步之下
+ *   ④ 单步详情     —— 点开某一步：计时五要素 + token 全字段 + 该轮**当时**的入模拆分
+ * 本面板是**单个任务**的微观诊断；统计页是跨会话宏观；诊断页是机器级环境自检。
  * 在此之前这三件事挤在同一个「诊断」页里 —— 它那 7 个区块只有 1 个名副其实。
  *
- * **数据全部来自运行台账**（`runLedger(sessionId)` → `run-timeline` 的 fold），
- * 不新增采集：轮 / 步、耗时、TTFT、tokens、缓存、工具、重试、压缩都在台账里；
- * 会话级汇总复用 `conversation.sessionStats`（daemon 的 session_stats 事件）。
+ * ② 与 ④ 里都出现「上下文」，含义不同，不许混（shared/context-usage.ts 文件头的纪律）：
+ *   ② 是**现在**（`getContextUsage()` 的实时 used/total + 分类估算，随对话滚动）；
+ *   ④ 是**当时**（`request_snapshot`，冻结在那一刻的真实入模拆分）。
+ * 两处文案各自标了「实时」/「该轮（当时）」，别在后来的改动里把标注删掉。
+ *
+ * **数据全部来自运行台账**（`runLedger(sessionId)` → run-timeline 的两级 fold），
+ * 不新增采集：轮 / 步、耗时、TTFT、tokens（含 reasoning）、缓存读写、工具、
+ * 重试、压缩、每轮入模快照都在台账里；会话级汇总复用 `conversation.sessionStats`。
  *
  * 容器骨架复用 SourcesPanel 那套（preview-panel / preview-head / preview-view），
  * 与 ArtifactPanel、SourcesPanel 同位互斥。
@@ -18,12 +25,18 @@
  * 「诊断对应任务」，关掉反而要用户重开。所以它由自己的开关控制，不参与
  * closePreviewPanel 的会话级清理。
  *
+ * **④ 做成列表内联展开，而不是像 dsh 那样再开一个 inspector 面板**：右侧栏本身
+ * 已经是窄栏（默认 440），再分一层双栏两边都不够用；内联还能保证答案紧贴被点的
+ * 那一行（长 run 里一步可能挂十几个工具，另开面板会把问题和答案分开）。
+ * 展开块排在**该步的工具行之前**：它是「这一步花了多少、看到了什么」的答案，
+ * 直接接在被点的那行下面；工具行随后补上「它做了什么」。
+ *
  * 本组件只 import @shared（AGENTS.md §1.3）。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { formatTokenCount } from "@shared/context-usage.ts";
+import { formatTokenCount, type ContextUsageDetail } from "@shared/context-usage.ts";
 import type { RunLedgerResult } from "@shared/ipc.ts";
 import {
 	averageTtftMs,
@@ -32,14 +45,25 @@ import {
 	decodeTokensPerSecond,
 	stepDecode,
 	type LlmCallData,
+	type RequestSnapshotData,
 	type RunEndReason,
 	type SessionStatCard,
 	type ToolCallData,
 } from "@shared/observability.ts";
 import { isStreamingEvent } from "@shared/session-events.ts";
-import { IconClose } from "./icons.tsx";
+import { ContextUsageBreakdown } from "./context-usage.tsx";
+import { IconChevronDown, IconChevronRight, IconClose } from "./icons.tsx";
 import { formatCost, formatSpan, formatThroughput } from "./reading-format.ts";
-import { foldRunLedger, type LedgerItem, type LedgerRun } from "./run-timeline.ts";
+import {
+	foldRunLedger,
+	foldRunSteps,
+	indexRequestSnapshots,
+	snapshotKey,
+	type LedgerRun,
+	type LedgerStep,
+	type LedgerStepItem,
+} from "./run-timeline.ts";
+import { SnapshotBreakdown } from "./snapshot-breakdown.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 /** run 终态的中文标签（诊断页有同款私有映射，它瘦身后可合并到这里）。 */
@@ -55,6 +79,17 @@ function formatClock(ts: number): string {
 	const d = new Date(ts);
 	const pad = (v: number): string => String(v).padStart(2, "0");
 	return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * 一个 run 在「展开哪一步」这件事上的稳定身份。
+ *
+ * 单用 runId 不够：它是进程内自增（run-N），daemon 重启后跨代际撞名
+ *（foldRunLedger 文件头已记），那样新老两轮的同一个步号会一起展开。
+ * 带上 run 的 startedAt（毫秒级，实际不可能重复）即可唯一。
+ */
+function runKeyOf(run: LedgerRun): string {
+	return `${run.runId}#${run.startedAt}`;
 }
 
 /* ── ① 会话总览 ──────────────────────────────────────────────────── */
@@ -127,49 +162,141 @@ function SessionOverview({
 	);
 }
 
-/* ── ③ 轮 / 步台账 ───────────────────────────────────────────────── */
+/* ── ② 上下文占用（现在） ────────────────────────────────────────── */
 
-/** 一步（模型调用）行：耗时 / tokens / TTFT / 速度 / 缓存，一行看齐。 */
-function StepRow({ data }: { readonly data: LlmCallData }): React.JSX.Element {
-	const usage = data.usage;
-	const hit = usage === undefined ? undefined : cacheHitRate(usage);
-	// 解码速度与 daemon 的累加共用一处判定（shared 的 stepDecode）——
+function ContextSection({
+	detail,
+}: {
+	readonly detail: ContextUsageDetail | undefined;
+}): React.JSX.Element {
+	return (
+		<section className="task-diag-section">
+			<h2 className="task-diag-heading">
+				上下文占用
+				<span className="stat-hint">实时</span>
+			</h2>
+			{detail === undefined ? (
+				<p className="task-diag-note">
+					还没有过带用量的响应 —— 占用读数会在第一轮结束后出现。
+					<br />
+					想看某一轮「当时」发出去的内容，点开下面台账里的那一步。
+				</p>
+			) : (
+				// 与输入条上的圆环浮层是同一个组件：分类的「估算」标注只此一份。
+				<ContextUsageBreakdown detail={detail} />
+			)}
+		</section>
+	);
+}
+
+/* ── ④ 单步详情（内联展开） ──────────────────────────────────────── */
+
+/** 点开某一步后的详情：计时五要素 + token 全字段 + 该轮当时的入模拆分。 */
+function StepDetail({
+	call,
+	snapshot,
+}: {
+	readonly call: LlmCallData;
+	readonly snapshot: RequestSnapshotData | undefined;
+}): React.JSX.Element {
+	const usage = call.usage;
+	// 解码窗口与 daemon 的会话级累加共用一处判定（shared 的 stepDecode）——
 	// 两处各算一遍必然漂移，而 tok/s 的分子分母最经不起这个。
-	const decode = stepDecode(data);
+	const decode = stepDecode(call);
 	const throughput =
 		decode === undefined || decode.ms === 0 ? undefined : decode.tokens / (decode.ms / 1_000);
+	const hit = usage === undefined ? undefined : cacheHitRate(usage);
 
 	return (
-		<div className="task-diag-step" title={data.errorMessage}>
-			<span className="task-diag-step-name">模型 #{data.turnIndex + 1}</span>
-			<span className="task-diag-num">{formatSpan(data.endedAt - data.startedAt)}</span>
-			{usage !== undefined && (
-				<span className="task-diag-num">
-					↑{formatTokenCount(billedInputTokens(usage))} ↓
-					{formatTokenCount(usage.output)}
-				</span>
+		<div className="task-diag-detail">
+			<dl className="task-diag-kv">
+				<div>
+					<dt>开始</dt>
+					<dd>{formatClock(call.startedAt)}</dd>
+				</div>
+				<div>
+					<dt>耗时</dt>
+					<dd>{formatSpan(Math.max(0, call.endedAt - call.startedAt))}</dd>
+				</div>
+				{call.ttftMs !== undefined && (
+					<div title="首个 text/thinking delta 到达时刻 − 本轮开始">
+						<dt>首 token</dt>
+						<dd>{formatSpan(call.ttftMs)}</dd>
+					</div>
+				)}
+				{decode !== undefined && (
+					<div title="首字之后到消息完成的耗时（总耗时 − 首 token）">
+						<dt>生成时长</dt>
+						<dd>{formatSpan(decode.ms)}</dd>
+					</div>
+				)}
+				{throughput !== undefined && (
+					<div title="输出 token ÷ 生成时长">
+						<dt>生成速度</dt>
+						<dd>{formatThroughput(throughput)} tok/s</dd>
+					</div>
+				)}
+				{call.stopReason !== undefined && (
+					<div>
+						<dt>停止原因</dt>
+						<dd>{call.stopReason}</dd>
+					</div>
+				)}
+			</dl>
+			{usage === undefined ? (
+				<p className="task-diag-note">这一轮没有 usage 上报（模型报错等无响应场景）。</p>
+			) : (
+				<dl className="task-diag-kv">
+					<div title="input + cacheRead + cacheWrite（三个互不相交的计费桶之和）">
+						<dt>输入</dt>
+						<dd>{formatTokenCount(billedInputTokens(usage))} tok</dd>
+					</div>
+					<div>
+						<dt>输出</dt>
+						<dd>{formatTokenCount(usage.output)} tok</dd>
+					</div>
+					{/* reasoning ⊂ output（pi 对该子集关系有明确标注），所以它是「其中」，
+					    不参与任何合计。provider 上报的真实值，不加 ~（~ 在本项目专指估算）。 */}
+					{usage.reasoning !== undefined && (
+						<div title="思考 token 是 output 的子集，已包含在上面的「输出」里">
+							<dt>其中思考</dt>
+							<dd>{formatTokenCount(usage.reasoning)} tok</dd>
+						</div>
+					)}
+					<div>
+						<dt>缓存读 / 写</dt>
+						<dd>
+							{formatTokenCount(usage.cacheRead)} / {formatTokenCount(usage.cacheWrite)}
+						</dd>
+					</div>
+					<div>
+						<dt>缓存命中</dt>
+						<dd>{hit === undefined ? "—" : `${Math.round(hit * 100)}%`}</dd>
+					</div>
+					<div>
+						<dt>合计</dt>
+						<dd>{formatTokenCount(usage.totalTokens)} tok</dd>
+					</div>
+					<div>
+						<dt>费用</dt>
+						<dd>{formatCost(usage.cost)}</dd>
+					</div>
+				</dl>
 			)}
-			{data.ttftMs !== undefined && (
-				<span className="task-diag-num">TTFT {formatSpan(data.ttftMs)}</span>
+			{call.errorMessage !== undefined && (
+				<p className="task-diag-note stat-err">{call.errorMessage}</p>
 			)}
-			{throughput !== undefined && (
-				<span className="task-diag-num">{formatThroughput(throughput)} tok/s</span>
+			<p className="stat-hint">该轮真实入模拆分（当时）</p>
+			{snapshot === undefined ? (
+				<p className="task-diag-note">该轮没有请求快照（无组装来源或旧台账）。</p>
+			) : (
+				<SnapshotBreakdown snapshot={snapshot} />
 			)}
-			{hit !== undefined && (
-				<span className="task-diag-num">缓存 {Math.round(hit * 100)}%</span>
-			)}
-			{data.stopReason !== undefined && !isNormalStop(data.stopReason) && (
-				<span className="stat-hint">{data.stopReason}</span>
-			)}
-			{data.errorMessage !== undefined && <span className="stat-err">失败</span>}
 		</div>
 	);
 }
 
-/** 正常收尾的 stopReason 不占位（`stop` / `toolUse` 是每步的常态）。 */
-function isNormalStop(reason: string): boolean {
-	return reason === "stop" || reason === "toolUse";
-}
+/* ── ③ 轮 / 步台账 ───────────────────────────────────────────────── */
 
 function ToolRow({ data }: { readonly data: ToolCallData }): React.JSX.Element {
 	return (
@@ -188,9 +315,8 @@ function ToolRow({ data }: { readonly data: ToolCallData }): React.JSX.Element {
 	);
 }
 
-/** 一条账目行（步 / 工具 / 重试 / 压缩）。 */
-function ItemRow({ item }: { readonly item: LedgerItem }): React.JSX.Element {
-	if (item.kind === "llm") return <StepRow data={item.data} />;
+/** 一条挂在该步之下的账目行（工具 / 重试 / 压缩）。 */
+function RestRow({ item }: { readonly item: LedgerStepItem }): React.JSX.Element {
 	if (item.kind === "tool") return <ToolRow data={item.data} />;
 	if (item.kind === "retry") {
 		const d = item.data;
@@ -216,9 +342,127 @@ function ItemRow({ item }: { readonly item: LedgerItem }): React.JSX.Element {
 	);
 }
 
-/** 一个 run：边界行 + 条目行 + 收束行（对齐 dsh ledger 的轮边界语义）。 */
-function RunBlock({ run }: { readonly run: LedgerRun }): React.JSX.Element {
+/** 一步：可点开的行（+ 展开的详情）+ 它之后的工具与状态行。 */
+function StepBlock({
+	step,
+	stepKey,
+	run,
+	snapshots,
+	expanded,
+	onToggle,
+}: {
+	readonly step: LedgerStep;
+	readonly stepKey: string;
+	readonly run: LedgerRun;
+	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	readonly expanded: boolean;
+	readonly onToggle: (key: string) => void;
+}): React.JSX.Element {
+	const call = step.call;
+
+	return (
+		<div className="task-diag-step-group">
+			{call === undefined ? (
+				// 台账截尾（daemon 只留最新 N 条）后可能出现的无主条目：
+				// 照常展示，只是不编造「它属于哪一步」。
+				<div className="task-diag-note-line">
+					以下条目在本窗口内没有对应的模型调用（台账截尾）
+				</div>
+			) : (
+				<StepRow
+					data={call}
+					expanded={expanded}
+					onToggle={() => onToggle(stepKey)}
+				/>
+			)}
+			{expanded && call !== undefined && (
+				<StepDetail
+					call={call}
+					snapshot={snapshots.get(snapshotKey(run.runId, call.turnIndex))}
+				/>
+			)}
+			{step.rest.map((item, index) => (
+				// 台账条目在 fold 后不再保留 seq，位置即其身份。
+				<RestRow key={`${item.kind}-${index}`} item={item} />
+			))}
+		</div>
+	);
+}
+
+/** 一步（模型调用）的可点开行：耗时 / tokens / TTFT / 速度 / 缓存，一行看齐。 */
+function StepRow({
+	data,
+	expanded,
+	onToggle,
+}: {
+	readonly data: LlmCallData;
+	readonly expanded: boolean;
+	readonly onToggle: () => void;
+}): React.JSX.Element {
+	const usage = data.usage;
+	const hit = usage === undefined ? undefined : cacheHitRate(usage);
+	const decode = stepDecode(data);
+	const throughput =
+		decode === undefined || decode.ms === 0 ? undefined : decode.tokens / (decode.ms / 1_000);
+
+	return (
+		<button
+			type="button"
+			className="task-diag-step task-diag-step-btn"
+			aria-expanded={expanded}
+			title={data.errorMessage ?? "点开看这一步的计时、token 与该轮入模拆分"}
+			onClick={onToggle}
+		>
+			<span className="task-diag-caret">
+				{expanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+			</span>
+			<span className="task-diag-step-name">模型 #{data.turnIndex + 1}</span>
+			<span className="task-diag-num">{formatSpan(data.endedAt - data.startedAt)}</span>
+			{usage !== undefined && (
+				<span className="task-diag-num">
+					↑{formatTokenCount(billedInputTokens(usage))} ↓
+					{formatTokenCount(usage.output)}
+				</span>
+			)}
+			{data.ttftMs !== undefined && (
+				<span className="task-diag-num">TTFT {formatSpan(data.ttftMs)}</span>
+			)}
+			{throughput !== undefined && (
+				<span className="task-diag-num">{formatThroughput(throughput)} tok/s</span>
+			)}
+			{hit !== undefined && (
+				<span className="task-diag-num">缓存 {Math.round(hit * 100)}%</span>
+			)}
+			{data.stopReason !== undefined && !isNormalStop(data.stopReason) && (
+				<span className="stat-hint">{data.stopReason}</span>
+			)}
+			{data.errorMessage !== undefined && <span className="stat-err">失败</span>}
+		</button>
+	);
+}
+
+/** 正常收尾的 stopReason 不占位（`stop` / `toolUse` 是每步的常态）。 */
+function isNormalStop(reason: string): boolean {
+	return reason === "stop" || reason === "toolUse";
+}
+
+/** 一个 run：边界行 + 步（含各自挂着的工具/状态）+ 收束行。 */
+function RunBlock({
+	run,
+	snapshots,
+	expandedStep,
+	onToggleStep,
+}: {
+	readonly run: LedgerRun;
+	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	readonly expandedStep: string | undefined;
+	readonly onToggleStep: (key: string) => void;
+}): React.JSX.Element {
 	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage);
+	// 工具属于「发出它的那次模型调用」——这个关系台账没记，按位置推（foldRunSteps）。
+	const steps = useMemo(() => foldRunSteps(run.items), [run.items]);
+	const base = runKeyOf(run);
+
 	return (
 		<li className="task-diag-run">
 			<div className="task-diag-run-head">
@@ -228,10 +472,21 @@ function RunBlock({ run }: { readonly run: LedgerRun }): React.JSX.Element {
 					<span className="task-diag-model">{run.modelId}</span>
 				)}
 			</div>
-			{run.items.map((item, index) => (
-				// 台账条目没有稳定 id（seq 在 fold 后不再保留），序号即其位置。
-				<ItemRow key={`${item.kind}-${index}`} item={item} />
-			))}
+			{steps.map((step, index) => {
+				// turnIndex 在 run 内唯一；无主前导组用位置兜底（它本来就没有步号）。
+				const stepKey = `${base}#${step.call?.turnIndex ?? `x${index}`}`;
+				return (
+					<StepBlock
+						key={stepKey}
+						step={step}
+						stepKey={stepKey}
+						run={run}
+						snapshots={snapshots}
+						expanded={expandedStep === stepKey}
+						onToggle={onToggleStep}
+					/>
+				);
+			})}
 			<div className="task-diag-run-foot">
 				{run.endedAt === undefined ? (
 					<span className="task-diag-running">进行中</span>
@@ -260,6 +515,7 @@ function RunBlock({ run }: { readonly run: LedgerRun }): React.JSX.Element {
 export function TaskDiagnosticsPanel({
 	sessionId,
 	stats,
+	usageDetail,
 	width,
 	onClose,
 }: {
@@ -267,12 +523,16 @@ export function TaskDiagnosticsPanel({
 	readonly sessionId: string;
 	/** 会话级汇总（daemon 的 session_stats 投影，`conversation.sessionStats`）。 */
 	readonly stats: SessionStatCard | undefined;
+	/** 当前上下文占用（`conversation.usageDetail`）—— ② 的数据源，就是「现在」。 */
+	readonly usageDetail: ContextUsageDetail | undefined;
 	/** 面板宽度（px）：与 ArtifactPanel / SourcesPanel 同一份 panelWidth。 */
 	readonly width: number;
 	readonly onClose: () => void;
 }): React.JSX.Element {
 	const [ledger, setLedger] = useState<RunLedgerResult | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
+	/** 展开的步（runKey#turnIndex）。单个而非集合：诊断时一次只看一步。 */
+	const [expandedStep, setExpandedStep] = useState<string | undefined>(undefined);
 
 	const refresh = useCallback(() => {
 		window.kami
@@ -287,8 +547,10 @@ export function TaskDiagnosticsPanel({
 	}, [sessionId]);
 
 	useEffect(() => {
-		// 换会话先复位：留着上一个任务的台账会让人以为数据串了（它此刻确实串了）。
+		// 换会话先复位：留着上一个任务的台账会让人以为数据串了（它此刻确实串了），
+		// 展开态同理 —— 指针停在别的任务的步号上毫无意义。
 		setLedger(undefined);
+		setExpandedStep(undefined);
 		refresh();
 		// 台账只在台账条目变化时才变，流式增量与进度类事件跳过（名单在 shared）。
 		const off = window.kami.onSessionEvent(({ event }) => {
@@ -299,6 +561,15 @@ export function TaskDiagnosticsPanel({
 	}, [refresh]);
 
 	const runs = useMemo(() => foldRunLedger(ledger?.entries ?? []), [ledger]);
+	const snapshots = useMemo(
+		() => indexRequestSnapshots(ledger?.entries ?? []),
+		[ledger],
+	);
+
+	// 再点同一行收起；点另一行换过去（不保留多个展开，避免面板被撑长）。
+	const toggleStep = useCallback((key: string) => {
+		setExpandedStep((current) => (current === key ? undefined : key));
+	}, []);
 
 	return (
 		<aside className="preview-panel task-diag-panel" style={{ width: `${width}px` }}>
@@ -316,6 +587,7 @@ export function TaskDiagnosticsPanel({
 			</header>
 			<div className="preview-view task-diag-body">
 				<SessionOverview stats={stats} />
+				<ContextSection detail={usageDetail} />
 				{error !== undefined && <ErrorState message={error} />}
 				{ledger === undefined ? (
 					<LoadingState text="正在读取台账…" />
@@ -323,11 +595,20 @@ export function TaskDiagnosticsPanel({
 					<EmptyState title="这个任务还没有跑过任何一轮。" />
 				) : (
 					<section className="task-diag-section">
-						<h2 className="task-diag-heading">轮 / 步台账</h2>
+						<h2 className="task-diag-heading">
+							轮 / 步台账
+							<span className="stat-hint">点开某一步看该轮详情</span>
+						</h2>
 						<ol className="task-diag-runs">
 							{/* 展示序：新的在前（与「最近任务」一致，最近发生的最该看见）。 */}
 							{[...runs].reverse().map((run, index) => (
-								<RunBlock key={`${run.runId}-${run.startedAt}-${index}`} run={run} />
+								<RunBlock
+									key={`${run.runId}-${run.startedAt}-${index}`}
+									run={run}
+									snapshots={snapshots}
+									expandedStep={expandedStep}
+									onToggleStep={toggleStep}
+								/>
 							))}
 						</ol>
 					</section>

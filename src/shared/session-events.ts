@@ -222,6 +222,13 @@ export interface ToolCard {
 	 * 缺省表示非 task 卡或旧格式会话 —— 渲染层回退普通工具卡渲染。
 	 */
 	readonly subagents?: readonly SubagentStatus[];
+	/**
+	 * 卡头摘要的 hover 提示（原生 title 属性），只在摘要不是入参原值时填充：
+	 * 模型给 shell 工具写了 description 时，卡头显示描述、命令本体退到这里
+	 * （WorkBuddy 的 primaryTitle 同款分工，见 core/session-rebuild.ts 的 summarizeArgs）。
+	 * 缺省 = 摘要本身就是入参原值，无需提示 —— 渲染层不渲染 title 属性。
+	 */
+	readonly summaryTitle?: string;
 	readonly at: number;
 }
 
@@ -423,14 +430,11 @@ export type SessionEvent =
 		readonly errorMessage?: string;
 	}
 	/**
-	 * steer / followUp 队列变化。daemon 在 pi queue_update 到达时直接转发，
-	 * renderer 只用计数渲染「N 条消息排队中」。数组内容本身不渲染。
+	 * steer / followUp 队列变化。daemon 在 pi queue_update 到达时直接转发。
+	 * 数组**就是队列内容**（pi 的 _steeringMessages / _followUpMessages 快照）——
+	 * 排队 chips 靠它渲染文本，删除/编辑靠它重排（session:queue-rewrite）。
 	 */
-	| {
-		readonly type: "queue_changed";
-		readonly steering: readonly string[];
-		readonly followUp: readonly string[];
-	}
+	| { readonly type: "queue_changed"; readonly steering: readonly string[]; readonly followUp: readonly string[] }
 	/**
 	 * 上下文压缩开始（pi compaction_start 透传）。
 	 *
@@ -616,6 +620,15 @@ export interface TurnTiming {
 }
 
 /**
+ * steer / followUp 等待队列的快照（pi _steeringMessages / _followUpMessages 的直转）。
+ * queue_changed 事件与 SessionSnapshot.queued 共用这一个形状 —— 队列内容只有一份口径。
+ */
+export interface QueuedMessages {
+	readonly steering: readonly string[];
+	readonly followUp: readonly string[];
+}
+
+/**
  * 渲染进程挂载或热重载后拉取的完整状态。
  *
  * 会话 id 不单独列字段：它在 state.sessionId（SessionState），
@@ -647,8 +660,12 @@ export interface SessionSnapshot {
 	readonly artifacts: readonly ArtifactRef[];
 	/** 进行中的模型自动重试（run_retry 折叠而来）。没有重试窗口时为 undefined。 */
 	readonly retry?: RunRetryState;
-	/** steer / followUp 排队条数（queue_changed 折叠而来）。0 / 未收到过都为 undefined。 */
-	readonly queueCount?: number;
+	/**
+	 * steer / followUp 排队中的消息（queue_changed 折叠而来）。
+	 * daemon 目前不回填本字段（队列是运行期瞬态，切会话即失）——
+	 * 排队 chips 只活在「正在看的这个会话」里，与 queueCount 时代的口径一致。
+	 */
+	readonly queued?: QueuedMessages;
 }
 
 /**

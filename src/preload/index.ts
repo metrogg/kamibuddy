@@ -26,6 +26,7 @@ const bridge: KamiBridge = {
 	snapshot: (sessionId) => ipcRenderer.invoke(INVOKE.snapshot, sessionId),
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
+	rewriteQueue: (queued) => ipcRenderer.invoke(INVOKE.queueRewrite, queued),
 	newTask: (cwd) => ipcRenderer.invoke(INVOKE.newTask, cwd),
 	completions: () => ipcRenderer.invoke(INVOKE.completions),
 	pickInputFiles: () => ipcRenderer.invoke(INVOKE.pickInputFiles),

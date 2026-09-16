@@ -9,17 +9,22 @@
   以 `docs/ARCHITECTURE.md` 的决策记录 + 代码为准。
 - 命名并存：界面显示名「嘉立创Work」/ 仓库名与代号「KamiBuddy」。
 
-## 可观测性（2026-09-14 盘点）
+## 可观测性（2026-09-14 盘点，09-16 补展示层分工）
 
 - 三层结构：记录层（`logs/runs/<sessionId>.jsonl` 台账 + `logs/events-*.jsonl` 事件日志
-  + pi 会话 JSONL）→ 投影层（`ObservabilitySnapshot`，daemon 算）→ 展示层（诊断页 /
-  时间线 / 聊天指标条）。
+  + pi 会话 JSONL）→ 投影层（`ObservabilitySnapshot`，daemon 算）→ 展示层。
+- **展示层三页各管一个粒度，别再互相塞**（2026-09-15 重排）：
+  统计页 = 跨会话宏观（热力图 / 排行 / 费用）；诊断页 = 机器级环境自检（热键 / venv /
+  观测健康）；**任务诊断面板 = 单任务微观**（右侧栏第三态，`task-diagnostics-panel.tsx`，
+  跟随会话、切会话不关）。重排前这三件事挤在同一个「诊断」页里。
 - **不双写纪律**：消息正文只在会话 JSONL 落一份，台账只记 pi 不记的
   （计时 / TTFT / 重试 / 快照 / 队列）。改动记录层前先读 `core/run-ledger.ts` 文件头纪律。
 - 两套计时口径并存且**不许混**：台账工具计时 = 执行期；流式卡片 = 生成期上屏。
 - 两个 token 口径并存且**不许混**：`getContextUsage()` 是精确值（圆环用）；
   分类拆分是字符数估算（必须标「估算」、数字前加 `~`）。
-- 专项清单：`docs/可观测性清单.md`（82 条，八段：LOG/CTX/CACHE/PERF/TOOL/AGG/VIEW/OPS）。
+- **「上下文」在界面里也出现两次且不许混**：面板 ② = **现在**（实时 used/total +
+  分类估算）；面板 ④ = **当时**（`request_snapshot` 的冻结快照）。两处文案各带标注。
+- 专项清单：`docs/可观测性清单.md`（84 条，八段：LOG/CTX/CACHE/PERF/TOOL/AGG/VIEW/OPS）。
 - 已知最大结构性缺口：**缺消息逐条稳定标识**，导致上下文增量 diff 与缓存命中
   前缀边界都算不出来。
 
@@ -85,6 +90,19 @@
   `showCacheMissNotices`、`hideThinkingBlock`、`images.blockImages`、`steeringMode`…
   `session-host.ts:525` 已 `SettingsManager.create()`，只是没接到 UI。
 - **完全没有**：网络代理、会话保留期批清理、手动主题切换、快捷键、子代理模型映射。
+
+## 界面约定与截图核对（2026-09-16）
+
+- **用户贴的截图要先定性是哪个应用**，别靠肉眼看品牌字：
+  四个我们仓库里**不存在**的串只在真 WorkBuddy 里出现 —— `发现应用`、`Buddy加油站`、
+  `5.5.6`、品牌名 `WorkBuddy`。我们的是 `嘉立创Work` / `V0.1.0`
+  （`src/renderer/index.html` 的 `<title>` 是权威处）。
+- **界面语言跟自家，不跟 WorkBuddy**（用户认可抄机制，不是抄像素）：本项目所有菜单
+  （model / permission / plus / space / 任务行 ⋯）都是**纯文字条目 + 右侧对勾**，
+  WorkBuddy 那套带前置图标 —— 遇分歧以自家语言为准。
+- **让位内边距一律四值分写**（`top right bottom left`）：写简写 `padding: X 84px` 会把
+  左侧也抬到 84，行首控件凭空右移（2026-09-16 在 `.chat-header` 上踩过一次）。
+  算让位时顺手 grep 同类名，把「跟着控件宽度走的算式」一起改。
 
 ## 完成后必跑
 

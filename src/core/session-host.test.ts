@@ -546,6 +546,82 @@ describe("todo_write 清单卡", () => {
 	});
 });
 
+describe("shell 卡头的模型自描述（WorkBuddy 口径）", () => {
+	type ToolStartedEvent = Extract<SessionEvent, { type: "tool_started" }>;
+	type ToolFinishedEvent = Extract<SessionEvent, { type: "tool_finished" }>;
+
+	/** 驱动一次 powershell 的 execution_start（带 args）→ execution_end。 */
+	function runPowershell(host: SessionHost, args: unknown): void {
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "powershell",
+			args,
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "powershell",
+			isError: false,
+			result: { content: [{ type: "text", text: "命令执行完成，退出码 0。" }] },
+		} as unknown as AgentSessionEvent);
+	}
+
+	function cards(events: readonly SessionEvent[]): {
+		started: ToolStartedEvent["card"] | undefined;
+		finished: ToolFinishedEvent["card"] | undefined;
+	} {
+		return {
+			started: events.find((e): e is ToolStartedEvent => e.type === "tool_started")?.card,
+			finished: events.find((e): e is ToolFinishedEvent => e.type === "tool_finished")?.card,
+		};
+	}
+
+	it("有 description：卡头显示描述，命令本体退成 hover 提示（终态从执行态继承）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runPowershell(host, {
+			command: "Get-ChildItem -Recurse | Select-Object Name",
+			description: "列出目录下的所有文件",
+		});
+
+		const { started, finished } = cards(events);
+		expect(started).toMatchObject({
+			summary: "列出目录下的所有文件",
+			summaryTitle: "Get-ChildItem -Recurse | Select-Object Name",
+		});
+		expect(finished).toMatchObject({
+			summary: "列出目录下的所有文件",
+			summaryTitle: "Get-ChildItem -Recurse | Select-Object Name",
+		});
+	});
+
+	it("无 description：摘要就是命令，summaryTitle 键缺席（不渲染 title 属性）", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runPowershell(host, { command: "node -v" });
+
+		const { started, finished } = cards(events);
+		expect(started?.summary).toBe("node -v");
+		expect(started !== undefined && "summaryTitle" in started).toBe(false);
+		expect(finished?.summary).toBe("node -v");
+		expect(finished !== undefined && "summaryTitle" in finished).toBe(false);
+	});
+
+	it("description 为空串：退回命令，不产生空的 hover 提示", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runPowershell(host, { command: "node -v", description: "" });
+
+		const { started } = cards(events);
+		expect(started?.summary).toBe("node -v");
+		expect(started !== undefined && "summaryTitle" in started).toBe(false);
+	});
+});
+
 describe("web_search 来源卡", () => {
 	type ToolFinishedEvent = Extract<SessionEvent, { type: "tool_finished" }>;
 

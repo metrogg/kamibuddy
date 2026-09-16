@@ -235,10 +235,11 @@ interface IntentBucket {
  *   - 组内有未完成的卡（outcome 未回填）→ 整句加「正在」前缀，
  *     与 chat-view 的 pendingText 共用同一个「完成」判据
  *
- * 主题就是 `ToolCard.summary` —— 它已经是 session-host 的 `summarizeArgs`
- * 按字段优先级（path / file_path / filePath / pattern / query / command / dir）
- * 从工具入参里抽出来的值。metafold 拿不到原始 args，也不该再写第二份字段表：
- * 字段口径的唯一真源在 core/session-host.ts（spec 的「与 summarizeArgs 同源」）。
+ * 主题就是 `ToolCard.summary` —— 它已经是 session-rebuild 的 `summarizeArgs`
+ * 按字段优先级（path / file_path / filePath / pattern / query / description /
+ * command / dir）从工具入参里抽出来的值。metafold 拿不到原始 args，也不该再写
+ * 第二份字段表：字段口径的唯一真源在 core/session-rebuild.ts
+ *（spec 的「与 summarizeArgs 同源」），live 与历史重建两条路径共用它。
  *
  * 主题来源的**三级降级链**（spec: add-intent-grouped-tool-folds 的 Requirement
  * 「组头为意图标题」）：入参字段 → `adjacentText` 的关键词 → 无。

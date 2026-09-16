@@ -519,7 +519,9 @@ textarea:focus-visible {
 
 /* 行内操作钮：hover 行才浮现（opacity + visibility，焦点进入时也保持可见）。
    绝对定位压在时间戳那一格上（right: 6px ≈ meta 的 --space-3 右内边距），
-   于是 hover 读作"时间戳原地变成操作钮"，而不是"右侧又挤进来一排按钮"。 */
+   于是 hover 读作"时间戳原地变成操作钮"，而不是"右侧又挤进来一排按钮"。
+   里面**只有一个「⋯」**（2026-09-16 改）：此前并排四个 20px 图标、gap 只有 2px，
+   窄栏里挤成一簇、看着像叠在一起 —— 动作全收进 .task-op-menu（WorkBuddy 同款）。 */
 .task-item-ops {
 	position: absolute;
 	top: 6px;
@@ -548,6 +550,20 @@ textarea:focus-visible {
 	height: 20px;
 	border-radius: 5px;
 	color: var(--text-secondary);
+}
+
+/*
+ * 任务行的 ⋯ 菜单：锚点与 .space-menu 不同（那边挂在 28px 高的空间组头下、right: 4px），
+ * 这边挂在任务行下、对齐触发钮（right: 6px + 20px 宽）的右缘。卡片视觉与条目样式
+ * 全部复用 .pop-menu / .space-menu-item —— 两个菜单是同一种东西，不能各长一副样子。
+ */
+.task-op-menu {
+	top: 100%;
+	right: 6px;
+	z-index: var(--z-panel);
+	min-width: 140px;
+	padding: var(--space-2);
+	transform-origin: top right;
 }
 
 .task-op-btn:hover {
@@ -1229,13 +1245,60 @@ textarea:focus-visible {
 	font-size: var(--text-meta);
 }
 
+/* ── 排队 chips（steer/followUp 已发出、待生效）──────────────────────
+   WorkBuddy 同位同语义：贴着输入卡上缘，文本 + 编辑 + 删除。
+   「待发送」徽标回答的是「这条现在是什么状态」——它不在消息流里、模型也还没看到，
+   与已发出的用户气泡是两种视觉（气泡有底色，chip 只有描边）。 */
+.queued-chip {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	font-size: var(--text-list);
+}
+
+.queued-chip-label {
+	flex: 0 0 auto;
+	padding: 1px var(--space-1);
+	border-radius: var(--radius-sm);
+	background: var(--bg-raised);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.queued-chip-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* 图标钮与侧栏行内操作同一档（20px 命中区、次要色、hover 提亮），不另造一档。 */
+.queued-chip-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 20px;
+	height: 20px;
+	border-radius: var(--radius-sm);
+	color: var(--text-secondary);
+}
+
+.queued-chip-btn:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 .composer-bar {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
-}
-
-.bar-btn {
+}.bar-btn {
 	display: flex;
 	align-items: center;
 	gap: var(--space-1);
@@ -1692,12 +1755,14 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
-	/* 左右内边距让出窗口两角：App 层的侧栏开关（左）与面板开关组（右）钉在那里，
-	   行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区。
+	/* 左右内边距分别让出窗口两角：App 层的侧栏开关（左）与面板开关组（右）钉在那里，
+	   行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区。两侧**必须分开写**：
+	   左侧 48 = left 12 + 一个侧栏开关 28 + 呼吸 8（左角只有一个控件，别跟着右侧涨）；
 	   右侧 84 = right 12 + 两个按钮（28×2）+ 组内 gap 8 + 呼吸 8 ——
-	   面板开关从一个变两个（任务诊断，2026-09-15）后 48 不再够：
-	   行尾的 ModeSwitch 会被第二个按钮压住。 */
-	padding: var(--space-3) 84px;
+	   面板开关从一个变两个（任务诊断，2026-09-15）后 48 不再够：行尾的 ModeSwitch
+	   会被第二个按钮压住。（此前这条写成简写 `padding: var(--space-3) 84px`，
+	   顺手把左侧也从 48 抬到 84，返回按钮凭空右移 36px —— 已改回分写。） */
+	padding: var(--space-3) 84px var(--space-3) 48px;
 	border-bottom: 1px solid var(--border);
 }
 
@@ -3660,8 +3725,14 @@ textarea:focus-visible {
 	gap: var(--space-3);
 }
 
-/* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。 */
+/* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。
+   flex 行是为了让标题带一句限定语（如「实时」「点开某一步看该轮详情」）——
+   这些限定语是口径的一部分（② 是「现在」、④ 是「当时」），不能省也不能换行飘走。 */
 .task-diag-heading {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
 	margin: 0;
 	font-size: var(--text-meta);
 	font-weight: 600;
@@ -3747,6 +3818,14 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
+/* 一步 + 它之后的工具 / 状态行：一组一容器，工具在 DOM 上也真的挂在这一步之下
+   （归属由 run-timeline 的 foldRunSteps 按位置推 —— 台账不记「这个工具属于哪一步」）。 */
+.task-diag-step-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
 /* 一步：缩进一级（挂在轮之下）。读数允许换行，窄面板里不挤成一坨。 */
 .task-diag-step {
 	display: flex;
@@ -3759,6 +3838,35 @@ textarea:focus-visible {
 
 .task-diag-step-name {
 	color: var(--text);
+}
+
+/* 步行可点开（看该轮详情），所以整行是个 button：这里只补「整行」需要的三条 ——
+   width / text-align / 缩进。其余按钮默认视觉（font inherit、无底色无边框、
+   padding 归零）由文件顶部的全局 `button` 规则统一给，不在这里重写一遍。
+   缩进：run 的 8 + margin 4 + padding 4 = 16，与改造前 .task-diag-step 的
+   padding-left 同位。注意这条规则在 .task-diag-step 之后，padding 简写会整体
+   覆盖它的 padding-left —— 是有意的（缩进算式写在一处），改缩进时改这里。 */
+.task-diag-step-btn {
+	width: 100%;
+	margin-left: var(--space-1);
+	padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+	border-radius: var(--radius-sm);
+	text-align: left;
+}
+
+.task-diag-step-btn:hover {
+	background: var(--bg-hover);
+}
+
+/* 展开指示：两态两个图标（不转动画，同本页其余图标按钮的写法）。
+   align-self: center 覆盖 .task-diag-step 的 baseline —— SVG 的基线在底边，
+   baseline 对齐会让 12px 的箭头明显偏下。 */
+.task-diag-caret {
+	display: flex;
+	align-items: center;
+	align-self: center;
+	flex: 0 0 auto;
+	color: var(--text-secondary);
 }
 
 .task-diag-num {
@@ -3790,6 +3898,21 @@ textarea:focus-visible {
 	padding-left: var(--space-5);
 	font-size: var(--text-meta);
 	color: var(--text-secondary);
+}
+
+/* 单步详情的展开块：比步 / 工具行再进一级，并换到「抬升面」底色 ——
+   归属靠左边条（run 块本身也有一条），层级靠底色，两级都读得出来。
+   展开块排在该步的工具行**之前**：它是「这一步花了多少、看到了什么」的答案，
+   紧贴被点的那一行；工具行随后补上「它做了什么」。 */
+.task-diag-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin-left: var(--space-4);
+	padding: var(--space-3);
+	background: var(--bg-raised);
+	border-left: 2px solid var(--border);
+	border-radius: var(--radius-sm);
 }
 
 .preview-group-title {
@@ -8214,7 +8337,8 @@ textarea:focus-visible {
 .model-menu-thinking:active,
 .model-menu-goto:active,
 .permission-menu-goto:active,
-.provider-select-trigger:active:not(:disabled) {
+.provider-select-trigger:active:not(:disabled),
+.task-diag-step-btn:active {
 	background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 

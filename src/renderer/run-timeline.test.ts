@@ -5,7 +5,13 @@ import type {
 	RunLedgerEntryKind,
 } from "@shared/observability.ts";
 import { emptyUsage } from "@shared/observability.ts";
-import { foldRunLedger, indexRequestSnapshots, snapshotKey } from "./run-timeline.ts";
+import {
+	foldRunLedger,
+	foldRunSteps,
+	indexRequestSnapshots,
+	snapshotKey,
+	type LedgerStep,
+} from "./run-timeline.ts";
 
 let seq = 0;
 function entry<K extends RunLedgerEntryKind>(
@@ -156,6 +162,108 @@ describe("foldRunLedger（台账条目 → run 泳道）", () => {
 			entry(1200, "run_end", { runId: "run-1", reason: "completed" }),
 		]);
 		expect(runs[0]?.items).toEqual([]);
+	});
+});
+
+describe("foldRunSteps（一轮 → 按步归组）", () => {
+	/** 直接喂「一轮的条目」，省掉 run 边界那两行噪音。 */
+	function stepsOf(entries: readonly RunLedgerEntry[]): readonly LedgerStep[] {
+		return foldRunSteps(foldRunLedger(entries)[0]?.items ?? []);
+	}
+
+	it("空条目 → 零步", () => {
+		expect(foldRunSteps([])).toEqual([]);
+	});
+
+	it("工具归入它前面那次模型调用（位置性归属，台账不记这个关系）", () => {
+		const steps = stepsOf([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "llm_call", { turnIndex: 0, startedAt: 1050, endedAt: 1100 }),
+			entry(1200, "tool_call", {
+				toolCallId: "t1",
+				toolName: "read",
+				summary: "a.ts",
+				startedAt: 1150,
+				endedAt: 1200,
+				outcome: "ok",
+			}),
+			entry(1300, "tool_call", {
+				toolCallId: "t2",
+				toolName: "grep",
+				summary: "b",
+				startedAt: 1250,
+				endedAt: 1300,
+				outcome: "ok",
+			}),
+			entry(1400, "llm_call", { turnIndex: 1, startedAt: 1350, endedAt: 1400 }),
+		]);
+		expect(steps).toHaveLength(2);
+		expect(steps[0]?.call?.turnIndex).toBe(0);
+		expect(steps[0]?.rest.map((i) => (i.kind === "tool" ? i.data.toolCallId : i.kind))).toEqual([
+			"t1",
+			"t2",
+		]);
+		expect(steps[1]?.call?.turnIndex).toBe(1);
+		expect(steps[1]?.rest).toEqual([]);
+	});
+
+	it("尾随工具归最后一步（最后一批工具后面没有下一次调用了）", () => {
+		const steps = stepsOf([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "llm_call", { turnIndex: 0, startedAt: 1050, endedAt: 1100 }),
+			entry(1200, "tool_call", {
+				toolCallId: "t1",
+				toolName: "read",
+				summary: "a.ts",
+				startedAt: 1150,
+				endedAt: 1200,
+				outcome: "ok",
+			}),
+			entry(1300, "run_end", { runId: "run-1", reason: "completed" }),
+		]);
+		expect(steps).toHaveLength(1);
+		expect(steps[0]?.rest).toHaveLength(1);
+	});
+
+	it("重试 / 压缩跟着当前步走，不挪到轮级（否则先后顺序会乱）", () => {
+		const steps = stepsOf([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "llm_call", { turnIndex: 0, startedAt: 1050, endedAt: 1100 }),
+			entry(1150, "retry", { phase: "start", attempt: 2, delayMs: 3000 }),
+			entry(1200, "compaction", { reason: "threshold", tokensBefore: 9000, aborted: false }),
+			entry(1300, "llm_call", { turnIndex: 1, startedAt: 1250, endedAt: 1300 }),
+		]);
+		expect(steps.map((s) => s.call?.turnIndex)).toEqual([0, 1]);
+		expect(steps[0]?.rest.map((i) => i.kind)).toEqual(["retry", "compaction"]);
+		expect(steps[1]?.rest).toEqual([]);
+	});
+
+	it("首个 llm 之前的工具（台账截尾）→ 无主前导组，不编造归属", () => {
+		const steps = stepsOf([
+			entry(1000, "run_start", { runId: "run-1" }),
+			entry(1100, "tool_call", {
+				toolCallId: "t1",
+				toolName: "read",
+				summary: "a.ts",
+				startedAt: 1050,
+				endedAt: 1100,
+				outcome: "ok",
+			}),
+			entry(1200, "tool_call", {
+				toolCallId: "t2",
+				toolName: "grep",
+				summary: "b",
+				startedAt: 1150,
+				endedAt: 1200,
+				outcome: "error",
+			}),
+			entry(1300, "llm_call", { turnIndex: 0, startedAt: 1250, endedAt: 1300 }),
+		]);
+		expect(steps).toHaveLength(2);
+		expect(steps[0]?.call).toBeUndefined();
+		// 连续的无主条目合成一组，不是一条一组。
+		expect(steps[0]?.rest).toHaveLength(2);
+		expect(steps[1]?.call?.turnIndex).toBe(0);
 	});
 });
 

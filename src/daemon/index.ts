@@ -178,6 +178,7 @@ import {
 } from "../shared/ipc.ts";
 import { nextRunAfter, validateSchedule } from "../shared/automation.ts";
 import type { AutomationTask } from "../shared/automation.ts";
+import type { QueuedMessages } from "../shared/session-events.ts";
 import {
 	createEnvContext,
 	defaultSpawn,
@@ -2530,8 +2531,20 @@ const handlers: Record<string, Handler> = {
 		// 同会话写操作排互斥链（session-registry.ts）：同会话严格按到达顺序
 		// 串行，跨会话互不阻塞。prompt 在链上是整段 run（await 到 agent 循环
 		// 收尾），后续写操作执行时本 run 必然已结束。
+		//
+		// **例外：run 进行中的 prompt 不进链**（2026-09-16 修「插入任务没反应」）。
+		// steer 是信号不是写操作 —— 链上前一个 prompt await 的就是整段 run，
+		// 第二条消息排进去要等 run 收尾才轮得到；那时流式已结束，session-host
+		// 的 steer 分支永远走不到，插入退化为「跑完后当作新一轮」，用户看到的
+		// 就是发了没反应。与 abort 同一条豁免理由：pi 本就设计为 run 进行中
+		// 从外部调用 steer。
 		const bucket = currentBucket;
 		bucket.lastUsedAt = Date.now();
+		if (bucket.running) {
+			const host = await getHost(bucket);
+			await host.prompt(text, whileStreaming, images);
+			return;
+		}
 		await enqueue(bucket, async () => {
 			const host = await getHost(bucket);
 			await host.prompt(text, whileStreaming, images);
@@ -2550,6 +2563,19 @@ const handlers: Record<string, Handler> = {
 		const hostPromise = currentBucket.hostPromise;
 		if (hostPromise === undefined) return;
 		await (await hostPromise).abort();
+	},
+
+	/**
+	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
+	 * 不进互斥链 —— 与 prompt 的 run 中旁路、abort 同一理由：它操作的是
+	 * 「正在跑的那一轮」的队列，排在整段 run 后面就永远轮不到。
+	 * run 已结束时 clearQueue 即完成、重入队挂到下一轮（消息不丢，chips 仍在）。
+	 */
+	[INVOKE.queueRewrite]: async ([queued]) => {
+		const hostPromise = currentBucket.hostPromise;
+		if (hostPromise === undefined) return;
+		const { steering, followUp } = queued as QueuedMessages;
+		await (await hostPromise).rewriteQueue(steering, followUp);
 	},
 
 	/**
