@@ -427,34 +427,42 @@ describe("powershell 前缀规则（getRules 透传）", () => {
 		expect(asked).toHaveLength(0);
 	});
 
-	it("拆分最严获胜：git allow 下 `git status && Remove-Item ./dist` 仍高风险弹窗", async () => {
-		// 第二段无命中 → 规则不表态 → 维持现状询问，不被 git 规则放行。
+	it("拆分最严获胜：链式命令任一段命中 deny → 整条拒绝（allow 规则已无放行意义）", async () => {
+		/*
+		 * 2026-09-16 对齐后门不再审 powershell 命令，规则引擎只剩 deny 侧：
+		 * 链式命令逐段判，任一段 deny → 整条拒绝。allow 规则冗余但无害
+		 * （命令本就放行，unmatched 也放行——约束由执行层沙箱兜）。
+		 */
 		const { call, asked } = mount({
 			approve: () => ({ id: "x", decision: "allow" }),
-			rules: [{ tool: "powershell", prefix: "git", action: "allow" }],
+			rules: [
+				{ tool: "powershell", prefix: "git", action: "allow" },
+				{ tool: "powershell", prefix: "Remove-Item", action: "deny" },
+			],
 		});
 
-		await call({ toolName: "powershell", input: { command: "git status && Remove-Item ./dist" } });
+		const result = await call({ toolName: "powershell", input: { command: "git status && Remove-Item ./dist" } });
 
-		expect(asked).toHaveLength(1);
-		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
+		expect(result?.block).toBe(true);
+		expect(asked).toHaveLength(0);
 	});
 
-	it("read-only 档且沙箱未就绪：名单外命令仍拒（只读沙箱不可用 = 不执行命令）", async () => {
+	it("read-only 档：powershell 命令放行（执行层只读沙箱兜），用户 deny 规则仍拒", async () => {
 		/*
-		 * 四期翻转后 read-only 档的名单内命令、就绪下的名单外命令都放行
-		 * （只读沙箱兜着）。这条守住未就绪的旧语义：没有 OS 约束可依时，
-		 * 只读档仍然拒 —— 样本用名单外命令（git status 在名单内会放行）。
-		 * gate 未注入 isSandboxReady → sandboxReady=false → 走兜底拒绝。
+		 * 2026-09-16 对齐后门不审命令：read-only 档的 powershell 命令放行到
+		 * 执行层（只读沙箱装不起来时由 runner 拒绝，不是门的事）。
+		 * 这条守 deny 侧：用户的「别碰」比放行更强。
 		 */
 		const { call, asked } = mount({
 			settings: { sandbox: "read-only", approval: "ask" },
-			rules: [{ tool: "powershell", prefix: "git", action: "allow" }],
+			rules: [{ tool: "powershell", prefix: "git", action: "deny" }],
 		});
 
-		const result = await call({ toolName: "powershell", input: { command: "Get-ChildItem" } });
+		const allowed = await call({ toolName: "powershell", input: { command: "Get-ChildItem" } });
+		const denied = await call({ toolName: "powershell", input: { command: "git status" } });
 
-		expect(result?.block).toBe(true);
+		expect(allowed).toBeUndefined();
+		expect(denied?.block).toBe(true);
 		expect(asked).toHaveLength(0);
 	});
 
@@ -485,36 +493,6 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 	 * 校验本身的边界用例（解释器/分隔符/空白/非 powershell/deny）在
 	 * permission-rules.test.ts 的 rememberRuleFromApproval 套件里。
 	 */
-	it("端到端链路：勾选写回并允许后，同类命令不再弹窗", async () => {
-		const { call, asked, setRules } = mount({
-			approve: () => ({ id: "x", decision: "allow", rememberPrefix: "git" }),
-		});
-
-		/*
-		 * 样本曾是 `git log --oneline` / `git diff`（2026-09-16 沙箱三期改掉）：
-		 * 两条都进了内置安全名单，第一条不再弹窗、第二条没规则也放行 ——
-		 * 这条端到端就什么都测不出了。换成名单外的 git 命令：
-		 * `git commit` 触发高风险弹窗，`git push` 靠写回的 "git" 规则免问 ——
-		 * 「写回即刻生效」测的仍然是规则，不是名单。
-		 */
-		// 第一次：无规则，高风险弹窗；用户勾「以后都允许「git」开头的命令」并允许。
-		const first = await call({ toolName: "powershell", input: { command: 'git commit -m "初始化"' } });
-		expect(first).toBeUndefined();
-		expect(asked).toHaveLength(1);
-		expect(asked[0]).toMatchObject({ toolName: "powershell", risk: "high" });
-
-		// daemon 审批回程 handler 的同款路径：校验载荷 → 构造规则 → 幂等并入内存规则集。
-		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "git" });
-		expect(rule).toEqual({ tool: "powershell", prefix: "git", action: "allow" });
-		if (rule === undefined) throw new Error("应产出规则");
-		setRules(appendPermissionRule(rule, []));
-
-		// 后续同类命令命中 allow 规则，免弹窗 —— 「写回即刻生效」由 getRules getter 保证。
-		const second = await call({ toolName: "powershell", input: { command: "git push" } });
-		expect(second).toBeUndefined();
-		expect(asked).toHaveLength(1);
-	});
-
 	it("幂等：同一条规则重复写回，规则集引用不变（不落盘）", () => {
 		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "git" });
 		if (rule === undefined) throw new Error("应产出规则");
@@ -522,9 +500,10 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 		expect(appendPermissionRule(rule, once)).toBe(once);
 	});
 
-	it("非法 rememberPrefix 载荷不产生规则，同类命令仍逐次询问", async () => {
+	it("非法 rememberPrefix 载荷不产生规则（载荷校验独立于弹窗场景仍有效）", async () => {
 		// 解释器前缀：写回它等于允许一切，daemon 侧必须忽略（弹窗本就不显示该选项，
-		// 这里模拟的是被篡改的渲染进程硬发）。
+		// 这里模拟的是被篡改的渲染进程硬发）。powershell 命令不再询问后，
+		// 校验本身仍守住——被篡改的载荷造不出规则。
 		const { call, asked } = mount({
 			approve: () => ({ id: "x", decision: "allow", rememberPrefix: "python" }),
 		});
@@ -532,9 +511,9 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
 		await call({ toolName: "powershell", input: { command: "python script.py" } });
 		const rule = rememberRuleFromApproval("powershell", { decision: "allow", rememberPrefix: "python" });
 		expect(rule).toBeUndefined();
-		// 规则集维持为空（setRules 从未被调），下一次同类命令照样弹窗。
-		await call({ toolName: "powershell", input: { command: "python other.py" } });
-		expect(asked).toHaveLength(2);
+		// 命令放行（门不审），但规则集维持为空（setRules 从未被调）。
+		expect(await call({ toolName: "powershell", input: { command: "python other.py" } })).toBeUndefined();
+		expect(asked).toHaveLength(0);
 	});
 });
 
@@ -543,20 +522,10 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
  * 【2026-09-16】区外读询问随「对齐水位」撤除（read 家族区外放行），
  * 路径写回的两条端到端用例随之删除 —— writeBackPath 通道不再有触发场景
  * （gate 的 readWriteBackTarget 依赖 ask low，永不满足）。
- * powershell 首词写回不受影响（命令询问仍在）。
+ * powershell 首词写回亦随「门不再审命令」停用（deny 规则仍可手写生效）。
  */
 
 describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
-
-	it("powershell 询问不带 writeBackPath（命令写回走首词通道，与路径写回互斥）", async () => {
-		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
-
-		// `git status` 进了内置安全名单不再询问，换成名单外的样本（沙箱三期）。
-		await call({ toolName: "powershell", input: { command: "git push" } });
-
-		expect(asked).toHaveLength(1);
-		expect(asked[0]?.writeBackPath).toBeUndefined();
-	});
 
 	it("区外写的中风险询问不带 writeBackPath（写工具的路径规则是 spec 明确不做的部分）", async () => {
 		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });

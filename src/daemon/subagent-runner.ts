@@ -90,14 +90,6 @@ export interface SubagentRunnerDeps {
 	readonly resources: LoadedResources;
 	readonly getPermissions: () => PermissionSettings;
 	/**
-	 * 某个工作区的沙箱写约束是否**确实在生效**（审批放松的判据，spec: 沙箱三期）。
-	 *
-	 * 按 cwd 问而不是给一个布尔：daemon 里同时存在多个工作区（切换工作区、
-	 * 临时任务会话），可用性又取决于该目录所在卷能否承载 ACL 与授权是否成功 ——
-	 * 传一个全局布尔就会把别的工作区的结论用在这里。
-	 */
-	readonly isSandboxReady: (cwd: string) => boolean;
-	/**
 	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。子代理会话每次新建，
 	 * 逐会话还原不适用；不做每子代理独立档位（spec 方案 C 明确不做）。
 	 */
@@ -288,22 +280,6 @@ function buildSubagentExtensions(
 			},
 			cwd,
 			getSettings: deps.getPermissions,
-			/*
-			 * 审批放松同样对子代理生效（spec: 沙箱三期）。
-			 *
-			 * **这与二期「子代理不接提权通道」的取舍相反，理由不同，不是自相矛盾**：
-			 *   提权是**新增能力**（跳过沙箱写约束），给委派开这个口子等于把一个
-			 *     高风险授权挪到用户更难判断的位置 —— 所以不接；
-			 *   放松只是**不问一个本来就受约束的命令** —— 命令照样在沙箱里跑、
-			 *     照样过危险命令检查器，能力一点没变，只是少一次弹窗。
-			 *
-			 * 而且子代理的弹窗恰恰是用户最难判断的那种（只看得到一条命令，
-			 * 没有委派的来龙去脉），所以这里的收益比主会话更大。
-			 *
-			 * 判据与主会话同源（deps 注入，按 cwd 问）：子代理与主会话同 cwd、
-			 * 同权限设置，两边答案本就应当一致。
-			 */
-			isSandboxReady: () => deps.isSandboxReady(cwd),
 			requestApproval: deps.requestApproval,
 		}),
 		createProjectTrust({ isOwnWorkspace: deps.isOwnWorkspace }),
@@ -337,8 +313,6 @@ function buildSubagentExtensions(
 				getSettings: deps.getPermissions,
 				workspaceDir: cwd,
 				fallback: runCommand,
-				// 先跑后问的闭环判据（四期），与主会话同源、按 cwd 问。
-				isSandboxReady: () => deps.isSandboxReady(cwd),
 				/*
 				 * **有意不接 requestEscalation**（spec: add-windows-acl-sandbox 二阶段）。
 				 * 于是子代理里的提权申请一律被拒（sandbox-runner 的

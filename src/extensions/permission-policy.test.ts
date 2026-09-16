@@ -431,18 +431,19 @@ describe("shell 工具", () => {
 		expect(result).toMatchObject({ kind: "ask", risk: "high" });
 	});
 
-	it("powershell 三档：默认档高风险询问、只读档拒、完全访问档放行", () => {
-		// 默认档（workspace-write + ask）：命令无法靠路径判影响范围，高风险询问。
-		expect(decide(facts({ toolName: "powershell", command: "Remove-Item x" }), PATHS, CWD)).toMatchObject({
-			kind: "ask",
-			risk: "high",
+	it("powershell 命令门不再审批（2026-09-16 对齐 dsh）：一律放行到执行层", () => {
+		/*
+		 * 能不能跑由执行层的沙箱决定（现场 confine，失败即拒），不由门预判——
+		 * dsh 的结构：shell 无事前审批，confine 失败抛 SANDBOX_UNAVAILABLE。
+		 * 唯一例外是配置文本闸（单独一组测试）。bash 不在此列：没配检查器、
+		 * 也没法给它包沙箱执行器，维持高风险询问。
+		 */
+		expect(decide(facts({ toolName: "powershell", command: "Remove-Item x" }), PATHS, CWD)).toEqual({
+			kind: "allow",
 		});
-		// 只读档：一切命令执行都拒（阶段 3，模式的全部含义）。
-		expect(
-			decide(facts({ toolName: "powershell", command: "Get-Date" }), PATHS, CWD, READONLY).kind,
-		).toBe("deny");
-		// 完全访问档：放行 —— 命令级危险操作由工具层的危险命令检查器拦，
-		// 与门分工（门管要不要问人）。凭据目录在阶段 1 已拦，不在此列。
+		expect(decide(facts({ toolName: "powershell", command: "Get-Date" }), PATHS, CWD, READONLY)).toEqual({
+			kind: "allow",
+		});
 		expect(decide(facts({ toolName: "powershell", command: "Get-Date" }), PATHS, CWD, FULL)).toEqual({
 			kind: "allow",
 		});
@@ -842,27 +843,30 @@ describe("powershell 前缀规则（判定链阶段 4 的规则阶段）", () =>
 		expect(result.reason).toContain("拒绝规则");
 	});
 
-	it("拆分最严获胜：git allow 下 `git status && rm -rf ./dist` 第二段无命中 → 维持高风险询问", () => {
-		// 这条是整个规则引擎存在的理由：允许了 git status，
-		// 不能把 && 后面跟的任何东西一并放行。
+	it("拆分最严获胜：deny 段命中整条拒绝，allow 规则不再有放行意义（门不审命令后）", () => {
+		/*
+		 * 2026-09-16 对齐后门不再审 powershell 命令（一律放行到执行层），
+		 * 规则引擎对 powershell 只剩 **deny 侧**有意义：链式命令任一段命中
+		 * deny → 整条拒绝（最严获胜）。allow 规则冗余但无害。
+		 */
 		expect(
 			decide(facts({ toolName: "powershell", command: "git status && rm -rf ./dist" }), PATHS, CWD, undefined, [
 				GIT_ALLOW,
 			]),
-		).toMatchObject({ kind: "ask", risk: "high" });
+		).toEqual({ kind: "allow" });
+		const CHAIN_DENY: PermissionRule = { tool: "powershell", prefix: "rm", action: "deny" };
+		expect(
+			decide(facts({ toolName: "powershell", command: "git status && rm -rf ./dist" }), PATHS, CWD, undefined, [
+				GIT_ALLOW,
+				CHAIN_DENY,
+			]).kind,
+		).toBe("deny");
 	});
 
-	it("read-only 档：**deny 规则仍赢过名单与先跑后问**（用户意图最强）", () => {
-		/*
-		 * 四期翻转后 read-only 档的名单内命令、就绪下的名单外命令都放行
-		 * （只读沙箱兜着），但用户写的 deny 规则必须仍然赢 —— 三个放行
-		 * 通道（规则 allow、名单、先跑后问）谁都盖不过用户的 deny。
-		 */
+	it("read-only 档：**deny 规则仍赢过放行**（用户意图最强）", () => {
 		const denyGit: PermissionRule = { tool: "powershell", prefix: "git", action: "deny" };
 		expect(
-			decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD, READONLY, [denyGit], {
-				sandboxReady: true,
-			}).kind,
+			decide(facts({ toolName: "powershell", command: "git status" }), PATHS, CWD, READONLY, [denyGit]).kind,
 		).toBe("deny");
 	});
 
@@ -881,28 +885,20 @@ describe("powershell 前缀规则（判定链阶段 4 的规则阶段）", () =>
 	});
 
 	/*
-	 * 下面两条的样本命令从 `git status` 换成了 `git push`（2026-09-16，沙箱三期）。
-	 *
-	 * 原因是**被测行为变了，不是测试写错了**：三期的内置安全名单把 `git status`
-	 * 列为只读自省类、无条件免审批，所以它不再是「一条普通 powershell 命令」的
-	 * 合格样本。这两条真正要测的是**规则引擎**（bash 规则不该匹配 powershell 调用、
-	 * 无规则时维持逐次询问），与具体是哪条 git 命令无关 —— 换成名单外的
-	 * `git push` 后意图完整保留，且仍然命中 prefix "git" 的规则匹配路径。
-	 *
-	 * 别改回 `git status`：那会让这两条变成「测名单」而不是「测规则引擎」，
-	 * 而名单自己的用例在 safe-commands.test.ts 与本文件的「审批放松」一组里。
+	 * 样本命令用 `git push`（名单层已退役，门不再审命令——任何 powershell
+	 * 命令都会放行，这两条测的是**规则匹配的归属**：deny 规则必须因
+	 * rule.tool 不匹配而不到达）。
 	 */
-	it("其他工具的规则不匹配 powershell（rule.tool 必须等于调用工具）", () => {
-		const bashRule: PermissionRule = { tool: "bash", prefix: "git", action: "allow" };
+	it("其他工具的 deny 规则不匹配 powershell（rule.tool 必须等于调用工具）", () => {
+		const bashRule: PermissionRule = { tool: "bash", prefix: "git", action: "deny" };
 		expect(
 			decide(facts({ toolName: "powershell", command: "git push" }), PATHS, CWD, undefined, [bashRule]),
-		).toMatchObject({ kind: "ask", risk: "high" });
+		).toEqual({ kind: "allow" });
 	});
 
-	it("不传规则时维持现状（向后兼容：powershell 默认档高风险询问）", () => {
-		expect(decide(facts({ toolName: "powershell", command: "git push" }), PATHS, CWD)).toMatchObject({
-			kind: "ask",
-			risk: "high",
+	it("不传规则时 powershell 命令放行（门不审命令；向后兼容由执行层守住）", () => {
+		expect(decide(facts({ toolName: "powershell", command: "git push" }), PATHS, CWD)).toEqual({
+			kind: "allow",
 		});
 	});
 
@@ -975,169 +971,62 @@ describe("read 家族路径前缀规则（判定链阶段 2 接线）", () => {
  * **接线的位置语义** —— 名单与用户规则、与三个档位、与沙箱就绪度的相互关系。
  * 那些关系一旦接错，单看名单本身是发现不了的。
  */
-describe("审批放松（内置安全名单）", () => {
-	/** 沙箱确实生效的运行期事实。 */
-	const READY = { sandboxReady: true };
-
+describe("powershell 命令放行 + 配置文本闸（对齐 dsh 的最终形态）", () => {
 	function shell(command: string): ToolCallFacts {
 		return facts({ toolName: "powershell", command, path: undefined });
 	}
 
-	it("只读自省类：**沙箱不生效也放行**（它们本来就不写文件）", () => {
-		for (const context of [undefined, { sandboxReady: false }, READY]) {
-			expect(decide(shell("git status"), PATHS, CWD, undefined, undefined, context)).toEqual({
+	it("命令一律放行到执行层（就绪与否无关——dsh 同构：confine 是执行层的事）", () => {
+		for (const command of ["Get-ChildItem", "npm run build", "Remove-Item x -Recurse", "node evil.js"]) {
+			expect(decide(shell(command), PATHS, CWD), command).toEqual({
 				kind: "allow",
 			});
 		}
 	});
 
-	it("构建类：沙箱生效才放行", () => {
-		expect(decide(shell("npm run build"), PATHS, CWD, undefined, undefined, READY)).toEqual({
-			kind: "allow",
-		});
-	});
-
-	it("构建类：**沙箱未就绪 / 未知时继续询问**（fail-closed，方向不能反）", () => {
-		/*
-		 * 这条是本期最关键的判据方向。一期「探测失败就降级执行」是相反的口径 ——
-		 * 那时降级只是「没有改善」；而放松的**依据本身**就是沙箱存在，
-		 * 所以不确定时必须继续问。undefined（预热还没跑完）也算不确定。
-		 */
-		for (const context of [undefined, { sandboxReady: false }, {}]) {
-			expect(
-				decide(shell("npm run build"), PATHS, CWD, undefined, undefined, context),
-				JSON.stringify(context),
-			).toMatchObject({ kind: "ask", risk: "high" });
-		}
-	});
-
-	it("名单外命令：**沙箱就绪直接放行**（先跑后问本体），未就绪维持询问", () => {
-		/*
-		 * 四期翻转本体：`Remove-Item x -Recurse`（工作区内路径）在就绪会话里
-		 * 直接进沙箱跑 —— 写范围由 OS 兜住；未就绪时没有 OS 约束可依，
-		 * 回到逐次高风险询问。危险命令检查器照旧在工具层拦危险形态
-		 * （本门只管「要不要问人」）。
-		 */
-		expect(decide(shell("Remove-Item x -Recurse"), PATHS, CWD, undefined, undefined, READY)).toEqual({
-			kind: "allow",
-		});
-		expect(decide(shell("Remove-Item x -Recurse"), PATHS, CWD, undefined, undefined, undefined)).toMatchObject(
-			{ kind: "ask", risk: "high" },
-		);
-	});
-
-	it("**用户的 deny 规则赢过内置名单**（最严获胜，用户意图强于默认）", () => {
-		const denyNpm: PermissionRule = { tool: "powershell", prefix: "npm", action: "deny" };
-		const verdict = decide(shell("npm run build"), PATHS, CWD, undefined, [denyNpm], READY);
-		expect(verdict.kind).toBe("deny");
-	});
-
-	it("只读档：就绪时名单内命令放行（只读沙箱），名单外命令未就绪时仍拒", () => {
-		/*
-		 * 四期翻转：read-only 不再一刀切拒 shell —— 就绪时命令进**只读沙箱**
-		 * 跑（写不进任何位置，含 .git/config，fsmonitor 链在 OS 层就断了）。
-		 * 未就绪时没有 OS 约束可依，维持「只读=不执行命令」的旧语义。
-		 */
-		expect(decide(shell("git status"), PATHS, CWD, READONLY, undefined, READY).kind).toBe("allow");
-		expect(decide(shell("Get-ChildItem"), PATHS, CWD, READONLY, undefined, READY).kind).toBe("allow");
-		expect(decide(shell("Get-ChildItem"), PATHS, CWD, READONLY, undefined, undefined).kind).toBe("deny");
-	});
-
-	it("完全访问档本来就放行，名单不改变它", () => {
-		expect(decide(shell("git status"), PATHS, CWD, FULL, undefined, READY)).toEqual({ kind: "allow" });
-	});
-
-	it("bash **不参与**放松（它没有危险命令检查器，维持 fail-closed）", () => {
-		const bash = facts({ toolName: "bash", command: "git status", path: undefined });
-		expect(decide(bash, PATHS, CWD, undefined, undefined, READY)).toMatchObject({
-			kind: "ask",
-			risk: "high",
-		});
-	});
-
-	it("放行是 allow，所以**不受审批策略转换影响**（无人值守的拦截在工具层）", () => {
-		/*
-		 * approval: "never" 把 ask 转成 deny，而名单给的是 allow —— 它会穿过那个
-		 * 转换。行为仍然正确：无人值守下 shell 的真正拦截在 powershell 工具自己的
-		 * unattended 分支（返回 UNATTENDED_TEXT，一律不执行）。
-		 * 这条依赖很脆，所以在这里写明并钉住：若哪天工具层那道闸被挪掉，
-		 * 定时任务就会静默获得免审批执行 shell 的能力。
-		 */
-		expect(decide(shell("git status"), PATHS, CWD, NO_ASK, undefined, READY)).toEqual({
-			kind: "allow",
-		});
-	});
-
-	it("**PowerShell 惯用管道放行**（用户实测缺陷的回归钉）", () => {
-		/*
-		 * 用户实测抓到的缺陷：这条在四期第一版被拦成高风险询问 —— 结构闸门
-		 * 把一切管道当危险，而 PowerShell 的日常写法就是管道。齐平调整后
-		 * 管道与单段同水位：就绪直接放行，未就绪询问。
-		 */
-		expect(
-			decide(
-				shell("Get-ChildItem -Force | Select-Object Mode, LastWriteTime, Length"),
-				PATHS,
-				CWD,
-				undefined,
-				undefined,
-				READY,
-			),
-		).toEqual({ kind: "allow" });
-		// 未就绪时管道同样回到询问（放行条件缺一不可）
-		expect(
-			decide(
-				shell("Get-ChildItem -Force | Select-Object Mode, LastWriteTime, Length"),
-				PATHS,
-				CWD,
-				undefined,
-				undefined,
-				undefined,
-			),
-		).toMatchObject({ kind: "ask", risk: "high" });
-	});
-
-	it("结构注入：未就绪时名单层拦（维持询问），**就绪时对齐水位放行**", () => {
-		/*
-		 * 四期「齐平」调整（用户指示：不用比 codex/dsh 严格）：结构（管道/
-		 * 链式/注入旗标）在**名单层**仍拦——名单管的是「未就绪时谁免问」，
-		 * 那个场景没有 OS 兜底。就绪后所有形态与单段同水位、直接进沙箱——
-		 * codex 对 `git -c core.fsmonitor=evil status` 都是直接放行
-		 * （unmatched 非危险 → Allow），dsh 连判定都没有。同水位的已知代价
-		 * （任意代码可在沙箱内读密钥+外发）写在 permission-policy 的注释里。
-		 */
+	it("结构（管道/链式/注入旗标）与单段同水位", () => {
 		for (const command of [
 			'git status | node -e "evil()"',
 			"git -c core.fsmonitor=evil status",
 			"git status && Remove-Item x",
+			"git log > out.txt",
 		]) {
-			expect(
-				decide(shell(command), PATHS, CWD, undefined, undefined, undefined),
-				`${command}（未就绪）`,
-			).toMatchObject({ kind: "ask", risk: "high" });
-			expect(
-				decide(shell(command), PATHS, CWD, undefined, undefined, READY),
-				`${command}（就绪）`,
-			).toEqual({ kind: "allow" });
+			expect(decide(shell(command), PATHS, CWD), command).toEqual({
+				kind: "allow",
+			});
 		}
+	});
+
+	it("配置文本闸是唯一例外：命令涉及配置路径 → 高风险询问", () => {
+		for (const command of [
+			'Set-Content .git\\config "[core]"',
+			"Get-Content package.json",
+			"Remove-Item .pi\\extensions\\x.ts",
+		]) {
+			expect(decide(shell(command), PATHS, CWD), command).toMatchObject({
+				kind: "ask",
+				risk: "high",
+			});
+		}
+	});
+
+	it("bash 不放行（没配检查器、无法包沙箱执行器，fail-closed）", () => {
+		expect(
+			decide(facts({ toolName: "bash", command: "git status", path: undefined }), PATHS, CWD),
+		).toMatchObject({ kind: "ask", risk: "high" });
+	});
+
+	it("approval=never 时文本闸的询问转 deny（不问 = 不做）", () => {
+		expect(
+			decide(shell('Set-Content .git\\config x'), PATHS, CWD, NO_ASK).kind,
+		).toBe("deny");
+	});
+
+	it("放行是 allow，穿过审批策略转换（无人值守的拦截在工具层 unattended 分支）", () => {
+		expect(decide(shell("Get-Date"), PATHS, CWD, NO_ASK)).toEqual({ kind: "allow" });
 	});
 });
 
-/**
- * 「配置即代码」文件的写保护（2026-09-16 实测缺口的回归护栏）。
- *
- * 缺口本体（`scripts/probe-config-write-exec.ts` 实测 16/16 免审批）：
- * 工作区内的写入免审批，于是模型可以**静默**写下这批文件，而它们的内容会变成
- * 被执行的代码 —— 最严重的是 `.pi/extensions/*.ts`（pi 在会话建立时**加载即以
- * 本进程权限执行**，权限门在它之后，根本拦不到）。
- *
- * 判据：**内容会被自动执行，且没有任何命令点名它**。所以 `evil.ps1` 不在名单里
- * （`powershell ./evil.ps1` 点了名，由 shell 审批把关），而 `git status` 不点
- * `.git/config` 的名。
- *
- * 这一组同时钉住**精度**：名单宽了不是「多点一次弹窗」而已 —— 它会训练用户对
- * 高风险弹窗条件反射点允许，那正是 project-trust.ts 警告过的失效模式。
- */
 describe("配置即代码：写入需要审批", () => {
 	/** 这些文件的内容会被自动执行 → 高风险询问（**不是** deny：加 script 是正常需求）。 */
 	const EXECUTABLE_CONFIGS = [

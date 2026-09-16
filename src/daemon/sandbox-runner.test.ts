@@ -196,8 +196,13 @@ describe("档位映射", () => {
 	});
 });
 
-describe("降级纪律", () => {
-	it("探测报不可用 → 降级并带说明", async () => {
+describe("沙箱不可用 → fail-closed 拒绝（对齐 dsh SANDBOX_UNAVAILABLE）", () => {
+	/*
+	 * 四期对齐后不存在「降级到无约束跑」：read-only / workspace-write 档下
+	 * 探测、授权、令牌、spawn 任何一环失败都拒绝执行，把原因回给模型。
+	 * 官方出路与 dsh 相同：切 danger-full-access。
+	 */
+	it("探测报不可用 → **拒绝执行**，绝不 fallback", async () => {
 		const h = harness({
 			probe: async () => ({ available: false, reason: "not-windows", detail: "linux" }) as const,
 		});
@@ -208,14 +213,16 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = ran(await run("echo hi", 120));
-		// 命令仍然执行（不倒退），但必须说明沙箱未生效
-		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
+		const result = wasBlocked(await run("echo hi", 120));
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(result.category).toBe("sandbox-unavailable");
+		expect(result.reason).toContain("拒绝本次执行");
+		// 出路与 dsh 官方文案一致：切完全访问档
+		expect(result.reason).toContain("允许完全访问");
 		expect(h.recorded.diagnostics[0]).toMatchObject({ available: false, reason: "not-windows" });
 	});
 
-	it("探测抛错 → 归为 ffi-load-failed 并降级", async () => {
+	it("探测抛错 → 拒绝执行", async () => {
 		const h = harness({
 			probe: async () => {
 				throw new Error("koffi 没装");
@@ -228,13 +235,12 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = ran(await run("echo hi", 120));
-		expect(outcome.note).toContain("未受操作系统级写入约束");
+		wasBlocked(await run("echo hi", 120));
+		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(h.recorded.diagnostics[0]).toMatchObject({ available: false, reason: "ffi-load-failed" });
 	});
 
-	it("授权失败 → 降级，而不是拿未授权的沙箱去跑", async () => {
-		// 未授权的沙箱会把工作区内的正常写入也拒掉，比不进沙箱更糟
+	it("授权失败 → 拒绝执行（未授权的沙箱会把区内写入也拒掉，无约束跑则写约束消失）", async () => {
 		const h = harness({
 			prepare: async () => {
 				throw new Error("SetNamedSecurityInfoW 失败（Win32 5）");
@@ -247,14 +253,13 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = ran(await run("echo hi", 120));
+		wasBlocked(await run("echo hi", 120));
 		expect(h.recorded.sandboxCalls).toEqual([]);
-		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
+		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(h.recorded.diagnostics[0]).toMatchObject({ reason: "acl-grant-failed" });
 	});
 
-	it("沙箱装配失败（令牌/spawn）→ 降级", async () => {
+	it("沙箱装配失败（令牌/spawn）→ 拒绝执行", async () => {
 		const h = harness({
 			run: async () => {
 				throw new Error("CreateRestrictedToken 失败（Win32 1314）");
@@ -267,17 +272,31 @@ describe("降级纪律", () => {
 			sandbox: h.facade,
 			onDiagnostics: h.onDiagnostics,
 		});
-		const outcome = ran(await run("echo hi", 120));
-		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
+		wasBlocked(await run("echo hi", 120));
+		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(h.recorded.diagnostics[0]).toMatchObject({ reason: "token-creation-failed" });
 	});
 
-	it("**命令自身失败不降级**——那是真实结果，不是沙箱故障", async () => {
+	it("read-only 档下沙箱不可用同样拒绝（不假装只读）", async () => {
+		const h = harness({
+			run: async () => {
+				throw new Error("spawn 失败");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("read-only"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+		});
+		wasBlocked(await run("echo hi", 120));
+		expect(h.recorded.fallbackCalls).toEqual([]);
+	});
+
+	it("**命令自身失败不拒绝**——那是真实结果，不是沙箱故障", async () => {
 		/*
 		 * 这是本层最关键的一条区分。命令被操作系统拒绝写入时会以「非零退出码」
-		 * 的形式正常返回；若把它当成沙箱故障去降级重跑，就等于
-		 * 「区外写被拒 → 不受约束地再写一次」—— 写约束直接失效。
+		 * 的形式正常返回；拒绝它就等于把真实结果吞掉。
 		 */
 		const h = harness({
 			run: async () => ({
@@ -295,16 +314,13 @@ describe("降级纪律", () => {
 			onDiagnostics: h.onDiagnostics,
 		});
 		const outcome = ran(await run("Set-Content C:\\Windows\\x.txt", 120));
-		// 绝不能出现 fallback 重跑
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(outcome.exitCode).toBe(1);
 		expect(outcome.stderr).toContain("拒绝访问");
-		expect(outcome.note).toBeUndefined();
-		// 沙箱是好的，诊断应报可用
 		expect(h.recorded.diagnostics.at(-1)).toMatchObject({ available: true });
 	});
 
-	it("超时也不降级（真实结果）", async () => {
+	it("超时也不拒绝（真实结果）", async () => {
 		const h = harness({
 			run: async () => ({ stdout: "", stderr: "", exitCode: null, timedOut: true }),
 		});
@@ -399,7 +415,7 @@ describe("按目录记忆授权", () => {
 		expect(h.recorded.sandboxCalls).toHaveLength(2);
 	});
 
-	it("授权失败被记住，不每条命令重试一遍", async () => {
+	it("授权失败被记住，不每条命令重试一遍（失败仍是拒绝，只是不重复授权）", async () => {
 		let calls = 0;
 		const h = harness({
 			prepare: async () => {
@@ -413,10 +429,10 @@ describe("按目录记忆授权", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		await run("a", 120);
-		await run("b", 120);
+		wasBlocked(await run("a", 120));
+		wasBlocked(await run("b", 120));
 		expect(calls).toBe(1);
-		expect(h.recorded.fallbackCalls).toEqual(["a", "b"]);
+		expect(h.recorded.fallbackCalls).toEqual([]);
 	});
 });
 
@@ -489,11 +505,11 @@ describe("等待提示（授权慢才出声）", () => {
 			fallback: h.fallback,
 			sandbox: h.facade,
 		});
-		const outcome = ran(await run("echo hi", 120, (text) => notices.push(text)));
+		wasBlocked(await run("echo hi", 120, (text) => notices.push(text)));
 		await vi.advanceTimersByTimeAsync(5_000);
 
+		// 失败很快发生：用户没在等，不出声；命令被拒绝（不再无约束跑）
 		expect(notices).toEqual([]);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
 	});
 
 	it("授权慢且失败时：提示已发，但不留悬挂定时器", async () => {
@@ -527,10 +543,10 @@ describe("等待提示（授权慢才出声）", () => {
 		expect(notices).toHaveLength(1);
 
 		rejectPrepare?.(new Error("SetEntriesInAclW 失败"));
-		const outcome = ran(await pending);
+		wasBlocked(await pending);
 
+		// 提示已发过（用户等了），失败后不留悬挂定时器；命令被拒绝
 		expect(vi.getTimerCount()).toBe(0);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
 	});
 
 	it("不传 onProgress 时正常工作（连定时器都不建）", async () => {
@@ -876,13 +892,12 @@ describe("拒写识别", () => {
 	});
 });
 
-describe("先跑后问的闭环（readiness 分流）", () => {
+describe("失败一律拒绝（readiness 已不是判据，对齐 dsh）", () => {
 	/*
-	 * 四期的安全核心：门按 readiness=true 直接放行的命令没有人工终审，
-	 * 执行层装配失败若降级 fallback，就是「没人看过的命令无约束执行」。
-	 * 所以装配失败必须按 readiness 分流 —— 这两条把闭环钉住。
+	 * 对齐 dsh 后 runner 不再接收 isSandboxReady：任何失败一律拒绝。
+	 * 门也不审命令——能不能跑由执行层的沙箱决定（dsh 的 confine 同构）。
 	 */
-	it("**就绪会话装配失败 → fail-closed 拒绝**，绝不降级无约束跑", async () => {
+	it("装配失败 → 拒绝（无论预热状态如何）", async () => {
 		const h = harness({
 			run: async () => {
 				throw new Error("CreateRestrictedToken 失败（Win32 1314）");
@@ -893,31 +908,10 @@ describe("先跑后问的闭环（readiness 分流）", () => {
 			workspaceDir: WORKSPACE,
 			fallback: h.fallback,
 			sandbox: h.facade,
-			isSandboxReady: () => true,
 		});
 		const result = wasBlocked(await run("Get-ChildItem C:\\", 120));
-		// 绝不能出现 fallback 重跑
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(result.category).toBe("sandbox-unavailable");
-		expect(result.reason).toContain("拒绝执行");
-	});
-
-	it("**未就绪会话装配失败 → 维持一期降级+说明**（门在弹窗，有人工终审）", async () => {
-		const h = harness({
-			run: async () => {
-				throw new Error("CreateRestrictedToken 失败（Win32 1314）");
-			},
-		});
-		const run = createSandboxedRunner({
-			getSettings: () => settings("workspace-write"),
-			workspaceDir: WORKSPACE,
-			fallback: h.fallback,
-			sandbox: h.facade,
-			isSandboxReady: () => false,
-		});
-		const outcome = ran(await run("echo hi", 120));
-		expect(h.recorded.fallbackCalls).toEqual(["echo hi"]);
-		expect(outcome.note).toContain("未受操作系统级写入约束");
 	});
 
 	it("read-only 沙箱内命令被拒时用**只读版**文案（不是「工作区内可写」）", async () => {

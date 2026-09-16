@@ -1070,30 +1070,10 @@ const sandboxDiagnosticsByWorkspace = new Map<string, SandboxDiagnostics>();
  * 为什么还留一个全局值：`buildPermissionInfo` 没有「当前是哪个工作区」的上下文
  * （权限设置是全局的，设置页也不属于某个会话）。所以那段文案只能表达
  * 「最近一次探测到的情况」—— 多工作区并存时它可能指的是另一个工作区。
- * **判据不能读它**（那正是上面那个 bug 的形状）：判据一律走
- * `isSandboxReadyFor(cwd)`，按工作区问。
+ * 这只是**展示**的近似；执行层的沙箱可用性由 runner 执行时现场探测决定
+ * （对齐 dsh 的 confine 同构），不依赖这个全局值。
  */
 let latestSandboxDiagnostics: SandboxDiagnostics | undefined;
-
-/**
- * 某个工作区的沙箱**是否确实可用**（写约束真的在生效）。
- *
- * 这是审批放松的唯一判据，两条纪律：
- *
- * 1. **未知 = 不可用**。预热是会话建立时异步启动的，判定可能早于它完成 ——
- *    那时按 fail-closed 走询问。会自愈（后续命令就免审批了），代价是最初
- *    一两条命令仍会问，这个方向是对的。
- * 2. **它蕴含「ACL 授权已成功」**，不只是「探测通过」。`warmUpSandbox` 先 probe
- *    再 `ensurePrepared`，只有两步都成才报 `available: true`（授权失败会以
- *    `acl-grant-failed` 上报）。这一点是判据成立的关键：探测通过但授权失败时，
- *    执行层会降级成无约束执行 —— 若判据只看探测，就会出现
- *    「免审批放行 → 授权失败 → 无约束执行，且没人批准过」。
- *    而 `ensurePrepared` 按目录 memoize，预热成功过的目录在执行时命中同一个
- *    promise，不会再失败。所以「门看到 ready」与「执行层装配得起来」是同一个事实。
- */
-function isSandboxReadyFor(cwd: string): boolean {
-	return sandboxDiagnosticsByWorkspace.get(cwd.toLowerCase())?.available === true;
-}
 
 /** 原因枚举 → 给用户看的一句话。不把枚举名直接抛给界面。 */
 function describeSandboxReason(reason: SandboxUnavailableReason | undefined): string {
@@ -1333,8 +1313,6 @@ const subagentRunner = createSubagentRunner({
 	getModelKey: () => activeModelKey,
 	resources: RESOURCES,
 	getPermissions: () => activePermissions,
-	// 审批放松的判据（按工作区问，理由见 isSandboxReadyFor 与子代理装配处注释）。
-	isSandboxReady: isSandboxReadyFor,
 	// 全局默认推理强度（现读偏好，理由同 automation 装配处）：子代理会话
 	// 每次新建、逐会话还原不适用，全局默认即口径。
 	getThinkingLevel: () => readPreferences().thinkingLevel,
@@ -1611,15 +1589,6 @@ async function createHost(
 				// 前缀规则同 getSettings 的 getter 范式：批准写回（appendRule）后，
 				// 已建好的宿主下一次工具调用即按新规则免问/直拒。
 				getRules: () => activePermissionRules,
-				/*
-				 * 审批放松的判据（spec: 沙箱三期）。**按本会话的工作区问**，
-				 * 不读那个全局的「最近一次」值 —— 后者在多工作区并存时可能说的是
-				 * 另一个工作区，拿它当放松依据就是 2026-09-16 修掉的那个 bug 的形状。
-				 *
-				 * getter 而非快照：预热是会话建立时异步启动的，构造时取值会永久
-				 * 停在 false（放松永不生效）。
-				 */
-				isSandboxReady: () => isSandboxReadyFor(cwd),
 				// 审批按桶计数：有待答审批的桶豁免 LRU 回收 ——
 				// 用户在答的框不能随宿主一起消失。
 				// sessionId 在此注入（唯一注入点）：审批归属发起它的会话桶，
@@ -1741,8 +1710,6 @@ async function createHost(
 					workspaceDir: cwd,
 					// 降级路径就是今天在跑的那条 spawn，不另写一遍。
 					fallback: runCommand,
-					// 先跑后问的闭环判据（四期）：与权限门同源，按工作区问。
-					isSandboxReady: () => isSandboxReadyFor(cwd),
 					onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, cwd),
 					/*
 					 * 一次性提权审批（spec: add-windows-acl-sandbox 二阶段）。

@@ -63,7 +63,7 @@ import {
 	type SandboxMode,
 } from "../shared/permissions.ts";
 import { evaluateCommand, evaluatePathRules, type PermissionRule } from "./permission-rules.ts";
-import { classifySafeCommand, commandTouchesConfigAsCode, isConfigAsCodePath } from "./safe-commands.ts";
+import { commandTouchesConfigAsCode, isConfigAsCodePath } from "./safe-commands.ts";
 
 /** 判定结果。ask 时需要弹窗，deny 时直接拒绝并把 reason 回给模型。 */
 export type PermissionDecision =
@@ -117,25 +117,6 @@ export interface PolicyPaths {
 	 * 可选：不传则这条规则不生效；daemon 必传。
 	 */
 	readonly resourcesDir?: string;
-}
-
-/**
- * 判定时的运行期事实（与路径布局无关，所以不并进 PolicyPaths）。
- *
- * 独立成参而不是塞进 `PolicyPaths`：那个类型是**目录布局**（静态配置），
- * 而这里是**运行期状态**（会随探测与授权结果变化）。混在一起会让调用方
- * 以为它也是启动时定死的，从而缓存一份陈旧的值 —— 那正是 fail-closed 判据
- * 最不能出的错。
- */
-export interface PolicyContext {
-	/**
-	 * 本次调用的工作区里，沙箱写约束**是否确实在生效**。
-	 *
-	 * `undefined` / `false` 都按「不生效」处理（fail-closed）。
-	 * 它必须蕴含「ACL 授权已成功」，不能只是「探测通过」——
-	 * 理由见 daemon/index.ts 的 isSandboxReadyFor。
-	 */
-	readonly sandboxReady?: boolean;
 }
 
 /**
@@ -325,9 +306,8 @@ export function decide(
 	cwd: string,
 	settings: PermissionSettings = DEFAULT_PERMISSIONS,
 	rules?: readonly PermissionRule[],
-	context?: PolicyContext,
 ): PermissionDecision {
-	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules, context);
+	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules);
 
 	// 审批策略只作用在「要问」的结果上 —— allow / deny 都已是终局。
 	if (decision.kind !== "ask") return decision;
@@ -348,7 +328,6 @@ function decideUnderMode(
 	cwd: string,
 	mode: SandboxMode,
 	rules?: readonly PermissionRule[],
-	context?: PolicyContext,
 ): PermissionDecision {
 	const { toolName, path: rawPath, command } = facts;
 
@@ -534,52 +513,25 @@ function decideUnderMode(
 		}
 
 		/*
-		 * 内置安全名单（spec: 沙箱三期 · 审批放松）。**位置是语义的一部分**：
+		 * powershell：**门不再审命令**（2026-09-16 对齐 dsh 的最终形态）。
 		 *
-		 *   在用户规则**之后** —— 用户写的 `deny: npm` 必须能盖掉内置的 `npm run`
-		 *     （最严获胜；用户的明示意图强于我们的默认名单）；
-		 *   在 danger-full-access 放行之后、read-only 拒绝（阶段 3）之后 ——
-		 *     两个档位的语义都不该由本期悄悄改；
-		 *   在兜底高风险询问**之前** —— 这就是它起作用的地方。
+		 * dsh 的结构：shell 命令没有事前审批，wrap 进沙箱直接跑，confine
+		 * 失败抛 SANDBOX_UNAVAILABLE 拒绝——「能不能跑」由**执行层的沙箱**
+		 * 决定，不由门预判。我们对齐：powershell 的命令一律放行到执行层，
+		 * 执行层（daemon/sandbox-runner.ts）现场 confine，任何失败一律
+		 * fail-closed 拒绝、绝不无约束重跑。readiness（预热结果）不再是
+		 * 门侧判据——它是性能优化（提前传播 ACE）与设置页诊断，仅此而已。
 		 *
-		 * 只对 powershell 生效，bash 不参与：bash 没有配危险命令检查器
-		 * （见上方 SHELL 分支的 fail-closed 说明），不该在它身上放松。
+		 * 唯一的例外是配置文本闸（与 WorkBuddy 的受保护文件层同级）：
+		 * 沙箱只约束写，而 `.git/config`、`package.json`、`.pi/extensions/**`
+		 * 都在工作区内（沙箱允许写），没有这道闸，一句
+		 * `Set-Content .git\config ...` 就能重新打开 fsmonitor 链。
 		 *
-		 * 两层判据（详见 safe-commands.ts）：
-		 *   always    只读自省类，无条件免审批（沙箱在不在都一样安全）；
-		 *   sandboxed 构建类 = 任意代码执行，**只在沙箱确实生效时**免审批。
-		 *
-		 * `sandboxReady` 缺省 false（**fail-closed，方向不能反**）：这与一期
-		 * 「探测失败就降级执行」是**相反**的判据 —— 那时降级只是「没有改善」，
-		 * 而这里放松的**依据本身**就是沙箱存在，所以不确定时必须继续询问。
-		 * 判据来源见 daemon/index.ts 的 isSandboxReadyFor：它蕴含「ACL 授权已成功」，
-		 * 不只是「探测通过」（否则会出现「免审批放行 → 授权失败 → 执行层降级成
-		 * 无约束执行，而没人批准过」）。
-		 *
-		 * **名单成立的前提是「配置即代码」文件的写入需要审批**（见下方 MUTATING
-		 * 分支的 isConfigAsCodePath）：否则模型可以静默改写 .git/config 或
-		 * package.json，让一条「名单内的安全命令」执行任意代码。两者是一套东西。
+		 * bash 仍维持高风险询问：没有配危险命令检查器（见上方说明），
+		 * 且我们无法给 bash 包沙箱执行器（runner 只跑 powershell.exe），
+		 * 没有约束可依，保持 fail-closed。
 		 */
 		if (toolName === "powershell" && command !== undefined) {
-			const tier = classifySafeCommand(command);
-			// 名单先于文本闸：名单内都是只读命令，`git log .git/config` 这类
-			// 「读到配置路径」无害，不该被文本闸拦成弹窗。
-			if (tier === "always") return { kind: "allow" };
-			if (tier === "sandboxed" && context?.sandboxReady === true) return { kind: "allow" };
-
-			/*
-			 * 配置文本闸（spec: 沙箱四期）：先跑后问模式下名单外命令不再逐次
-			 * 弹窗，而沙箱**只约束写** —— `.git/config`、`package.json`、
-			 * `.pi/extensions/**` 都在工作区内（沙箱允许写）。没有这道闸，
-			 * 一句 `Set-Content .git\config ...` 就把三期的 fsmonitor 链
-			 * 重新打开。命中 → 高风险弹窗（与 write/edit 的配置即代码判定
-			 * 同一份名单，见 safe-commands.ts）。
-			 *
-			 * **防字面量不防变量拼接**（`$p = Join-Path ".git" "config"` 穿得过
-			 * 文本闸）—— 与 dsh（连字面量都不看）相比是净增强；语义级解析
-			 * （tree-sitter）是下一期方向。read-only 档不需要这道闸：只读沙箱
-			 * 连工作区都写不进（见下方的直接放行分支）。
-			 */
 			if (commandTouchesConfigAsCode(command)) {
 				return {
 					kind: "ask",
@@ -588,34 +540,7 @@ function decideUnderMode(
 					details: command,
 				};
 			}
-
-			/*
-			 * 先跑后问（spec: 沙箱四期，对齐 dsh / codex 的默认方向）：
-			 * 沙箱就绪时，名单外的命令**直接进沙箱跑**，不再逐次弹窗 ——
-			 * 写范围由 OS 兜住（区外写被拒），被拒时模型会看到 denial 提示
-			 * 并可申请一次性提权（daemon/sandbox-runner.ts）。
-			 *
-			 * **结构（管道/链式/子表达式/注入旗标）在这里不拦**（对齐水位）：
-			 * 结构闸门只作用于上面的名单层（管「未就绪时谁免问」）。就绪后
-			 * 所有形态与单段同水位 —— codex 对 `git -c core.fsmonitor=evil
-			 * status` 都是直接放行（unmatched 非危险 → Allow），dsh 连判定都
-			 * 没有；用户实测管道弹窗后明确「不用比他们严格，齐平就行」。
-			 * 已知的同水位代价：`-c core.fsmonitor=evil` 这类注入旗标免审批
-			 * 跑，任意代码可在沙箱内读密钥+外发（读/网无 OS 约束）——
-			 * codex/dsh 同样如此。凭据文本模式（.ssh 等）仍由检查器在
-			 * 工具层拦（那条防线先于门，不受此影响）。
-			 *
-			 * read-only 档在这里放行是安全的：只读沙箱无任何写能力；
-			 * workspace-write 档的安全闭环（门放行 ⟹ 执行必受约束）见
-			 * daemon/sandbox-runner.ts —— 装配失败按 readiness 分流，
-			 * 就绪会话 fail-closed 拒绝而不是降级无约束跑。
-			 *
-			 * readiness 未知/false 时**不得**走到这里（弹窗兜底）—— 放松的
-			 * 依据就是沙箱存在，方向不能反（三期的同一条纪律）。
-			 */
-			if (context?.sandboxReady === true) return { kind: "allow" };
-			// 未就绪：落到下方兜底（read-only 档拒、其余询问）—— 没有 OS 约束
-			// 可依时人工终审，名单层已放过它认为安全的形态。
+			return { kind: "allow" };
 		}
 
 		// 走到这里 = 没有 OS 约束可依（bash 全档；readiness 未知的 powershell）。

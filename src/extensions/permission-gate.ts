@@ -36,20 +36,6 @@ export interface PermissionGateOptions {
 	 * 省略 = 无规则，powershell 维持逐次高风险询问（引入规则前的行为）。
 	 */
 	readonly getRules?: () => readonly PermissionRule[];
-	/**
-	 * 本会话工作区的沙箱写约束**是否确实在生效**（spec: 沙箱三期 · 审批放松）。
-	 *
-	 * 与 getSettings 同为 getter：预热是会话建立时异步启动的，构造时取快照会
-	 * 永久停在 `false`（那样放松就永不生效）；而工作区所在卷、ACL 授权结果都
-	 * 可能在会话存续期间变化。
-	 *
-	 * 省略 = 按不生效处理（**fail-closed**）：审批放松的依据就是沙箱存在，
-	 * 不确定时必须继续逐次询问。注意这与一期「沙箱不可用就降级执行」是**相反**
-	 * 的判据方向 —— 那时降级只是「没有改善」，这里放松却是「减少人工把关」。
-	 */
-	readonly isSandboxReady?: () => boolean;
-	/** 向宿主发起审批。resolve 表示用户已作出选择。 */
-	// sessionId 由注入方（daemon 接线闭包）补 —— 扩展不认识会话桶。
 	readonly requestApproval: (
 		request: Omit<PermissionRequest, "id" | "sessionId">,
 	) => Promise<PermissionResponse>;
@@ -102,8 +88,6 @@ export function createPermissionGate(options: PermissionGateOptions) {
 				options.cwd,
 				options.getSettings?.(),
 				options.getRules?.(),
-				// 每次调用现读：预热是异步的，构造时取快照会永久停在 false。
-				{ sandboxReady: options.isSandboxReady?.() === true },
 			);
 
 			if (decision.kind === "allow") return undefined;

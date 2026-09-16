@@ -2,31 +2,23 @@
  * powershell 工具的沙箱执行器装配（spec: add-windows-acl-sandbox）。
  *
  * 这一层回答两个**策略**问题，所以它住在 daemon 而不是 extensions：
- *   1. 哪个权限档该进沙箱；
- *   2. 沙箱不可用时怎么降级、怎么如实告知。
+ *   1. 哪个权限档该进沙箱（read-only / workspace-write 进，danger-full-access 不进）；
+ *   2. 沙箱装不起来时怎么办——**拒绝执行，绝不无约束重跑**（对齐 dsh 的
+ *      SandboxUnavailableError：read-only/workspace-write 档下探测、授权、
+ *      令牌、spawn 任何一环失败都 fail-closed，官方出路是切
+ *      danger-full-access。不存在「降级到无约束跑」——那会让写约束静默消失）。
+ *
+ * 探测在**执行时**现场做（dsh 的 confine 同构：能力是执行时事实）；
+ * 会话建立时的 warmUp 只是性能优化（提前传播 ACE）与设置页诊断，
+ * 不是执行判据。
+ *
  * 工具本体只管跑命令与格式化结果（见 extensions/powershell-tool.ts 的 runner 注释）。
- *
- * 档位映射：
- *   read-only          → 不进沙箱。权限门阶段 3 已把 shell 全拒，走不到这里；
- *                        真走到了也不该假装受限（那会掩盖门的漏洞）。
- *   workspace-write    → **进沙箱**。本期主战场。
- *   danger-full-access → 不进沙箱。该预设的文案写的是「不限制文件范围」，
- *                        加了沙箱就是文案说谎 —— 诚实优先于「顺手更安全」。
- *
- * 降级纪律：探测失败或授权失败 → 退回直接 spawn（今天的行为），
- * 但在给模型的文本里**明确说明沙箱未生效**。这不是 fail-open：今天本来就
- * 没有沙箱，且权限门对 shell 逐次询问 —— 沙箱是新增的纵深防御，
- * 降级等于「没有改善」，不等于「打开了一个洞」。
- *
- * **下一期放松审批时这条判据必须翻转成 fail-closed**：放松的依据就是沙箱存在，
- * 所以那时探测不可用必须继续逐次询问，不得放松。
  */
 
 import type {
 	CommandBlocked,
 	CommandEscalationRequest,
 	CommandOutcome,
-	CommandRunResult,
 	CommandRunner,
 } from "../extensions/powershell-tool.ts";
 import {
@@ -58,11 +50,6 @@ const PREPARE_NOTICE_DELAY_MS = 1_000;
  */
 const PREPARE_NOTICE =
 	"正在为工作目录配置写入约束（首次较慢，与目录内文件数量有关；之后每次都会很快）……";
-
-/** 沙箱未生效时追加给模型的说明。 */
-const DEGRADED_NOTE =
-	"注意：本次执行未受操作系统级写入约束（沙箱不可用）。" +
-	"写入范围仅由 KamiBuddy 的权限判定把关，请严格只写工作目录内的文件。";
 
 /* ── 拒写识别（让「被策略拒了」对模型可见） ────────────────────── */
 
@@ -263,18 +250,6 @@ export interface SandboxRunnerOptions {
 	/** 诊断变化时回调（探测结论、降级原因）。同一结论只报一次。 */
 	readonly onDiagnostics?: (diagnostics: SandboxDiagnostics) => void;
 	/**
-	 * 本工作区的沙箱**是否确实在生效**（与权限门同一判据源：daemon 的
-	 * isSandboxReadyFor）。四期「先跑后问」的闭环关键：
-	 *
-	 * 门按 readiness=true 直接放行的命令（没有人工终审），若执行层装配失败
-	 * 还走旧降级（fallback 无约束跑），就变成「没人看过的命令无约束执行」。
-	 * 所以装配失败按 readiness 分流：true → fail-closed 拒绝；false/undefined →
-	 * 维持一期降级+说明（那些会话的门在逐次弹窗，有人看过命令）。
-	 *
-	 * getter 而非快照：readiness 随预热/授权结果在会话存续期间变化。
-	 */
-	readonly isSandboxReady?: () => boolean;
-	/**
 	 * 发起一次提权审批。**省略 = 没有审批通道**，于是任何提权申请都被拒
 	 * （fail-closed：没人能批准的时候「批准」不能凭空发生）。
 	 *
@@ -417,17 +392,28 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		options.onDiagnostics?.(diagnostics);
 	};
 
-	/** 降级执行：跑 fallback，并把「沙箱未生效」追加进结果。 */
-	const degrade = async (
-		command: string,
-		timeoutSeconds: number,
-		reason: SandboxUnavailableReason,
-		detail: string,
-	): Promise<CommandOutcome & { readonly note?: string }> => {
+	/**
+	 * 沙箱不可用 → **拒绝执行**，绝不无约束重跑。
+	 *
+	 * 对齐 dsh 的 `SandboxUnavailableError`（"refusing to run the command
+	 * unconfined"）：read-only / workspace-write 档下，探测失败、授权失败、
+	 * 令牌派生失败、spawn 失败——任何「沙箱装不起来」的情形都拒，把原因
+	 * 回给模型。不存在「降级到无约束跑」这条路：那会让写约束静默消失。
+	 * 官方出路与 dsh 相同：切 danger-full-access（用户明示的无约束档）。
+	 */
+	function refuse(reason: SandboxUnavailableReason, detail: string): CommandBlocked {
 		report({ available: false, reason, detail });
-		const outcome = await options.fallback(command, timeoutSeconds);
-		return { ...outcome, note: DEGRADED_NOTE };
-	};
+		return {
+			blocked: true,
+			category: "sandbox-unavailable",
+			reason:
+				"命令未执行：本机的命令沙箱不可用" +
+				`（${describeReason(reason)}${detail === "" ? "" : `：${detail}`}）。` +
+				"为避免在没有操作系统写入约束的情况下执行命令，已拒绝本次执行。" +
+				"请改用文件工具完成任务；确实需要 shell 时，可在设置中切换到「允许完全访问」" +
+				"（无沙箱约束，用户明示授权）后重试。",
+		};
+	}
 
 	return async (command, timeoutSeconds, onProgress, escalation) => {
 		const settings = options.getSettings();
@@ -451,14 +437,10 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		}
 
 		/*
-		 * danger-full-access（用户选择或一次性提权获批）是唯一走 fallback 的档：
-		 * 「没有写入约束」就是该档的语义。用户自己选的不加说明（说了是撒谎）；
-		 * 提权获批的加 ESCALATED_NOTE（让模型知道放宽了、且只此一次）。
-		 *
-		 * **read-only 绝不走这条路**（四期翻转）：旧代码 `mode !== workspace-write
-		 * → fallback` 对 read-only 意味着「无沙箱全权限跑」，此前靠权限门在
-		 * 阶段 3 全拒 shell 掩盖着（防御性死代码）；门放行只读沙箱执行后，
-		 * 命令真的会到这里 —— 必须进沙箱，见下方 read-only 分支。
+		 * danger-full-access（用户选择或一次性提权获批）是唯一不经沙箱的档：
+		 * 「没有写入约束」就是该档的语义（dsh 同义：consumer 不调 confine）。
+		 * 用户自己选的不加说明（说了是撒谎）；提权获批的加 ESCALATED_NOTE
+		 * （让模型知道放宽了、且只此一次）。
 		 */
 		if (mode === "danger-full-access") {
 			const outcome = await options.fallback(command, timeoutSeconds);
@@ -468,18 +450,20 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		const { workspaceDir } = options;
 		let probe: SandboxAvailability;
 		try {
+			// 执行时现场探测（dsh 的 confine 同构：能力是执行时事实，
+			// 不依赖预热缓存——预热只是提前做了同一件事）。
 			probe = await sandbox.probe(workspaceDir);
 		} catch (error) {
-			return degrade(command, timeoutSeconds, "ffi-load-failed", errorDetail(error));
+			return refuse("ffi-load-failed", errorDetail(error));
 		}
 		if (!probe.available) {
-			return degrade(command, timeoutSeconds, probe.reason, probe.detail);
+			return refuse(probe.reason, probe.detail);
 		}
 
 		/*
-		 * read-only：不 prepare（只读沙箱不需要任何 ACE，warmUp 本就只预热
-		 * workspace-write），直接以无写能力的受限令牌跑。命令写**任何位置**
-		 * 都会被 OS 拒（含工作区内），denial note 用只读版文案。
+		 * read-only：不 prepare（只读沙箱不需要任何 ACE），直接以无写能力的
+		 * 受限令牌跑。命令写**任何位置**都会被 OS 拒（含工作区内），
+		 * denial note 用只读版文案。
 		 */
 		if (mode === "read-only") {
 			try {
@@ -503,16 +487,16 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				}
 				return outcome;
 			} catch (error) {
-				return sandboxAssemblyFailure(command, timeoutSeconds, error);
+				return refuse(classifyFailure(error), errorDetail(error));
 			}
 		}
 
 		try {
 			await awaitWithNotice(ensurePrepared(workspaceDir, sandbox.prepare), onProgress);
 		} catch (error) {
-			// 授权失败 = 沙箱用不了，降级（而不是拿未授权的沙箱去跑 ——
-			// 那会让工作区内的正常写入也被拒，比不进沙箱更糟）。
-			return degrade(command, timeoutSeconds, classifyFailure(error), errorDetail(error));
+			// 授权失败 = 沙箱装不起来 → 拒绝（未授权的沙箱会把区内写入也拒掉，
+			// 无约束跑则写约束静默消失——两条路都不如拒）。
+			return refuse(classifyFailure(error), errorDetail(error));
 		}
 
 		try {
@@ -529,7 +513,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 			});
 			report({ available: true });
 			/*
-			 * 沙箱**是好的**，命令自己被拒了 —— 如实回传结果（不降级、不重跑），
+			 * 沙箱**是好的**，命令自己被拒了 —— 如实回传结果（不重跑），
 			 * 只追加一段让模型看得懂的说明。
 			 *
 			 * 这里绝不能改成「据此自动放宽后重跑」：stderr 由子进程控制，
@@ -550,37 +534,31 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 			}
 			return outcome;
 		} catch (error) {
-			return sandboxAssemblyFailure(command, timeoutSeconds, error);
+			// 装配失败（令牌派生、spawn）同口径拒绝。
+			return refuse(classifyFailure(error), errorDetail(error));
 		}
 	};
+}
 
-	/**
-	 * 沙箱**装配**失败（令牌派生、spawn 本身；不是命令执行失败 —— 后者以
-	 * outcome 形式正常返回）。按 readiness 分流（四期闭环不变式）：
-	 *
-	 * readiness=true：门按「沙箱在约束」直接放行了这条命令（先跑后问，
-	 *   没有人工终审）。若降级 fallback，就是「没人看过的命令无约束执行」
-	 *   —— fail-closed 拒绝，把原因回给模型。这是 dsh SANDBOX_UNAVAILABLE
-	 *   的同款语义。
-	 * readiness=false/undefined：门对名单外命令在逐次弹窗（有人看过命令），
-	 *   维持一期降级纪律（降级 = 没有改善，不等于打开一个洞）。
-	 */
-	async function sandboxAssemblyFailure(
-		command: string,
-		timeoutSeconds: number,
-		error: unknown,
-	): Promise<CommandRunResult> {
-		if (options.isSandboxReady?.() === true) {
-			return {
-				blocked: true,
-				category: "sandbox-unavailable",
-				reason:
-					`命令未执行：沙箱装配失败（${classifyFailure(error)}：${errorDetail(error)}）。` +
-					"为避免在没有操作系统写入约束的情况下执行命令，本次拒绝执行。" +
-					"请改用文件工具完成，或请用户检查沙箱环境后重试。",
-			};
-		}
-		return degrade(command, timeoutSeconds, classifyFailure(error), errorDetail(error));
+/** 原因枚举 → 拒绝文案里的一句话。 */
+function describeReason(reason: SandboxUnavailableReason): string {
+	switch (reason) {
+		case "not-windows":
+			return "当前系统不是 Windows";
+		case "ffi-load-failed":
+			return "系统调用组件加载失败";
+		case "token-creation-failed":
+			return "受限令牌创建失败";
+		case "acl-grant-failed":
+			return "工作目录授权失败";
+		case "unsupported-filesystem":
+			return "工作目录所在磁盘不支持权限控制";
+		case "process-start-failed":
+			return "命令执行环境的启动自检未通过";
+		case "disabled-by-setting":
+			return "已被设置关闭";
+		default:
+			return "原因未知";
 	}
 }
 
