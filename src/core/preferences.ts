@@ -60,6 +60,23 @@ export interface Preferences {
 	 */
 	readonly memoryEnabled?: boolean;
 	/**
+	 * 团队协作开关（spec: add-team-foundations）：批 3 的团队工具四件套按它启停。
+	 * 未设置 undefined，调用方按 false 处理 —— 缺省关闭，对齐 WorkBuddy 把
+	 * Agent Teams 当实验特性默认禁用的立场。缺省语义收在调用方（daemon 装配）。
+	 */
+	readonly agentTeamsEnabled?: boolean;
+	/**
+	 * 每会话的子代理 spawn 预算（task 工具防失控循环）。未设置 undefined，
+	 * 调用方回 SPAWN_BUDGET_PER_SESSION（20，原编译期常量现值）。
+	 * 非正整数读取层归一 undefined（手改文件的容错，同 thinkingLevel 口径）。
+	 */
+	readonly spawnBudget?: number;
+	/**
+	 * 单个子代理的执行超时毫秒。未设置 undefined，调用方回 SUBAGENT_TIMEOUT_MS
+	 * 缺省（600000，10 分钟）。非正整数归一 undefined，同上。
+	 */
+	readonly subagentTimeoutMs?: number;
+	/**
 	 * 个性化六字段（spec: rework-settings-layout）。
 	 * 字符串四键空串归一化为 undefined（与 styleId 三态特例不同：这些键没有
 	 * 「显式关闭」语义，空就是没设）；两个 boolean 缺省 true 的语义收在调用方
@@ -116,6 +133,9 @@ export function readPreferences(): Preferences {
 			thinkingLevel?: unknown;
 			styleId?: unknown;
 			memoryEnabled?: unknown;
+			agentTeamsEnabled?: unknown;
+			spawnBudget?: unknown;
+			subagentTimeoutMs?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
@@ -163,6 +183,8 @@ export function readPreferences(): Preferences {
 		// 非法值（手改文件）按「未配置」处理，同 thinkingLevel 的口径。
 		const memoryEnabled =
 			typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined;
+		const agentTeamsEnabled =
+			typeof record.agentTeamsEnabled === "boolean" ? record.agentTeamsEnabled : undefined;
 		/*
 		 * 个性化六字段：字符串空串归一化为 undefined（无三态语义，空=未设），
 		 * 非法类型按未配置；boolean 只验类型，缺省 true 语义在 daemon 合并。
@@ -182,6 +204,14 @@ export function readPreferences(): Preferences {
 		const personaDescription = optString("personaDescription");
 		const welcomeGreeting = optBoolean("welcomeGreeting");
 		const showChangeDetails = optBoolean("showChangeDetails");
+		// 防线参数（spec: add-team-foundations）：必须为正整数，否则按未配置处理
+		//（缺省语义收在调用方：spawn 预算 20 / 超时 600000ms）。
+		const optPositiveInt = (k: string): number | undefined => {
+			const v = rec[k];
+			return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
+		};
+		const spawnBudget = optPositiveInt("spawnBudget");
+		const subagentTimeoutMs = optPositiveInt("subagentTimeoutMs");
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -192,6 +222,9 @@ export function readPreferences(): Preferences {
 			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
 			...(styleId !== undefined ? { styleId } : {}),
 			...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
+			...(agentTeamsEnabled !== undefined ? { agentTeamsEnabled } : {}),
+			...(spawnBudget !== undefined ? { spawnBudget } : {}),
+			...(subagentTimeoutMs !== undefined ? { subagentTimeoutMs } : {}),
 			...(customInstructions !== undefined ? { customInstructions } : {}),
 			...(userNickname !== undefined ? { userNickname } : {}),
 			...(assistantName !== undefined ? { assistantName } : {}),

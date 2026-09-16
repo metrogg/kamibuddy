@@ -29,12 +29,12 @@ import {
 import type {
 	SessionEvent,
 	SessionState,
-	SubagentStatus,
 	ThinkingLevel,
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
 import { generatingLabel } from "../shared/session-events.ts";
+import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
 import {
 	composeHiddenContext,
@@ -295,20 +295,6 @@ function toolResultDetails(result: unknown): unknown {
 	return (result as { details?: unknown }).details;
 }
 
-/**
- * task 工具的子代理投影（details.subagents）：部分结果与终态共用同一条通道。
- *
- * 运行时判空 + Array.isArray 防御 —— pi 的 details 是扩展自定义的 unknown，
- * 非 task 工具（或旧格式会话）没有该键则返回 undefined，调用方走原逻辑。
- * 数组项不逐字段校验：投影的生产方就是本仓库的 task 工具（同进程、同构建），
- * 不是外来数据；逐项窄化是给不可信输入的，用在这里是纯防御性兜底。
- */
-function subagentsOf(details: unknown): readonly SubagentStatus[] | undefined {
-	if (typeof details !== "object" || details === null) return undefined;
-	const subagents = (details as { subagents?: unknown }).subagents;
-	return Array.isArray(subagents) ? (subagents as readonly SubagentStatus[]) : undefined;
-}
-
 export interface SessionHostOptions {
 	readonly catalog: ModelCatalog;
 	/** 选中的模型标识（`provider/model`）。undefined 表示让 pi 自己挑第一个可用的。 */
@@ -395,6 +381,13 @@ export interface SessionHostOptions {
 	 * 是 daemon 的知识（每次现载不缓存），宿主不重复持有。
 	 */
 	readonly getExpertLabel?: () => string | undefined;
+	/**
+	 * 当前绑定专家的追加工具白名单（spec: add-team-foundations）。
+	 * 生效工具集 = mode.tools ∪ extraTools（专家只能增不能删）。undefined/空 =
+	 * 不追加。与 getExpertLabel 同款注入口径：专家库是 daemon 的知识，宿主不持有；
+	 * 每次调用现查（专家库用户可覆盖，编辑后新解析即生效）。
+	 */
+	readonly getExpertExtraTools?: () => readonly string[] | undefined;
 }
 
 export class SessionHost {
@@ -587,8 +580,13 @@ export class SessionHost {
 		 * 曾经只传 DEFAULT_TOOLS、切换只发生在 setInteraction —— 新建任务后的
 		 * 首次对话（没人点过切换器）工具集就没有 web_search，模型自称「没有联网
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
+		 * 专家 extraTools 在创建时同样生效（创建即绑定专家的会话不该等一次
+		 * setExpert 才拿到追加工具）——与下方 effectiveToolNames 同一套合并语义。
 		 */
-		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
+		const initialMode = options.resources.modes.find((m) => m.id === options.interactionId);
+		const initialBase =
+			initialMode === undefined ? [...DEFAULT_TOOLS] : [...initialMode.tools];
+		const initialExtra = options.getExpertExtraTools?.() ?? [];
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
@@ -607,9 +605,9 @@ export class SessionHost {
 			tools:
 				options.toolsOverride !== undefined
 					? [...options.toolsOverride]
-					: mode === undefined
-						? [...DEFAULT_TOOLS]
-						: [...mode.tools],
+					: initialExtra.length === 0
+						? initialBase
+						: [...initialBase, ...initialExtra.filter((tool) => !initialBase.includes(tool))],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
@@ -812,6 +810,15 @@ export class SessionHost {
 	}
 
 	/**
+	 * 团队成员会话的溯源标记（team_member custom 条目，spec:
+	 * add-team-foundations 批 5）。与 subagent_run 同理：成员会话不该混进
+	 * 会话列表；listSessions 的头部扫描按两个标记一起过滤。
+	 */
+	markTeamMemberRun(memberName: string): void {
+		this.session.sessionManager.appendCustomEntry("team_member", { member: memberName });
+	}
+
+	/**
 	 * 当前会话文件名。daemon 用它标会话列表的 current、判定 rename/delete
 	 * 的目标是不是这个活会话。in-memory 会话为 undefined —— 本应用的会话
 	 * 都是持久化的，但 pi 的类型如此，调用方必须处理。
@@ -860,6 +867,7 @@ export class SessionHost {
 	/**
 	 * 切换交互模式。只切模式轴、换工具集 —— 专家绑定（expertId）与模式正交，
 	 * 不在这里读也不在这里写（spec: rework-expert-orthogonal-and-skills）。
+	 * 工具集经 effectiveToolNames 合并专家 extraTools（切模式不清专家的追加工具）。
 	 */
 	setInteraction(interactionId: string): void {
 		const mode = this.options.resources.modes.find(
@@ -867,14 +875,36 @@ export class SessionHost {
 		);
 		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
 		this.interactionId = interactionId;
-		this.session.setActiveToolsByName([...mode.tools]);
+		this.session.setActiveToolsByName([...this.effectiveToolNames()]);
 		this.emitState();
 	}
 
-	/** 绑定 / 清除专家。与交互模式正交：只改 expertId，不动模式与工具集。 */
+	/**
+	 * 绑定 / 清除专家。与交互模式正交：只改 expertId，不动模式轴。
+	 * 工具集重新应用：extraTools 是专家的声明（spec: add-team-foundations），
+	 * 绑定/清除都要即时生效 —— 与「创建即模式工具面」的既有纪律同源
+	 * （工具面是一等公民，不该等下一次切模式才对上）。
+	 */
 	setExpert(expertId: string | undefined): void {
 		this.expertId = expertId;
+		// 子代理会话的工具面来自 agent 定义、终身不变（toolsOverride 契约，
+		// 见 SessionHostOptions.toolsOverride 注释）——它们不会被调用到这里，
+		// 但守卫让契约显式：有 override 就不参与专家联动。
+		if (this.options.toolsOverride === undefined) {
+			this.session.setActiveToolsByName([...this.effectiveToolNames()]);
+		}
 		this.emitState();
+	}
+
+	/**
+	 * 生效工具集 = 当前模式白名单 ∪ 专家 extraTools（spec: add-team-foundations）。
+	 * 专家只能增不能删：extraTools 不出现在白名单里就追加，出现了去重跳过。
+	 */
+	private effectiveToolNames(): readonly string[] {
+		const mode = this.options.resources.modes.find((m) => m.id === this.interactionId);
+		const base = mode === undefined ? [...DEFAULT_TOOLS] : [...mode.tools];
+		const extra = this.options.getExpertExtraTools?.() ?? [];
+		return extra.length === 0 ? base : [...base, ...extra.filter((tool) => !base.includes(tool))];
 	}
 
 	/** 当前技能描述符，供 daemon 组装提示词的技能段。 */
@@ -1418,7 +1448,7 @@ export class SessionHost {
 				// task 工具的结构化投影优先于文本 delta，且判定必须放在取文本之前：
 				// 投影期 content.text 恒为空串（进度全走 details.subagents），
 				// 落到下面的空串早退会把整段投影静默吞掉。
-				const subagents = subagentsOf(toolResultDetails(event.partialResult));
+				const subagents = childAgentsOf(toolResultDetails(event.partialResult));
 				if (subagents !== undefined) {
 					emit({ type: "subagent_progress", id: event.toolCallId, agents: subagents });
 					return;
@@ -1468,7 +1498,7 @@ export class SessionHost {
 				// task 工具的子代理终态投影：与 sources 同源（result.details 只在
 				// execution_end 拿到），挂上后终态卡自带完整分组结果，不依赖
 				// 运行期 subagent_progress 是否到过（如恢复会话的回放路径）。
-				const subagents = subagentsOf(toolResultDetails(event.result));
+				const subagents = childAgentsOf(toolResultDetails(event.result));
 
 				emit({
 					type: "tool_finished",

@@ -11,10 +11,13 @@
 
 import { randomUUID } from "node:crypto";
 import {
+	closeSync,
 	existsSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	statSync,
 	writeFileSync,
@@ -23,6 +26,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { AutomationStore } from "../core/automation-store.ts";
+import { SessionArchive } from "../core/session-archive.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
 import {
 	getAppDir,
@@ -85,6 +89,9 @@ import {
 	validateSessionFilePath,
 } from "../core/session-rebuild.ts";
 import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from "../core/run-ledger.ts";
+import { SessionMailbox } from "./mailbox.ts";
+import { spawnMember, type MemberHandle } from "./member-runner.ts";
+import { TeamRegistry } from "./team-runtime.ts";
 import type { SystemSegmentStat } from "../shared/observability.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import {
@@ -114,6 +121,7 @@ import {
 	type SandboxDiagnostics,
 } from "./sandbox-runner.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
+import { teamExtensionFactory } from "../extensions/team-tools.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
@@ -639,6 +647,7 @@ const bucketsById = new Map<string, SessionBucket<SessionHost>>();
 let currentBucket: SessionBucket<SessionHost> = createBucket({
 	cwd: defaultWorkspaceDir,
 	conversation: freshConversation(defaultWorkspaceDir, "work", "craft"),
+	spawnBudget: readPreferences().spawnBudget,
 });
 
 /** 按会话文件查注册表（resume/rename/delete/export 守「同文件单写者」不变式）。 */
@@ -666,6 +675,9 @@ function setCurrentBucket(bucket: SessionBucket<SessionHost>): void {
 /** 空闲宿主 LRU 回收：dispose + 出表。历史在 JSONL，resume 可完整重开。 */
 function evictIdleHosts(): void {
 	for (const bucket of pickEvictions(bucketsById.values(), currentBucket)) {
+		// 领导桶逐出即解散团队（spec: add-team-foundations 批 5 v1 决策）：
+		// 成员产出要回投领导，领导宿主没了就是断了回投线 —— 留着只会烧钱。
+		void disbandTeamOf(bucket.sessionId);
 		bucketsById.delete(bucket.sessionId);
 		// pickEvictions 已排除 pristine（无 hostPromise）与 running / 审批待答 /
 		// 链上有活的桶 —— 这里拿到的必然是空闲宿主，dispose 不会杀到任何 run。
@@ -747,6 +759,8 @@ const previewServers = new PreviewServers();
  * load() 在 start() 里显式调（库损坏暴露在启动时刻，而不是第一次读写时才炸）。
  */
 const automationStore = new AutomationStore();
+/** 会话归档索引（L28）：path → 归档时刻；会话文件不动，列表标注与恢复走它。 */
+const sessionArchive = new SessionArchive();
 
 const automationScheduler = new AutomationScheduler({
 	store: automationStore,
@@ -853,6 +867,13 @@ function toggleAutomation(id: string): AutomationTask {
 	return next;
 }
 
+/**
+ * 「prompt 已受理」的等待者（按桶）：prompt IPC 改为受理即回后，
+ * emitSessionEvent 见到 run_started 就解闸该桶上等待的提交方
+ * （见 INVOKE.prompt 的 accepted 注释）。
+ */
+const runStartWaiters = new WeakMap<SessionBucket<SessionHost>, Set<() => void>>();
+
 function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEvent): void {
 	// resume 降级打开的桶：把 skippedLines 并入该桶发出的每个 session_state ——
 	// 宿主侧的 emitState 不知道这回事（它是桶级事实不是会话状态），
@@ -898,6 +919,14 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 	if (event.type === "run_started" || event.type === "run_finished") {
 		pushTaskListChanged();
 		if (event.type === "run_finished") evictIdleHosts();
+	}
+	// prompt IPC 的「受理即回」：run_started 解闸对应桶上等待受理的提交方
+	//（见 INVOKE.prompt 的 accepted 注释）。
+	if (event.type === "run_started") {
+		const waiters = runStartWaiters.get(bucket);
+		if (waiters !== undefined) {
+			for (const waiter of waiters) waiter();
+		}
 	}
 
 	// 带用量的 session_state 到达后补发明细：used/total 是 pi 的精确值（刚折叠进
@@ -1274,12 +1303,14 @@ function liveMcpHandles(): McpClientHandle[] {
  */
 const subagentRunner = createSubagentRunner({
 	getCatalog,
-	getModelKey: () => activeModelKey,
-	resources: RESOURCES,
+	getModelKey: () => activeModelKey,	resources: RESOURCES,
 	getPermissions: () => activePermissions,
 	// 全局默认推理强度（现读偏好，理由同 automation 装配处）：子代理会话
 	// 每次新建、逐会话还原不适用，全局默认即口径。
 	getThinkingLevel: () => readPreferences().thinkingLevel,
+	// 超时可配置（spec: add-team-foundations 防线参数化）：现读偏好，
+	// 未配置由 runner 侧回编译期缺省（10 分钟）。
+	getTimeoutMs: () => readPreferences().subagentTimeoutMs,
 	protectedDirs: PROTECTED_DIRS,
 	isTempCwd,
 	isOwnWorkspace: (dir) =>
@@ -1293,6 +1324,110 @@ const subagentRunner = createSubagentRunner({
 	 */
 	requestApproval: (request) => requestApproval(request, ""),
 });
+
+/**
+ * 成员会话执行器的装配（与上方 subagentRunner 的 deps 同源同值）——
+ * 两者的隔离语义一致，差异在宿主生命周期。字面量各写一份是接线配置不是逻辑；
+ * 若第三个执行器出现，再抽共享 deps 对象（与 automation-runner 一起，批 6）。
+ */
+const memberRunnerDeps = {
+	getCatalog,
+	getModelKey: () => activeModelKey,
+	resources: RESOURCES,
+	getPermissions: () => activePermissions,
+	getThinkingLevel: () => readPreferences().thinkingLevel,
+	protectedDirs: PROTECTED_DIRS,
+	isTempCwd,
+	isOwnWorkspace: (dir: string) =>
+		isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
+	getWebSearchConfig,
+	requestApproval: (request: Omit<PermissionRequest, "id" | "sessionId">) =>
+		requestApproval(request, ""),
+};
+
+/* ── 会话间消息信箱（spec: add-team-foundations 批 3） ────────────────
+   原语在 daemon/mailbox.ts（纯逻辑、有单测）。本批没有 IPC 通道也没有
+   调用方：消费方是批 5 的 send_message 工具与成员路由 —— 原语先行接线，
+   到时候只需在这层函数上加工具/UI 壳。 */
+
+const teamMailbox = new SessionMailbox();
+
+/**
+ * 向目标会话投递一条消息并排队唤醒它。
+ *
+ * 通路：入箱 → 排进目标桶互斥链 → drain 合成一条 prompt →
+ * `host.prompt(composed, "followUp")`。followUp 与「缺省排队」的产品决策
+ * 同口径（INVOKE.prompt 的缺省分支）：目标正在 run 中不打断，跑完接着消费。
+ *
+ * @param fromLabel 来源显示名（成员名/会话标题，批 5 的路由层有这个知识）；
+ *        缺省回落 fromSessionId。
+ * @throws 目标会话不在注册表、或从未建过宿主（pristine 桶没有可接收消息的
+ *         对话）—— 响亮失败，不静默丢消息。
+ */
+function deliverSessionMessage(
+	fromSessionId: string,
+	toSessionId: string,
+	text: string,
+	fromLabel?: string,
+): Promise<void> {
+	const target = bucketsById.get(toSessionId);
+	if (target === undefined) {
+		throw new Error(`目标会话不存在：${toSessionId}`);
+	}
+	if (target.hostPromise === undefined) {
+		throw new Error("目标会话还没有建立对话，无法接收消息");
+	}
+	teamMailbox.deliver(toSessionId, fromSessionId, text, fromLabel);
+	return enqueue(target, async () => {
+		const messages = teamMailbox.drain(toSessionId);
+		if (messages.length === 0) return;
+		const composed = messages
+			.map((message) => `[来自会话「${message.fromLabel ?? message.fromSessionId}」的消息]\n${message.text}`)
+			.join("\n\n---\n\n");
+		const host = await target.hostPromise;
+		if (host === undefined) return; // 不可达（上方已判），窄化守卫
+		await host.prompt(composed, "followUp");
+	});
+}
+
+/**
+ * 批 5（send_message 工具 / 成员路由）的消费锚点：原语与接线在这里就位，
+ * 到时候从对象上取用，不再各自拼装。导出是为了过 noUnusedLocals ——
+ * 本批刻意没有调用方（spec: add-team-foundations 批 3「无 IPC 通道」决策）。
+ */
+export const teamMessaging = { mailbox: teamMailbox, deliver: deliverSessionMessage };
+
+/* ── 团队运行时（spec: add-team-foundations 批 5） ─────────────────── */
+
+const teamRegistry = new TeamRegistry();
+/** 成员会话句柄（sessionId → handle）。宿主生命周期在接线层，注册表只管身份。 */
+const memberHandlesBySession = new Map<string, MemberHandle>();
+
+/** 团队开关（缺省关闭：对齐 WorkBuddy 把 Agent Teams 当实验特性的立场）。 */
+function isAgentTeamsEnabled(): boolean {
+	return readPreferences().agentTeamsEnabled ?? false;
+}
+
+/**
+ * 解散领导的团队：中止 + dispose 全部成员宿主，清注册表与句柄。
+ * 三个触发点：team_delete 工具、领导桶被 LRU 逐出、领导会话被删除 ——
+ * v1 决策是「逐出即解散」（防幽灵、防白烧钱；WorkBuddy 的无恢复语义同款），
+ * 「豁免逐出」留批 6 评估。
+ */
+async function disbandTeamOf(leaderSessionId: string): Promise<void> {
+	const team = teamRegistry.getTeam(leaderSessionId);
+	if (team === undefined) return;
+	for (const member of team.members.values()) {
+		if (member.sessionId === undefined) continue;
+		const handle = memberHandlesBySession.get(member.sessionId);
+		if (handle !== undefined) {
+			await handle.abort().catch(() => {});
+			handle.dispose();
+			memberHandlesBySession.delete(member.sessionId);
+		}
+	}
+	teamRegistry.disband(leaderSessionId);
+}
 
 /**
  * 懒建宿主。第一次发消息时才创建 —— 建会话需要一个可用模型，
@@ -1533,6 +1668,18 @@ async function createHost(
 				return undefined;
 			}
 		},
+		// 专家追加工具白名单（spec: add-team-foundations）：与 getExpertLabel
+		// 同款注入——现载专家库查 extraTools，坏库自吞退回「不追加」（工具面
+		// 退回模式白名单，比炸掉整个会话装配温和且可预期）。
+		getExpertExtraTools: () => {
+			const expertId = bucket.conversation.state.expertId;
+			if (expertId === undefined) return undefined;
+			try {
+				return loadExpertsNow().find((e) => e.name === expertId)?.extraTools;
+			} catch {
+				return undefined;
+			}
+		},
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -1724,15 +1871,124 @@ async function createHost(
 				 * spawn 预算按桶计（session-registry 的 SPAWN_BUDGET_PER_SESSION）：
 				 * 换桶即新预算，saveToWorkspace 原地换 cwd 不换桶、不复位。
 				 */
-			taskExtensionFactory({
-				runSubagent: (request) => subagentRunner.run({ ...request, cwd }),
-				listAgents: () => agents,
-				checkBudget: () => {
-					if (bucket.spawnBudgetRemaining <= 0) return false;
-					bucket.spawnBudgetRemaining -= 1;
-					return true;
-				},
-			}),
+		taskExtensionFactory({
+			runSubagent: (request) => subagentRunner.run({ ...request, cwd }),
+			listAgents: () => agents,
+			checkBudget: () => {
+				if (bucket.spawnBudgetRemaining <= 0) return false;
+				bucket.spawnBudgetRemaining -= 1;
+				return true;
+			},
+		}),
+		/*
+		 * 团队工具四件套（spec: add-team-foundations 批 5）：agentTeamsEnabled
+		 * 开启时才注册（缺省关闭，白名单名静默忽略）。只挂用户会话 ——
+		 * automation run 会话有自己的装配（不含 team 工厂），无人值守下建团
+		 * 与「无人值守下递归委派」是同一条不做决策。成员 spawn 逐个消耗
+		 * 同一份桶预算；完成/失败经批 3 的 deliverSessionMessage 回投本会话；
+		 * 领导桶逐出/删除时由 disbandTeamOf 解散（防幽灵成员）。
+		 */
+		teamExtensionFactory({
+			isEnabled: isAgentTeamsEnabled,
+			listAgents: () => agents,
+			startTeam: async (plan, hooks) => {
+				const leaderId = adoptedSessionId(bucket);
+				// 注册表校验先行（单团队/重名/数量）；预算逐成员扣，失败即解散
+				// —— 不留半支队伍（半死的成员产出无处回投，只会烧钱）。
+				teamRegistry.createTeam(leaderId, plan.name, plan.members);
+				const acks: { name: string; sessionId: string }[] = [];
+				try {
+					for (const member of plan.members) {
+						if (bucket.spawnBudgetRemaining <= 0) {
+							throw new Error("spawn 预算已耗尽，无法启动全部成员");
+						}
+						bucket.spawnBudgetRemaining -= 1;
+						const agent = agents.find((a) => a.name === member.agentName);
+						if (agent === undefined) {
+							throw new Error(`没有名为「${member.agentName}」的子代理定义`);
+						}
+						const handle = await spawnMember(
+							memberRunnerDeps,
+							{ cwd, agent, memberName: member.name, task: member.task },
+							{
+								onProgress: (name, text) => {
+									teamRegistry.recordProgress(leaderId, name, 0, text);
+									hooks.onProgress(name, text);
+								},
+								onComplete: (name, output, turns) => {
+									teamRegistry.markStatus(leaderId, name, "idle", `已完成 ${turns} 轮`);
+									void deliverSessionMessage(
+										teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId ?? "",
+										leaderId,
+										output,
+										name,
+									).catch((error: unknown) => {
+										eventLog.append({
+											kind: "team_member_delivery_failed",
+											sessionId: leaderId,
+											message: error instanceof Error ? error.message : String(error),
+										});
+									});
+								},
+								onFailed: (name, message) => {
+									teamRegistry.markStatus(leaderId, name, "failed", message);
+									const memberSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
+									if (memberSession === undefined) return;
+									void deliverSessionMessage(memberSession, leaderId, `成员任务失败：${message}`, name).catch(
+										(error: unknown) => {
+											eventLog.append({
+												kind: "team_member_delivery_failed",
+												sessionId: leaderId,
+												message: error instanceof Error ? error.message : String(error),
+											});
+										},
+									);
+								},
+							},
+						);
+						memberHandlesBySession.set(handle.sessionId, handle);
+						teamRegistry.markSpawned(leaderId, member.name, handle.sessionId);
+						acks.push({ name: member.name, sessionId: handle.sessionId });
+					}
+				} catch (error) {
+					void disbandTeamOf(leaderId);
+					throw error;
+				}
+				return acks;
+			},
+			sendToMembers: async (to, text) => {
+				const leaderId = adoptedSessionId(bucket);
+				const team = teamRegistry.getTeam(leaderId);
+				if (team === undefined) throw new Error("本会话没有团队，先 team_create 建团");
+				const names =
+					to.toLowerCase() === "@all"
+						? [...team.members.keys()]
+						: [to.replace(/^@/, "")];
+				const sessionIds = teamRegistry.resolveMemberSessions(leaderId, names);
+				const composed = `[来自领导的消息]\n${text}`;
+				for (const sessionId of sessionIds) {
+					const handle = memberHandlesBySession.get(sessionId);
+					if (handle === undefined) throw new Error(`成员会话丢失：${sessionId}`);
+					void handle.prompt(composed).catch(() => {});
+				}
+				return names;
+			},
+			getTeamState: () => {
+				const team = teamRegistry.getTeam(adoptedSessionId(bucket));
+				if (team === undefined) return undefined;
+				return {
+					name: team.name,
+					members: [...team.members.values()].map((member) => ({
+						name: member.name,
+						agentName: member.agentName,
+						status: member.status,
+						turns: member.turns,
+						lastActivity: member.lastActivity,
+					})),
+				};
+			},
+			closeTeam: () => disbandTeamOf(adoptedSessionId(bucket)),
+		}),
 		],
 	});
 
@@ -1788,6 +2044,76 @@ function isEnoent(error: unknown): boolean {
 	);
 }
 
+/* ── 子代理会话过滤（spec: add-team-foundations） ────────────────────
+   markSubagentRun 写的 subagent_run custom 条目此前唯一消费方是 usage-stats，
+   列表链路没接 —— 子代理会话混进侧栏是现行 bug。团队成员会话（后续批次）
+   会进一步放大它，所以在列表读取层过滤，UI 无感。 */
+
+/** 子代理/成员会话的溯源条目类型（写入点：session-host 的 mark*Run 系列）。 */
+const CHILD_SESSION_CUSTOM_TYPES = new Set(["subagent_run", "team_member"]);
+
+/**
+ * 头部扫描窗口。标记在会话建立后、任何 message 之前写入（markSubagentRun
+ * 紧跟 SessionHost.create，pi 只追加条目从不重写文件），所以首条 message
+ * 之前必然扫到或不复存在——64KB 只是个宽松上界，不为 correctness 服务。
+ */
+const SUBAGENT_HEAD_BYTES = 64 * 1024;
+
+/** (path, mtimeMs, size) → 判定缓存：列表刷新期间反复扫大文件是纯浪费。 */
+const subagentFileMemo = new Map<string, boolean>();
+
+/**
+ * 会话文件是否子代理 run（头部扫描）。文件读不到/解析失败按非子代理处理：
+ * 判定失败不该让会话从列表里消失（那是比混入更难排查的丢数据观感）。
+ */
+function isSubagentSessionFile(filePath: string): boolean {
+	let mtimeMs = 0;
+	let size = 0;
+	try {
+		const stats = statSync(filePath);
+		mtimeMs = stats.mtimeMs;
+		size = stats.size;
+	} catch {
+		return false;
+	}
+	const memoKey = `${filePath}\u0000${mtimeMs}\u0000${size}`;
+	const memoed = subagentFileMemo.get(memoKey);
+	if (memoed !== undefined) return memoed;
+
+	let result = false;
+	const fd = openSync(filePath, "r");
+	try {
+		const buffer = Buffer.alloc(Math.min(SUBAGENT_HEAD_BYTES, size));
+		const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+		for (const line of buffer.toString("utf8", 0, bytes).split("\n")) {
+			if (line.trim() === "") continue;
+			let entry: unknown;
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				continue; // 半行（窗口截断）/坏行跳过
+			}
+			if (typeof entry !== "object" || entry === null) continue;
+			const record = entry as { type?: unknown; customType?: unknown };
+			if (record.type === "custom") {
+				if (typeof record.customType === "string" && CHILD_SESSION_CUSTOM_TYPES.has(record.customType)) {
+					result = true;
+					break;
+				}
+				continue; // 其他 custom 条目（如 artifacts_presented）不判定，继续扫
+			}
+			// 首条 message 之后标记不可能再出现（写入时序不变量），短路。
+			if (record.type === "message") break;
+		}
+	} finally {
+		closeSync(fd);
+	}
+	// 防长尾膨胀：同一批文件只留有限份判定，超限整表清空（全量重扫代价可接受）。
+	if (subagentFileMemo.size > 4096) subagentFileMemo.clear();
+	subagentFileMemo.set(memoKey, result);
+	return result;
+}
+
 async function listSessions(): Promise<SessionSummary[]> {
 	let infos: SessionInfo[];
 	try {
@@ -1806,7 +2132,13 @@ async function listSessions(): Promise<SessionSummary[]> {
 			byFile.set(resolve(bucket.sessionFilePath), bucket);
 		}
 	}
-	return infos
+	const visible: SessionInfo[] = [];
+	for (const info of infos) {
+		// 子代理会话是 task 工具的隔离子会话，不进侧栏（spec: add-team-foundations）。
+		if (isSubagentSessionFile(info.path)) continue;
+		visible.push(info);
+	}
+	return visible
 		.map((info): SessionSummary => {
 			const bucket = byFile.get(resolve(info.path));
 			return {
@@ -1823,6 +2155,7 @@ async function listSessions(): Promise<SessionSummary[]> {
 				messageCount: info.messageCount,
 				current: bucket !== undefined && bucket === currentBucket,
 				running: bucket?.running ?? false,
+				archived: sessionArchive.isArchived(resolve(info.path)),
 			};
 		})
 		.sort((a, b) => b.modifiedAt - a.modifiedAt);
@@ -2009,6 +2342,7 @@ async function resumeSessionOnce(path: string): Promise<void> {
 			currentBucket.conversation.state.interactionId,
 			currentBucket.conversation.state.expertId,
 		),
+		spawnBudget: readPreferences().spawnBudget,
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
 	/*
@@ -2330,6 +2664,7 @@ async function newTask(targetCwd = ""): Promise<void> {
 			// 专家绑定与两轴正交，同口径沿用（开新活不是改偏好）。
 			currentBucket.conversation.state.expertId,
 		),
+		spawnBudget: readPreferences().spawnBudget,
 	});
 	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
 	bucket.pendingWorktreeBranch = pendingWorktreeBranch;
@@ -2584,14 +2919,77 @@ const handlers: Record<string, Handler> = {
 			// 立刻插进这一轮（steer）要用户显式点「立即插入」才发生。
 			// 两个入口共用这一个缺省值，写在这里而不是 session-host，是为了让
 			// 「哪条路是默认」只有一个地方说了算。
+			// pi 的 steer/followUp 入队即返回（agent-session.js：push 进队列 +
+			// emitQueueUpdate，不等 run），所以这条路的 IPC 本来就快。
 			const host = await getHost(bucket);
 			await host.prompt(text, whileStreaming ?? "followUp", images);
 			return;
 		}
-		await enqueue(bucket, async () => {
-			const host = await getHost(bucket);
-			await host.prompt(text, whileStreaming, images);
+		/*
+		 * **受理即回**（2026-09-16 修「带图发送后图片 chip 挂满整个 run」）：
+		 * 下面这行原本 `await enqueue(...)` 到 run 结束，IPC promise 也就挂到
+		 * run 结束 —— 而 renderer 的附件清除挂在 promise 成功分支上（composer
+		 * submit 的注释），结果是输入区的图片要等整个任务跑完才消失（实测 48s）。
+		 * 把「提交成功」与「run 结束」拆开：**run_started 即 resolve**（实测
+		 * IPC→run_started 仅 ~12ms），run 本体留在链上串行语义不变。
+		 *
+		 * 失败语义分两段保真：
+		 *   - 起跑前（getHost 抛 / pi 预检抛：没配模型、密钥失效）→ reject，
+		 *     renderer 照旧收到错误：附件留在输入区、错误可重试 —— 原语义；
+		 *   - run 中途失败 → run_error 事件折叠成消息流里的错误卡（独立通路，
+		 *     从不依赖本 IPC 的 reject），附件此时已清 —— 本就已被 run 消费。
+		 */
+		let settleAccepted!: () => void;
+		let failAccepted!: (error: unknown) => void;
+		const accepted = new Promise<void>((resolve, reject) => {
+			settleAccepted = resolve;
+			failAccepted = reject;
 		});
+		let acceptedSettled = false;
+		// 先挂空分支吃掉 rejected 态，末尾的 await 才不会变成 unhandled rejection。
+		void accepted.then(
+			() => {
+				acceptedSettled = true;
+			},
+			() => {
+				acceptedSettled = true;
+			},
+		);
+		const onRunStarted = (): void => settleAccepted();
+		let waiters = runStartWaiters.get(bucket);
+		if (waiters === undefined) {
+			waiters = new Set();
+			runStartWaiters.set(bucket, waiters);
+		}
+		waiters.add(onRunStarted);
+		try {
+			await enqueue(bucket, async () => {
+				let host: SessionHost;
+				try {
+					host = await getHost(bucket);
+				} catch (error) {
+					if (!acceptedSettled) failAccepted(error);
+					throw error;
+				}
+				try {
+					await host.prompt(text, whileStreaming, images);
+					// 兜底：run 收尾却从未见过 run_started（理论不发生）也别把提交方吊死。
+					if (!acceptedSettled) settleAccepted();
+				} catch (error) {
+					// 起跑前的抛错（pi 预检）从这里回给提交方；run 已开始后的抛错
+					// 说明 accepted 已 resolve，这里 rethrow 只为链的 tail 记账。
+					if (!acceptedSettled) failAccepted(error);
+					throw error;
+				} finally {
+					waiters?.delete(onRunStarted);
+				}
+			}).catch(() => {
+				/* 失败已经由 accepted 传给提交方；链上 promise 不接会变 unhandled rejection */
+			});
+		} catch {
+			/* enqueue 本身不 reject（见 session-registry.ts），守一道纯防御 */
+		}
+		await accepted;
 	},
 
 	/**
@@ -2639,6 +3037,14 @@ const handlers: Record<string, Handler> = {
 	/* ── 历史会话 ─────────────────────────────────────────────────── */
 
 	[INVOKE.sessionList]: async () => listSessions(),
+
+	// 归档 / 取消归档（L28）：只动 archive.json 索引，会话文件与宿主不动 ——
+	// 归档 ≠ 下线，正在聊的会话归档后照常可用（WB 同语义）。列表变化推
+	// taskListChanged 让侧栏即时收起。
+	[INVOKE.sessionArchive]: async ([path, archived]) => {
+		sessionArchive.setArchived(resolve(path as string), archived as boolean, Date.now());
+		pushTaskListChanged();
+	},
 
 	[INVOKE.sessionResume]: async ([path]) => resumeSession(path as string),
 
@@ -2693,6 +3099,10 @@ const handlers: Record<string, Handler> = {
 			if (bucket.pendingOps > 0)
 				throw new Error("该任务还有正在执行的操作，请稍后再删除");
 			bucketsById.delete(bucket.sessionId);
+			// 信箱随会话一起销毁：未投出的消息没有存在的意义（spec: add-team-foundations）。
+			teamMailbox.clear(bucket.sessionId);
+			// 团队随会话一起解散（同逐出决策，spec 批 5）。
+			void disbandTeamOf(bucket.sessionId);
 			const hostPromise = bucket.hostPromise;
 			// 已注册桶的 hostPromise 必已 resolve（adoptHost 赋值），
 			// await 在微任务内即刻拿到宿主。
@@ -3089,6 +3499,21 @@ const handlers: Record<string, Handler> = {
 		if (ensureBuiltinMemoryTask(automationStore, value)) {
 			pushAutomationChanged();
 		}
+	},
+
+	/* ── 团队协作开关（spec: add-team-foundations 批 5） ──────────── */
+
+	// 未配置回 false（缺省关闭）：实验特性缺省不可见，对齐 WorkBuddy 的立场；
+	// 缺省语义收在这一个出口（读偏好处不填默认值，同 memoryEnabled）。
+	[INVOKE.getAgentTeamsEnabled]: async () => ({
+		enabled: readPreferences().agentTeamsEnabled ?? false,
+	}),
+
+	// 读改写（同上）。只影响之后新建的会话：团队工具注册发生在 SessionHost
+	// 建立时（teamExtensionFactory 的 isEnabled 现读偏好），既有会话不补注册。
+	[INVOKE.setAgentTeamsEnabled]: async ([enabled]) => {
+		const value = enabled === true;
+		writePreferences({ ...readPreferences(), agentTeamsEnabled: value });
 	},
 
 	/* ── 用户画像（spec: add-memory-system） ────────────────────── */

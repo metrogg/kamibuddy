@@ -157,12 +157,25 @@ function installCsp(isDev: boolean): void {
 	// 外部图片依赖它——此前不含 https: 是 favicon 全部回退 Globe 的根因。
 	// 权衡：img-src 只放行图片加载（不可执行），风险是追踪像素/IP 暴露，
 	// 对桌面 agent 是可接受口径（WorkBuddy 同）；script-src/connect-src 不受影响。
+	//
+	// script-src 的 CDN 白名单 + blob: + 'unsafe-inline'（2026-09-16 修「图表空白」）：
+	// widget 卡的 srcdoc iframe **继承父文档 CSP**（HTML 规范），与 iframe 自己的
+	// meta CSP 叠加取严 —— renderer 这份不认识 cdnjs，widget 里 Chart.js 的
+	// 外链脚本就被静默拦掉（文本照常渲染、canvas 空白，实测根因）；prod 原来连
+	// 'unsafe-inline' 都没有，widget 的内联脚本（含 bootstrap）整个不跑。
+	// 白名单与 widget-view.tsx 的 WIDGET_CSP 保持同一组来源，改一处必须同步另一处。
+	const widgetScriptSrc =
+		" 'unsafe-inline' blob: https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com";
 	const policy = isDev
-		? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+		? "default-src 'self'; script-src 'self'" +
+		widgetScriptSrc +
+		"; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: blob: https: http://127.0.0.1:*; " +
 		"connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*; " +
 		"frame-src http://127.0.0.1:*"
-		: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+		: "default-src 'self'; script-src 'self'" +
+		widgetScriptSrc +
+		"; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: blob: https: http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:*; " +
 		"frame-src http://127.0.0.1:*";
 

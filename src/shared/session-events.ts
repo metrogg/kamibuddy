@@ -151,6 +151,12 @@ export interface SubagentStatus {
 	readonly agent: string;
 	/** 任务描述摘要。 */
 	readonly task: string;
+	/**
+	 * 子代理种类（spec: add-team-foundations 批 4）：task 工具的隔离子会话 =
+	 * "subagent"，未来的团队成员 = "team"。**缺省按 "subagent" 解释** ——
+	 * task 工具不写、旧格式会话没有这个键，读方不得要求它存在。
+	 */
+	readonly kind?: "subagent" | "team";
 	readonly status: "queued" | "running" | "done" | "failed";
 	/** 最新动作行，如「正在 web_search xxx」「已完成 N 轮」；无进展时为空串。 */
 	readonly activity: string;

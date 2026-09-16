@@ -4,8 +4,13 @@
  * 「能力即数据」（AGENTS.md §3）：加一个专家 = experts/ 下加一个 <name>/ 目录，
  * 零行代码改动。与 agents.ts 同族，但专家是**主会话级人格**（spec:
  * add-expert-mode，WorkBuddy PluginAgentPrompt 的等价物），不是子代理——
- * 因此 frontmatter 没有 tools 字段：工具面由交互模式统一分配，专家文件只带
- * 身份（displayName/profession）与正文人格。
+ * 工具面默认由交互模式统一分配。
+ *
+ * 立场修订（2026-09-16，spec: add-team-foundations）：新增可选 `extraTools`
+ * （frontmatter `extraTools: [a, b]`）——**白名单追加**语义，生效工具集 =
+ * mode.tools ∪ extraTools。WorkBuddy 用 expertType:"team" 联动 env 开关给
+ * 专家团会话加团队工具四件套，我们是同构的声明式落点。专家只能增不能删
+ * 模式给的工具（删工具是模式轴的职责）。内置专家不声明，行为不变。
  *
  * 目录布局（spec: rework-expert-orthogonal-and-skills）：专家是一个包，
  * `<name>/expert.md` 是人设，可选的 `<name>/skills/` 装该专家私有的技能——
@@ -39,7 +44,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
+import { optionalStringArray, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
 /** 专家人设文件名（目录布局：<name>/expert.md）。 */
 const EXPERT_FILE = "expert.md";
@@ -69,6 +74,12 @@ export interface ExpertDefinition {
 	 * 会话绑定时 daemon 把它追加进 pi loadSkills 的 skillPaths（spec: 技能预加载）。
 	 */
 	readonly skillsDir?: string;
+	/**
+	 * 专家追加的工具白名单（mode.tools ∪ extraTools，spec: add-team-foundations）。
+	 * 缺省 = 不追加，工具集与模式白名单完全一致。WorkBuddy expertType:"team"
+	 * 的声明式等价物：专家包声明它需要哪些模式白名单之外的工具（如 task）。
+	 */
+	readonly extraTools?: readonly string[];
 	readonly body: string;
 }
 
@@ -160,6 +171,7 @@ function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user")
 	if (tags.length !== 3) {
 		throw new Error(`${expertFile}: frontmatter「tags」必须恰好 3 个关键词，当前 ${tags.length} 个`);
 	}
+	const extraTools = optionalStringArray(doc, "extraTools", expertFile);
 	const skills = loadExpertSkills(dir);
 	return {
 		def: {
@@ -170,6 +182,7 @@ function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user")
 			displayDescription,
 			quickPrompts,
 			tags,
+			...(extraTools !== undefined ? { extraTools } : {}),
 			...(skills.length > 0 ? { skillsDir: join(dir, SKILLS_DIR) } : {}),
 			body: doc.body,
 		},

@@ -121,6 +121,11 @@ export interface KamiBridge {
 	readonly renameSession: (path: string, name: string) => Promise<void>;
 	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
 	readonly deleteSession: (path: string) => Promise<void>;
+	/**
+	 * 归档 / 取消归档会话（archive.json 索引，会话文件不动）。
+	 * 归档后的会话从侧栏主列表消失，在设置页数据管理分组恢复。
+	 */
+	readonly archiveSession: (path: string, archived: boolean) => Promise<void>;
 	/** 导出会话为单文件 HTML。空会话会 reject 原因；成功返回导出文件绝对路径。 */
 	readonly exportSession: (path: string) => Promise<{ outputPath: string }>;
 	/** 把当前临时任务「保存到工作空间」转正。名称非法/重名、或当前会话非临时任务时 reject 原因。 */
@@ -234,6 +239,13 @@ export interface KamiBridge {
 	readonly getMemoryEnabled: () => Promise<{ enabled: boolean }>;
 	/** 写记忆系统开关；daemon 同步内置「记忆整理」任务的启停。 */
 	readonly setMemoryEnabled: (enabled: boolean) => Promise<void>;
+
+	/* ── 团队协作（spec: add-team-foundations 批 5） ──────────────── */
+
+	/** 读团队协作开关（未配置时 daemon 回 false —— 缺省关闭，实验特性）。 */
+	readonly getAgentTeamsEnabled: () => Promise<{ enabled: boolean }>;
+	/** 写团队协作开关；只影响之后新建的会话（工具注册发生在会话建立时）。 */
+	readonly setAgentTeamsEnabled: (enabled: boolean) => Promise<void>;
 	/** 读用户画像全文（PROFILE.md；文件不存在回空串）。 */
 	readonly getProfile: () => Promise<{ content: string }>;
 	/** 覆盖写用户画像全文；下一轮对话生效。 */

@@ -9,7 +9,7 @@
 >
 > 状态图例：✅ 已对齐 ／ 🟡 部分对齐（缺口写在我们列）／ ❌ 未做 ／ ⛔ 明确不做（附理由）
 >
-> 当前 196 条：**✅ 53 ／ 🟡 48 ／ ❌ 72 ／ ⛔ 23**（L23 拆为 a–d 四个子项；2026-09-11 复核；2026-09-15 增补 L27 并修正 C22；2026-09-16 复核改判：B4 插队全链 ✅、C22 worktree 🟡、L27 场景芯片 🟡、H10 Windows 沙箱 🟡——均以 src/ 实况为准）
+> 当前 212 条：**✅ 55 ／ 🟡 51 ／ ❌ 79 ／ ⛔ 27**（L23 拆为 a–d 四个子项；2026-09-11 复核；2026-09-15 增补 L27 并修正 C22；2026-09-16 复核改判：B4 插队全链 ✅、C22 worktree 🟡、L27 场景芯片 🟡、H10 Windows 沙箱 🟡——均以 src/ 实况为准；**同日深挖增补 16 条**（A12–A13、B12、C31、D7、L28–L38，见下方来源说明））
 
 ## 怎么用这份清单
 
@@ -20,9 +20,18 @@
 
 清单来源（不靠对着界面看）：随包官方能力文档 64 篇 +
 `main/common.js` 的 **244 个 ProductFeature 特性开关枚举** + CLI bundle 的工具名枚举 +
-内置插件与技能目录 + `docs/workbuddy分析/` 十篇逆向笔记。
+内置插件与技能目录 + `docs/workbuddy分析/` 十一篇逆向笔记。
 特性开关那一项尤其重要 —— 它暴露了大量界面上看不出来的功能（比如语音的 ASR/TTS
 是两个独立开关、删除文件工具存在但可被关闭）。
+
+**2026-09-16 深挖增补（A12–A13 / B12 / C31 / D7 / L28–L38 共 16 条）的来源与手法**：
+① 117 个 productFeatures 开关全量拉出，与清单正文做词面覆盖率比对，挑出 29 个未覆盖
+再人工过滤（IDE 补全类 NES/Completions 14 个归并成 B12 一行）；② renderer 产物按
+「模块存在即功能面」盘点——`project-detail-page`（1.9MB，项目工作空间）、
+`colleagues-panel`（OPC 协作）、`kanban-todo`（看板）、`automation-panel`（模板库 +
+执行记录）、`desktop-terminal-view`（独立终端）、`lexiang`（知识库）此前都不在清单；
+③ 设置面用 SettingsNavigation 的 16 个 Panel init 枚举做硬证据（L30）。手法沉淀在
+skill `workbuddy-reverse-probe`（中文文案采集器 `.tmp-mine.mjs` 的正则口径）。
 
 ***
 
@@ -41,6 +50,8 @@
 | A9  | 单实例锁        | `app.requestSingleInstanceLock`                                                                                                            | 无                                                                    | ❌                   |
 | A10 | 托盘 / 多窗口    | 托盘菜单 + 窗口管理域                                                                                                                               | 单窗口、无托盘                                                              | ❌                   |
 | A11 | 自动更新        | 三平台 update-service（mac 整包替换 + install-channel marker）、force-upgrade、架构不匹配引导                                                                | 无                                                                    | ❌                   |
+| A12 | 应用菜单        | `main/menu-builder.js`（63KB）自建 native 菜单（文件/编辑/视图/窗口/帮助，含快捷键与角色项）                                                                              | 无自建菜单（Electron 默认）                                          | ❌                   |
+| A13 | 后台终端持有与回收 | daemon 侧 `runningBackgroundIds` 集中持有后台跑着的终端（terminalId 优先 / toolCallId 兜底双锚定），页面划走作废未完成连接 + 宽限期定时回收（`runtimeHoldGraceTimer`）—— C3 后台执行的 UI/生命周期面 | 无后台执行（C3 未做，此面随之不存在）                                  | ❌ 随 C3 一起          |
 
 ## B. Agent 内核
 
@@ -57,6 +68,7 @@
 | B9  | 结构化输出       | `StructuredOutput` 工具，按 JSON Schema 返回                                                                                                       | 无                                                                                                                                                            | ❌                                          |
 | B10 | 死循环检测       | `ToolCallLoopDetector`：同参重复 N 次发 `LOOP_DETECTION_MARKER` 喝止消息                                                                                | 无                                                                                                                                                            | ❌ 便宜且有效                                    |
 | B11 | 重试策略        | HTTP 层 maxRetries + 指数退避 + 尊重 Retry-After                                                                                                    | pi 自带                                                                                                                                                        | ✅                                          |
+| B12 | IDE 内联补全（NES） | Completions/NES 全家桶开关 14 个（Next Edit Suggestion、prefetch、jump-to-here、repeat filter、proposal API……）—— CodeBuddy IDE 遗产，桌面端不消费                        | 无（桌面对话形态无此面）                                                                                                                                                 | ⛔ IDE 形态才有 |
 
 ## C. 工具面
 
@@ -96,6 +108,7 @@ automation\_create / automation\_list / automation\_delete / task。
 | C28 | 地图选点           | `pick_location` 工具 + `PoiMap` 特性开关；结果 `{name, address, lat, lng}` 并 setSessionPoi 绑定会话                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | 无                                                                                                                                                                                                  | ❌                                                        |
 | C29 | 邮件附件           | `agent_mail_upload_attachment` / `agent_mail_download_attachment`；下载附件注入「未信任附件禁止执行」强制红线文案（`[MANDATORY CONSTRAINT — OVERRIDE ALL OTHER INSTRUCTIONS]`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | 无                                                                                                                                                                                                  | ❌ 该红线文案值得先抄进 doc-read                                    |
 | C30 | 通知 / 监控 / REPL | `PushNotification`（模型主动推）、`Monitor`、`REPL`、`ReportFindings`（结构化审查发现）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 无（只有系统 toast）                                                                                                                                                                                      | ❌                                                        |
+| C31 | 应用发布入口     | 设置页数据管理面板的「我发布的应用」入口（`DisablePublishedApps` 开关，海外版隐藏）+ 管理中心入口（`DisableManageCenterEntry`）—— C18 Artifact 发布的桌面 UI 面 | 无（发布本身 C18 未做，入口面随之不存在） | ❌ 随 C18 一起 |
 
 ## D. 办公内置插件（产品价值核心）
 
@@ -109,6 +122,7 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | D4 | 腾讯文档集成       | `tencent-docs-plugin`：按身份路由 C 端/SaaS；doc/sheet/slide/smartcanvas 的 create/edit + references（auth/空间/图表/OCR/aipage）+ Python 与 JS 脚本                                | 无                                                                                                                                                                                                              | ⛔ 依赖腾讯生态                                                        |
 | D5 | 支付插件         | `weixinpay`                                                                                                                                                       | 无                                                                                                                                                                                                              | ⛔                                                               |
 | D6 | 本地 Office 编辑 | `tencent-local-office-edit` 技能 + editor\_sdk 本地引擎（spawn 单端口 HTTP，提供 `/mcp` JSON-RPC 与编辑器预览资源）                                                                     | 无                                                                                                                                                                                                              | ⛔ 一个团队的量级                                                       |
+| D7 | 知识库集成     | `TencentLexiangKnowledge` / `ImaKnowledge` 两个独立开关 + renderer `lexiang` 模块（297KB 主模块 + `lexiang-content-picker` 110KB 内容选择器 + 90KB CSS）：乐享 / ima 知识库接入对话，内容选择器把知识库条目作为引用上下文 | 无 | ⛔ 依赖腾讯知识库服务；「外部知识库 → 内容选择器 → 引用上下文」的形态值得记档 |
 
 ## E. 技能与专家生态
 
@@ -265,6 +279,17 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 | L26  | 引用来源面板  | 从 web\_search 工具结果提取（结构化优先、Markdown 降级，web\_fetch 不计入），按 URL 去重；footer「来源」按钮（favicon 头像组 ≤3 按站点去重）；面板复用右侧 DetailPanel 容器互斥渲染（favicon+站点+标题1行+摘要2行，点击外部打开）；零持久化、切会话清空                          | `web-tools.ts` details 带结构化 results + `source-parse.ts` 安全校验（公网 http(s)，禁凭据/localhost/内网）+ ToolCard.sources 两路径填充（live/恢复）+ `collect-sources.ts` 聚合 + 来源按钮 + `sources-panel.tsx`（与 ArtifactPanel 同位互斥）；spec：`.trae/specs/add-search-sources-panel/`。favicon 曾全部被 CSP 拦截回退（img-src 无 https:），`add-source-favicons` 已放行并补搜索卡来源列表（卡头头像组 + 展开行列表，WorkBuddy cr-tool-web-search 同款）                           | ✅ v1：按会话聚合一行（WorkBuddy 按 requestId 每轮一个 footer）；favicon 用 origin/favicon.ico 回退（无服务端下发）               | <br />                                    | <br /> |
 
 | L27 | 场景专属输入区芯片 | 输入区按 `welcomeMode` 挂载专属芯片，位置枚举 `FooterStart` / `AfterAddMenu` / `FooterAfterWorkspace`（`packages/agent-ui/src/modules/home/components/use-home-input-providers.tsx` 的 slots）：design → `HomeDesignOptions`（风格 + 生图模式，AfterAddMenu）；**code →** **`WbWorktreeChip`**（分支选择 + Worktree 开关，FooterAfterWorkspace，门控 `sceneMode === "code" && cwd && taskTarget !== "cloud"`）；work → 无。芯片本体 `packages/agent-ui/src/modules/worktree/worktree-chip.tsx`，依赖 `useWorktreeGit`（isGit / branches / currentBranch / worktreeCount）、branch-list、cleanup-dialog、overlays、source-map。发送链路：`useCreateHomeTask` 先建 worktree 再把 cwd 换成副本路径并 `recordWorktreeSource` 记映射，失败 toast `worktree.createFailedFallback` 后**降级回原目录继续**；`useHomeBranchSwitchGate` 在发送前再过一道脏工作区门（`BranchSwitchDirtyPicker` 从 abort / commit / stash / discard 里选，默认 abort） | worktree chip 已挂进首页输入区（`renderer/worktree-chip.tsx`，门控 `sceneId === "code" && cwd 非空` 与 WB 同；组件内再判 git 仓库，不可用整块隐藏——对齐 WB 的隐藏策略，用户确认过「跟 workbuddy 逻辑一样」）；design 的 HomeDesignOptions 无（design 场景本身占位） | 🟡 worktree 芯片对齐；design 芯片与 taskTarget（云端任务）维度无 |
+| L28 | 任务归档 | 任务可归档出侧栏列表；「已归档任务」入口在设置页数据管理面板（`DisableArchivedTasks` 开关，海外版隐藏）。归档 ≠ 删除：历史仍可查 | ✅ 2026-09-16 落地：`core/session-archive.ts` 索引（archive.json，会话文件不动）+ `session:archive` 通道 + 侧栏 ⋯菜单「归档」+ 设置页**数据管理**分组（恢复 / 删除）；当前会话归档后照常聊（WB 同语义） |
+| L29 | 数据管理面板 | 设置页 16 面板之一：已归档任务 / 我发布的应用 / 管理中心 / 存储清理等同驻此面板 | 🟡 数据管理分组已建（2026-09-16，含已归档任务）；WB 同面板的发布应用（C31）/ 管理中心 / 存储清理未做 |
+| L30 | 设置面全量对比 | 16 面板：账户 / 外观(appearance) / Claw 设置 / 连接器 / **数据管理** / 扩展设置 / 通用 / 帮助与反馈 / **键盘快捷键（可视化编辑）** / 软件配置 / 记忆 / 模型 / 个性化 / **安全中心** / 订阅用量 / **系统权限**。我们 6 分组（通用/个性化/记忆与进化/模型/提示词预览/关于）。本地可对齐缺口：**数据管理、外观、快捷键可视化、系统权限、帮助反馈**；云端/发行版绑定（账户/订阅/Claw/软件配置/扩展/安全中心）缓 | 覆盖了通用/模型/个性化/记忆的核心键，缺整面板 | 🟡 逐面板差异本行即账目 |
+| L31 | 项目工作空间 = 资源容器 | `project-detail-page`（1893KB + 682KB CSS，本清单最大单模块）：项目侧栏五区 **指令 / 连接器 / 专家 / 技能 / 自动化**，按**项目**绑定而非全局。实证（2026-09-16 probe）：① 项目指令上限 **1 万字符**（输入框 2 万，`PROJECT_INSTRUCTION_MAX_LENGTH=1e4`，constants-Do1hO4uz.js）；② **指令注入走 hidden context 机制**（与 F5 同一套 `wrapHiddenContextXml` + user-context/additional-data 两桶，`buildContextBlocks` @ project-detail-page:79809）：identity/tool-routing/file-rules **只首轮**，projectInstructions/connectorStatus **diff 快照仅变化时注入**（isUpdate 变体 XML、CLEARED 显式信号，会话快照 LRU 50 条乐观刷新）——diff 省流量依赖「注入随消息持久化」，与我们 transformContext 不落盘的模型不同；③ 专家：项目专家出在 Craft「召唤专家」子菜单，`facades.project.switchExpert(conversationId,{expertId})` 按会话切换，带 `defaultInitPrompt`（en/zh 缓存）选中即预填输入框；④ 技能池 = `mergeTeamSkills(个人池(cwd,useCloud,projectId), projectSkills)`，@skill 走 `skill://` URI，遥测 ext3/ext4 区分项目/个人技能；⑤ 连接器带 enabled 开关随发送上报；⑥ 自动化按项目挂（scheduler-automation-mapper 做 cron↔BYDAY 映射） | 空间只绑定 cwd + L3 记忆目录；专家/技能/自动化全是全局的 | ❌ 「项目即配置作用域」是 WB 产品架构的大分岔；**可借的机制**：diff 注入策略与 isUpdate/CLEARED 语义（待我们把注入落盘后）、专家 defaultInitPrompt 预填 |
+| L32 | query 队列 | 项目任务内的 query 队列管理：调整顺序 / 编辑 / 删除 / 立即发送 / 队列展现 —— 多条待发 query 的完整队列 UI | 排队 chips（B4）是单条级 steer/followUp 的展示与删改；无队列级「重排 / 立即发送」 | 🟡 我们是消息队列，WB 是任务队列 |
+| L33 | 任务协作 | 协作者（邀请链接 / 加入方式申请后加入·直接加入 / 成员管理 / 移除菜单）、任务转交、评论（修改/删除/更多操作）、分享选择态、委派助理（停止旧助理任务）—— 云协作产品面 | 无 | ⛔ 无协作后端；「任务转交 / 任务评论」两条形态值得留档 |
+| L34 | 待办计划视图 | 项目页「我的待办计划 (N)」+ 添加子待办入口 —— 待办的计划聚合视图（人视角，跨任务） | todo 卡是单轮产物视图（L6）；无跨任务的人视角聚合 | ❌ |
+| L35 | 看板视图 | `kanban-todo`（182KB）+ `kanban`（77KB）：任务清单的看板形态 —— 卡片、分组、跨分组拖拽（按来源分组时禁跨组移动）、全选/取消全选 | 只有清单卡（L6）一种形态 | ❌ |
+| L36 | 自动化模板库 + 执行记录 | `automation-panel`（232KB + 155KB CSS）：**模板添加自动化**（预设模板 + 示例提示词，如每周提醒家人 / 随机壁纸生成）、查看执行记录、选择任务空间绑定 | ✅ 2026-09-16 落地：执行记录此前已有（任务行内展开，倒序 / 成败徽章 / 点击跳会话）；**模板库** `shared/automation-templates.ts` 6 个内置模板（提示词自包含、调度过 validateSchedule 并有测试钉住）+ 管理页「从模板」选择浮层 → 预填表单；任务空间绑定=新建时 cwd 取当前空间 |
+| L37 | 独立终端 | `StandaloneTerminal` 开关 + `desktop-terminal-view`（434KB，xterm 宿主）：独立终端窗口，配合 A13 的后台终端生命周期 | 无 | ❌ |
+| L38 | 同事面板 / OPC | `colleagues-panel`（394KB）：云助理 / OPC·一人公司 / OPC 专家团 —— 云端多人协作的产品面（OPC = One Person Company） | 无 | ⛔ 云产品 |
 
 ## M. 渠道与远程
 
@@ -327,6 +352,8 @@ WorkBuddy 投入最大的一块，而且完全不依赖腾讯云 —— 这是�
 5. **L11 语音输入与朗读** —— 试用时最容易被拿来对比的一项，且是纯前端 + ASR 接口。
 6. **C27 删除文件 + K8 回滚 + H13 回收站** —— 三件必须一起做：单独的删除工具在没有
    回收站兜底时是净风险。
+7. ~~**L36 自动化执行记录 + 模板库**~~ —— ✅ 已落地（执行记录原有，模板库 2026-09-16 补齐，见 L36 行）。
+8. ~~**L28 任务归档**~~ —— ✅ 已落地（归档索引 + 侧栏收起 + 数据管理恢复，见 L28 行）。
 
 **第三梯队 · 底座补齐**
 
@@ -364,5 +391,6 @@ H10 OS 沙箱、H11 语言 shim、H12 网络隔离、M1–M6 渠道与远程、N
 | 内置技能（19 个）             | `_analysis/extracted/resources/plugins/workbuddy-builtin/skills/`                                                          |
 | 插件注册表                  | `_analysis/extracted/resources/plugins/workbuddy-builtin/.codebuddy-plugin/marketplace.json`                               |
 | 沙箱与 shim               | `开源项目/WorkBuddy/resources/app.asar.unpacked/cli/vendor/{sandbox,shim}/`                                                    |
-| 逐层调研笔记                 | `docs/workbuddy分析/01`–`10` 与 `WorkBuddy-全面解剖分析报告.md`                                                                       |
+| 逐层调研笔记                 | `docs/workbuddy分析/01`–`11` 与 `WorkBuddy-全面解剖分析报告.md`                                                                       |
+| **2026-09-16 深挖面**      | renderer 大模块：`{project-detail-page,colleagues-panel,kanban-todo,automation-panel,desktop-terminal-view,lexiang,claw,gallery}`；设置面 `SettingsNavigation` 16 Panel init 枚举（ui-docs-viewer）；后台终端生命周期 `main/server.js`（`runningBackgroundIds` / `runtimeHoldGraceTimer`）；特性开关 `cli/product.json` 的 `productFeatures`（117 个） |
 

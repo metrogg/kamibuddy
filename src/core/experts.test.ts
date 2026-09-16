@@ -391,3 +391,26 @@ describe("真实 resources/experts/ 的回归约束", () => {
 		}
 	});
 });
+
+describe("extraTools（spec: add-team-foundations）", () => {
+	it("声明 extraTools → 解析为字符串数组", () => {
+		writeBuiltin("fin", validFrontmatter("fin") + "\nextraTools: [task, web_search]");
+		const experts = load();
+		expect(experts.find((e) => e.name === "fin")?.extraTools).toEqual(["task", "web_search"]);
+	});
+
+	it("未声明 → undefined（缺省不追加，行为与现状一致）", () => {
+		writeBuiltin("fin");
+		expect(load().find((e) => e.name === "fin")?.extraTools).toBeUndefined();
+	});
+
+	it("空数组归一为 undefined（追加空集无语义，不留空壳）", () => {
+		writeBuiltin("fin", validFrontmatter("fin") + "\nextraTools: []");
+		expect(load().find((e) => e.name === "fin")?.extraTools).toBeUndefined();
+	});
+
+	it("非字符串数组 → 抛错（元素含非字符串同样不放过）", () => {
+		writeBuiltin("fin", validFrontmatter("fin") + "\nextraTools: 不是数组");
+		expect(errorMessage(() => load())).toContain("extraTools");
+	});
+});

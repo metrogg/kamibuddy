@@ -166,3 +166,19 @@ describe("pickEvictions（空闲宿主 LRU 回收）", () => {
 		expect(pickEvictions([current, ...running, ...idle], current)).toEqual([]);
 	});
 });
+
+describe("spawnBudget 注入（spec: add-team-foundations 防线参数化）", () => {
+	it("传入 spawnBudget → 桶预算取传入值", () => {
+		const bucket = createBucket<StubHost>({
+			cwd: "/tmp/x",
+			conversation: initialConversation,
+			spawnBudget: 7,
+		});
+		expect(bucket.spawnBudgetRemaining).toBe(7);
+	});
+
+	it("缺省 → 回 SPAWN_BUDGET_PER_SESSION（现值 20，行为与参数化前一致）", () => {
+		const bucket = createBucket<StubHost>({ cwd: "/tmp/x", conversation: initialConversation });
+		expect(bucket.spawnBudgetRemaining).toBe(20);
+	});
+});

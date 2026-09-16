@@ -1722,3 +1722,92 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		expect(snapshot?.hiddenContextChars).toBeGreaterThan(0);
 	});
 });
+
+describe("专家 extraTools 工具面联动（spec: add-team-foundations）", () => {
+	const MODES: readonly ModeResource[] = [
+		{ id: "ask", label: "问答", description: "", ready: true, tools: ["read"], body: "" },
+		{ id: "craft", label: "执行", description: "", ready: true, tools: ["read", "write"], body: "" },
+	];
+
+	function createExtraToolsHost(opts: {
+		interactionId: string;
+		expertId?: string;
+		getExtra: () => readonly string[] | undefined;
+	}): { host: SessionHost; toolCalls: readonly (readonly string[])[] } {
+		const toolCalls: string[][] = [];
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			thinkingLevel: "off",
+			getAvailableThinkingLevels: () => ["off"],
+			setActiveToolsByName: (tools: readonly string[]) => {
+				toolCalls.push([...tools]);
+			},
+		};
+		const options: SessionHostOptions = {
+			catalog: {} as unknown as ModelCatalog,
+			modelKey: undefined,
+			cwd: "C:\\test",
+			isTempTask: false,
+			sceneId: "work",
+			interactionId: opts.interactionId,
+			...(opts.expertId === undefined ? {} : { expertId: opts.expertId }),
+			emit: () => {},
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map() },
+			getExpertExtraTools: opts.getExtra,
+		};
+		const Ctor = SessionHost as unknown as new (
+			session: unknown,
+			options: SessionHostOptions,
+			sceneId: string,
+			interactionId: string,
+			expertId: string | undefined,
+			skills: readonly unknown[],
+		) => SessionHost;
+		const host = new Ctor(session, options, "work", opts.interactionId, opts.expertId ?? undefined, []);
+		return { host, toolCalls };
+	}
+
+	it("setExpert 应用追加工具：模式白名单 ∪ extraTools，重复项去重", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			getExtra: () => ["task", "write"],
+		});
+		host.setExpert("fin");
+		expect(toolCalls.at(-1)).toEqual(["read", "write", "task"]);
+	});
+
+	it("清除专家 → resolver 已不返回追加集，回到纯模式白名单", () => {
+		// 生产契约：INVOKE.setExpert 先 updateStateLocally（桶状态落新绑定），
+		// 再调 host.setExpert —— resolver 读桶状态，此刻已看不到旧专家。
+		let bound = true;
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			expertId: "fin",
+			getExtra: () => (bound ? ["task"] : undefined),
+		});
+		bound = false;
+		host.setExpert(undefined);
+		expect(toolCalls.at(-1)).toEqual(["read", "write"]);
+	});
+
+	it("切交互模式保留追加工具（切模式不清专家的 extraTools）", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			getExtra: () => ["task"],
+		});
+		host.setInteraction("ask");
+		expect(toolCalls.at(-1)).toEqual(["read", "task"]);
+	});
+
+	it("resolver 返回 undefined（未声明 extraTools）→ 纯模式白名单，与现状一致", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "ask",
+			getExtra: () => undefined,
+		});
+		host.setExpert("fin");
+		expect(toolCalls.at(-1)).toEqual(["read"]);
+	});
+});

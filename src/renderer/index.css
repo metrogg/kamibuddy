@@ -7344,6 +7344,58 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
+/* ── 自动化模板选择浮层（L36）：复用 .auto-form-card 容器，这里只管卡片网格。 ──
+   .auto-tpl-card 顶部留出关闭钮的绝对定位基准；列表窄卡三行（名称/描述/调度），
+   hover 提亮与可点行同语言。 */
+.auto-tpl-card {
+	position: relative;
+	width: min(560px, 92%);
+}
+
+.auto-tpl-close {
+	position: absolute;
+	top: var(--space-3);
+	right: var(--space-3);
+}
+
+.auto-tpl-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.auto-tpl-item {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	padding: var(--space-3) var(--space-4);
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.auto-tpl-item:hover {
+	background: var(--bg-hover);
+}
+
+.auto-tpl-name {
+	font-size: var(--text-list);
+	color: var(--text);
+}
+
+.auto-tpl-desc {
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.auto-tpl-schedule {
+	font-size: var(--text-meta);
+	color: var(--text-tertiary);
+}
+
 .auto-run-time {
 	color: var(--text-secondary);
 	flex: 0 0 auto;

@@ -44,11 +44,11 @@ import type { PermissionSettings } from "../shared/permissions.ts";
 import type { SessionEvent, ThinkingLevel } from "../shared/session-events.ts";
 
 /**
- * 单个子代理的执行上限：超过即 abort 记超时。
- *
- * 10 分钟的理由：子代理跑在主会话的工具调用里，主代理（和用户）在等它——
- * 必须显著短于 automation run 的 30 分钟无人值守上限；而调研类任务
- * （多轮搜索 + 精读）正常在几分钟内收尾，10 分钟只兜失控循环。
+ * 单个子代理的执行上限**缺省值**：超过即 abort 记超时（spec:
+ * add-team-foundations 防线参数化——preferences.subagentTimeoutMs 可覆盖，
+ * 缺省即本值）。10 分钟的理由：子代理跑在主会话的工具调用里，主代理
+ * （和用户）在等它——必须显著短于 automation run 的 30 分钟无人值守上限；
+ * 而调研类任务（多轮搜索 + 精读）正常在几分钟内收尾，10 分钟只兜失控循环。
  */
 const SUBAGENT_TIMEOUT_MS = 10 * 60_000;
 
@@ -94,6 +94,11 @@ export interface SubagentRunnerDeps {
 	 * 逐会话还原不适用；不做每子代理独立档位（spec 方案 C 明确不做）。
 	 */
 	readonly getThinkingLevel: () => ThinkingLevel | undefined;
+	/**
+	 * 单个子代理超时毫秒（spec: add-team-foundations 防线参数化）。
+	 * 缺省回 SUBAGENT_TIMEOUT_MS；daemon 现读偏好传入。
+	 */
+	readonly getTimeoutMs?: () => number | undefined;
 	readonly protectedDirs: readonly string[];
 	readonly isTempCwd: (cwd: string) => boolean;
 	/** 自家目录判定（生效根 / 配置目录内直接信任，见 project-trust.ts）。 */
@@ -215,10 +220,11 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): SubagentRunner {
 			}
 
 			let timedOut = false;
+			const timeoutMs = deps.getTimeoutMs?.() ?? SUBAGENT_TIMEOUT_MS;
 			const timeout = setTimeout(() => {
 				timedOut = true;
 				void host?.abort();
-			}, SUBAGENT_TIMEOUT_MS);
+			}, timeoutMs);
 			timeout.unref?.();
 			try {
 				await host.prompt(task);
@@ -227,7 +233,11 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): SubagentRunner {
 				input.signal?.removeEventListener("abort", onAbort);
 			}
 
-			if (timedOut) throw new Error(partialDiagnosis("运行超时（10 分钟上限）", lastText, turns));
+			if (timedOut) {
+				throw new Error(
+					partialDiagnosis(`运行超时（${Math.round(timeoutMs / 60_000)} 分钟上限）`, lastText, turns),
+				);
+			}
 			if (runError !== undefined) throw new Error(partialDiagnosis(runError, lastText, turns));
 			// 中断（主会话 abort / abortAll）：没跑完就是没跑完，诊断回给主代理。
 			if (cancelled) throw new Error(partialDiagnosis("运行被中断", lastText, turns));
@@ -283,18 +293,21 @@ function partialDiagnosis(reason: string, lastText: string, turns: number): stri
 }
 
 /**
- * 子代理会话的扩展集：与用户会话同族（同一批工厂），差异四处——
+ * 子代理/成员会话的扩展集：与用户会话同族（同一批工厂），差异四处——
  *   1. 权限门是用户在场变体（不传 unattended）：审批正常弹给用户，
  *      主代理等待期间用户可答（与 automation 的关键差异，见文件头）；
  *   2. 提示词由 agent.body 组装（composeSubagentPrompt），不走双轴 compose；
- *   3. 不挂 questionnaire / automation_* / task / MCP —— 双保险：
+ *   3. 不挂 questionnaire / automation_* / task / MCP / team —— 双保险：
  *      agent frontmatter 的白名单本就不含这些工具名，装配层也不注册
- *      （深度锁 1 层：子代理不许再委派；没有人在子会话里答问卷；
- *      定时任务归主会话统一管理）；
+ *      （深度锁 1 层：子代理/成员不许再委派或建团；没有人在子会话里
+ *      答问卷；定时任务归主会话统一管理）；
  *   4. present_files 只落盘不发事件（子会话没有人在看它的交付，
  *      产物归属由最终回传给主代理的文本说明）。
+ *
+ * 成员会话（member-runner）与子代理共用本装配 —— 两者的隔离语义完全一致，
+ * 差异只在宿主生命周期（即弃 vs 长会话），不在工具面。
  */
-function buildSubagentExtensions(
+export function buildSubagentExtensions(
 	deps: SubagentRunnerDeps,
 	agent: AgentDefinition,
 	cwd: string,

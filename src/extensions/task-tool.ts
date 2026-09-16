@@ -30,6 +30,7 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
+import { ChildAgentsProjection } from "../shared/child-agents.ts";
 import type { SubagentStatus } from "../shared/session-events.ts";
 
 /** 委派给执行器的一次子代理运行（cwd 由 daemon 装配时补注入）。 */
@@ -72,33 +73,10 @@ interface TaskToolDetails {
 	 * 子代理运行状态的全量投影（UI 进度通道，整体替换语义）。
 	 * 部分结果与终态同形状：部分结果里 results 恒空、靠 subagents 表达进展；
 	 * 终态两者皆全，subagents 与 results 一一对应（同下标）。
+	 * 键名即 shared/child-agents.ts 的 CHILD_AGENTS_DETAILS_KEY —— host 认键
+	 * 不认工具，投影状态机也在那个共享模块（批 4 抽取，team 工具复用）。
 	 */
 	readonly subagents: readonly SubagentStatus[];
-}
-
-/**
- * 时间线封顶：只保留最后 12 条**真实动作行**，溢出在最前面补「前 N 条已省略」
- * 标记——标记不占槽位，N 按累计丢弃数算（若标记也计入，下一轮追加会把
- * 标记当动作行再挤掉一条，计数永远差一）。
- * 封顶的理由：长任务的工具动作行可以几十上百条，投影每变一次都全量
- * 拷贝一遍，无封顶会让进度通道体积随任务时长线性膨胀。
- */
-const TIMELINE_MAX = 12;
-
-const OMITTED_MARKER = /^（前 (\d+) 条已省略）$/;
-
-/** 追加一条动作行：同步更新 timeline（capped）与 activity（恒为末元素）。 */
-function appendTimeline(entry: SubagentStatus, text: string): SubagentStatus {
-	const previous = entry.timeline ?? [];
-	const omittedBefore = OMITTED_MARKER.exec(previous[0] ?? "")?.[1];
-	const real = omittedBefore === undefined ? previous : previous.slice(1);
-	const total = Number(omittedBefore ?? 0) + real.length + 1;
-	if (total <= TIMELINE_MAX) {
-		return { ...entry, timeline: [...real, text], activity: text };
-	}
-	const dropped = total - TIMELINE_MAX;
-	const keep = [...real, text].slice(-TIMELINE_MAX);
-	return { ...entry, timeline: [`（前 ${dropped} 条已省略）`, ...keep], activity: text };
 }
 
 const TaskItem = Type.Object({
@@ -208,11 +186,10 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 				const agents = options.listAgents();
 
 				/*
-				 * 状态投影：按下标定位（同名 agent 在并行/链式里可同时出现多次，
-				 * 名字不能当键）。每次变化发一份全量拷贝 —— 消费端整体替换，
-				 * 发可变本体引用会让 UI 与后续突变纠缠。
-				 * 初始化即发一次（全 queued）：工具卡从执行开始就能摆出全部
-				 * 子任务的分组骨架，而不是等第一个子代理起跑才有内容。
+				 * 状态投影：状态机在 shared/child-agents.ts（批 4 抽取，team 工具
+				 * 复用同一契约与累加器），这里只喂状态 + 每次变化发全量快照。
+				 * model 徽标数据在初始化时定格（agent 定义在会话内不变）；
+				 * 未声明则缺席，卡片不渲染徽标。
 				 */
 				const plan: ReadonlyArray<{ agent: string; task: string }> =
 					tasks ??
@@ -221,40 +198,21 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					(singleAgent !== undefined && singleTask !== undefined
 						? [{ agent: singleAgent, task: singleTask }]
 						: []);
-				const projection: SubagentStatus[] = plan.map((p) => {
-					// model 徽标数据在初始化时定格（agent 定义在会话内不变）；
-					// 未声明则缺席，卡片不渲染徽标。
-					const model = agents.find((a) => a.name === p.agent)?.model;
-					return {
+				const projection = new ChildAgentsProjection(
+					plan.map((p) => ({
 						agent: p.agent,
 						task: p.task,
-						status: "queued" as const,
-						activity: "",
-						turns: 0,
-						...(model === undefined ? {} : { model }),
-					};
-				});
+						// model 徽标数据在初始化时定格（agent 定义在会话内不变）。
+						model: agents.find((a) => a.name === p.agent)?.model,
+					})),
+				);
 				const emitProjection = (): void => {
 					// content 文本恒空：进度全走 details.subagents，文本 delta 通道
 					// 对多代理分组进度是负资产（交错混杂），details 形状与终态一致。
 					onUpdate?.({
 						content: [{ type: "text" as const, text: "" }],
-						details: { mode, results: [], subagents: projection.map((s) => ({ ...s })) },
+						details: { mode, results: [], subagents: projection.snapshot() },
 					});
-				};
-				const patchEntry = (index: number, patch: Partial<SubagentStatus>): void => {
-					const current = projection[index];
-					if (current === undefined) return;
-					projection[index] = { ...current, ...patch };
-					emitProjection();
-				};
-				// 动作行更新走 appendTimeline：activity 与 timeline 同步推进，
-				// 卡片的「最新动作」与可展开过程永远一致。
-				const pushActivity = (index: number, text: string): void => {
-					const current = projection[index];
-					if (current === undefined || text === "") return;
-					projection[index] = appendTimeline(current, text);
-					emitProjection();
 				};
 				emitProjection();
 
@@ -274,14 +232,17 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					// agent 不存在不消耗预算：这是入参错误，不是一次真实执行。
 					if (agent === undefined) {
 						const text = `没有名为「${agentName}」的子代理。${availableAgentsText(agents)}\n请改用上述之一重新委派。`;
-						patchEntry(index, { status: "failed", output: text });
+						projection.patch(index, { status: "failed", output: text });
+						emitProjection();
 						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 					if (!options.checkBudget()) {
-						patchEntry(index, { status: "failed", output: BUDGET_EXHAUSTED_TEXT });
+						projection.patch(index, { status: "failed", output: BUDGET_EXHAUSTED_TEXT });
+						emitProjection();
 						return { agent: agentName, ok: false, text: BUDGET_EXHAUSTED_TEXT, turns: 0 };
 					}
-					patchEntry(index, { status: "running" });
+					projection.patch(index, { status: "running" });
+					emitProjection();
 					try {
 						const { output, turns } = await options.runSubagent({
 							agent,
@@ -289,15 +250,19 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 							...(signal === undefined ? {} : { signal }),
 							// 排队消息（并发上限超出的「排队等待空位」）也经此落到
 							// activity：状态保持 running，等待原因对用户可见。
-							onProgress: (text) =>
-								pushActivity(index, stripPrefix(agent.name, text)),
+							onProgress: (text) => {
+								projection.pushActivity(index, stripPrefix(agent.name, text));
+								emitProjection();
+							},
 						});
-						patchEntry(index, { status: "done", turns, output });
+						projection.patch(index, { status: "done", turns, output });
+						emitProjection();
 						return { agent: agentName, ok: true, text: output, turns };
 					} catch (error) {
 						// 子代理失败不是工具失败：诊断回给主代理，由它决定换路还是如实上报。
 						const text = error instanceof Error ? error.message : String(error);
-						patchEntry(index, { status: "failed", output: text });
+						projection.patch(index, { status: "failed", output: text });
+						emitProjection();
 						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 				};
@@ -306,7 +271,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 				const finalDetails = (results: readonly SubtaskReport[]): TaskToolDetails => ({
 					mode,
 					results,
-					subagents: projection.map((s) => ({ ...s })),
+					subagents: projection.snapshot(),
 				});
 
 				if (singleAgent !== undefined && singleTask !== undefined) {

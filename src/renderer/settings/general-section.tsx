@@ -464,6 +464,91 @@ function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Elem
 
 /* ── 分组出口 ────────────────────────────────────────────────────── */
 
+/**
+ * 团队协作（spec: add-team-foundations 批 5）。
+ *
+ * toggle = preferences.agentTeamsEnabled（daemon 同款 get/set 通道，记忆开关
+ * 的模式复刻）。数据源自管、不借 settingsSnapshot（快照里没有这个键，与
+ * WebSearchSection 不借快照的理由相同）。实验特性缺省关闭 —— 对齐 WorkBuddy
+ * 把「智能体团队管理」放进设置、缺省禁用的立场。
+ */
+function TeamSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
+	const [enabled, setEnabled] = useState<boolean | undefined>(undefined);
+	const [loaded, setLoaded] = useState(false);
+	const [error, setError] = useState<string | undefined>(undefined);
+
+	const load = useCallback(async (): Promise<void> => {
+		try {
+			const result = await window.kami.getAgentTeamsEnabled();
+			setEnabled(result.enabled);
+			setLoaded(true);
+			setError(undefined);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, []);
+
+	useEffect(() => {
+		void load();
+	}, [load]);
+
+	const toggle = (next: boolean): void => {
+		const prev = enabled;
+		setEnabled(next);
+		void window.kami.setAgentTeamsEnabled(next).catch((e: unknown) => {
+			// 失败回滚显示值：开关是受控的，不回滚会让用户以为已经存上。
+			setEnabled(prev);
+			setError(e instanceof Error ? e.message : String(e));
+		});
+	};
+
+	return (
+		<section className="settings-section">
+			<header className="settings-section-head">
+				<h2>团队协作</h2>
+			</header>
+
+			{/* 三态互斥：未就绪时失败只渲染错误态（+ 重拉），不与加载态同框。 */}
+			{enabled === undefined || !loaded ? (
+				error !== undefined ? (
+					<ErrorState message={error} onRetry={() => void load()} />
+				) : (
+					<LoadingState text="正在读取团队协作设置…" />
+				)
+			) : (
+				<>
+					{/* 开关失败的透出位（与内容并存，不与加载态并存）。 */}
+					{error !== undefined && <ErrorState message={error} />}
+					<div className="provider-row">
+						<div className="provider-main">
+							<span className="provider-name">智能体团队（实验）</span>
+							<span className="provider-meta">创作模式下建团队、派成员并行工作</span>
+							<span className="bar-spacer" />
+							{/* 开关复用 mcp-switch 档位（同一个开关控件，不另造类）。 */}
+							<label className="mcp-switch" title={enabled ? "点击停用" : "点击启用"}>
+								<input
+									type="checkbox"
+									checked={enabled}
+									disabled={busy}
+									aria-label="智能体团队"
+									onChange={(e) => toggle(e.currentTarget.checked)}
+								/>
+								<span className="mcp-switch-track">
+									<span className="mcp-switch-thumb" />
+								</span>
+							</label>
+						</div>
+					</div>
+					<p className="settings-foot">
+						实验特性：开启后创作模式提供团队工具（建团、发消息、查状态、解散），成员是独立会话，
+						完成后自动把结果回投到你的对话。只对开启后新建的会话生效；每个成员占用一次子代理调用预算。
+					</p>
+				</>
+			)}
+		</section>
+	);
+}
+
 /** 「通用」分组：分区顺序即原平铺页的相对顺序。 */
 export function GeneralSection({ busy }: { readonly busy: boolean }): React.JSX.Element {
 	return (
@@ -472,6 +557,7 @@ export function GeneralSection({ busy }: { readonly busy: boolean }): React.JSX.
 			<WebSearchSection busy={busy} />
 			<DefaultWorkspaceSection busy={busy} />
 			<PermissionSection busy={busy} />
+			<TeamSection busy={busy} />
 		</>
 	);
 }

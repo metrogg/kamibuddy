@@ -1008,6 +1008,20 @@ export function App(): React.JSX.Element {
 	);
 
 	/**
+	 * 归档（L28）：只写 archive.json 索引，会话文件与宿主不动 ——
+	 * 当前会话归档后照常聊（WB 同语义），只是从侧栏主列表消失；
+	 * 恢复入口在设置页数据管理分组。列表刷新靠 daemon 的 taskListChanged 推送。
+	 */
+	const archiveTask = useCallback((path: string) => {
+		window.kami
+			.archiveSession(path, true)
+			.then(() => showToast("已归档，可在设置 → 数据管理中找到", "success"))
+			.catch((error: unknown) => {
+				showToast(error instanceof Error ? error.message : String(error));
+			});
+	}, []);
+
+	/**
 	 * 导出会话为单文件 HTML：成功 toast 出文件路径并用系统关联程序打开
 	 * （openArtifact 失败只 toast，文件已生成，不算导出失败）。
 	 *
@@ -1171,7 +1185,14 @@ export function App(): React.JSX.Element {
 	 * 「一个任务/空间都没有」，与刚刚才分开的在途/空又混成一团（Task 1.1）。
 	 */
 	const sidebarGroups = useMemo(
-		() => (taskList === undefined ? undefined : groupSessions(taskList, groupMetas)),
+		() =>
+			taskList === undefined
+				? undefined
+				: groupSessions(
+						// 已归档会话不进侧栏（L28）：数据管理分组负责查看与恢复。
+						taskList.filter((s) => !s.archived),
+						groupMetas,
+					),
 		[taskList, groupMetas],
 	);
 	/**
@@ -1266,8 +1287,9 @@ export function App(): React.JSX.Element {
 				onNewTask={newTask}
 				onResumeTask={resumeTask}
 				onRenameTask={renameTask}
-				onDeleteTask={deleteTask}
-				onExportTask={exportTask}
+			onDeleteTask={deleteTask}
+			onArchiveTask={archiveTask}
+			onExportTask={exportTask}
 				onNewTaskInSpace={newTaskInSpace}
 				onRenameWorkspace={renameWorkspace}
 				onRemoveWorkspace={removeWorkspace}

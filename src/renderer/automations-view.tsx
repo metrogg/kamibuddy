@@ -16,9 +16,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AutomationTask, Schedule } from "@shared/automation.ts";
 import { scheduleSummary, validateSchedule } from "@shared/automation.ts";
+import { AUTOMATION_TEMPLATES, type AutomationTemplate } from "@shared/automation-templates.ts";
 import type { AutomationSaveInput } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
-import { IconBack, IconChevronDown, IconPlus } from "./icons.tsx";
+import { IconBack, IconChevronDown, IconClose, IconPlus } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 import type { ToastType } from "./toast.tsx";
 import { useModalFocus } from "./use-modal-focus.ts";
@@ -111,6 +112,22 @@ function draftFromTask(task: AutomationTask): FormDraft {
 	};
 }
 
+/** 模板 → 表单草稿：名称 / 内容 / 调度全部预填，用户改完保存（cwd 用当前工作空间）。 */
+function draftFromTemplate(template: AutomationTemplate, cwd: string): FormDraft {
+	const s = template.schedule;
+	return {
+		name: template.name,
+		prompt: template.prompt,
+		scheduleType: s.type,
+		onceAt: s.type === "once" ? toLocalInputValue(s.at) : "",
+		intervalMinutes: s.type === "interval" ? String(s.everyMinutes) : "30",
+		dailyTime: s.type === "daily" ? s.time : "09:00",
+		weeklyTime: s.type === "weekly" ? s.time : "09:00",
+		weekdays: s.type === "weekly" ? [...s.weekdays] : [1, 2, 3, 4, 5],
+		cwd,
+	};
+}
+
 /**
  * 草稿 → Schedule。先过 shared 的 validateSchedule（与 daemon 双闸，
  * 错误文案同源），返回给用户看的错误；合法返回 schedule。
@@ -157,6 +174,8 @@ export function AutomationsView({
 	const [expandedId, setExpandedId] = useState<string | undefined>(undefined);
 	/** 表单弹层草稿：undefined = 关闭；无 id = 新建，有 id = 编辑。 */
 	const [draft, setDraft] = useState<FormDraft | undefined>(undefined);
+	/** 模板选择浮层（L36）：选中后预填表单草稿。 */
+	const [tplOpen, setTplOpen] = useState(false);
 	const [formError, setFormError] = useState<string | undefined>(undefined);
 	const [saving, setSaving] = useState(false);
 
@@ -218,6 +237,12 @@ export function AutomationsView({
 		setDraft(emptyDraft(cwd ?? ""));
 	}, [cwd]);
 
+	const openTemplate = useCallback((template: AutomationTemplate): void => {
+		setTplOpen(false);
+		setFormError(undefined);
+		setDraft(draftFromTemplate(template, cwd ?? ""));
+	}, [cwd]);
+
 	const openEdit = useCallback((task: AutomationTask): void => {
 		setFormError(undefined);
 		setDraft(draftFromTask(task));
@@ -271,6 +296,9 @@ export function AutomationsView({
 				</button>
 				<h1>定时任务</h1>
 				<span className="bar-spacer" />
+				<button type="button" className="mini-btn" onClick={() => setTplOpen(true)}>
+					从模板
+				</button>
 				<button type="button" className="mini-btn" onClick={openCreate}>
 					<IconPlus size={13} />
 					新建任务
@@ -336,7 +364,73 @@ export function AutomationsView({
 					onCancel={() => setDraft(undefined)}
 				/>
 			)}
+
+			{tplOpen && (
+				<TemplatePicker
+					onSelect={openTemplate}
+					onCancel={() => setTplOpen(false)}
+				/>
+			)}
 		</main>
+	);
+}
+
+/* ── 模板选择浮层（L36） ─────────────────────────────────────── */
+
+function TemplatePicker({
+	onSelect,
+	onCancel,
+}: {
+	readonly onSelect: (template: AutomationTemplate) => void;
+	readonly onCancel: () => void;
+}): React.JSX.Element {
+	const cardRef = useModalFocus();
+
+	// Esc 关闭：与表单卡同口径（只读列表无输入态，无需放行）。
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") onCancel();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onCancel]);
+
+	return (
+		<div
+			className="modal-backdrop"
+			onMouseDown={(e) => {
+				if (e.target === e.currentTarget) onCancel();
+			}}
+		>
+			<div
+				className="auto-form-card auto-tpl-card"
+				role="dialog"
+				aria-modal="true"
+				aria-label="从模板添加定时任务"
+				ref={cardRef}
+			>
+				<button type="button" className="bar-btn auto-tpl-close" aria-label="关闭" onClick={onCancel}>
+					<IconClose size={15} />
+				</button>
+				<h2 className="save-space-title">从模板添加</h2>
+				<div className="auto-tpl-list">
+					{AUTOMATION_TEMPLATES.map((template) => (
+						<button
+							key={template.id}
+							type="button"
+							className="auto-tpl-item"
+							title={template.prompt}
+							onClick={() => onSelect(template)}
+						>
+							<span className="auto-tpl-name">{template.name}</span>
+							<span className="auto-tpl-desc">{template.description}</span>
+							<span className="auto-tpl-schedule">{scheduleSummary(template.schedule)}</span>
+						</button>
+					))}
+				</div>
+				<p className="field-hint">选中后进入编辑表单，名称、内容与调度都可以改。</p>
+			</div>
+		</div>
 	);
 }
 

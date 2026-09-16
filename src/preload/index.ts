@@ -47,6 +47,8 @@ const bridge: KamiBridge = {
 	renameSession: (path, name) =>
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
+	archiveSession: (path, archived) =>
+		ipcRenderer.invoke(INVOKE.sessionArchive, path, archived),
 	exportSession: (path) => ipcRenderer.invoke(INVOKE.sessionExport, path),
 	saveToWorkspace: (name) => ipcRenderer.invoke(INVOKE.saveToWorkspace, name),
 
@@ -115,6 +117,10 @@ const bridge: KamiBridge = {
 	getMemoryEnabled: () => ipcRenderer.invoke(INVOKE.getMemoryEnabled),
 	setMemoryEnabled: (enabled) =>
 		ipcRenderer.invoke(INVOKE.setMemoryEnabled, enabled),
+
+	getAgentTeamsEnabled: () => ipcRenderer.invoke(INVOKE.getAgentTeamsEnabled),
+	setAgentTeamsEnabled: (enabled) =>
+		ipcRenderer.invoke(INVOKE.setAgentTeamsEnabled, enabled),
 	getProfile: () => ipcRenderer.invoke(INVOKE.getProfile),
 	setProfile: (content) => ipcRenderer.invoke(INVOKE.setProfile, content),
 	resetProfile: () => ipcRenderer.invoke(INVOKE.resetProfile),
