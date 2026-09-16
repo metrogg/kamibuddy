@@ -21,6 +21,7 @@ import {
 	artifactsFromEntries,
 	conversationReducer,
 	initialConversation,
+	insertQueuedNow,
 	removeQueuedMessage,
 	type ConversationView,
 } from "./conversation.ts";
@@ -825,6 +826,32 @@ describe("removeQueuedMessage（排队 chips 的删除/编辑底层）", () => {
 
 	it("没找到就原样返回（不造新数组，调用方可据此跳过重排）", () => {
 		expect(removeQueuedMessage(queued, "不存在")).toBe(queued);
+	});
+});
+
+describe("insertQueuedNow（排队 chips 的立即插入）", () => {
+	it("把 followUp 里的那条挪到 steering 队尾", () => {
+		expect(insertQueuedNow({ steering: ["甲"], followUp: ["乙", "丙"] }, "乙")).toEqual({
+			steering: ["甲", "乙"],
+			followUp: ["丙"],
+		});
+	});
+
+	it("同文本多条只挪一条", () => {
+		expect(insertQueuedNow({ steering: [], followUp: ["甲", "甲"] }, "甲")).toEqual({
+			steering: ["甲"],
+			followUp: ["甲"],
+		});
+	});
+
+	it("已在 steering 里（已经在插）就原样返回，不重复入队", () => {
+		const q = { steering: ["甲"], followUp: [] };
+		expect(insertQueuedNow(q, "甲")).toBe(q);
+	});
+
+	it("两边都没有就原样返回", () => {
+		const q = { steering: ["甲"], followUp: ["乙"] };
+		expect(insertQueuedNow(q, "丙")).toBe(q);
 	});
 });
 

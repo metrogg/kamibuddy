@@ -494,9 +494,11 @@ export interface PromptRequest {
 	/** 本条消息携带的图片附件（pickInputFiles 选出）。无图时缺省。 */
 	readonly images?: readonly ImagePart[];
 	/**
-	 * 流式期间发来的消息如何处理。
-	 * steer：本轮工具执行完后插入；followUp：等 agent 完全停下再发。
-	 * 对应 pi 的 steer/followUp 语义，在 adapter 层映射。
+	 * 流式期间发来的消息如何处理（对应 pi 的 steer / followUp 语义）。
+	 * steer：本轮工具执行完后插进当前这轮；followUp：等当前任务完全停下再发。
+	 * **缺省 = followUp（排队）** —— 补一句的常规意图是「等它跑完再接着做」；
+	 * 立刻插入必须由用户显式点「立即插入」（传 "steer"）才会发生。
+	 * 缺省值由 daemon 在会话互斥链的旁路分支落定（唯一处），这里不重复定义。
 	 */
 	readonly whileStreaming?: "steer" | "followUp";
 }

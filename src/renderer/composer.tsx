@@ -61,8 +61,16 @@ interface ComposerProps {
 	/**
 	 * 提交（文本 + 可选图片附件）。resolve 表示 daemon 已接收；
 	 * 附件据此决定去留（失败保留在输入区，见 submit）。
+	 *
+	 * `whileStreaming` 只在流式期间由本组件显式给出：回车排队（缺省，daemon
+	 * 落定为 followUp）、「立即插入」按钮传 "steer"。非流式时不传 —— 那时
+	 * 它没有意义，传了也会被 daemon 当作普通发送。
 	 */
-	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
+	readonly onSubmit: (
+		text: string,
+		images?: readonly ImagePart[],
+		whileStreaming?: "steer" | "followUp",
+	) => Promise<void>;
 	/** 就地轻提示（附件格式/大小被拒等）。 */
 	readonly onError: (message: string) => void;
 	/**
@@ -177,7 +185,7 @@ export function Composer({
 		if (streaming !== true) setStopConfirm((current) => (current.phase === "pending" ? stopConfirmIdle : current));
 	}, [streaming]);
 
-	const submit = (): void => {
+	const submit = (whileStreaming?: "steer" | "followUp"): void => {
 		const text = draft.trim();
 		// 超限双闸之一：发送按钮已 disabled，这里拦快捷键（Enter）路径。
 		if (charCountState(draft.length).over) return;
@@ -191,7 +199,11 @@ export function Composer({
 		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
 		// 文档引用在提交这一刻折回文本末尾（recordSent 只记用户原文，
 		// 历史翻页还原的是人写的部分）。
-		void onSubmit(foldDocumentRefsIntoText(text, img.documentRefs), images.length > 0 ? images : undefined).then(
+		void onSubmit(
+			foldDocumentRefsIntoText(text, img.documentRefs),
+			images.length > 0 ? images : undefined,
+			whileStreaming,
+		).then(
 			() => {
 				img.clear();
 				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
@@ -299,14 +311,31 @@ export function Composer({
 						{chars.remaining}
 					</span>
 				)}
-				{/*
-					流式期间发送键变中断键。
-					没有中断入口时，模型跑偏或长任务只能干等，甚至杀进程 —— 这是必须有的逃生门。
-				*/}
-				{streaming === true ? (
-					// 二次确认：首次点击武装 3s 窗口（按钮内容换 Esc 徽章），
-					// 窗口内再点（或再按 Esc）才真正中断，超时自动复原。
-					<button
+			{/*
+				流式期间发送键变中断键，旁边多一个「立即插入」：
+				回车（含非流式的发送键）= **排队**，等当前任务做完再跑；
+				「立即插入」= steer，当前这轮的工具一结束就生效。
+				两条路必须在视觉上分开 —— 用户补一句多数是想排队，插入是例外，
+				所以例外才配按钮（2026-09-16 用户定的语义，勿对调）。
+			*/}
+			{streaming === true && (
+				<button
+					type="button"
+					className="insert-btn"
+					aria-label="立即插入当前任务"
+					title="不等排队，立刻插进当前这轮"
+					disabled={!ready || draft.trim() === "" || chars.over}
+					onClick={() => submit("steer")}
+				>
+					<IconSend size={13} />
+					立即插入
+				</button>
+			)}
+			{streaming === true ? (
+				// 二次确认：首次点击武装 3s 窗口（按钮内容换 Esc 徽章），
+				// 窗口内再点（或再按 Esc）才真正中断，超时自动复原。
+				// 没有中断入口时，模型跑偏或长任务只能干等，甚至杀进程 —— 必须有的逃生门。
+				<button
 						type="button"
 						className="send-btn stop"
 						aria-label="停止"
@@ -320,7 +349,7 @@ export function Composer({
 						type="button"
 						className="send-btn"
 						aria-label="发送"
-						onClick={submit}
+						onClick={() => submit()}
 						disabled={!ready || draft.trim() === "" || chars.over}
 					>
 						<IconSend size={16} />

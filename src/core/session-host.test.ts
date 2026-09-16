@@ -260,6 +260,13 @@ describe("prompt 的图片透传", () => {
 		await createHost(followUp.session, () => { }).prompt("追问", "followUp");
 		expect(followUp.calls.followUp).toEqual([["追问", undefined]]);
 	});
+
+	it("流式缺省 = 排队（followUp）：补一句的常规意图是等它跑完，不是打断", async () => {
+		const s = recordingSession(true);
+		await createHost(s.session, () => { }).prompt("补一句");
+		expect(s.calls.followUp).toEqual([["补一句", undefined]]);
+		expect(s.calls.steer).toHaveLength(0);
+	});
 });
 
 type StreamStartedEvent = Extract<SessionEvent, { type: "tool_stream_started" }>;

@@ -119,19 +119,44 @@ export const initialConversation: ConversationView = {
  * 剩下的整体重排。只摘第一条 —— 同文本可以排队多条，按内容删必须一条一条来，
  * 否则一次会摘掉两根相同的 chip。
  */
+/**
+ * 从等待队列里摘掉**第一条**与 text 相同的消息（steering 优先）。
+ *
+ * 供排队 chips 的「删除 / 编辑」用：pi 只能整队清空（session:queue-rewrite
+ * 的底层就是清空 + 按序重入队），所以删一条 = 先在本地算出剩下的队列，再把
+ * 剩下的整体重排。只摘第一条 —— 同文本可以排队多条，按内容删必须一条一条来，
+ * 否则一次会摘掉两根相同的 chip。
+ *
+ * 两边都没有时**原样返回**（同一对象），调用方可据此跳过这次重排。
+ */
 export function removeQueuedMessage(queued: QueuedMessages, text: string): QueuedMessages {
-	const dropFirst = (list: readonly string[]): readonly string[] | undefined => {
-		const index = list.indexOf(text);
-		return index === -1 ? undefined : [...list.slice(0, index), ...list.slice(index + 1)];
-	};
 	// steering 命中就只动 steering：同一文本同时出现在两个队列时不双重删除。
-	const steering = dropFirst(queued.steering);
+	const steering = dropFirstMatch(queued.steering, text);
 	if (steering !== undefined) return { steering, followUp: queued.followUp };
-	const followUp = dropFirst(queued.followUp);
+	const followUp = dropFirstMatch(queued.followUp, text);
 	if (followUp !== undefined) return { steering: queued.steering, followUp };
-	// 两边都没有（陈旧 chip 点了已消费的消息）：原样返回，调用方据同一对象
-	// 跳过这次重排，不必白发一条 IPC。
 	return queued;
+}
+
+/**
+ * 把等待队列里的一条 follow-up **提升为立即插入**（挪进 steering 队尾）。
+ *
+ * 排队 chips 的「立即插入」用：先在 followUp 里摘掉它、再排到 steering 队尾 ——
+ * 重排的底层仍是「清空 + 按序重入队」，重入队时它走的是 steer 通道，
+ * 于是本轮下一个工具边界就生效（不必等当前 run 结束）。
+ * 已在 steering 里 / 找不到时**原样返回**，调用方据此跳过重排。
+ */
+export function insertQueuedNow(queued: QueuedMessages, text: string): QueuedMessages {
+	if (queued.steering.includes(text)) return queued;
+	const followUp = dropFirstMatch(queued.followUp, text);
+	if (followUp === undefined) return queued;
+	return { steering: [...queued.steering, text], followUp };
+}
+
+/** 摘掉数组中第一条与 text 相同的元素；没命中返回 undefined（不造新数组）。 */
+function dropFirstMatch(list: readonly string[], text: string): readonly string[] | undefined {
+	const index = list.indexOf(text);
+	return index === -1 ? undefined : [...list.slice(0, index), ...list.slice(index + 1)];
 }
 
 /** 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。 */

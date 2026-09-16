@@ -2541,8 +2541,12 @@ const handlers: Record<string, Handler> = {
 		const bucket = currentBucket;
 		bucket.lastUsedAt = Date.now();
 		if (bucket.running) {
+			// 缺省 followUp = **排队**：补一句的常规意图是「等当前任务跑完再接着做」，
+			// 立刻插进这一轮（steer）要用户显式点「立即插入」才发生。
+			// 两个入口共用这一个缺省值，写在这里而不是 session-host，是为了让
+			// 「哪条路是默认」只有一个地方说了算。
 			const host = await getHost(bucket);
-			await host.prompt(text, whileStreaming, images);
+			await host.prompt(text, whileStreaming ?? "followUp", images);
 			return;
 		}
 		await enqueue(bucket, async () => {

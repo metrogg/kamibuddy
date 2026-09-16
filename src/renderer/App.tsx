@@ -513,13 +513,20 @@ export function App(): React.JSX.Element {
 	}, [showToast]);
 
 	const submit = useCallback(
-		(text: string, images?: readonly ImagePart[]): Promise<void> => {
+		(
+			text: string,
+			images?: readonly ImagePart[],
+			/** 流式期间发消息的排队方式；缺省由 daemon 落定为 followUp（排队）。 */
+			whileStreaming?: "steer" | "followUp",
+		): Promise<void> => {
 			if (link.kind !== "ready") return Promise.resolve();
 			setLastError(undefined);
 			setView("chat");
-			// 空数组与缺省同义：不带 images 字段，payload 与无图版本完全一致。
+			// 空数组与缺省同义：不带 images / whileStreaming 字段，payload 与无图版本完全一致。
 			const request: PromptRequest =
-				images !== undefined && images.length > 0 ? { text, images } : { text };
+				images !== undefined && images.length > 0
+					? { text, images, ...(whileStreaming === undefined ? {} : { whileStreaming }) }
+					: { text, ...(whileStreaming === undefined ? {} : { whileStreaming }) };
 			// 错误先落进消息流（错误卡）再 rethrow：调用方靠成败决定附件去留
 			// （成功才 clear，见两个视图的 submit）。
 			return window.kami.prompt(request).catch((error: unknown) => {

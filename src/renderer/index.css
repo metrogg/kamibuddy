@@ -1382,6 +1382,28 @@ textarea:focus-visible {
 	color: var(--primary-text);
 }
 
+/* 「立即插入」：流式期间与停止键并排的例外入口 —— 回车是排队（缺省语义），
+   它才是 steer。文字按钮走次要色（与停止键的实心圆拉开视觉层级：
+   插入是例外，例外不配主按钮色）。禁用态按 §3.1 图标钮口径 opacity .4。 */
+.insert-btn {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--radius-sm);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.insert-btn:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.insert-btn:disabled {
+	opacity: 0.4;
+}
+
 .send-btn:hover {
 	opacity: 0.88;
 }

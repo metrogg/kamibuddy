@@ -613,9 +613,11 @@ export class SessionHost {
 		const piImages = toPiImages(images);
 		if (this.session.isStreaming) {
 			// 流式期间直接 prompt 会被 pi 拒绝，必须显式选择排队方式。
-			// 默认 steer：用户追加的话通常是想纠偏当前这轮，而不是等它跑完。
-			if (whileStreaming === "followUp") await this.session.followUp(text, piImages);
-			else await this.session.steer(text, piImages);
+			// **缺省是 followUp（排队）而不是 steer**：用户在跑长任务时补一句，
+			// 绝大多数是「等它跑完再接着做」，不是「现在就打断它」（2026-09-16 用户定）。
+			// 想立刻插进当前这轮必须显式带 "steer"（输入区的「立即插入」按钮）。
+			if (whileStreaming === "steer") await this.session.steer(text, piImages);
+			else await this.session.followUp(text, piImages);
 			return;
 		}
 		if (whileStreaming !== undefined) {

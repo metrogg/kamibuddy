@@ -8,7 +8,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
-import { removeQueuedMessage } from "@shared/conversation.ts";
+import { removeQueuedMessage, insertQueuedNow } from "@shared/conversation.ts";
 import { formatTokenCount } from "@shared/context-usage.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
@@ -34,6 +34,7 @@ import {
 	IconSkill,
 	IconAssistant,
 	IconWeb,
+	IconSend,
 	IconTrash,
 } from "./icons.tsx";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
@@ -85,8 +86,13 @@ interface ChatViewProps {
 	/**
 	 * 提交（文本 + 可选图片附件）。resolve 表示 daemon 已接收；
 	 * 附件据此决定去留（失败保留在输入区，见 submit）。
+	 * `whileStreaming` 由 Composer 给出：回车排队（缺省）、「立即插入」传 "steer"。
 	 */
-	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
+	readonly onSubmit: (
+		text: string,
+		images?: readonly ImagePart[],
+		whileStreaming?: "steer" | "followUp",
+	) => Promise<void>;
 	readonly onAbort: () => void;
 	/**
 	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
@@ -1529,6 +1535,7 @@ export function ChatView({
 	/**
 	 * 排队 chips 的行数据：steering 在前（先被消费）、followUp 在后。
 	 * `rest` 是摘掉本条后的剩余队列 —— 删除/编辑都走它（session:queue-rewrite）。
+	 * `kind` 决定「立即插入」是否出现：steering 的条目本来就在插，不重复给入口。
 	 * 在这里先窄化 `queued`，回调里就不用 `!`（窄化穿不过 useCallback 闭包）。
 	 */
 	const queued = conversation.queued;
@@ -1536,9 +1543,14 @@ export function ChatView({
 		() =>
 			queued === undefined
 				? []
-				: [...queued.steering, ...queued.followUp].map((text) => ({
+				: [
+						...queued.steering.map((text) => ({ text, kind: "steering" as const })),
+						...queued.followUp.map((text) => ({ text, kind: "followUp" as const })),
+					].map(({ text, kind }) => ({
 						text,
+						kind,
 						rest: removeQueuedMessage(queued, text),
+						insertNow: insertQueuedNow(queued, text),
 					})),
 		[queued],
 	);
@@ -1832,8 +1844,12 @@ export function ChatView({
 		return result;
 	};
 
-	const handleComposerSubmit = (text: string, images?: readonly ImagePart[]): Promise<void> => {
-		return submitWithAnchor(() => onSubmit(text, images));
+	const handleComposerSubmit = (
+		text: string,
+		images?: readonly ImagePart[],
+		whileStreaming?: "steer" | "followUp",
+	): Promise<void> => {
+		return submitWithAnchor(() => onSubmit(text, images, whileStreaming));
 	};
 
 	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
@@ -2328,12 +2344,26 @@ export function ChatView({
 				携带的队列内容（pi _steeringMessages / _followUpMessages 的快照），
 				消息被消费时 pi 自己出队并推新快照，chips 随之消失。
 			*/}
-			{queuedItems.map(({ text, rest }) => (
+			{queuedItems.map(({ text, kind, rest, insertNow }) => (
 				<div key={text} className="queued-chip">
-					<span className="queued-chip-label">待发送</span>
+					<span className="queued-chip-label">{kind === "steering" ? "将插入" : "排队中"}</span>
 					<span className="queued-chip-text" title={text}>
 						{text}
 					</span>
+					{kind === "followUp" && (
+						<button
+							type="button"
+							className="queued-chip-btn"
+							aria-label="立即插入当前任务"
+							title="不等排队，立刻插进当前这轮"
+							onClick={() => {
+								// 挪进 steering 队列：重排的底层（清空 + 重入队）会让它走 steer 通道。
+								if (insertNow !== queued) onQueueRewrite(insertNow);
+							}}
+						>
+							<IconSend size={13} />
+						</button>
+					)}
 					<button
 						type="button"
 						className="queued-chip-btn"
@@ -2394,7 +2424,13 @@ export function ChatView({
 						<Composer
 							ref={composerRef}
 							ready={ready}
-							placeholder={ready ? (streaming ? "补充说明会插入当前任务…" : "继续追问…") : "正在准备…"}
+							placeholder={
+								ready
+									? streaming
+										? "回车排队等待，点「立即插入」插进当前这轮"
+										: "继续追问…"
+									: "正在准备…"
+							}
 							rows={2}
 							cwd={conversation.state.cwd}
 							modelId={conversation.state.modelId}
