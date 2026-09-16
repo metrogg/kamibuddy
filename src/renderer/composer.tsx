@@ -13,8 +13,9 @@
 
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
+import { skillInvocationText } from "@shared/skill-block.ts";
 import { useAutocomplete } from "./autocomplete.tsx";
-import { IconSend, IconStop } from "./icons.tsx";
+import { IconClose, IconSend, IconSkill, IconStop } from "./icons.tsx";
 import { AttachmentStrip, DocumentRefStrip, foldDocumentRefsIntoText, useImageAttachments } from "./image-attachments.tsx";
 import { useImeGuard } from "./ime-guard.ts";
 import { loadDraft, navigateHistory, recordSent, saveDraft, sentHistory } from "./input-history.ts";
@@ -101,6 +102,47 @@ interface ComposerProps {
 	readonly ref?: React.Ref<ComposerHandle>;
 }
 
+/**
+ * 已选技能条（`/` 菜单里选中技能 → 这里一枚 chip）。
+ *
+ * 为什么技能不进 textarea：`/skill:docx` 是给 pi 看的命令语法。插成文本，用户看到的是
+ * 一串 `/skill:frontend-design` 纯文本 —— 那既不说明「选了什么」，也不像个选择结果。
+ * 与文档引用同一条路子（见 DocumentRefStrip 的注释）：结构化件与 textarea 分离，
+ * 提交那一刻才折回模型要的语法（`/skill:<name>` 前缀，pi 只认它）。
+ * chip 视觉复用输入卡上既有的 chip 声明（index.css，不新造第二套值）。
+ *
+ * 只放一枚（多个技能由模型自己用 use_skill 加载）：pi 的语法只有一个前置 `/skill:`
+ * （agent-session.js:984 的 startsWith），拼两个的第二个会被当成第一个技能的参数 ——
+ * 界面允许选两个而模型只认一个，比不让选更糟。
+ */
+function SkillStrip({
+	name,
+	onRemove,
+}: {
+	/** 已选技能名；undefined = 没选（整条不渲染）。 */
+	readonly name: string | undefined;
+	readonly onRemove: () => void;
+}): React.JSX.Element | null {
+	if (name === undefined) return null;
+	return (
+		<div className="skill-strip">
+			<div className="skill-chip">
+				<IconSkill size={14} className="skill-chip-icon" />
+				<span className="skill-chip-name">{name}</span>
+				<button
+					type="button"
+					className="skill-chip-remove"
+					aria-label={`移除技能 ${name}`}
+					title="移除技能"
+					onClick={onRemove}
+				>
+					<IconClose size={12} />
+				</button>
+			</div>
+		</div>
+	);
+}
+
 export function Composer({
 	ready,
 	placeholder,
@@ -134,10 +176,18 @@ export function Composer({
 	// 图片/文档附件（粘贴/拖拽/选择三入口，同一份 hook）。
 	// 文档进 chip 条（documentRefs），提交时才折回文本，textarea 保持纯人写文本。
 	const img = useImageAttachments(onError);
+	/*
+	 * 已选技能（`/` 菜单里选中即入列，textarea 里不留命令语法）。单选，见 SkillStrip 注释。
+	 * 与附件同一层语义：结构化件在提交那一刻才拼回模型要的文本。
+	 * 不做草稿持久化（同 documentRefs / 附件：视图切换带不走它们；
+	 * 真正的草稿持久化只覆盖人写的文本）。
+	 */
+	const [skill, setSkill] = useState<string | undefined>(undefined);
 	// 输入长度余量（input-limit.ts 纯函数判定）：接近上限才显示，超限禁发。
 	const chars = charCountState(draft.length);
 	// @ / 补全：触发与选中逻辑全在 hook 里，这里只接管 ref 与值；cwd 变化时重拉数据源。
-	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd, memberItems);
+	// 技能项走 onPickSkill：选中即一枚 chip，不进草稿（再选一次即替换）。
+	const ac = useAutocomplete(draft, setDraft, textareaRef, cwd, memberItems, setSkill);
 
 	useImperativeHandle(
 		ref,
@@ -195,25 +245,35 @@ export function Composer({
 		const text = draft.trim();
 		// 超限双闸之一：发送按钮已 disabled，这里拦快捷键（Enter）路径。
 		if (charCountState(draft.length).over) return;
-		if (text === "" || !ready) return;
+		// 只带技能、没有正文也是合法请求（`/skill:docx` 单独发送 = 让模型照该技能做事，
+		// WorkBuddy 的 skill chip 同样可单独发送）。
+		if ((text === "" && skill === undefined) || !ready) return;
 		const images = img.attachments;
+		// 单选技能 → 数组形态（skillInvocationText 的入参口径：0 或 1 个前缀）。
+		const picked = skill === undefined ? [] : [skill];
 		setDraft("");
+		setSkill(undefined);
 		// 发送即清掉该 key 的暂存草稿（已发出不再是草稿），并退出历史导航态。
 		if (draftKey !== undefined) saveDraft(draftKey, "");
 		setHistoryNav(undefined);
 		// 附件等 daemon 接收成功再清：失败时错误卡已落进消息流，图留在
 		// 输入区（文本可从错误卡重试），补一句话重发即可，不必重挑文件。
+		// 技能与文本同去留：重挑技能只是再敲一次 `/`，不必像图片那样占着输入区。
 		// 文档引用在提交这一刻折回文本末尾（recordSent 只记用户原文，
 		// 历史翻页还原的是人写的部分）。
+		// 技能必须拼在最前面：pi 只认开头的 `/skill:`（agent-session.js:984），
+		// 前缀与其后的参数用空格分隔（skillInvocationText 的注释）。
 		void onSubmit(
-			foldDocumentRefsIntoText(text, img.documentRefs),
+			skillInvocationText(picked, foldDocumentRefsIntoText(text, img.documentRefs)),
 			images.length > 0 ? images : undefined,
 			whileStreaming,
 		).then(
 			() => {
 				img.clear();
 				// 历史只记发送成功的：失败的文本留在错误卡里可重试，不该进翻页序列。
-				if (enableHistory === true) recordSent(text);
+				// 记的是「技能 + 人写的正文」而不含文档引用（沿用原口径）：翻回来时
+				// 框里是 `/skill:docx 写周报` —— 技能留在命令语法里，重发语义与首次一致。
+				if (enableHistory === true) recordSent(skillInvocationText(picked, text));
 			},
 			() => { },
 		);
@@ -269,6 +329,8 @@ export function Composer({
 			onDragOver={img.bind.onDragOver}
 			onDragLeave={img.bind.onDragLeave}
 		>
+			{/* 已选技能 chip 条在最前（它是整条消息的前缀语义，且排在文档 chip 之前）。 */}
+			<SkillStrip name={skill} onRemove={() => setSkill(undefined)} />
 			{/* 文档 chip 条在图片缩略图条之前。 */}
 			<DocumentRefStrip refs={img.documentRefs} onRemove={img.removeDocumentRefAt} />
 			<AttachmentStrip attachments={img.attachments} onRemove={img.removeAt} />
@@ -330,7 +392,7 @@ export function Composer({
 					className="insert-btn"
 					aria-label="立即插入当前任务"
 					title="不等排队，立刻插进当前这轮"
-					disabled={!ready || draft.trim() === "" || chars.over}
+					disabled={!ready || (draft.trim() === "" && skill === undefined) || chars.over}
 					onClick={() => submit("steer")}
 				>
 					<IconSend size={13} />
@@ -356,7 +418,7 @@ export function Composer({
 						className="send-btn"
 						aria-label="发送"
 						onClick={() => submit()}
-						disabled={!ready || draft.trim() === "" || chars.over}
+						disabled={!ready || (draft.trim() === "" && skill === undefined) || chars.over}
 					>
 						<IconSend size={16} />
 					</button>

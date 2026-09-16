@@ -13,7 +13,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { SkillInfo } from "../shared/settings.ts";
 import { getConfigDir } from "./config-paths.ts";
-import { parseFrontmatter, requireString } from "./frontmatter.ts";
+import { parseFrontmatter, optionalBoolean, requireString } from "./frontmatter.ts";
 
 /** pi 的技能名校验规则（skills.ts validateName）。 */
 const NAME_RE = /^[a-z0-9-]+$/;
@@ -26,6 +26,8 @@ export function userSkillsDir(): string {
 interface ParsedSkill {
 	readonly name: string;
 	readonly description: string;
+	/** 与 listSkills 同一口径地读一次 `user-invocable`（缺省 true），导入结果如实返回。 */
+	readonly userInvocable: boolean;
 	/** SKILL.md 在来源中的路径（导入后成为目标路径的参照）。 */
 	readonly skillMdPath: string;
 	/** 需要复制的根：文件夹来源是来源目录，单文件来源是 null（只复制一个文件）。 */
@@ -41,13 +43,25 @@ function parseSource(sourcePath: string): ParsedSkill {
 	if (stat.isFile()) {
 		if (!source.endsWith(".md")) throw new Error("请选择含 SKILL.md 的文件夹，或单个 .md 技能文件");
 		const doc = parseFrontmatter(readFileSync(source, "utf8"), source);
-		return { name: requireString(doc, "name", source), description: requireString(doc, "description", source), skillMdPath: source, sourceDir: null };
+		return {
+			name: requireString(doc, "name", source),
+			description: requireString(doc, "description", source),
+			userInvocable: optionalBoolean(doc, "user-invocable", true),
+			skillMdPath: source,
+			sourceDir: null,
+		};
 	}
 
 	const skillMd = join(source, "SKILL.md");
 	if (!existsSync(skillMd)) throw new Error("所选文件夹里没有 SKILL.md —— 技能必须包含 SKILL.md");
 	const doc = parseFrontmatter(readFileSync(skillMd, "utf8"), skillMd);
-	return { name: requireString(doc, "name", skillMd), description: requireString(doc, "description", skillMd), skillMdPath: skillMd, sourceDir: source };
+	return {
+		name: requireString(doc, "name", skillMd),
+		description: requireString(doc, "description", skillMd),
+		userInvocable: optionalBoolean(doc, "user-invocable", true),
+		skillMdPath: skillMd,
+		sourceDir: source,
+	};
 }
 
 /**
@@ -79,5 +93,6 @@ export function importSkill(sourcePath: string): SkillInfo {
 		filePath: join(destDir, "SKILL.md"),
 		origin: "user",
 		disableModelInvocation: false,
+		userInvocable: parsed.userInvocable,
 	};
 }

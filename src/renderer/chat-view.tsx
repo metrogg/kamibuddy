@@ -16,6 +16,7 @@ import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
 import type { CompactionReason, ConversationEntry, ModeDescriptor, QueuedMessages, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import { skillInvocationText } from "@shared/skill-block.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
@@ -243,6 +244,7 @@ function UserBubble({
 	text,
 	at,
 	images,
+	skillNames,
 }: {
 	/** 刻度轨（TurnRail）的测量锚点：data-entry-id 落在根 div 上。 */
 	readonly entryId: string;
@@ -250,6 +252,12 @@ function UserBubble({
 	readonly at: number;
 	/** 本条消息携带的图片附件（仅 UI 展示；进模型的翻译在 daemon 侧）。 */
 	readonly images?: readonly ImagePart[];
+	/**
+	 * 本条消息调用的技能名（`/skill:<name>` 被 pi 展开后剥出的结果，见 shared/skill-block.ts）。
+	 * 与 WorkBuddy 的 userMessage 侧同口径：徽标只读展示，不带删除按钮 ——
+	 * 消息已发出，撤技能等于改历史。
+	 */
+	readonly skillNames?: readonly string[];
 }): React.JSX.Element {
 	const { copied, copy } = useCopyWithTick();
 	// 点击放大的那张图；undefined = 预览关闭。MVP 不做轮播/缩放（YAGNI）。
@@ -275,6 +283,22 @@ function UserBubble({
 	return (
 		<div className="entry user" data-entry-id={entryId}>
 			<div className="user-bubble">
+				{/*
+					技能胶囊**内联在正文流里**（WB 同款：`[图标] 技能名  正文` 同一行），
+					不是先占一行的块 —— 块级排法会让气泡凭空高出一档（胶囊 23 高 vs 正文行 24，
+					再加一道间隙就是几十像素的空行）。间距靠 .user-bubble 下的 margin-right
+					（内联元素吃不到 flex 的 gap）。
+					key 用下标与 user-bubble-images 同口径：列表项无本地状态，
+					且同一条消息可以两次调用同一个技能（名字不是唯一键）。
+				*/}
+				{skillNames?.map((name, index) => (
+					<span key={index} className="skill-chip">
+						<IconSkill size={14} className="skill-chip-icon" />
+						{/* 名字走 .skill-chip-name（nowrap + 省略号）：胶囊是固定 23 高，
+						    名字折行会顶破胶囊。与输入卡那枚的技能名同一个类。 */}
+						<span className="skill-chip-name">{name}</span>
+					</span>
+				))}
 				{text}
 				{images !== undefined && images.length > 0 && (
 					// key 用下标与 AttachmentStrip 同口径：列表项无本地状态，src 是同步解码的 data URL。
@@ -302,7 +326,9 @@ function UserBubble({
 					className="entry-icon-btn"
 					aria-label="复制消息内容"
 					title={copied ? "已复制" : "复制"}
-					onClick={() => void copy(text)}
+					// 复制的是用户打过的话（技能消息拼回 `/skill:<name> …`）：技能名在气泡里
+					// 是胶囊、不在 text 里，直接复制 text 在「只调技能、没写正文」时是空串。
+					onClick={() => void copy(skillInvocationText(skillNames ?? [], text))}
 				>
 					{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
 				</button>
@@ -1574,14 +1600,14 @@ export function ChatView({
 			queued === undefined
 				? []
 				: [
-						...queued.steering.map((text) => ({ text, kind: "steering" as const })),
-						...queued.followUp.map((text) => ({ text, kind: "followUp" as const })),
-					].map(({ text, kind }) => ({
-						text,
-						kind,
-						rest: removeQueuedMessage(queued, text),
-						insertNow: insertQueuedNow(queued, text),
-					})),
+					...queued.steering.map((text) => ({ text, kind: "steering" as const })),
+					...queued.followUp.map((text) => ({ text, kind: "followUp" as const })),
+				].map(({ text, kind }) => ({
+					text,
+					kind,
+					rest: removeQueuedMessage(queued, text),
+					insertNow: insertQueuedNow(queued, text),
+				})),
 		[queued],
 	);
 	// 当前专家（绑定专家才有值，与交互模式正交）：composer-bar chip、起手 chips
@@ -1623,7 +1649,19 @@ export function ChatView({
 	// 与消息流无关的重渲染（折叠开合、面板交互）不再重扫。
 	const lastUserEntry = useMemo(() => entries.findLast((e) => e.role === "user"), [entries]);
 	const lastUserId = lastUserEntry?.id;
-	const retryText = lastUserEntry?.text;
+	/*
+	 * 重试要重发的是**用户打过的话**，不是气泡里那块展示文本。
+	 * 技能消息的 text 只剩补充文本（技能块已在翻译层剥掉，见 shared/skill-block.ts），
+	 * 直接拿 text 重发会把技能丢掉 —— 用户看到的「重试」结果和上一条不是同一个请求。
+	 * 拼回 `/skill:<name> …` 后交 pi，pi 会照旧展开技能，语义与首次发送一致。
+	 */
+	const retryText = useMemo(
+		() =>
+			lastUserEntry === undefined
+				? undefined
+				: skillInvocationText(lastUserEntry.skillNames ?? [], lastUserEntry.text),
+		[lastUserEntry],
+	);
 	// 起手 chips「发送一条后消失」的判定：entries 里有无 user 消息（权威口径，
 	// 恢复历史会话也正确 —— 有历史的会话 chips 本就不该再出现）。
 	const hasUserMessage = lastUserEntry !== undefined;
@@ -1971,7 +2009,16 @@ export function ChatView({
 		}
 		// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
 		if (entry.role === "user") {
-			return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+			return (
+				<UserBubble
+					key={entry.id}
+					entryId={entry.id}
+					text={entry.text}
+					at={entry.at}
+					images={entry.images}
+					skillNames={entry.skillNames}
+				/>
+			);
 		}
 		// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
 		// conversation.artifacts，产物卡在消息流底部统一展示）。
@@ -2326,6 +2373,7 @@ export function ChatView({
 										text={userEntry.text}
 										at={userEntry.at}
 										images={userEntry.images}
+										skillNames={userEntry.skillNames}
 									/>
 								)}
 								{/*
@@ -2384,61 +2432,61 @@ export function ChatView({
 				)}
 			</div>
 
-		<footer className="chat-composer">
-			{/*
+			<footer className="chat-composer">
+				{/*
 				排队 chips（WorkBuddy 同位同语义）：steer/followUp 发出去之后、
 				被 pi 消费之前的「已发出、待生效」消息就挂在这里 —— 文本可读、
 				可编辑（填回草稿并从队列摘除）、可删除。数据是 queue_changed 事件
 				携带的队列内容（pi _steeringMessages / _followUpMessages 的快照），
 				消息被消费时 pi 自己出队并推新快照，chips 随之消失。
 			*/}
-			{queuedItems.map(({ text, kind, rest, insertNow }) => (
-				<div key={text} className="queued-chip">
-					<span className="queued-chip-label">{kind === "steering" ? "将插入" : "排队中"}</span>
-					<span className="queued-chip-text" title={text}>
-						{text}
-					</span>
-					{kind === "followUp" && (
+				{queuedItems.map(({ text, kind, rest, insertNow }) => (
+					<div key={text} className="queued-chip">
+						<span className="queued-chip-label">{kind === "steering" ? "将插入" : "排队中"}</span>
+						<span className="queued-chip-text" title={text}>
+							{text}
+						</span>
+						{kind === "followUp" && (
+							<button
+								type="button"
+								className="queued-chip-btn"
+								aria-label="立即插入当前任务"
+								title="不等排队，立刻插进当前这轮"
+								onClick={() => {
+									// 挪进 steering 队列：重排的底层（清空 + 重入队）会让它走 steer 通道。
+									if (insertNow !== queued) onQueueRewrite(insertNow);
+								}}
+							>
+								<IconSend size={13} />
+							</button>
+						)}
 						<button
 							type="button"
 							className="queued-chip-btn"
-							aria-label="立即插入当前任务"
-							title="不等排队，立刻插进当前这轮"
+							aria-label="编辑这条排队消息"
+							title="编辑"
 							onClick={() => {
-								// 挪进 steering 队列：重排的底层（清空 + 重入队）会让它走 steer 通道。
-								if (insertNow !== queued) onQueueRewrite(insertNow);
+								// 摘出后填回草稿：改完由用户自己重新发送（仍是 steer 语义）。
+								composerRef.current?.fillText(text);
+								if (rest !== queued) onQueueRewrite(rest);
 							}}
 						>
-							<IconSend size={13} />
+							<IconEdit size={13} />
 						</button>
-					)}
-					<button
-						type="button"
-						className="queued-chip-btn"
-						aria-label="编辑这条排队消息"
-						title="编辑"
-						onClick={() => {
-							// 摘出后填回草稿：改完由用户自己重新发送（仍是 steer 语义）。
-							composerRef.current?.fillText(text);
-							if (rest !== queued) onQueueRewrite(rest);
-						}}
-					>
-						<IconEdit size={13} />
-					</button>
-					<button
-						type="button"
-						className="queued-chip-btn"
-						aria-label="删除这条排队消息"
-						title="删除"
-						onClick={() => {
-							if (rest !== queued) onQueueRewrite(rest);
-						}}
-					>
-						<IconTrash size={13} />
-					</button>
-				</div>
-			))}
-			{pendingQuestionnaire !== undefined ? (
+						<button
+							type="button"
+							className="queued-chip-btn"
+							aria-label="删除这条排队消息"
+							title="删除"
+							onClick={() => {
+								if (rest !== queued) onQueueRewrite(rest);
+							}}
+						>
+							<IconTrash size={13} />
+						</button>
+					</div>
+				))}
+				{pendingQuestionnaire !== undefined ? (
 					/*
 					问卷浮层替换输入区（WorkBuddy CBChat 的 hasQuestionFloating 语义：
 					答题期间 composer 让位，答完/跳过后 composer 恢复）。key 按请求 id

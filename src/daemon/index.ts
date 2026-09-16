@@ -37,6 +37,7 @@ import {
 	getTempTasksDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
+import { optionalBoolean, parseFrontmatter } from "../core/frontmatter.ts";
 import { ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
@@ -123,6 +124,7 @@ import {
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
 import { teamExtensionFactory } from "../extensions/team-tools.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
+import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
 	DEFAULT_PERMISSIONS,
@@ -142,6 +144,7 @@ import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
+import { SKILL_COMMAND_PREFIX } from "../shared/skill-block.ts";
 import {
 	artifactsFromEntries,
 	conversationReducer,
@@ -351,6 +354,32 @@ ensureUserMemoryFiles();
 const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
 
 /**
+ * 读一个技能的 `user-invocable`（缺省 true，只有显式 false 才是 false）。
+ *
+ * 为什么要**多读一次盘**：真正加载技能的是 pi 的 `loadSkills`，而它只认
+ * name / description / disable-model-invocation，未知键（含 `user-invocable`）直接丢弃
+ * （pi core/skills.js 的 frontmatter 映射表）—— 字段根本到不了我们手上。
+ * 选择再解析一次而不是改 pi 的加载器或自己接管加载：只补这一个字段，路径发现、
+ * 优先级、name 校验、正文装载仍全由 pi 决定（AGENTS.md §1.2 的适配层口径），
+ * 代价是一次小文件读取，技能列表本来就是现读不缓存的。
+ *
+ * 解析失败（我们的解析器是真 YAML 的子集，pi 能读、我们读不了的文件是可能的）：
+ * 响亮记日志，但**逐文件降级为 true**（可见）。两条理由：① 整个列表接口不能因为
+ * 一个坏 SKILL.md 打挂（`listSkills` 外层 catch 的既有口径是「页面照常打开」）；
+ * ② 降级成 false 更糟 —— 技能会从 `/` 菜单静默消失，用户连手动 `/skill:name`
+ * 都补不出来，故障被藏进「看不见」。默认可见 + 日志里的报错，坏文件是能被发现的。
+ */
+function readUserInvocable(filePath: string): boolean {
+	try {
+		const doc = parseFrontmatter(readFileSync(filePath, "utf8"), filePath);
+		return optionalBoolean(doc, "user-invocable", true);
+	} catch (error) {
+		console.error(`技能「${filePath}」的 frontmatter 解析失败，暂按可在 / 菜单调用处理：`, error);
+		return true;
+	}
+}
+
+/**
  * 技能清单。技能页展示与提示词组装共用这一个来源，且**每次现读** ——
  * 导入新技能后下一轮对话即生效，无需重启应用。
  *
@@ -383,6 +412,7 @@ function listSkills(expertSkillsDir?: string): SkillInfo[] {
 			filePath: s.filePath,
 			origin: s.filePath.startsWith(BUILTIN_SKILLS_DIR) ? "builtin" : "user",
 			disableModelInvocation: s.disableModelInvocation,
+			userInvocable: readUserInvocable(s.filePath),
 		}));
 	} catch (error) {
 		console.error("技能加载失败（设置页列表为空）：", error);
@@ -401,6 +431,41 @@ function listSkills(expertSkillsDir?: string): SkillInfo[] {
 function loadExpertsNow(): readonly ExpertDefinition[] {
 	// 第三个参数是全局技能目录：私有技能与它重名要在加载期拦下（spec: 专家技能重名防护）。
 	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILLS_DIR);
+}
+
+/**
+ * 会话技能来源的**单一出口**：技能清单段（composeSystemPrompt）、use_skill 工具
+ * （用户会话与定时 run 会话的注册点）都从这里取技能。语义 = `listSkills(绑定专家的
+ * 私有技能目录)`，未绑定专家时就是全局技能池。
+ *
+ * 为什么必须同源：清单段是模型看到的「有哪些技能」，use_skill 是它唯一能兑现这句话
+ * 的手段 —— 两处各读一份盘，模型就会看到清单里有、工具却加载不了的技能（或反之）。
+ *
+ * 为什么**不**用 SessionHost 自持的 `resourceLoader.getSkills()`（其 skillDescriptors
+ * getter，当前无消费方）：那份是宿主按自己的加载路径发现的第三个技能集，与清单段走的
+ * listSkills（内置 + 用户 + 可选专家私有）并不一致 —— 用它等于再制造一个来源，
+ * 与「工具与提示词一致」正好相反。该 getter 保持无消费方。
+ *
+ * 每次现读不缓存：与 listSkills 同一口径，导入新技能后下一次工具调用/下一轮对话即生效。
+ */
+function sessionSkills(expertId: string | undefined): SkillInfo[] {
+	// expertId 缺失时**短路**：未绑专家的会话不该走专家库读路径（专家库加载从紧，
+	// 坏专家文件抛错——与 composeSystemPrompt 里那次短路同一个理由）。
+	if (expertId === undefined) return listSkills();
+	return listSkills(resolveSessionExpert(loadExpertsNow(), expertId)?.skillsDir);
+}
+
+/**
+ * SkillInfo → use_skill 工具的技能描述符（工具只认这四个字段，不关心 origin /
+ * userInvocable）。两个注册点（用户会话 / 定时 run 会话）共用，字段集不会各自漂移。
+ */
+function toUseSkills(skills: readonly SkillInfo[]): UseSkillTarget[] {
+	return skills.map((s) => ({
+		name: s.name,
+		description: s.description,
+		filePath: s.filePath,
+		disableModelInvocation: s.disableModelInvocation,
+	}));
 }
 
 /**
@@ -464,17 +529,20 @@ async function composeSystemPrompt(
 	// 未绑定专家不走这条读路径：专家库加载从紧（坏文件抛错），三模式会话不该被
 	// 一个坏专家包拖垮（短路求值刻意保留）。
 	const expert = expertId === undefined ? undefined : resolveSessionExpert(loadExpertsNow(), expertId);
-	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。绑定专家时
-	// 追加其私有技能目录（未绑定时与全局技能池完全一致）。
-	const skills: SkillDescriptor[] = listSkills(expert?.skillsDir).map((s) => ({
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。技能与 use_skill
+	// 工具走同一个出口（sessionSkills）：绑定专家时其私有技能既进清单段、也进工具。
+	const skills: SkillDescriptor[] = sessionSkills(expertId).map((s) => ({
 		name: s.name,
 		description: s.description,
 		filePath: s.filePath,
+		// 这一项不能省：pi 的 formatSkillsForPrompt 靠它把 disable-model-invocation
+		// 的技能从清单段过滤掉 —— 曾经在这里降维成三字段丢掉它 = 过滤整条失效，
+		// 声明「模型不可调用」的内部技能照样进提示词。
+		disableModelInvocation: s.disableModelInvocation,
 	}));
-	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
-	// 的工具（read / bash）时，不注入技能段（见 core/prompt-composer.ts
-	// skillsSectionForMode）—— 否则会让模型去调用一个并不存在的 read 工具
-	//（plan 模式就是这个坑）。
+	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里 read / bash / use_skill 一个
+	// 都没有时，不注入技能段（见 core/prompt-composer.ts skillsSectionForMode）
+	// —— 否则会让模型去调用一个并不存在的工具（plan 这类只读配置就是这个坑）。
 	const skillsSection = skillsSectionForMode(mode.tools, skills);
 	/*
 	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
@@ -783,6 +851,9 @@ const automationScheduler = new AutomationScheduler({
 		isOwnWorkspace: (dir) =>
 			isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
 		getWebSearchConfig,
+		// run 会话恒不绑专家，技能就是全局池 —— 但仍走技能单一出口 sessionSkills
+		//（与它自己的提示词技能清单段同源，见 sessionSkills 注释）。
+		resolveSkills: () => toUseSkills(sessionSkills(undefined)),
 	}),
 	push: (event) => {
 		post({ kind: "push", channel: PUSH.automationEvent, payload: event });
@@ -1987,6 +2058,17 @@ async function createHost(
 			// 文档读取：所有会话都装。read_document 已登记权限门只读工具
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
+			/*
+			 * 技能加载（三模式白名单都含 use_skill）：模型**自动**命中技能时用它取
+			 * SKILL.md 全文 —— pi 只有手动 /skill: 的展开，自动路径本来没有工具
+			 * （旧约定是让模型 read 技能文件，界面上只显示成一堆「读取文件」）。
+			 * 技能来源经回调注入、且与技能清单段**同源**（sessionSkills）；闭包在
+			 * 工具调用时才求值：会话中途换绑专家后，工具看到的技能集立刻跟上同出口
+			 * 产出的清单段，不会出现「清单里有、工具查不到」。
+			 */
+			createUseSkillTool({
+				resolveSkills: () => toUseSkills(sessionSkills(bucket.conversation.state.expertId)),
+			}),
 			/*
 			 * docx 生成：craft 白名单含 docx_convert，所有用户会话都装。
 			 * 转换是 daemon 进程内受控 spawn venv python（命令与参数写死在
@@ -3804,6 +3886,9 @@ const handlers: Record<string, Handler> = {
 				name: s.name,
 				description: s.description,
 				filePath: s.filePath,
+				// 与真实组装一样不能丢：丢了预览会把 disable-model-invocation 的
+				// 内部技能显示在清单段里，与「此刻发消息看到的提示词」漂移。
+				disableModelInvocation: s.disableModelInvocation,
 			})),
 			// 预览按请求里的 expertId 解析人格（同一条 requireExpertPersona 路径）。
 			experts,
@@ -3852,11 +3937,16 @@ const handlers: Record<string, Handler> = {
 		commands: [
 			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
 			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
-			...listSkills().map((s) => ({
-				name: `skill:${s.name}`,
-				description: s.description,
-				source: "skill" as const,
-			})),
+			// `user-invocable: false` 的（纯内部技能）不进菜单 —— 面板是给用户手动选的地方；
+			// 手动敲 /skill:<name> 仍然照旧可用（可见性只收菜单，不拦 pi 的展开）。
+			...listSkills()
+				.filter((s) => s.userInvocable)
+				.map((s) => ({
+					// 前缀用共享常量（渲染层要按它切出裸技能名去渲染 chip）。
+					name: `${SKILL_COMMAND_PREFIX}${s.name}`,
+					description: s.description,
+					source: "skill" as const,
+				})),
 			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
 			// 发现目录必须与会话实际生效的一致 —— cwd 取当前会话桶的 cwd
 			//（会话与 cwd 终身绑定，桶即真相）。空串 = 待分配（还没工作目录）由

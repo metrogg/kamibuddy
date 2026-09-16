@@ -19,7 +19,7 @@ import type { SkillsSnapshot, SkillInfo } from "@shared/settings.ts";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import { ConnectorsView } from "./connectors-view.tsx";
 import { ExpertsView } from "./experts-view.tsx";
-import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
+import { IconBack, IconFolder, IconPlus, IconSkill } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface SkillsViewProps {
@@ -189,6 +189,8 @@ function SkillCard({ skill }: { readonly skill: SkillInfo }): React.JSX.Element 
 	return (
 		<div className="skill-card">
 			<div className="skill-card-head">
+				{/* 与 `/` 菜单技能组同一个图标（用户决策：不引入技能自定义图标）。 */}
+				<IconSkill size={15} className="skill-card-icon" />
 				<span className="skill-card-name">{skill.name}</span>
 				<span className="provider-tag">{skill.origin === "builtin" ? "内置" : "自装"}</span>
 			</div>

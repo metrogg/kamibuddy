@@ -7,8 +7,9 @@
  * 数据源经 window.kami.completions() 拉取（daemon 聚合：文件=当前工作空间、
  * 命令=技能+自有）。临时任务的工作目录（待分配态为空）通常没有文件，@ 下拉自然不出。
  *
- * 选中后 `@` / `/` 以纯文本插入（按需求，不做内容注入）——
- * 文件内容靠模型的 read 工具去读，命令由 pi 的 prompt 自动展开。
+ * 选中后 `@` 文件与「指令」类 `/` 项以纯文本插入（文件内容靠模型的 read 工具去读，
+ * 命令由 pi 的 prompt 自动展开）；**技能项不插文本**，转成输入卡上的 chip
+ * （见 useAutocomplete 的 onPickSkill）。
  *
  * 用法：
  *   const ac = useAutocomplete(value, setValue, textareaRef, cwd);
@@ -24,8 +25,12 @@ import {
 	applyCompletion,
 	completionTrigger,
 	filterItems,
+	sectionize,
+	type CompletionGroup,
 	type CompletionItem,
 } from "@shared/autocomplete.ts";
+import { bareSkillName } from "@shared/skill-block.ts";
+import { IconSkill } from "./icons.tsx";
 
 export interface UseAutocompleteResult {
 	/**
@@ -55,10 +60,29 @@ interface OpenState {
 	readonly cursorPos: number;
 }
 
+/** `/` 菜单的组标题。组序（技能在前、指令在后）由 shared/autocomplete.ts 的 sectionize 定。 */
+const GROUP_TITLES: Readonly<Record<CompletionGroup, string>> = {
+	skill: "技能",
+	command: "指令",
+};
+
 function buildItems(data: CompletionData | undefined, kind: "file" | "command"): CompletionItem[] {
 	if (data === undefined) return [];
 	if (kind === "file") return data.files.map((p) => ({ label: p, insert: `@${p}` }));
-	return data.commands.map((c) => ({ label: `/${c.name}`, insert: `/${c.name}`, hint: c.description }));
+	return data.commands.map((c) => {
+		// 分组信息来自契约的 source，渲染层不按名字前缀猜类型。
+		const group: CompletionGroup = c.source === "skill" ? "skill" : "command";
+		return {
+			label: `/${c.name}`,
+			// 插入文本原样带上 daemon 给的前缀（技能是 `skill:<name>`）—— pi 只认 `/skill:` 前缀，
+			// 分组只改呈现、不改语法。
+			insert: `/${c.name}`,
+			hint: c.description,
+			group,
+			// 技能项另带裸名：选中后它变成 chip（显示裸名），`/skill:` 前缀由发送时拼回。
+			...(group === "skill" ? { skill: bareSkillName(c.name) } : {}),
+		};
+	});
 }
 
 export function useAutocomplete(
@@ -77,6 +101,16 @@ export function useAutocomplete(
 	 * 由调用方从最近一张 team 卡派生；空数组/缺省 = 无团队，行为不变。
 	 */
 	memberItems: readonly CompletionItem[] = [],
+	/**
+	 * 选中技能项时的回调（技能**不进 textarea**，变成输入卡上的 chip）。
+	 *
+	 * 为什么技能与其它项走两条路：`/skill:docx` 是给 pi 看的命令语法，不是用户想看到的东西
+	 * —— 插成文本，框里就是一串 `/skill:frontend-design` 纯文本（用户原话：「选择了为什么
+	 * 还是纯文本」）。WorkBuddy 同口径：选中即一个 phrase/chip 块。技能名交给调用方存起来，
+	 * 发送那一刻再拼回 `/skill:<name>`（shared/skill-block.ts 的 skillInvocationText）。
+	 * 缺省（不传）时回退到旧的插文本行为。
+	 */
+	onPickSkill?: (name: string) => void,
 ): UseAutocompleteResult {
 	const [data, setData] = useState<CompletionData | undefined>(undefined);
 	const [open, setOpen] = useState<OpenState | undefined>(undefined);
@@ -123,11 +157,33 @@ export function useAutocomplete(
 		[data, memberItems, close],
 	);
 
-	/** 选中一项：替换触发片段为新文本，光标落在插入内容后。 */
+	/**
+	 * 选中一项：替换触发片段为新文本，光标落在插入内容后。
+	 *
+	 * 技能项例外（见 onPickSkill）：不插文本，只把触发片段（用户敲的那半截 `/fron`）
+	 * 从草稿里摘掉，技能名交给调用方存成 chip。
+	 */
 	const pick = useCallback(
 		(item: CompletionItem) => {
 			const s = openRef.current;
 			if (s === undefined) return;
+			if (item.skill !== undefined && onPickSkill !== undefined) {
+				onPickSkill(item.skill);
+				// 摘掉触发片段：`/` 命令的触发点固定在文本起始（completionTrigger 只认
+				// 首字符是 `/`），所以留下的只有触发点之后、光标之后的那截尾巴。
+				// 不走 applyCompletion：它固定补一个尾空格，而这里框里本来就该是空的。
+				setValue(value.slice(0, s.query.start) + value.slice(s.cursorPos));
+				close();
+				// 与插文本那条路同样还焦点：选完技能接着写正文，不该再多点一下输入框。
+				requestAnimationFrame(() => {
+					const el = textareaRef.current;
+					if (el === null) return;
+					el.focus();
+					const at = s.query.start;
+					el.setSelectionRange(at, at);
+				});
+				return;
+			}
 			const next = applyCompletion({ text: value, position: s.cursorPos }, s.query, item);
 			setValue(next.text);
 			close();
@@ -140,7 +196,7 @@ export function useAutocomplete(
 				}
 			});
 		},
-		[value, setValue, close, textareaRef],
+		[value, setValue, close, textareaRef, onPickSkill],
 	);
 	const pickRef = useRef(pick);
 	pickRef.current = pick;
@@ -217,27 +273,57 @@ export function useAutocomplete(
 		window.setTimeout(close, 120);
 	}, [close]);
 
-	const menu =
-		open === undefined ? null : (
+	/**
+	 * 渲染下拉：按组分节（空组不出标题），技能组带 IconSkill。
+	 *
+	 * `active` 仍是**横跨两组的单一扁平序号** —— 分节只是呈现，上下键因此天然跨组连续；
+	 * 所以这里的 index 一路续着数，不能每组从 0 重开。
+	 */
+	const renderMenu = (state: OpenState): React.JSX.Element => {
+		let index = -1;
+		return (
 			<div className="ac-menu" role="listbox">
-				{open.items.map((item, i) => (
-					<button
-						key={item.label}
-						type="button"
-						role="option"
-						aria-selected={i === open.active}
-						className={`ac-item${i === open.active ? " active" : ""}`}
-						onMouseDown={(e) => {
-							e.preventDefault(); // 保住 textarea 焦点，让 pick 里的 requestAnimationFrame 能正确放光标
-							pickRef.current(item);
-						}}
+				{sectionize(state.items).map((section) => (
+					<div
+						key={section.group ?? "plain"}
+						className="ac-group"
+						role="group"
+						aria-label={section.group === undefined ? undefined : GROUP_TITLES[section.group]}
 					>
-						<span className="ac-label">{item.label}</span>
-						{item.hint !== undefined && <span className="ac-hint">{item.hint}</span>}
-					</button>
+						{section.group !== undefined && (
+							// 组名已由容器的 aria-label 给出，标题行只做视觉，不重复播报。
+							<div className="ac-group-title" aria-hidden="true">
+								{GROUP_TITLES[section.group]}
+							</div>
+						)}
+						{section.items.map((item) => {
+							index += 1;
+							const active = index === state.active;
+							return (
+								<button
+									key={item.label}
+									type="button"
+									role="option"
+									aria-selected={active}
+									className={`ac-item${active ? " active" : ""}`}
+									onMouseDown={(e) => {
+										e.preventDefault(); // 保住 textarea 焦点，让 pick 里的 requestAnimationFrame 能正确放光标
+										pickRef.current(item);
+									}}
+								>
+									{item.group === "skill" && <IconSkill size={15} className="ac-icon" />}
+									<span className="ac-label">{item.label}</span>
+									{item.hint !== undefined && <span className="ac-hint">{item.hint}</span>}
+								</button>
+							);
+						})}
+					</div>
 				))}
 			</div>
 		);
+	};
+
+	const menu = open === undefined ? null : renderMenu(open);
 
 	return {
 		bind: { onChange, onKeyDown, onSelect, onBlur, onCompositionStart, onCompositionEnd },

@@ -71,14 +71,10 @@ export interface ModelInfo {
 /** 技能页一次性拉取的内容。 */
 export interface SkillsSnapshot {
 	readonly skills: readonly SkillInfo[];
-	/** 用户自装技能目录（导入落点）。「打开技能目录」直接 openArtifact 它。 */
-	readonly userSkillsDir: string;
-}
-
-/** 技能页一次性拉取的完整内容。 */
-export interface SkillsSnapshot {
-	readonly skills: readonly SkillInfo[];
-	/** 用户自装技能的落盘目录（导入的默认目标）。 */
+	/**
+	 * 用户自装技能的落盘目录（导入的默认目标）。「打开技能目录」直接 openArtifact 它 ——
+	 * 高级用户可以绕过导入，把技能文件夹手工放进去。
+	 */
 	readonly userSkillsDir: string;
 }
 
@@ -92,6 +88,14 @@ export interface SkillInfo {
 	readonly origin: "builtin" | "user";
 	/** frontmatter 声明仅限手动 /skill:name 触发，不出现在模型提示词里。 */
 	readonly disableModelInvocation: boolean;
+	/**
+	 * frontmatter 的 `user-invocable`（缺省 true）。false = 不出现在 `/` 菜单，
+	 * 但仍可被模型或其它技能按路径引用。
+	 *
+	 * 与 `disableModelInvocation` 是**两个独立**的可见性开关（一个收用户入口、
+	 * 一个收模型入口），两者都命中才是纯内部技能。
+	 */
+	readonly userInvocable: boolean;
 }
 
 /** 设置界面一次性拉取的全部内容。 */

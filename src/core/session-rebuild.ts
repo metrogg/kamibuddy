@@ -35,6 +35,7 @@ import type { TokenUsage } from "../shared/observability.ts";
 import type { ImagePart } from "../shared/image.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
+import { splitSkillBlocks } from "../shared/skill-block.ts";
 
 /* pi 的具体消息类型不从包名直接 import（pi-ai 是 pi-coding-agent 的嵌套依赖，
  * 顶层 node_modules 不可达），而是从 SessionMessageEntry 结构推导 ——
@@ -54,16 +55,29 @@ const TRUNCATED_MARK = "（已截断）";
  * image 块转成 images 附件（pi 的 ImageContent 与 shared 的 ImagePart 同构，直接映射）。
  * 图片不进文本占位 —— 占位混进 text 会让恢复与在线两路对同一条消息显示不同内容，
  * 图片本体由 UI 用 images 渲染缩略图。
+ *
+ * 拼好的正文再过一遍 splitSkillBlocks（与在线路径 session-host 的 message_start
+ * 同一个解析出口）：`/skill:<name>` 被 pi 展开的整篇 SKILL.md 不该出现在气泡里，
+ * 只留技能名 + 用户自己打的补充文本。两路不同源会出现「在线是胶囊、刷新变回
+ * 一屏 XML 与内部路径」。
  */
-function userView(content: PiUserMessage["content"]): { text: string; images: ImagePart[] } {
-	if (typeof content === "string") return { text: content, images: [] };
+function userView(content: PiUserMessage["content"]): {
+	text: string;
+	images: ImagePart[];
+	skillNames: readonly string[];
+} {
+	if (typeof content === "string") {
+		const { text, skillNames } = splitSkillBlocks(content);
+		return { text, images: [], skillNames };
+	}
 	let text = "";
 	const images: ImagePart[] = [];
 	for (const block of content) {
 		if (block.type === "text") text += block.text;
 		else images.push({ type: "image", data: block.data, mimeType: block.mimeType });
 	}
-	return { text, images };
+	const { text: displayText, skillNames } = splitSkillBlocks(text);
+	return { text: displayText, images, skillNames };
 }
 
 /** 拼接 assistant content 的 text 块（块间无分隔，与 session-host 的 textOf 同口径）。 */
@@ -217,13 +231,15 @@ export function buildConversationEntries(
 		const at = Date.parse(entry.timestamp);
 
 		if (message.role === "user") {
-			const { text, images } = userView(message.content);
+			const { text, images, skillNames } = userView(message.content);
 			const user: UserMessage = {
 				id: entry.id,
 				role: "user",
 				text,
 				// 没有图片时键必须缺席（thinking 键缺席同理）：空数组会让 UI 渲染一行空缩略图。
 				...(images.length === 0 ? {} : { images }),
+				// 技能同理：空数组会让 UI 渲染一行空胶囊行。
+				...(skillNames.length === 0 ? {} : { skillNames }),
 				at,
 			};
 			out.push(user);

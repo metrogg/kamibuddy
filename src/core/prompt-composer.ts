@@ -24,9 +24,12 @@
  * finalizeCore 的注释。
  */
 
+import { dirname } from "node:path";
 import {
+	createSyntheticSourceInfo,
 	formatSkillsForPrompt,
 	type BuildSystemPromptOptions,
+	type Skill,
 } from "@earendil-works/pi-coding-agent";
 import type { ExpertDefinition } from "./experts.ts";
 
@@ -39,8 +42,14 @@ export type PromptContextOptions = Pick<
 export interface SkillDescriptor {
 	readonly name: string;
 	readonly description: string;
-	/** SKILL.md 的绝对路径 —— 模型用 read 工具按需加载全文就靠它。 */
+	/** SKILL.md 的绝对路径 —— 模型用 read / use_skill 按需加载全文就靠它。 */
 	readonly filePath: string;
+	/**
+	 * frontmatter 的 `disable-model-invocation`。**必须一路带到清单段**：pi 的
+	 * formatSkillsForPrompt 靠它把这类技能过滤掉（它们只能被 /skill:name 手动触发）。
+	 * 缺省 false（pi 的 loader 就是 `=== true`）。
+	 */
+	readonly disableModelInvocation?: boolean;
 }
 
 /**
@@ -680,13 +689,58 @@ export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string
 /**
  * 技能清单段。无技能返回空串——骨架里 {{skills}} 所在行会被压平，零 token。
  *
- * 格式直接委托 pi 的 formatSkillsForPrompt（agentskills.io 规范的 XML 形态）：
- * 我们的 before_agent_start 整体替换让 pi 不再自动附加这段，但「模型如何理解
- * 技能清单」的格式决定权仍应归 pi——它升级格式（比如改调用约定）时我们零改动。
+ * 格式与过滤仍全权委托 pi 的 formatSkillsForPrompt（agentskills.io 规范的 XML 形态，
+ * disable-model-invocation 的技能由它剔掉）：我们的 before_agent_start 整体替换让 pi
+ * 不再自动附加这段，但「模型如何理解技能清单」的格式决定权仍应归 pi——它升级格式
+ * （比如改调用约定）时我们零改动。**只追加一句**本会话的调用约定，而不是自己重写
+ * 那套 XML：重写就等于把 pi 的格式抄一份过来，从此两份都要维护。
  */
 export function formatSkillsSection(skills: readonly SkillDescriptor[]): string {
 	if (skills.length === 0) return "";
-	return formatSkillsForPrompt(skills as never[]).trim();
+	const section = formatSkillsForPrompt(skills.map(toPiSkill), "read").trim();
+	// 技能全被 disable-model-invocation 过滤掉时 pi 返回空串：保持零 token 口径，
+	// 不留一句孤零零的调用约定（没有清单可指，那句只会让模型去找不存在的技能）。
+	if (section === "") return "";
+	return `${section}\n\n${SKILL_INVOCATION_NOTE}`;
+}
+
+/**
+ * 本会话的技能调用约定（追加在 pi 的清单段之后）。
+ *
+ * pi 的清单段只写了「用 read 工具加载技能文件」——那是 pi 没有自动调用工具时的
+ * 通用约定（docs/skills.md）。本会话更常用的是 use_skill（extensions/use-skill-tool.ts），
+ * 一句指引把模型引到对的工具上；read 作为兜底路径保留（模式白名单不一定有 use_skill）。
+ * 「技能名不许凭记忆编」这条约束在约定句里明写：它同时管两条路径 ——
+ * 编出来的技能名在 use_skill 会撞错、在 read 会撞一个不存在的路径。
+ */
+const SKILL_INVOCATION_NOTE =
+	"要加载上面某个技能时：优先调用 use_skill（command 填该技能 <name> 里的技能名）；" +
+	"当前会话没有 use_skill 工具时，用 read 读取它的 <location>。" +
+	"技能名与路径都必须来自上面的清单，不要凭记忆拼写。";
+
+/**
+ * SkillDescriptor → pi 的 Skill。
+ *
+ * 为什么需要这一层：pi 的格式化器入参类型是完整的 `Skill`（含 baseDir / sourceInfo），
+ * 而它实现里只读 name / description / filePath / disableModelInvocation 四项
+ * （pi dist/core/skills.js 的 formatSkillsForPrompt，0.85.x）。此前这里写的是
+ * `skills as never[]` —— 把入参类型检查整体关掉，pi 改了字段名或签名我们不会有任何
+ * 编译期信号。改成按 pi 自己的 loader 造出同形对象（baseDir = dirname(filePath)，
+ * sourceInfo 走 pi 公开的 createSyntheticSourceInfo，与它给 path 来源技能造的那份一致；
+ * scope/origin 取该函数的缺省值，格式化器不读它），换来的是真实类型。
+ */
+function toPiSkill(skill: SkillDescriptor): Skill {
+	const baseDir = dirname(skill.filePath);
+	return {
+		name: skill.name,
+		description: skill.description,
+		filePath: skill.filePath,
+		baseDir,
+		sourceInfo: createSyntheticSourceInfo(skill.filePath, { source: "local", baseDir }),
+		// pi 的 loader 口径是 `frontmatter["disable-model-invocation"] === true`，
+		// 缺省即 false：这里归一到同一语义，避免 undefined 在过滤处变成「真值」。
+		disableModelInvocation: skill.disableModelInvocation === true,
+	};
 }
 
 /**
@@ -702,14 +756,19 @@ export function sessionSkillPaths(globalSkillsDir: string, expertSkillsDir?: str
 }
 
 /**
- * 会话技能清单段：模式工具白名单里有 read / bash 才注入，否则空串（零 token）。
- * 无读取工具还注入技能段，等于让模型去调一个并不存在的 read 工具（plan 模式即此坑）。
- * 与 daemon composeSystemPrompt / prompt-preview.ts 是同一门控规则。
+ * 会话技能清单段：模式工具白名单里有 read / bash / use_skill 才注入，否则空串（零 token）。
+ * 三个都是「能加载技能」的工具：read（按 <location> 读文件）、bash（cat 技能文件）、
+ * use_skill（本项目的技能加载工具）。一个都能没有还注入技能段，等于让模型去调一个
+ * 并不存在的工具（plan 模式曾是这个坑）。
+ * 与 daemon 的 composeSystemPrompt 及 prompt-preview.ts 是同一门控规则（两处必须一致，
+ * 见 prompt-preview.ts 里的镜像注释）。
  */
 export function skillsSectionForMode(
 	modeTools: readonly string[],
 	skills: readonly SkillDescriptor[],
 ): string {
-	const hasSkillReader = modeTools.some((t) => t === "read" || t === "bash");
-	return hasSkillReader ? formatSkillsSection(skills) : "";
+	const hasSkillLoader = modeTools.some(
+		(t) => t === "read" || t === "bash" || t === "use_skill",
+	);
+	return hasSkillLoader ? formatSkillsSection(skills) : "";
 }

@@ -202,6 +202,45 @@ describe("用户消息的图片附件翻译", () => {
 	});
 });
 
+describe("用户消息的技能块剥离", () => {
+	it("pi 展开的「/skill:docx 写周报」：text 只留补充文本，skillNames 结构化下发", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		// pi 的展开形状（agent-session.js:995-996）：`<skill …>块</skill>` + `\n\n` + 用户补充文本。
+		const expanded =
+			'<skill name="docx" location="C:\\Users\\me\\.kamibuddy\\skills\\docx\\SKILL.md">\n' +
+			"References are relative to C:\\Users\\me\\.kamibuddy\\skills\\docx.\n\n" +
+			"做 Word 文档。\n</skill>\n\n写周报";
+
+		translate(host, {
+			type: "message_start",
+			message: { role: "user", content: expanded, timestamp: 1725 },
+		} as unknown as AgentSessionEvent);
+
+		const message = events.find(
+			(e): e is UserMessageEvent => e.type === "user_message",
+		)?.message;
+		expect(message?.text).toBe("写周报");
+		expect(message?.skillNames).toEqual(["docx"]);
+	});
+
+	it("无技能块的用户消息不带 skillNames 字段", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		translate(host, {
+			type: "message_start",
+			message: { role: "user", content: "你好", timestamp: 1725 },
+		} as unknown as AgentSessionEvent);
+
+		const message = events.find(
+			(e): e is UserMessageEvent => e.type === "user_message",
+		)?.message;
+		expect(message !== undefined && "skillNames" in message).toBe(false);
+	});
+});
+
 describe("prompt 的图片透传", () => {
 	/** 可记录调用的假会话。isStreaming 决定走 prompt 还是 steer/followUp 分支。 */
 	function recordingSession(isStreaming: boolean): {

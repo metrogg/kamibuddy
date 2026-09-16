@@ -637,12 +637,18 @@ export interface RunLedgerResult {
 	readonly entries: readonly RunLedgerEntry[];
 }
 
-/** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
+/** 一条 `/` 命令的展示信息（技能 / 提示词模板 / 内置命令）。 */
 export interface CommandItem {
 	/** 命令名（不含 /）。技能形如 `skill:docx`，模板形如 `weekly`。 */
 	readonly name: string;
 	readonly description: string;
-	/** 来源，供 renderer 分组显示。 */
+	/**
+	 * 来源，供 renderer 分组显示：`skill` → `/` 菜单的「技能」组（带图标、置顶），
+	 * `template` / `builtin` → 「指令」组。
+	 *
+	 * 分组**只认这个字段**，不在渲染层按名字前缀推断 —— 技能与模板在菜单里
+	 * 都只是一个 `/` 开头的名字，看不出类型。
+	 */
 	readonly source: "skill" | "template" | "builtin";
 }
 

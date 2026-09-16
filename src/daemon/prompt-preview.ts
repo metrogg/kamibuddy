@@ -17,8 +17,8 @@
  * 风格让位于人格，全由 composer 承担），专家不在库中同样响亮报错。
  * 这样预览能覆盖专家人格（曾经是预览与真实组装的差异面，现已消除）。
  *
- * 技能段与真实组装同一条门控：模式工具白名单里没有 read / bash 时不注入
- * （plan 模式没有这个工具，注入等于让模型去调一个不存在的工具）。
+ * 技能段与真实组装同一条门控：模式工具白名单里 read / bash / use_skill 一个都没有时
+ * 不注入（那种配置下模型没有任何加载技能的手段，注入等于让它去调不存在的工具）。
  */
 
 import {
@@ -82,10 +82,17 @@ export function buildPromptPreview(
 	}
 	// request.styleId === "" → style 保持 undefined = 关闭风格注入。
 
-	// 与 daemon composeSystemPrompt 同一条门控（理由见其注释）：plan 这类
-	// 只读模式的工具白名单里没有 read / bash，技能段不注入。
-	const hasSkillReader = mode.tools.some((t) => t === "read" || t === "bash");
-	const skillsSection = hasSkillReader ? formatSkillsSection(env.skills) : "";
+	/*
+	 * 与 daemon composeSystemPrompt 同一条门控（规则定义在 core/prompt-composer.ts
+	 * 的 skillsSectionForMode，这里是与它逐字对齐的镜像）：工具白名单里 read / bash /
+	 * use_skill 一个都没有时，技能段不注入（plan 这类只读模式的极端配置）。
+	 * **改门控必须两处同改**：预览一旦与真实组装不同口径，用户就会对着一个不存在的
+	 * 差异排查（prompt-composer.ts 的 skillsSectionForMode 注释是另一处指针）。
+	 */
+	const hasSkillLoader = mode.tools.some(
+		(t) => t === "read" || t === "bash" || t === "use_skill",
+	);
+	const skillsSection = hasSkillLoader ? formatSkillsSection(env.skills) : "";
 
 	const composed = composePromptWithMeta({
 		sceneBody: scene.body,

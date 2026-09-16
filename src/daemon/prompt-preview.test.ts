@@ -40,8 +40,10 @@ function makeResources(): LoadedResources {
 		modes: [
 			{ id: "ask", label: "问答", description: "", ready: true, tools: ["read"], body: "问答行为段" },
 			{ id: "craft", label: "创作", description: "", ready: true, tools: ["read", "write"], body: "创作行为段" },
-			// plan 的工具白名单没有 read / bash —— 技能段门控的反侧用例。
+			// plan 的工具白名单没有 read / bash / use_skill —— 技能段门控的反侧用例。
 			{ id: "plan", label: "计划", description: "", ready: true, tools: ["grep"], body: "计划行为段" },
+			// 只有 use_skill（没有 read / bash）：门控扩到三词后的正侧用例。
+			{ id: "skill-only", label: "技能", description: "", ready: true, tools: ["use_skill"], body: "技能行为段" },
 		],
 		styles: [
 			{ id: "professional", label: "专业严谨", body: "专业风格正文" },
@@ -138,7 +140,7 @@ describe("styleId 三态", () => {
 	});
 });
 
-describe("技能段门控（与真实组装同一条 read/bash 规则）", () => {
+describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则）", () => {
 	it("craft（含 read）注入技能段", () => {
 		const result = buildPromptPreview(
 			makeResources(),
@@ -149,13 +151,46 @@ describe("技能段门控（与真实组装同一条 read/bash 规则）", () =>
 		expect(skills?.text).toContain("meeting-notes");
 	});
 
-	it("plan（无 read/bash）不注入技能段", () => {
+	it("只有 use_skill（无 read/bash）也注入 —— 镜像口径与 skillsSectionForMode 一致", () => {
+		const result = buildPromptPreview(
+			makeResources(),
+			{ sceneId: "work", modeId: "skill-only", styleId: "" },
+			makeEnv(),
+		);
+		const skills = result.segments.find((s) => s.source === "skills");
+		expect(skills?.text).toContain("meeting-notes");
+		// 与真实组装同一句调用约定（同一条 formatSkillsSection）。
+		expect(skills?.text).toContain("优先调用 use_skill");
+	});
+
+	it("plan（无 read/bash/use_skill）不注入技能段", () => {
 		const result = buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "plan", styleId: "" },
 			makeEnv(),
 		);
 		expect(result.segments.some((s) => s.source === "skills")).toBe(false);
+	});
+
+	it("disable-model-invocation 的技能不进预览技能段（与真实组装同一过滤）", () => {
+		const result = buildPromptPreview(
+			makeResources(),
+			{ sceneId: "work", modeId: "craft", styleId: "" },
+			makeEnv({
+				skills: [
+					...SKILLS,
+					{
+						name: "typeset",
+						description: "内部排版子技能",
+						filePath: "/skills/typeset/SKILL.md",
+						disableModelInvocation: true,
+					},
+				],
+			}),
+		);
+		const skills = result.segments.find((s) => s.source === "skills");
+		expect(skills?.text).toContain("meeting-notes");
+		expect(skills?.text).not.toContain("typeset");
 	});
 });
 

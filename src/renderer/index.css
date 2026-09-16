@@ -1059,6 +1059,28 @@ textarea:focus-visible {
 	text-align: left;
 }
 
+/* 分组之间的呼吸：只是布局，不是新的分隔线视觉。 */
+.ac-group+.ac-group {
+	margin-top: var(--space-1);
+}
+
+/* 组标题行（「技能」/「指令」）：字号与颜色口径照 .ac-hint（meta 档 + 次文色），
+   缩进与 .ac-item 的文字左侧对齐。 */
+.ac-group-title {
+	padding: var(--space-1) var(--space-3);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+}
+
+/* 图标位：只负责「垂直居中 + 不被压缩」的布局（.ac-item 是 baseline 对齐，
+   图标要单独居中，否则 SVG 底边会挂在文字基线上）。颜色同次文色。 */
+.ac-icon {
+	display: inline-flex;
+	align-self: center;
+	flex: 0 0 auto;
+	color: var(--text-secondary);
+}
+
 .ac-item.active {
 	background: var(--bg-hover);
 }
@@ -1298,7 +1320,9 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
-}.bar-btn {
+}
+
+.bar-btn {
 	display: flex;
 	align-items: center;
 	gap: var(--space-1);
@@ -1469,8 +1493,12 @@ textarea:focus-visible {
 
 /* ── 输入区文档引用 chip（chat / home 共用，排在缩略图条之前） ────── */
 
-/* 长文件名 chip 换行比横向滚动好读（路径在 title 里，视觉只留文件名）。 */
-.document-ref-strip {
+/* 长文件名 chip 换行比横向滚动好读（路径在 title 里，视觉只留文件名）。
+   技能条与文档条共用这一层布局（都是输入卡上方的 chip 条）：只是容器，
+   chip 本体的视觉两者各有一套 —— 文档 chip 是有边框的方块（见下），
+   技能 chip 是 WB skillTag 的胶囊（见「技能 chip」段）。 */
+.document-ref-strip,
+.skill-strip {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-2);
@@ -1542,8 +1570,10 @@ textarea:focus-visible {
 }
 
 /* × 平时收起，hover/聚焦 chip 时显现（与附件条的克制同一口径）；
-   focus-within 也要算——键盘 Tab 到 × 上时不能看不见它。 */
-.document-ref-remove {
+   focus-within 也要算——键盘 Tab 到 × 上时不能看不见它。
+   技能 chip 的删除钮共用这组声明（同一个控件形态，不另造一套值）。 */
+.document-ref-remove,
+.skill-chip-remove {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
@@ -1558,13 +1588,59 @@ textarea:focus-visible {
 }
 
 .document-ref-chip:hover .document-ref-remove,
-.document-ref-chip:focus-within .document-ref-remove {
+.document-ref-chip:focus-within .document-ref-remove,
+.skill-chip:hover .skill-chip-remove,
+.skill-chip:focus-within .skill-chip-remove {
 	opacity: 1;
 }
 
 .document-ref-remove:hover {
 	background: var(--bg-hover);
 	color: var(--text);
+}
+
+.skill-chip-remove:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+/* ── 技能 chip（输入卡的已选技能条 + 用户消息气泡里的只读胶囊） ──────
+
+   WorkBuddy skillTag 原值（lib-chat-ui-Co_VI_pZ.css:12261-12298）：
+   height 23 / border-radius 100px / padding 1px 8 / font-size 13 / 图标容器 14。
+   取它而不是输入卡的 .context-chip（32 高），是因为「比正文行高」：用户气泡正文
+   是 15px/1.6（行高 24），23 高的胶囊贴齐正文行；32 那档是 composer-bar 里跟按钮
+   并排的控件高度，放进消息流会顶出一行。
+   两处差异（有意，见 DESIGN.md §3.6）：① WB 写 font-weight 500，本站字重只有
+   400/600 两档语义（§2.6），胶囊取常规不加粗；② 删除钮仍是独立按钮（WB 是 hover
+   时与左侧图标原位互换），保住 aria-label 与键盘可达。
+   底色的分档见 --bg-chip（§2.2）：白底上是 WB 的 #f2f2f2，用户气泡（--bg-raised）
+   上仍能辨出层次。 */
+.skill-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	box-sizing: border-box;
+	height: 23px; /* WB 原值，非档位值：§3.6 */
+	max-width: 100%;
+	padding: 1px var(--space-3); /* 1px 是 WB 原值（胶囊内不塞 4px 档） */
+	border-radius: var(--radius-full);
+	background: var(--bg-chip);
+	font-size: var(--text-list);
+	line-height: 1;
+}
+
+.skill-chip-icon {
+	flex: 0 0 auto;
+}
+
+.skill-chip-name {
+	/* flex 子项的 min-width 默认是 auto（不收缩）：不给 0 的话长技能名不会走
+	   省略号，而是把胶囊撑到 max-width 再溢出。 */
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 /* 非视觉模型提示：缩略图条下方一行说明（图片仍可发送，但进不了模型，
@@ -2264,6 +2340,13 @@ textarea:focus-visible {
 	/* 超高消息内部滚动，不让一条长消息占满整个消息流（WorkBuddy 同口径 310px）。 */
 	max-height: 310px;
 	overflow-y: auto;
+}
+
+/* 气泡里的技能胶囊：内联在正文流里（WB 同款），所以要自己给一道右间距 ——
+   内联元素吃不到 flex 的 gap；只有技能、没有正文时也不留多余空隙（没有空行可撑）。
+   胶囊本体的视觉见「技能 chip」段（23 高，贴齐这里的 15px/1.6 正文行）。 */
+.user-bubble .skill-chip {
+	margin-right: var(--space-1);
 }
 
 /* 气泡内附件缩略图：文本下方横向排列（换行而非横向滚动 —— 气泡宽度有限，
@@ -3827,7 +3910,7 @@ textarea:focus-visible {
 	flex-direction: column;
 }
 
-.task-diag-fold + .task-diag-fold {
+.task-diag-fold+.task-diag-fold {
 	margin-top: var(--space-2);
 }
 
@@ -3872,7 +3955,7 @@ textarea:focus-visible {
 	margin: 0;
 }
 
-.task-diag-kv > div {
+.task-diag-kv>div {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
@@ -6772,6 +6855,13 @@ textarea:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+}
+
+/* 标题前的技能图标：只给「不参与压缩 + 次文色」（行的对齐与间距已由 .skill-card-head 定），
+   不新造视觉值。 */
+.skill-card-icon {
+	flex: 0 0 auto;
+	color: var(--text-secondary);
 }
 
 .skill-card-name {

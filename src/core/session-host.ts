@@ -58,6 +58,7 @@ import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import type { SystemSegmentStat } from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
+import { splitSkillBlocks } from "../shared/skill-block.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -118,6 +119,8 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	// 见 TOOL_DONE_LABELS）：卡片本体就是清单渲染，进度由 todos 内容表达，
 	// 标题不随 执行中/已完成 跳变。
 	todo_write: "任务列表",
+	// 与工具注册的 label 同词（WorkBuddy 的动作词：「正在加载技能 xxx」）。
+	use_skill: "加载技能",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -137,6 +140,7 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	questionnaire: "已回答",
 	task: "已完成",
 	todo_write: "任务列表",
+	use_skill: "已加载",
 };
 
 /**
@@ -150,6 +154,8 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
  * read/ls/grep/find/read_me 不在列：本地快操作几乎瞬时完成，
  * 参数又小（一个路径/一个词/一个模块名），生成期上屏反而闪一下，卡片等执行态再上
  * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
+ * use_skill 同档（同一口径）：读一份本地 SKILL.md，入参只有一个短技能名，
+ * 参数生成期上屏只会闪一下接执行态 —— 不进本表。
  */
 const STREAM_CARD_TOOLS: readonly string[] = [
 	"write",
@@ -1265,14 +1271,20 @@ export class SessionHost {
 					// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
 					// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
 					const { text, images } = userContentOf(message.content);
+					// 技能正文（pi 展开的整篇 SKILL.md）只该进模型上下文，不该进用户气泡：
+					// 剥成技能名 + 用户自己打的补充文本，两条产出路径同一个解析出口
+					// （历史重建见 session-rebuild 的 userView）。
+					const { skillNames, text: displayText } = splitSkillBlocks(text);
 					emit({
 						type: "user_message",
 						message: {
 							id: this.nextId("user"),
 							role: "user",
-							text,
+							text: displayText,
 							// 无图不带字段：UserMessage.images 是可选契约，UI 按缺省渲染。
 							...(images === undefined ? {} : { images }),
+							// 无技能同理，不带空数组（口径同 images）。
+							...(skillNames.length === 0 ? {} : { skillNames }),
 							at: message.timestamp,
 						},
 					});
