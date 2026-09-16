@@ -9,7 +9,7 @@
  *
  * 第 3 个 describe 里的期望值直接取自 dsh 真实会话的一行读数，
  * 全字段与截图逐字对齐（1 轮 · 27 步 / LLM 1m8s · 工具调用 1m10s /
- * 首 token 平均 1.1s · 241 tok/s / 缓存命中 95% / 输入 1.5M tok · 输出 8.9K tok）。
+ * 首 token 平均 1.1s · 241 tok/s / 缓存命中 95.0% / 输入 1.5M tok · 输出 8.9K tok）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -94,7 +94,7 @@ describe("sessionStatsGroups", () => {
 			"1 轮 · 27 步",
 			"LLM 1m8s · 工具调用 1m10s",
 			"首 token 平均 1.1s · 241 tok/s",
-			"缓存命中 95%",
+			"缓存命中 95.0%",
 			"输入 1.5M tok · 输出 8.9K tok",
 		]);
 	});

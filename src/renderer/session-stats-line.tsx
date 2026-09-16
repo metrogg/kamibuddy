@@ -59,7 +59,9 @@ export function sessionStatsGroups(stats: SessionStatCard): string[] {
 	const billed = billedInputTokens(stats.usage);
 	if (billed > 0 || stats.usage.output > 0) {
 		if (stats.cacheHitRate !== undefined) {
-			groups.push(`缓存命中 ${Math.round(stats.cacheHitRate * 100)}%`);
+			// 一位小数（用户要求）：整数四舍五入会把 90.4% 与 91.2% 都显示成 91，
+			// 长会话里缓存效率的细微变化（提示词缓存是否被打破）就读不出来了。
+			groups.push(`缓存命中 ${(stats.cacheHitRate * 100).toFixed(1)}%`);
 		}
 		groups.push(
 			`输入 ${formatTokenCount(billed)} tok · 输出 ${formatTokenCount(stats.usage.output)} tok`,
