@@ -67,6 +67,7 @@ const SCOUT: AgentDefinition = {
 	name: "scout",
 	description: "只读侦察",
 	tools: ["read", "ls"],
+	model: undefined,
 	body: "你是侦察子代理。",
 };
 
@@ -74,6 +75,7 @@ const WORKER: AgentDefinition = {
 	name: "worker",
 	description: "全工具执行",
 	tools: ["read", "write"],
+	model: undefined,
 	body: "你是执行子代理。",
 };
 
@@ -380,10 +382,45 @@ describe("子代理状态投影", () => {
 				activity: "正在 read a.md",
 				turns: 3,
 				output: "侦察完毕",
+				timeline: ["正在 read a.md"],
 			},
 		]);
 		// 模型看到的回传文本不受投影改造影响。
 		expect(result.content[0]?.text).toContain("侦察完毕");
+	});
+
+	it("投影带 model（agent 声明了专用模型时）；timeline 与 activity 同步推进", async () => {
+		const scoutWithModel: AgentDefinition = { ...SCOUT, model: "deepseek/deepseek-chat" };
+		const { tool } = mount({
+			agents: [scoutWithModel],
+			behavior: async (request) => {
+				request.onProgress?.(`${request.agent.name}：正在 ls`);
+				request.onProgress?.(`${request.agent.name}：正在 read b.md`);
+				return { output: "完成", turns: 2 };
+			},
+		});
+		const result = await tool.execute("t1", { agent: "scout", task: "查一下" });
+		expect(result.details.subagents[0]).toMatchObject({
+			model: "deepseek/deepseek-chat",
+			activity: "正在 read b.md",
+			timeline: ["正在 ls", "正在 read b.md"],
+		});
+	});
+
+	it("timeline 封顶 12 条：溢出补「前 N 条已省略」首标记，activity 恒为最新", async () => {
+		const { tool } = mount({
+			behavior: async (request) => {
+				for (let i = 1; i <= 15; i += 1) {
+					request.onProgress?.(`${request.agent.name}：动作 ${i}`);
+				}
+				return { output: "完成", turns: 15 };
+			},
+		});
+		const result = await tool.execute("t1", { agent: "scout", task: "查一下" });
+		const timeline = result.details.subagents[0]?.timeline;
+		expect(timeline).toHaveLength(13); // 1 条省略标记 + 12 条保留
+		expect(timeline?.[0]).toBe("（前 3 条已省略）");
+		expect(timeline?.at(-1)).toBe("动作 15");
 	});
 
 	it("失败置 failed，output 是诊断文本（turns 归零）", async () => {
@@ -428,8 +465,8 @@ describe("子代理状态投影", () => {
 		).toEqual(["", ""]);
 
 		expect(result.details.subagents).toEqual([
-			{ agent: "scout", task: "甲", status: "done", activity: "正在处理甲", turns: 1, output: "产出甲" },
-			{ agent: "scout", task: "乙", status: "done", activity: "正在处理乙", turns: 1, output: "产出乙" },
+			{ agent: "scout", task: "甲", status: "done", activity: "正在处理甲", turns: 1, output: "产出甲", timeline: ["正在处理甲"] },
+			{ agent: "scout", task: "乙", status: "done", activity: "正在处理乙", turns: 1, output: "产出乙", timeline: ["正在处理乙"] },
 		]);
 	});
 

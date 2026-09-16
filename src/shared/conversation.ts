@@ -479,6 +479,28 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				),
 			};
 
+		case "team_member_progress": {
+			// 成员实时投影（spec: add-team-foundations 批 7）：归位到最近一张
+			// team 卡（toolName === "team_create"），整体替换其 subagents
+			// （契约见 session-events.ts 的事件注释）。找不到归属卡（旧格式
+			// 会话 / 卡被清）→ 原样返回，事件丢弃不算错。
+			let teamCardIndex = -1;
+			for (let i = view.entries.length - 1; i >= 0; i -= 1) {
+				const entry = view.entries[i];
+				if (entry !== undefined && entry.role === "tool" && entry.toolName === "team_create") {
+					teamCardIndex = i;
+					break;
+				}
+			}
+			if (teamCardIndex === -1) return view;
+			return {
+				...view,
+				entries: view.entries.map((entry, i) =>
+					i === teamCardIndex && entry.role === "tool" ? { ...entry, subagents: event.members } : entry,
+				),
+			};
+		}
+
 		case "tool_finished": {
 			const card: ToolCard = event.card;
 			const replaced = replaceEntry(view.entries, card.id, () => card);

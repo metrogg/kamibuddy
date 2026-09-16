@@ -85,6 +85,12 @@ export const INVOKE = {
 	/** 中断当前 run。 */
 	abort: "session:abort",
 	/**
+	 * 当前会话最近一次注入的 hidden context 全文（任务诊断面板的展示口）。
+	 * 还没跑过任何一轮为 undefined —— 注入块按 run 冻结，这里是展示语义
+	 * （agent_end 不清，run 结束后仍可看）。
+	 */
+	hiddenContext: "session:hidden-context",
+	/**
 	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
 	 * 传入的就是**重排后**的完整队列 —— daemon 清空后按序重入队。
 	 */
@@ -140,6 +146,8 @@ export const INVOKE = {
 	 * daemon 侧有路径守卫（限会话目录内的 .jsonl，防 ../ 穿越）。
 	 */
 	sessionResume: "session:resume",
+	/** 归档 / 取消归档会话（archive.json 索引，会话文件不动；详见 InvokeMap）。 */
+	sessionArchive: "session:archive",
 	/** 重命名会话（写入 pi 的 session_info 条目）。path 定位，name 为新名。 */
 	sessionRename: "session:rename",
 	/** 删除会话文件。当前活动会话由 daemon 拒删（需先新建任务）。 */
@@ -314,6 +322,21 @@ export const INVOKE = {
 	getMemoryEnabled: "settings:get-memory-enabled",
 	/** 写记忆系统开关；daemon 同时把内置「记忆整理」任务的启停对齐过来。 */
 	setMemoryEnabled: "settings:set-memory-enabled",
+
+	/* ── 团队协作开关（spec: add-team-foundations 批 5） ───────────── */
+
+	/** 读团队协作开关。未配置时 daemon 回 false（缺省关闭，实验特性）。 */
+	getAgentTeamsEnabled: "settings:get-agent-teams-enabled",
+	/** 写团队协作开关。只影响之后新建的会话（工具注册发生在会话建立时）。 */
+	setAgentTeamsEnabled: "settings:set-agent-teams-enabled",
+
+	/* ── 团队成员会话操作（spec: add-team-foundations 批 8） ───────── */
+
+	/** 向成员会话投一条消息（followUp 语义：idle 唤醒 / running 排队）。 */
+	memberPrompt: "team:member-prompt",
+	/** 中止成员当前轮（聚焦成员视图的停止键）。 */
+	memberAbort: "team:member-abort",
+
 	/** 读用户画像全文（PROFILE.md）。文件不存在回空串 —— 新用户本来就没有画像，不是错误。 */
 	getProfile: "settings:get-profile",
 	/** 覆盖写用户画像全文。下一轮对话生效（画像在 compose 时现读）。 */
@@ -674,6 +697,12 @@ export interface SessionSummary {
 	 * 多任务并发后后台会话也在跑，本地推导只看得见当前会话。
 	 */
 	readonly running: boolean;
+	/**
+	 * 是否已归档（archive.json 索引，daemon 标注好）。已归档的会话不进
+	 * 侧栏主列表，在设置页数据管理分组查看 / 恢复 —— 归档 ≠ 删除，
+	 * 会话文件原地不动，resume / delete 照常可用。
+	 */
+	readonly archived: boolean;
 }
 
 /** 「空间」分组的元数据：一个工作目录一条。组本身由会话文件派生（磁盘真相），这里只承载名称覆盖。 */
@@ -783,6 +812,7 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: [sessionId?: string]; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
+	[INVOKE.hiddenContext]: { args: []; result: string | undefined };
 	[INVOKE.queueRewrite]: { args: [QueuedMessages]; result: void };
 	/**
 	 * 新建任务。cwd 缺省 = 空串 = 未选工作空间（待分配，首次执行才分配自动目录）——
@@ -801,6 +831,11 @@ export interface InvokeMap {
 	[INVOKE.setThinkingLevel]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.sessionList]: { args: []; result: SessionSummary[] };
 	[INVOKE.sessionResume]: { args: [path: string]; result: void };
+	/**
+	 * 归档 / 取消归档一个会话（archive.json 索引，会话文件不动）。
+	 * 归档后的会话从侧栏主列表消失，在设置页数据管理分组恢复。
+	 */
+	[INVOKE.sessionArchive]: { args: [path: string, archived: boolean]; result: void };
 	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
 	[INVOKE.sessionExport]: { args: [path: string]; result: { outputPath: string } };
@@ -847,6 +882,10 @@ export interface InvokeMap {
 	[INVOKE.setStyle]: { args: [styleId: string]; result: void };
 	[INVOKE.getMemoryEnabled]: { args: []; result: { enabled: boolean } };
 	[INVOKE.setMemoryEnabled]: { args: [enabled: boolean]; result: void };
+	[INVOKE.getAgentTeamsEnabled]: { args: []; result: { enabled: boolean } };
+	[INVOKE.setAgentTeamsEnabled]: { args: [enabled: boolean]; result: void };
+	[INVOKE.memberPrompt]: { args: [memberSessionId: string, text: string]; result: void };
+	[INVOKE.memberAbort]: { args: [memberSessionId: string]; result: void };
 	[INVOKE.getProfile]: { args: []; result: { content: string } };
 	[INVOKE.setProfile]: { args: [content: string]; result: void };
 	[INVOKE.resetProfile]: { args: []; result: void };

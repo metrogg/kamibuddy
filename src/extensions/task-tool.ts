@@ -20,12 +20,19 @@
  * 桥接成 subagent_progress 事件。并行多代理各自推进，文本 delta 会让进度行
  * 交错混在一行 detail 里，投影替换则幂等且天然分组；模型看到的回传
  * （content 文本）不受影响，只改 UI 进度通道。
+ *
+ * 投影里的 timeline（过程时间线）与 model（生效模型徽标）是 2026-09-16 的
+ * 表现形式升级：Trae 把子代理事件以 fromSubagent 标记实时回流主消息流，
+ * 我们保持隔离设计不转发事件，折中是在投影里带上按序动作行——用户展开
+ * 分组就能看到子代理做过什么，缓解「回传只有最后一条文本」的纠错盲区。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
+import { ChildAgentsProjection } from "../shared/child-agents.ts";
 import type { SubagentStatus } from "../shared/session-events.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 /** 委派给执行器的一次子代理运行（cwd 由 daemon 装配时补注入）。 */
 export interface SubagentRunRequest {
@@ -67,6 +74,8 @@ interface TaskToolDetails {
 	 * 子代理运行状态的全量投影（UI 进度通道，整体替换语义）。
 	 * 部分结果与终态同形状：部分结果里 results 恒空、靠 subagents 表达进展；
 	 * 终态两者皆全，subagents 与 results 一一对应（同下标）。
+	 * 键名即 shared/child-agents.ts 的 CHILD_AGENTS_DETAILS_KEY —— host 认键
+	 * 不认工具，投影状态机也在那个共享模块（批 4 抽取，team 工具复用）。
 	 */
 	readonly subagents: readonly SubagentStatus[];
 }
@@ -98,6 +107,9 @@ function formatReport(report: SubtaskReport): string {
 }
 
 export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["task"]);
 	// 工具描述里的子代理简介动态生成：agents 是数据，用户可同名覆盖内置
 	// （~/.kamibuddy/agents/），写死简介会与实际生效的定义漂移。
 	const agentLines = options
@@ -178,11 +190,10 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 				const agents = options.listAgents();
 
 				/*
-				 * 状态投影：按下标定位（同名 agent 在并行/链式里可同时出现多次，
-				 * 名字不能当键）。每次变化发一份全量拷贝 —— 消费端整体替换，
-				 * 发可变本体引用会让 UI 与后续突变纠缠。
-				 * 初始化即发一次（全 queued）：工具卡从执行开始就能摆出全部
-				 * 子任务的分组骨架，而不是等第一个子代理起跑才有内容。
+				 * 状态投影：状态机在 shared/child-agents.ts（批 4 抽取，team 工具
+				 * 复用同一契约与累加器），这里只喂状态 + 每次变化发全量快照。
+				 * model 徽标数据在初始化时定格（agent 定义在会话内不变）；
+				 * 未声明则缺席，卡片不渲染徽标。
 				 */
 				const plan: ReadonlyArray<{ agent: string; task: string }> =
 					tasks ??
@@ -191,26 +202,21 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					(singleAgent !== undefined && singleTask !== undefined
 						? [{ agent: singleAgent, task: singleTask }]
 						: []);
-				const projection: SubagentStatus[] = plan.map((p) => ({
-					agent: p.agent,
-					task: p.task,
-					status: "queued",
-					activity: "",
-					turns: 0,
-				}));
+				const projection = new ChildAgentsProjection(
+					plan.map((p) => ({
+						agent: p.agent,
+						task: p.task,
+						// model 徽标数据在初始化时定格（agent 定义在会话内不变）。
+						model: agents.find((a) => a.name === p.agent)?.model,
+					})),
+				);
 				const emitProjection = (): void => {
 					// content 文本恒空：进度全走 details.subagents，文本 delta 通道
 					// 对多代理分组进度是负资产（交错混杂），details 形状与终态一致。
 					onUpdate?.({
 						content: [{ type: "text" as const, text: "" }],
-						details: { mode, results: [], subagents: projection.map((s) => ({ ...s })) },
+						details: { mode, results: [], subagents: projection.snapshot() },
 					});
-				};
-				const patchEntry = (index: number, patch: Partial<SubagentStatus>): void => {
-					const current = projection[index];
-					if (current === undefined) return;
-					projection[index] = { ...current, ...patch };
-					emitProjection();
 				};
 				emitProjection();
 
@@ -230,14 +236,17 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					// agent 不存在不消耗预算：这是入参错误，不是一次真实执行。
 					if (agent === undefined) {
 						const text = `没有名为「${agentName}」的子代理。${availableAgentsText(agents)}\n请改用上述之一重新委派。`;
-						patchEntry(index, { status: "failed", output: text });
+						projection.patch(index, { status: "failed", output: text });
+						emitProjection();
 						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 					if (!options.checkBudget()) {
-						patchEntry(index, { status: "failed", output: BUDGET_EXHAUSTED_TEXT });
+						projection.patch(index, { status: "failed", output: BUDGET_EXHAUSTED_TEXT });
+						emitProjection();
 						return { agent: agentName, ok: false, text: BUDGET_EXHAUSTED_TEXT, turns: 0 };
 					}
-					patchEntry(index, { status: "running" });
+					projection.patch(index, { status: "running" });
+					emitProjection();
 					try {
 						const { output, turns } = await options.runSubagent({
 							agent,
@@ -245,15 +254,19 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 							...(signal === undefined ? {} : { signal }),
 							// 排队消息（并发上限超出的「排队等待空位」）也经此落到
 							// activity：状态保持 running，等待原因对用户可见。
-							onProgress: (text) =>
-								patchEntry(index, { activity: stripPrefix(agent.name, text) }),
+							onProgress: (text) => {
+								projection.pushActivity(index, stripPrefix(agent.name, text));
+								emitProjection();
+							},
 						});
-						patchEntry(index, { status: "done", turns, output });
+						projection.patch(index, { status: "done", turns, output });
+						emitProjection();
 						return { agent: agentName, ok: true, text: output, turns };
 					} catch (error) {
 						// 子代理失败不是工具失败：诊断回给主代理，由它决定换路还是如实上报。
 						const text = error instanceof Error ? error.message : String(error);
-						patchEntry(index, { status: "failed", output: text });
+						projection.patch(index, { status: "failed", output: text });
+						emitProjection();
 						return { agent: agentName, ok: false, text, turns: 0 };
 					}
 				};
@@ -262,7 +275,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 				const finalDetails = (results: readonly SubtaskReport[]): TaskToolDetails => ({
 					mode,
 					results,
-					subagents: projection.map((s) => ({ ...s })),
+					subagents: projection.snapshot(),
 				});
 
 				if (singleAgent !== undefined && singleTask !== undefined) {

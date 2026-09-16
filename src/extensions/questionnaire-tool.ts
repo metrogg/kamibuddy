@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { QuestionnaireRequest, QuestionnaireResponse } from "../shared/ipc.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 
 export interface QuestionnaireToolOptions {
 	/** 向宿主发起提问并阻塞等答（id 由工具生成后传入）。 */
@@ -51,6 +52,9 @@ const SKIPPED_TEXT =
 export function questionnaireExtensionFactory(
 	options: QuestionnaireToolOptions,
 ): ExtensionFactory {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["questionnaire"]);
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "questionnaire",

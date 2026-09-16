@@ -250,3 +250,20 @@ export function indexRequestSnapshots(
 	}
 	return map;
 }
+
+/**
+ * 最近一次入模拆分（条目流里最后一条 request_snapshot）。
+ *
+ * 任务诊断面板 ② 的「最近一次入模拆分」数据源：模型最近一次调用实际收到的
+ * 上下文就是「当前的上下文组成」—— 比任何估算都真。entries 倒序找第一条，
+ * 没有返回 undefined（还没跑过模型调用）。
+ */
+export function latestRequestSnapshot(
+	entries: readonly RunLedgerEntry[],
+): RequestSnapshotData | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i] as LedgerEntryUnion;
+		if (entry.kind === "request_snapshot") return entry.data;
+	}
+	return undefined;
+}

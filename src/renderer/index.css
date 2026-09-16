@@ -3095,6 +3095,22 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
+/* 模型徽标：agent 定义声明了专用 model 时挂在名字旁（subagent-runner 按
+   声明选型）。meta 小字 + 边框胶囊，只取 modelId 段、完整 key 在 title。 */
+.task-agent-model {
+	flex: 0 0 auto;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 0 var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-full);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+}
+
 /* 动作行：运行中是最新动作（扫光在 tsx 摘挂），失败时是诊断文本（可换行）。 */
 .task-agent-action {
 	color: var(--text-secondary);
@@ -3108,6 +3124,63 @@ textarea:focus-visible {
 	--shimmer-color: var(--text-secondary);
 }
 
+/* 展开盒（过程时间线 + 成功输出）的统一容器：缩进与主列对齐（glyph 16 + gap 8）。 */
+.task-agent-detail {
+	margin: 2px 0 var(--space-1) var(--space-6);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+/* 过程时间线：左轨 + 逐条动作行（与投影 timeline 同序，最新在末尾）。
+   长任务封顶仍有十几条，限高滚动 + contain 防滚动链（DESIGN §7.8）。 */
+.task-agent-timeline {
+	max-height: 160px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	padding: var(--space-1) 0 var(--space-1) var(--space-3);
+	border-left: 2px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.task-agent-timeline-item {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+/* 成员计数行（spec 批 8）：轮数/工具/token/费用，meta 小字次级色。 */
+.task-agent-meta {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+}
+
+/* 成员聚焦横幅（spec 批 8）：可见会话是团队成员时钉在头部下方，
+   标注 + 返回主会话。底色用抬升面与消息区分层，不造新档。 */
+.member-focus-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-5);
+	background: var(--bg-raised);
+	border-bottom: 1px solid var(--border);
+}
+
+.member-focus-text {
+	color: var(--text);
+	font-size: var(--text-list);
+}
+
+.member-focus-note {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+}
+
 /* 成功勾绿（--ok）/ 失败叉红（--danger），与 tool-dot 终态同色系。 */
 .task-agent-check {
 	color: var(--ok);
@@ -3117,9 +3190,8 @@ textarea:focus-visible {
 	color: var(--danger);
 }
 
-/* done 组的可展开输出盒：等宽小字，缩进与主列对齐（glyph 16 + gap 8）。 */
+/* done 组的可展开输出盒：等宽小字；缩进由外层 .task-agent-detail 统一负责。 */
 .task-agent-output {
-	margin: 2px 0 var(--space-1) var(--space-6);
 	padding: var(--space-3) var(--space-4);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
@@ -3745,6 +3817,37 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-3);
+}
+
+/* ② 的成分折叠块：头行整行可点（同 ④ 步行的按钮化套路——重置 UA 默认视觉）；
+   chevron 复用 .seg-chevron 的朝向类。hint 标注的是口径（估算 / 真实计数），
+   是纪律不是装饰，不删。 */
+.task-diag-fold {
+	display: flex;
+	flex-direction: column;
+}
+
+.task-diag-fold + .task-diag-fold {
+	margin-top: var(--space-2);
+}
+
+.task-diag-fold-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	width: 100%;
+	padding: var(--space-1) 0;
+	background: none;
+	border: 0;
+	font-family: inherit;
+	font-size: var(--text-list);
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+
+.task-diag-fold-body {
+	padding: 0 0 var(--space-2) var(--space-4);
 }
 
 /* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。
@@ -7267,6 +7370,58 @@ textarea:focus-visible {
 /* 无会话可跳的记录（装配失败）不给 hover 反馈，避免暗示能点开（同 tool-head）。 */
 .auto-run-static {
 	color: var(--text-secondary);
+}
+
+/* ── 自动化模板选择浮层（L36）：复用 .auto-form-card 容器，这里只管卡片网格。 ──
+   .auto-tpl-card 顶部留出关闭钮的绝对定位基准；列表窄卡三行（名称/描述/调度），
+   hover 提亮与可点行同语言。 */
+.auto-tpl-card {
+	position: relative;
+	width: min(560px, 92%);
+}
+
+.auto-tpl-close {
+	position: absolute;
+	top: var(--space-3);
+	right: var(--space-3);
+}
+
+.auto-tpl-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.auto-tpl-item {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	padding: var(--space-3) var(--space-4);
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.auto-tpl-item:hover {
+	background: var(--bg-hover);
+}
+
+.auto-tpl-name {
+	font-size: var(--text-list);
+	color: var(--text);
+}
+
+.auto-tpl-desc {
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+.auto-tpl-schedule {
+	font-size: var(--text-meta);
+	color: var(--text-tertiary);
 }
 
 .auto-run-time {

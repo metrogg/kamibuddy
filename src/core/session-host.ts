@@ -29,13 +29,20 @@ import {
 import type {
 	SessionEvent,
 	SessionState,
-	SubagentStatus,
 	ThinkingLevel,
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
 import { generatingLabel } from "../shared/session-events.ts";
+import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
+import {
+	composeHiddenContext,
+	formatRunTime,
+	prependHiddenContext,
+	type HiddenSection,
+} from "../shared/hidden-context.ts";
+import { memoryReminder } from "./memory.ts";
 import {
 	changeFromEdit,
 	changeFromWrite,
@@ -288,20 +295,6 @@ function toolResultDetails(result: unknown): unknown {
 	return (result as { details?: unknown }).details;
 }
 
-/**
- * task 工具的子代理投影（details.subagents）：部分结果与终态共用同一条通道。
- *
- * 运行时判空 + Array.isArray 防御 —— pi 的 details 是扩展自定义的 unknown，
- * 非 task 工具（或旧格式会话）没有该键则返回 undefined，调用方走原逻辑。
- * 数组项不逐字段校验：投影的生产方就是本仓库的 task 工具（同进程、同构建），
- * 不是外来数据；逐项窄化是给不可信输入的，用在这里是纯防御性兜底。
- */
-function subagentsOf(details: unknown): readonly SubagentStatus[] | undefined {
-	if (typeof details !== "object" || details === null) return undefined;
-	const subagents = (details as { subagents?: unknown }).subagents;
-	return Array.isArray(subagents) ? (subagents as readonly SubagentStatus[]) : undefined;
-}
-
 export interface SessionHostOptions {
 	readonly catalog: ModelCatalog;
 	/** 选中的模型标识（`provider/model`）。undefined 表示让 pi 自己挑第一个可用的。 */
@@ -382,6 +375,19 @@ export interface SessionHostOptions {
 	 * 来源（子代理提示词不走 compose），快照的 systemSegments 键缺席。
 	 */
 	readonly getSystemPromptSegments?: () => readonly SystemSegmentStat[] | undefined;
+	/**
+	 * 当前绑定专家的显示名（hidden context 的 expert 行用）。undefined = 未绑定
+	 * 或解析不出（注入层回落到 expertId）。daemon 现载专家库后查表 —— 专家库
+	 * 是 daemon 的知识（每次现载不缓存），宿主不重复持有。
+	 */
+	readonly getExpertLabel?: () => string | undefined;
+	/**
+	 * 当前绑定专家的追加工具白名单（spec: add-team-foundations）。
+	 * 生效工具集 = mode.tools ∪ extraTools（专家只能增不能删）。undefined/空 =
+	 * 不追加。与 getExpertLabel 同款注入口径：专家库是 daemon 的知识，宿主不持有；
+	 * 每次调用现查（专家库用户可覆盖，编辑后新解析即生效）。
+	 */
+	readonly getExpertExtraTools?: () => readonly string[] | undefined;
 }
 
 export class SessionHost {
@@ -482,6 +488,26 @@ export class SessionHost {
 	>();
 	/** 最近一次 auto_retry_start 的退避参数（auto_retry_end 不携带，转发 run_retry 时补齐）。 */
 	private pendingRetry: { maxAttempts: number; delayMs: number } | undefined;
+	/**
+	 * 本 run 的 hidden context（F5，对齐 WorkBuddy 的 composeUserPrompt）。
+	 *
+	 * **按 run 冻结**（prompt() 时算一次，agent_end 清）：transformContext 每次
+	 * 模型调用都触发，注入内容若含每秒都变的时钟，每一跳都会从最后一条 user
+	 * 消息处打断提示词缓存 —— 长任务的缓存命中全废。时间取 run 开始时刻。
+	 *
+	 * steer / followUp 不刷新本字段：排队消息落进的是**当前 run**，run 的
+	 * 冻结内容理应保持不变。
+	 */
+	private pendingHidden: string | undefined;
+	/**
+	 * 最近一次注入的块全文（与 pendingHidden 同时写，但 agent_end **不清**）。
+	 *
+	 * pendingHidden 是 run 期的账（run 终即清，防压缩调用误注入）；
+	 * 这个是「最近一次注入了什么」的展示语义 —— 任务诊断面板的
+	 * 「hidden context 注入块」靠它：run 结束后用户仍该能看到刚才
+	 * 注入的内容。下一次 freeze 覆盖。
+	 */
+	private lastHiddenContext: string | undefined;
 
 	private constructor(
 		private readonly session: Awaited<
@@ -494,6 +520,9 @@ export class SessionHost {
 		private readonly skills: readonly SkillDescriptor[],
 	) {
 		this.ledger = options.createLedger?.(session.sessionId);
+		// 注入层先装、快照层后装：快照包住注入后的结果，request_snapshot 记到的
+		// 就是模型真正看到的上下文（含 hidden context），不是注入前的残影。
+		this.installHiddenContext();
 		if (this.ledger !== undefined) this.installRequestSnapshot();
 	}
 
@@ -551,8 +580,13 @@ export class SessionHost {
 		 * 曾经只传 DEFAULT_TOOLS、切换只发生在 setInteraction —— 新建任务后的
 		 * 首次对话（没人点过切换器）工具集就没有 web_search，模型自称「没有联网
 		 * 能力」。工具面是一等公民，创建的那一刻就该是模式的工具面。
+		 * 专家 extraTools 在创建时同样生效（创建即绑定专家的会话不该等一次
+		 * setExpert 才拿到追加工具）——与下方 effectiveToolNames 同一套合并语义。
 		 */
-		const mode = options.resources.modes.find((m) => m.id === options.interactionId);
+		const initialMode = options.resources.modes.find((m) => m.id === options.interactionId);
+		const initialBase =
+			initialMode === undefined ? [...DEFAULT_TOOLS] : [...initialMode.tools];
+		const initialExtra = options.getExpertExtraTools?.() ?? [];
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
@@ -571,9 +605,9 @@ export class SessionHost {
 			tools:
 				options.toolsOverride !== undefined
 					? [...options.toolsOverride]
-					: mode === undefined
-						? [...DEFAULT_TOOLS]
-						: [...mode.tools],
+					: initialExtra.length === 0
+						? initialBase
+						: [...initialBase, ...initialExtra.filter((tool) => !initialBase.includes(tool))],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
@@ -625,13 +659,42 @@ export class SessionHost {
 			// 也不能裸调 prompt（pi 对流式会话无 streamingBehavior 会响亮拒绝）。
 			// AgentSession.prompt 自带 streamingBehavior 选项，把排队意图原样交给 pi
 			// —— run 真已结束就是普通发送，万一边缘并发也按同一语义排队。
+			this.freezeHiddenContext();
 			await this.session.prompt(text, {
 				...(piImages === undefined ? {} : { images: piImages }),
 				streamingBehavior: whileStreaming,
 			});
 			return;
 		}
+		this.freezeHiddenContext();
 		await this.session.prompt(text, piImages === undefined ? undefined : { images: piImages });
+	}
+
+	/**
+	 * 冻结本 run 的 hidden context（prompt 的两个非流式入口共用这一个写点）。
+	 * steer / followUp（流式分支）不经过这里：排队消息落进的是当前 run，
+	 * run 的冻结内容不变（见 pendingHidden 注释）。
+	 */
+	private freezeHiddenContext(): void {
+		try {
+			this.pendingHidden = this.composeRunHiddenContext();
+			this.lastHiddenContext = this.pendingHidden;
+		} catch (error) {
+			// 组装失败 = 本 run 无注入（原始 prompt 直送）。与 installHiddenContext
+			// 的 must-not-throw 同纪律：hidden context 是增强不是门槛。
+			this.pendingHidden = undefined;
+			this.ledger?.reportFailure(
+				`hidden context 组装失败：${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * 最近一次注入的 hidden context 全文（任务诊断面板的展示口）。
+	 * 还没有过 prompt（或组装一直失败）为 undefined。
+	 */
+	peekHiddenContext(): string | undefined {
+		return this.lastHiddenContext;
 	}
 
 	/**
@@ -747,6 +810,15 @@ export class SessionHost {
 	}
 
 	/**
+	 * 团队成员会话的溯源标记（team_member custom 条目，spec:
+	 * add-team-foundations 批 5）。与 subagent_run 同理：成员会话不该混进
+	 * 会话列表；listSessions 的头部扫描按两个标记一起过滤。
+	 */
+	markTeamMemberRun(memberName: string): void {
+		this.session.sessionManager.appendCustomEntry("team_member", { member: memberName });
+	}
+
+	/**
 	 * 当前会话文件名。daemon 用它标会话列表的 current、判定 rename/delete
 	 * 的目标是不是这个活会话。in-memory 会话为 undefined —— 本应用的会话
 	 * 都是持久化的，但 pi 的类型如此，调用方必须处理。
@@ -795,6 +867,7 @@ export class SessionHost {
 	/**
 	 * 切换交互模式。只切模式轴、换工具集 —— 专家绑定（expertId）与模式正交，
 	 * 不在这里读也不在这里写（spec: rework-expert-orthogonal-and-skills）。
+	 * 工具集经 effectiveToolNames 合并专家 extraTools（切模式不清专家的追加工具）。
 	 */
 	setInteraction(interactionId: string): void {
 		const mode = this.options.resources.modes.find(
@@ -802,14 +875,36 @@ export class SessionHost {
 		);
 		if (mode === undefined) throw new Error(`未知的交互模式：${interactionId}`);
 		this.interactionId = interactionId;
-		this.session.setActiveToolsByName([...mode.tools]);
+		this.session.setActiveToolsByName([...this.effectiveToolNames()]);
 		this.emitState();
 	}
 
-	/** 绑定 / 清除专家。与交互模式正交：只改 expertId，不动模式与工具集。 */
+	/**
+	 * 绑定 / 清除专家。与交互模式正交：只改 expertId，不动模式轴。
+	 * 工具集重新应用：extraTools 是专家的声明（spec: add-team-foundations），
+	 * 绑定/清除都要即时生效 —— 与「创建即模式工具面」的既有纪律同源
+	 * （工具面是一等公民，不该等下一次切模式才对上）。
+	 */
 	setExpert(expertId: string | undefined): void {
 		this.expertId = expertId;
+		// 子代理会话的工具面来自 agent 定义、终身不变（toolsOverride 契约，
+		// 见 SessionHostOptions.toolsOverride 注释）——它们不会被调用到这里，
+		// 但守卫让契约显式：有 override 就不参与专家联动。
+		if (this.options.toolsOverride === undefined) {
+			this.session.setActiveToolsByName([...this.effectiveToolNames()]);
+		}
 		this.emitState();
+	}
+
+	/**
+	 * 生效工具集 = 当前模式白名单 ∪ 专家 extraTools（spec: add-team-foundations）。
+	 * 专家只能增不能删：extraTools 不出现在白名单里就追加，出现了去重跳过。
+	 */
+	private effectiveToolNames(): readonly string[] {
+		const mode = this.options.resources.modes.find((m) => m.id === this.interactionId);
+		const base = mode === undefined ? [...DEFAULT_TOOLS] : [...mode.tools];
+		const extra = this.options.getExpertExtraTools?.() ?? [];
+		return extra.length === 0 ? base : [...base, ...extra.filter((tool) => !base.includes(tool))];
 	}
 
 	/** 当前技能描述符，供 daemon 组装提示词的技能段。 */
@@ -1018,10 +1113,13 @@ export class SessionHost {
 					// 此时发 run_finished 会让 UI 提前解禁输入框、然后又被下一轮锁住。
 					return;
 				}
-				const runId = this.currentRunId ?? this.nextId("run");
-				this.currentRunId = undefined;
-				this.currentAssistantId = undefined;
-				this.streamToolCalls.clear();
+			const runId = this.currentRunId ?? this.nextId("run");
+			this.currentRunId = undefined;
+			this.currentAssistantId = undefined;
+			this.streamToolCalls.clear();
+			// 本 run 的 hidden context 账清掉：transformContext 注入的是 run 期
+			// 瞬态，run 已终就不该再出现在（可能的）压缩调用等后续模型请求里。
+			this.pendingHidden = undefined;
 				/*
 				 * pi 没有独立的「已取消」事件：abort() 后 agent 循环照常走
 				 * message_end → turn_end → agent_end 收尾（agent.ts handleRunFailure /
@@ -1350,7 +1448,7 @@ export class SessionHost {
 				// task 工具的结构化投影优先于文本 delta，且判定必须放在取文本之前：
 				// 投影期 content.text 恒为空串（进度全走 details.subagents），
 				// 落到下面的空串早退会把整段投影静默吞掉。
-				const subagents = subagentsOf(toolResultDetails(event.partialResult));
+				const subagents = childAgentsOf(toolResultDetails(event.partialResult));
 				if (subagents !== undefined) {
 					emit({ type: "subagent_progress", id: event.toolCallId, agents: subagents });
 					return;
@@ -1400,7 +1498,7 @@ export class SessionHost {
 				// task 工具的子代理终态投影：与 sources 同源（result.details 只在
 				// execution_end 拿到），挂上后终态卡自带完整分组结果，不依赖
 				// 运行期 subagent_progress 是否到过（如恢复会话的回放路径）。
-				const subagents = subagentsOf(toolResultDetails(event.result));
+				const subagents = childAgentsOf(toolResultDetails(event.result));
 
 				emit({
 					type: "tool_finished",
@@ -1473,6 +1571,86 @@ export class SessionHost {
 	}
 
 	/**
+	 * 挂 pi 的 transformContext 钩子注入 hidden context（F5）。
+	 *
+	 * transformContext 是 agent-loop 每次模型调用前的官方改写口，且**返回值
+	 * 即入模内容、不落会话文件**（agent-loop.ts 局部变量，state.messages 不回写）
+	 * —— 所以这里每次调用都注入（WorkBuddy 的 every_turn 同语义），run 结束
+	 * 后自然消失，不需要任何卸载逻辑。工作目录/场景/专家这类常态内容也必须
+	 * 每轮重注入：不落盘的东西不注入就等于模型看不见。
+	 *
+	 * 包一层而不是替换（同 installRequestSnapshot）：先调原钩子（含全部扩展
+	 * 的改写），对改写结果注入。钩子契约 must-not-throw：注入失败经台账上报
+	 * 通道进 event-log，消息原样入模 —— hidden context 是增强不是门槛。
+	 */
+	private installHiddenContext(): void {
+		const agent = this.session.agent;
+		// agent 对象缺席就没处挂钩子（生产路径不会发生；测试桩会话没有它）——
+		// 跳过注入而不是炸构造：hidden context 是增强不是门槛。
+		if (agent === undefined) return;
+		const inner = agent.transformContext?.bind(agent);
+		agent.transformContext = async (messages, signal) => {
+			let transformed = inner === undefined ? messages : await inner(messages, signal);
+			const block = this.pendingHidden;
+			if (block !== undefined) {
+				try {
+					// spread 一次：pi 的钩子签名要可变数组，注入函数按纪律返回只读。
+					transformed = [...prependHiddenContext(transformed, block)];
+				} catch (error) {
+					this.ledger?.reportFailure(
+						`hidden context 注入失败：${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+			return transformed;
+		};
+	}
+
+	/**
+	 * 组装本 run 的 hidden context：三个 section（对齐 WorkBuddy 逆向笔记 §6
+	 * 第一批的范围，"first_turn + 变更重发"简化为每 run 重注入 —— 我们的注入
+	 * 不落会话文件，不重注入就等于丢失）：
+	 *
+	 *   1. workspace_context（user-context）—— cwd + 场景 + 交互模式 + 专家。
+	 *      系统提示词里 {{cwd}} 槽位是会话建立时的静态值，中途切场景/换专家
+	 *      （setScene/setExpert 不重组系统提示词）只有这里跟得上。
+	 *   2. memory_and_skills_reminder（user-context）—— 记忆三层短指针
+	 *      （core/memory.ts memoryReminder），全空则整段缺席。
+	 *   3. current_time（additional-data）—— run 冻结时刻，一次性容器。
+	 *
+	 * 全部段都空返回 undefined（新用户 + 无记忆 + 不可能：时间永远有 ——
+	 * 实际上本函数恒有值，undefined 分支只是 composeHiddenContext 契约的如实透传）。
+	 */
+	private composeRunHiddenContext(): string | undefined {
+		const scene = this.options.resources.scenes.find((s) => s.id === this.sceneId);
+		const mode = this.options.resources.modes.find((m) => m.id === this.interactionId);
+		// sessionCwd 是 string（不是 undefined）：create() 里必然赋值，但构造后
+		// 理论上有空窗，空串回落到 options.cwd 才不失真。
+		const cwd = this.sessionCwd === "" ? this.options.cwd : this.sessionCwd;
+		// 专家显示名解析失败回落 expertId：钉子的职责是「指认身份」，id 也能指认。
+		const expertLabel = this.options.getExpertLabel?.() ?? this.expertId;
+
+		const workspaceLines = [`工作目录：${cwd}`];
+		if (scene !== undefined) workspaceLines.push(`场景：${scene.label}（${scene.id}）`);
+		if (mode !== undefined) workspaceLines.push(`交互模式：${mode.label}（${mode.id}）`);
+		if (expertLabel !== undefined) workspaceLines.push(`专家：${expertLabel}`);
+
+		const sections: HiddenSection[] = [
+			{ tag: "workspace_context", role: "user-context", body: workspaceLines.join("\n") },
+		];
+		const memory = memoryReminder(cwd);
+		if (memory !== undefined) {
+			sections.push({ tag: "memory_and_skills_reminder", role: "user-context", body: memory });
+		}
+		sections.push({
+			tag: "current_time",
+			role: "additional-data",
+			body: formatRunTime(new Date()),
+		});
+		return composeHiddenContext(sections);
+	}
+
+	/**
 	 * 挂 pi 的 transformContext 钩子记请求快照（request_snapshot）。
 	 *
 	 * transformContext 是 agent-loop 每次模型调用前的官方观察口
@@ -1538,6 +1716,11 @@ export class SessionHost {
 			...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
 			turnIndex: this.ledgerTurnIndex - 1,
 			...(segments === undefined ? {} : { systemSegments: segments }),
+			// 快照在注入之后记录（钩子包装顺序见构造器），user 计数里已含
+			// hidden context —— 这里把它的字符数单独亮出，成分视图好单列一行。
+			...(this.pendingHidden === undefined
+				? {}
+				: { hiddenContextChars: this.pendingHidden.length }),
 			messages: { user, assistant, toolResult, other },
 		});
 	}

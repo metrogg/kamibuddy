@@ -1,5 +1,8 @@
 /**
  * 设置「提示词预览」分组（自原平铺页原样搬入）。
+ *
+ * 只预览**系统提示词**（2026-09-16 用户定）：每个任务的完整上下文组成不一样，
+ * 放在全局设置页没有意义 —— 那份预览落在任务诊断面板 ②（按任务、可折叠）。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -253,6 +256,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 					<p className="settings-foot">
 						预览按所选四轴（场景 / 模式 / 风格 / 专家）现场组装，与真实会话同一条组装路径；
 						pi 上下文段（项目指令、工具提示）不在预览中出现，真实会话会额外携带。
+						每一轮的完整上下文组成（含历史消息与注入块）在任务诊断面板按任务查看。
 					</p>
 				</>
 			)}

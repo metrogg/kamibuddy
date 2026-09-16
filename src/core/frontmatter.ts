@@ -223,6 +223,16 @@ export function requireString(doc: ParsedDocument, key: string, label: string): 
 	return value;
 }
 
+/** 可选字符串字段：缺席返回 undefined，写了但类型不符/为空则报错（不静默吞）。 */
+export function optionalString(doc: ParsedDocument, key: string, label: string): string | undefined {
+	const value = doc.frontmatter[key];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || value === "") {
+		throw new Error(`${label}: frontmatter 字段「${key}」应为非空字符串`);
+	}
+	return value;
+}
+
 export function optionalBoolean(doc: ParsedDocument, key: string, fallback: boolean): boolean {
 	const value = doc.frontmatter[key];
 	return typeof value === "boolean" ? value : fallback;
@@ -234,4 +244,21 @@ export function requireStringArray(doc: ParsedDocument, key: string, label: stri
 		throw new Error(`${label}: frontmatter 缺少数组字段「${key}」，应为 ${key}: [a, b]`);
 	}
 	return value;
+}
+
+/**
+ * 可选字符串数组字段：缺席返回 undefined；写了但形状不对响亮报错；
+ * 空数组归一为 undefined（追加一个空集没有语义，留 undefined 让消费方少一层分支）。
+ */
+export function optionalStringArray(
+	doc: ParsedDocument,
+	key: string,
+	label: string,
+): readonly string[] | undefined {
+	const value = doc.frontmatter[key];
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+		throw new Error(`${label}: frontmatter 字段「${key}」应为字符串数组，写法 ${key}: [a, b]`);
+	}
+	return value.length === 0 ? undefined : value;
 }

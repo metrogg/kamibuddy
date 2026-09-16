@@ -151,6 +151,12 @@ export interface SubagentStatus {
 	readonly agent: string;
 	/** 任务描述摘要。 */
 	readonly task: string;
+	/**
+	 * 子代理种类（spec: add-team-foundations 批 4）：task 工具的隔离子会话 =
+	 * "subagent"，未来的团队成员 = "team"。**缺省按 "subagent" 解释** ——
+	 * task 工具不写、旧格式会话没有这个键，读方不得要求它存在。
+	 */
+	readonly kind?: "subagent" | "team";
 	readonly status: "queued" | "running" | "done" | "failed";
 	/** 最新动作行，如「正在 web_search xxx」「已完成 N 轮」；无进展时为空串。 */
 	readonly activity: string;
@@ -158,6 +164,31 @@ export interface SubagentStatus {
 	readonly turns: number;
 	/** 终态：成功输出或失败诊断；运行中缺省。 */
 	readonly output?: string;
+	/**
+	 * 子代理生效的模型标识（agent 定义声明了 model 才有）。
+	 * 卡片据此显示模型徽标——「调研用便宜模型」是否真的生效，用户要看得见。
+	 */
+	readonly model?: string;
+	/**
+	 * 过程动作行时间线（Trae fromSubagent 透明性的折中实现）：按发生序追加、
+	 * 最新在末尾，与 activity 内容同源（activity 恒等于末元素或空串）。
+	 * 生产方封顶保留最后 12 条，溢出在最前面补「前 N 条已省略」标记；
+	 * 消费端不假设长度、不自行裁剪。旧格式会话缺席——卡片不渲染时间线入口。
+	 */
+	readonly timeline?: readonly string[];
+	/**
+	 * 以下四个键**只有团队成员投影（kind:"team"）填写**，task 卡的子代理
+	 * 投影不写（缺省缺席，卡片不渲染对应元素）——实时计数与聚焦导航的
+	 * 数据源（spec: add-team-foundations 批 8）。
+	 */
+	/** 成员会话 id（焦点导航的寻址键；spawning 阶段未定为 undefined）。 */
+	readonly sessionId?: string;
+	/** 累计工具调用次数。 */
+	readonly toolCalls?: number;
+	/** 累计 token 用量（各轮 totalTokens 之和）。 */
+	readonly tokens?: number;
+	/** 累计费用（美元，各轮 cost 之和）。 */
+	readonly cost?: number;
 }
 
 export interface ToolCard {
@@ -362,6 +393,15 @@ export type SessionEvent =
 	 * 恢复历史会话时由消息回放从落盘 details 经同路径还原。
 	 */
 	| { readonly type: "subagent_progress"; readonly id: ToolCallId; readonly agents: readonly SubagentStatus[] }
+	/**
+	 * 团队成员的实时状态投影（spec: add-team-foundations 批 7）。
+	 * 与 subagent_progress 的差异：不带 toolCallId —— 成员是长会话，
+	 * 产出（team_create 工具调用）早已终态，投影按「最近一张 team 卡」
+	 * 归位（reducer 找 toolName === "team_create" 的最后一条工具条目，
+	 * 整体替换其 subagents；找不到则 no-op，旧格式会话安全）。
+	 * 携带全量投影（整体替换语义，kind 恒为 "team"）。
+	 */
+	| { readonly type: "team_member_progress"; readonly members: readonly SubagentStatus[] }
 	/** 工具执行结束。 */
 	| { readonly type: "tool_finished"; readonly card: ToolCard }
 	/** run 结束。outcome 区分正常完成与用户取消（取消语义见 RunOutcome 注释）。 */

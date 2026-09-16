@@ -57,6 +57,11 @@ export function getAutomationsFile(): string {
 	return join(getConfigDir(), "automations.json");
 }
 
+/** 会话归档索引（archive.json，path → 归档时刻）。 */
+export function getArchiveFile(): string {
+	return join(getConfigDir(), "archive.json");
+}
+
 /**
  * MCP 连接器配置（mcp.json，用户级）。
  *

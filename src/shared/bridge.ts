@@ -66,6 +66,8 @@ export interface KamiBridge {
 	readonly snapshot: (sessionId?: string) => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
+	/** 最近一次注入的 hidden context 全文（任务诊断面板用）；还没跑过一轮为 undefined。 */
+	readonly hiddenContext: () => Promise<string | undefined>;
 	/**
 	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
 	 * 传入的是**重排后**的完整队列：daemon 清空后按序重入队。
@@ -119,6 +121,11 @@ export interface KamiBridge {
 	readonly renameSession: (path: string, name: string) => Promise<void>;
 	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
 	readonly deleteSession: (path: string) => Promise<void>;
+	/**
+	 * 归档 / 取消归档会话（archive.json 索引，会话文件不动）。
+	 * 归档后的会话从侧栏主列表消失，在设置页数据管理分组恢复。
+	 */
+	readonly archiveSession: (path: string, archived: boolean) => Promise<void>;
 	/** 导出会话为单文件 HTML。空会话会 reject 原因；成功返回导出文件绝对路径。 */
 	readonly exportSession: (path: string) => Promise<{ outputPath: string }>;
 	/** 把当前临时任务「保存到工作空间」转正。名称非法/重名、或当前会话非临时任务时 reject 原因。 */
@@ -232,6 +239,17 @@ export interface KamiBridge {
 	readonly getMemoryEnabled: () => Promise<{ enabled: boolean }>;
 	/** 写记忆系统开关；daemon 同步内置「记忆整理」任务的启停。 */
 	readonly setMemoryEnabled: (enabled: boolean) => Promise<void>;
+
+	/* ── 团队协作（spec: add-team-foundations 批 5） ──────────────── */
+
+	/** 读团队协作开关（未配置时 daemon 回 false —— 缺省关闭，实验特性）。 */
+	readonly getAgentTeamsEnabled: () => Promise<{ enabled: boolean }>;
+	/** 写团队协作开关；只影响之后新建的会话（工具注册发生在会话建立时）。 */
+	readonly setAgentTeamsEnabled: (enabled: boolean) => Promise<void>;
+	/** 向成员会话投一条消息（followUp 语义）；成员视图的发送与 @直接路由共用。 */
+	readonly memberPrompt: (memberSessionId: string, text: string) => Promise<void>;
+	/** 中止成员当前轮（成员视图的停止键）。 */
+	readonly memberAbort: (memberSessionId: string) => Promise<void>;
 	/** 读用户画像全文（PROFILE.md；文件不存在回空串）。 */
 	readonly getProfile: () => Promise<{ content: string }>;
 	/** 覆盖写用户画像全文；下一轮对话生效。 */

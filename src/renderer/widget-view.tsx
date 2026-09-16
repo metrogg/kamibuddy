@@ -16,6 +16,7 @@ import type { ToolCard } from "@shared/session-events.ts";
 import { useCopyWithTick } from "./copy-tick.ts";
 import { IconAlert, IconCheck, IconCopy, IconDownload } from "./icons.tsx";
 import { Spinner } from "./state-views.tsx";
+import chartUmd from "./vendor/chart.umd-4.4.0.min.js?raw";
 
 /* ── 取数：结果 JSON 与部分参数提取 ───────────────────────────── */
 
@@ -277,6 +278,26 @@ const WIDGET_HEAD = [
 ].join("\n");
 
 /*
+ * Chart.js 本地化（2026-09-16 修「图表空白」第二层）：widget 模板让模型引用
+ * CDN 的 chart.umd 脚本，网络不通/被拦时 canvas 永远空白且无任何报错线索。
+ * 把 Chart.js UMD 打进应用，finalize 前把 CDN 的 chart.umd <script src> 整个
+ * **替换为内联脚本**（UMD 已验证不含 </script 序列，innerHTML 写入安全）——
+ * 走 bootstrap activateScripts 的文档序执行：内联先于后续内联脚本，Chart
+ * 必然先就位。不用 blob: URL —— 沙箱 srcdoc iframe 是 opaque origin，
+ * 取父文档创建的 blob 会被同源检查拦掉（实测）。其余 CDN 引用不动。
+ */
+/** CDN 上 Chart.js UMD 构建的 script src（chart.umd 命名，白名单 CDN）。 */
+const CHART_CDN_SRC =
+	/<script\s+src="(https:\/\/(?:cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|unpkg\.com)\/[^"]*chart\.umd[^"]*)"/g;
+
+/** 把 widget HTML 里 CDN 的 Chart.js 外链替换为内联 UMD（幂等：内联后无 src 可再匹配）。 */
+export function rewriteChartCdn(html: string): string {
+	// replacer 必须走函数：minified UMD 里含 $& / $' 等字符，作为替换串会被
+	// String.replace 当特殊模式展开（实测把 200KB 源码截成 13K，Chart 没了）。
+	return html.replace(CHART_CDN_SRC, () => `<script>${chartUmd}</script>`);
+}
+
+/*
  * srcDoc 内置 bootstrap（iframe 侧协议实现）：
  * - 挂载即回 ready；ResizeObserver 观察 #root，高度变化即上报（宿主侧 clamp）。
  * - update / finalize：写 #root。finalize 额外克隆重建 <script> ——
@@ -383,7 +404,7 @@ export function buildStandaloneHtml(title: string, widgetCode: string): string {
 		WIDGET_HEAD,
 		"</head>",
 		"<body>",
-		`<div id="root">${widgetCode}</div>`,
+		`<div id="root">${rewriteChartCdn(widgetCode)}</div>`,
 		"</body>",
 		"</html>",
 	].join("\n");
@@ -518,7 +539,9 @@ export function WidgetView({ card }: { readonly card: ToolCard }): React.JSX.Ele
 		postToFrame(iframeRef.current, {
 			source: "kami-widget-host",
 			type: finalized ? "finalize" : "update",
-			html: finalized ? widgetCode : stripScripts(widgetCode),
+			// finalize 路径把 CDN 的 Chart.js 重写为本地 blob（离线可画、零延迟）；
+			// update 路径脚本整体被剥离，无需重写。
+			html: finalized ? rewriteChartCdn(widgetCode) : stripScripts(widgetCode),
 		});
 	}, [frameReady, widgetCode, finalized]);
 

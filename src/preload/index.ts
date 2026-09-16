@@ -26,6 +26,7 @@ const bridge: KamiBridge = {
 	snapshot: (sessionId) => ipcRenderer.invoke(INVOKE.snapshot, sessionId),
 	prompt: (request) => ipcRenderer.invoke(INVOKE.prompt, request),
 	abort: () => ipcRenderer.invoke(INVOKE.abort),
+	hiddenContext: () => ipcRenderer.invoke(INVOKE.hiddenContext),
 	rewriteQueue: (queued) => ipcRenderer.invoke(INVOKE.queueRewrite, queued),
 	newTask: (cwd) => ipcRenderer.invoke(INVOKE.newTask, cwd),
 	completions: () => ipcRenderer.invoke(INVOKE.completions),
@@ -46,6 +47,8 @@ const bridge: KamiBridge = {
 	renameSession: (path, name) =>
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
+	archiveSession: (path, archived) =>
+		ipcRenderer.invoke(INVOKE.sessionArchive, path, archived),
 	exportSession: (path) => ipcRenderer.invoke(INVOKE.sessionExport, path),
 	saveToWorkspace: (name) => ipcRenderer.invoke(INVOKE.saveToWorkspace, name),
 
@@ -114,6 +117,14 @@ const bridge: KamiBridge = {
 	getMemoryEnabled: () => ipcRenderer.invoke(INVOKE.getMemoryEnabled),
 	setMemoryEnabled: (enabled) =>
 		ipcRenderer.invoke(INVOKE.setMemoryEnabled, enabled),
+
+	getAgentTeamsEnabled: () => ipcRenderer.invoke(INVOKE.getAgentTeamsEnabled),
+	setAgentTeamsEnabled: (enabled) =>
+		ipcRenderer.invoke(INVOKE.setAgentTeamsEnabled, enabled),
+
+	memberPrompt: (memberSessionId, text) =>
+		ipcRenderer.invoke(INVOKE.memberPrompt, memberSessionId, text),
+	memberAbort: (memberSessionId) => ipcRenderer.invoke(INVOKE.memberAbort, memberSessionId),
 	getProfile: () => ipcRenderer.invoke(INVOKE.getProfile),
 	setProfile: (content) => ipcRenderer.invoke(INVOKE.setProfile, content),
 	resetProfile: () => ipcRenderer.invoke(INVOKE.resetProfile),

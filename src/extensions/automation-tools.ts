@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AutomationStore } from "../core/automation-store.ts";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 import {
 	nextRunAfter,
 	scheduleSummary,
@@ -144,6 +145,9 @@ export function automationExtensionFactory(
 	store: AutomationStore,
 	getCurrentCwd: () => string,
 ): ExtensionFactory {
+	// automation_list 只读任务库，无路径参数 → 只读自声明（注册处登记）；
+	// automation_create/delete 改应用自身数据，走中心登记的询问档，不在此列。
+	declareReadOnlyTools(["automation_list"]);
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "automation_create",

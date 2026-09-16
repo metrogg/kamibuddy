@@ -18,6 +18,7 @@ import { statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { declareReadOnlyTools } from "./permission-policy.ts";
 import {
 	classifyPresentedFiles,
 	type PresentedFile,
@@ -35,6 +36,9 @@ export interface PresentFilesOptions {
 }
 
 export function createPresentFiles(options: PresentFilesOptions) {
+	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
+	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
+	declareReadOnlyTools(["present_files"]);
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "present_files",

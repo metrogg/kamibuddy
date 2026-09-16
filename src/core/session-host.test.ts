@@ -1024,6 +1024,7 @@ function createLedgerHost(
 	emit: (event: SessionEvent) => void,
 	ledger: RunLedger,
 	segments?: readonly { source: string; chars: number }[],
+	expertLabel?: string,
 ): SessionHost {
 	const options: SessionHostOptions = {
 		catalog: {} as unknown as ModelCatalog,
@@ -1036,6 +1037,7 @@ function createLedgerHost(
 		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
 		createLedger: () => ledger,
 		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
+		...(expertLabel === undefined ? {} : { getExpertLabel: () => expertLabel }),
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -1631,5 +1633,181 @@ describe("流式 delta 合批（16ms 窗口）", () => {
 			expect(deltaTrace(events)).toHaveLength(4);
 			expect(deltaTrace(events).length).toBeLessThan(script.length);
 		});
+	});
+});
+
+describe("hidden context（transformContext 注入，F5）", () => {
+	it("prompt 冻结注入块：workspace_context + 专家 + current_time 前置在最后一条 user 消息之前", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger, undefined, "前端开发");
+		await host.prompt("你好");
+
+		const hooked = agent.transformContext;
+		expect(hooked).toBeDefined();
+		const out = (await hooked?.([
+			{ role: "user", content: "早前的对话", timestamp: 1 },
+			{ role: "assistant", content: "回复", timestamp: 2 },
+			{ role: "user", content: "你好", timestamp: 3 },
+		])) as { role: string; content: string }[];
+
+		const last = out[out.length - 1];
+		expect(last?.role).toBe("user");
+		const content = String(last?.content);
+		// 隐藏块前置在用户正文之前；三类段齐全
+		expect(content.indexOf('data-role="user-context"')).toBeLessThan(content.indexOf("你好"));
+		expect(content).toContain("工作目录：C:\\test");
+		expect(content).toContain("专家：前端开发");
+		expect(content).toContain("<current_time>");
+		// 前面的消息不动（注入只落在最后一条 user 上）
+		expect(out[0]?.content).toBe("早前的对话");
+	});
+
+	it("agent_end 清账：run 结束后同一钩子不再注入", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+		await host.prompt("你好");
+		runStarted(host);
+		agentEnd(host, false);
+
+		const out = (await agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as { role: string; content: string }[];
+		expect(out[0]?.content).toBe("你好");
+	});
+
+	it("peekHiddenContext：run 结束后仍可读最近一次注入全文（展示语义，不随 pendingHidden 清账）", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+		// 还没跑过任何一轮：undefined
+		expect(host.peekHiddenContext()).toBeUndefined();
+
+		await host.prompt("你好");
+		const frozen = host.peekHiddenContext();
+		expect(frozen).toBeDefined();
+		expect(frozen).toContain("workspace_context");
+
+		runStarted(host);
+		agentEnd(host, false);
+		// pendingHidden 已清（transformContext 不再注入），但展示口仍在
+		expect(host.peekHiddenContext()).toBe(frozen);
+	});
+
+	it("request_snapshot 带上 hiddenContextChars（注入后记快照，拆出来亮明）", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger, [
+			{ source: "skeleton", chars: 10 },
+		]);
+		await host.prompt("你好");
+		// run 进行中记快照（真实时序：transformContext 发生在 agent_start 之后）
+		runStarted(host);
+		await agent.transformContext?.([{ role: "user", content: "你好", timestamp: 1 }]);
+
+		const snapshot = calls.find((c) => c.kind === "request_snapshot")?.data as
+			| { hiddenContextChars?: number; messages?: unknown }
+			| undefined;
+		expect(snapshot).toBeDefined();
+		// 注入块字符数 = 注入后 user 消息里多出来的那部分，面板成分视图靠它单列一行
+		expect(snapshot?.hiddenContextChars).toBeGreaterThan(0);
+	});
+});
+
+describe("专家 extraTools 工具面联动（spec: add-team-foundations）", () => {
+	const MODES: readonly ModeResource[] = [
+		{ id: "ask", label: "问答", description: "", ready: true, tools: ["read"], body: "" },
+		{ id: "craft", label: "执行", description: "", ready: true, tools: ["read", "write"], body: "" },
+	];
+
+	function createExtraToolsHost(opts: {
+		interactionId: string;
+		expertId?: string;
+		getExtra: () => readonly string[] | undefined;
+	}): { host: SessionHost; toolCalls: readonly (readonly string[])[] } {
+		const toolCalls: string[][] = [];
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			thinkingLevel: "off",
+			getAvailableThinkingLevels: () => ["off"],
+			setActiveToolsByName: (tools: readonly string[]) => {
+				toolCalls.push([...tools]);
+			},
+		};
+		const options: SessionHostOptions = {
+			catalog: {} as unknown as ModelCatalog,
+			modelKey: undefined,
+			cwd: "C:\\test",
+			isTempTask: false,
+			sceneId: "work",
+			interactionId: opts.interactionId,
+			...(opts.expertId === undefined ? {} : { expertId: opts.expertId }),
+			emit: () => {},
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map() },
+			getExpertExtraTools: opts.getExtra,
+		};
+		const Ctor = SessionHost as unknown as new (
+			session: unknown,
+			options: SessionHostOptions,
+			sceneId: string,
+			interactionId: string,
+			expertId: string | undefined,
+			skills: readonly unknown[],
+		) => SessionHost;
+		const host = new Ctor(session, options, "work", opts.interactionId, opts.expertId ?? undefined, []);
+		return { host, toolCalls };
+	}
+
+	it("setExpert 应用追加工具：模式白名单 ∪ extraTools，重复项去重", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			getExtra: () => ["task", "write"],
+		});
+		host.setExpert("fin");
+		expect(toolCalls.at(-1)).toEqual(["read", "write", "task"]);
+	});
+
+	it("清除专家 → resolver 已不返回追加集，回到纯模式白名单", () => {
+		// 生产契约：INVOKE.setExpert 先 updateStateLocally（桶状态落新绑定），
+		// 再调 host.setExpert —— resolver 读桶状态，此刻已看不到旧专家。
+		let bound = true;
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			expertId: "fin",
+			getExtra: () => (bound ? ["task"] : undefined),
+		});
+		bound = false;
+		host.setExpert(undefined);
+		expect(toolCalls.at(-1)).toEqual(["read", "write"]);
+	});
+
+	it("切交互模式保留追加工具（切模式不清专家的 extraTools）", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "craft",
+			getExtra: () => ["task"],
+		});
+		host.setInteraction("ask");
+		expect(toolCalls.at(-1)).toEqual(["read", "task"]);
+	});
+
+	it("resolver 返回 undefined（未声明 extraTools）→ 纯模式白名单，与现状一致", () => {
+		const { host, toolCalls } = createExtraToolsHost({
+			interactionId: "ask",
+			getExtra: () => undefined,
+		});
+		host.setExpert("fin");
+		expect(toolCalls.at(-1)).toEqual(["read"]);
 	});
 });

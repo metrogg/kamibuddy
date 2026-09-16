@@ -65,6 +65,8 @@ interface SidebarProps {
 	readonly onResumeTask: (path: string) => void;
 	readonly onRenameTask: (path: string, name: string) => void;
 	readonly onDeleteTask: (path: string) => void;
+	/** 归档（L28）：写 archive.json 索引，行从侧栏主列表消失（数据管理分组可恢复）。 */
+	readonly onArchiveTask: (path: string) => void;
 	/** 导出会话为单文件 HTML。历史会话的导出隐含「先恢复为当前会话」，由 App 侧处理，这里只透传 path。 */
 	readonly onExportTask: (path: string) => void;
 	/** 空间组「+」：把工作空间切到该 cwd 并新建任务（setWorkspace 的守卫在 App 侧复用）。 */
@@ -135,6 +137,7 @@ export function Sidebar({
 	onResumeTask,
 	onRenameTask,
 	onDeleteTask,
+	onArchiveTask,
 	onExportTask,
 	onNewTaskInSpace,
 	onRenameWorkspace,
@@ -362,6 +365,23 @@ export function Sidebar({
 								}}
 							>
 								重命名
+							</button>
+							{/*
+								归档（L28）：会话文件与宿主都不动，只从侧栏主列表收起 ——
+								与删除（危险红、行内确认）刻意拉开：这是整理动作不是销毁。
+								恢复入口在设置页数据管理分组。
+							*/}
+							<button
+								type="button"
+								className="space-menu-item"
+								onClick={() => {
+									setMenuPath(undefined);
+									setEditingPath(undefined);
+									setConfirmingPath(undefined);
+									onArchiveTask(task.path);
+								}}
+							>
+								归档
 							</button>
 							<button
 								type="button"

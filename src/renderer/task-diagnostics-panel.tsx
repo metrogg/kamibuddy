@@ -1,13 +1,16 @@
 /**
  * 任务诊断面板 —— 诊断对应任务（右侧栏第三态）。
  *
- * 信息架构（2026-09-15 重排，09-16 补齐 ②③④）：
+ * 信息架构（2026-09-15 重排，09-16 补齐 ②③④、② 升级为成分视图）：
  *   ① 会话总览     —— 这个任务一共多少轮 / 多少步 / 花了多少（会话级累计）
- *   ② 上下文占用   —— **现在**占了多少、被谁占着（pi 精确值 + 分类估算）
+ *   ② 上下文       —— 完整的上下文组成，两个可折叠成分块：
+ *                     「占用与分类」= **现在**（pi 精确值 + 分类估算）；
+ *                     「最近一次入模拆分」= **当时**（台账最后一条快照，真实计数）
  *   ③ 轮 / 步台账  —— 时间序的条目流水，工具挂在自己那一步之下
  *   ④ 单步详情     —— 点开某一步：计时五要素 + token 全字段 + 该轮**当时**的入模拆分
  * 本面板是**单个任务**的微观诊断；统计页是跨会话宏观；诊断页是机器级环境自检。
  * 在此之前这三件事挤在同一个「诊断」页里 —— 它那 7 个区块只有 1 个名副其实。
+ *（设置页的提示词预览只管系统提示词；完整上下文按任务走这里 —— 2026-09-16 用户定。）
  *
  * ② 与 ④ 里都出现「上下文」，含义不同，不许混（shared/context-usage.ts 文件头的纪律）：
  *   ② 是**现在**（`getContextUsage()` 的实时 used/total + 分类估算，随对话滚动）；
@@ -58,6 +61,7 @@ import {
 	foldRunLedger,
 	foldRunSteps,
 	indexRequestSnapshots,
+	latestRequestSnapshot,
 	snapshotKey,
 	type LedgerRun,
 	type LedgerStep,
@@ -162,29 +166,165 @@ function SessionOverview({
 	);
 }
 
-/* ── ② 上下文占用（现在） ────────────────────────────────────────── */
+/* ── ② 上下文（现在） ────────────────────────────────────────────── */
 
+/**
+ * ② 的折叠块：默认收起（右栏是窄栏，全展开会把台账挤没），展开态不持久 ——
+ * 诊断是即看即走的行为。两种形态二选一：
+ *   - children：数据已在手（台账 / 会话 state 折叠而来）；
+ *   - onLoad：惰性取全文（系统提示词 / hidden context 块），**每次展开都重拉** ——
+ *     这些内容随 run 变化（注入块按 run 冻结、系统提示词随两轴变），缓存住
+ *     第一次的结果就是陈旧数据（2026-09-16 实测：重启后先点开再跑任务，
+ *     空结果被缓存住，跑了多少轮都显示「还没跑过」）。换会话由 resetKey 清态。
+ */
+function Fold({
+	label,
+	hint,
+	emptyText,
+	resetKey,
+	onLoad,
+	children,
+}: {
+	readonly label: string;
+	readonly hint: string;
+	/** onLoad 路径下取到空串时的占位（children 形态的空态由 children 自理）。 */
+	readonly emptyText?: string;
+	/** 换会话时清掉已取内容（面板跟随会话，onLoad 的结果不能跨会话残留）。 */
+	readonly resetKey?: string;
+	readonly onLoad?: () => Promise<string | undefined>;
+	readonly children?: React.ReactNode;
+}): React.JSX.Element {
+	const [open, setOpen] = useState(false);
+	const [text, setText] = useState<string | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
+
+	// 换会话即作废：sessionId 变了，上次取的全文就是别的任务的。
+	useEffect(() => {
+		setText(undefined);
+		setError(undefined);
+	}, [resetKey]);
+
+	const toggle = (): void => {
+		const next = !open;
+		setOpen(next);
+		if (next && onLoad !== undefined) {
+			setText(undefined);
+			setError(undefined);
+			// 过一层微任务：onLoad 若同步抛（如窗口里还没有新加的桥方法 ——
+			// preload 不吃 HMR，改完必须重启进程），也会落进拒绝分支显示错误，
+			// 而不是把面板永远钉在「正在读取」。
+			Promise.resolve()
+				.then(onLoad)
+				.then(
+					(value) => setText(value ?? ""),
+					(e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+				);
+		}
+	};
+
+	return (
+		<div className="task-diag-fold">
+			<button
+				type="button"
+				className="task-diag-fold-head"
+				aria-expanded={open}
+				onClick={toggle}
+			>
+				<span className={`seg-chevron${open ? " open" : ""}`}>
+					<IconChevronRight size={12} />
+				</span>
+				<span>{label}</span>
+				<span className="stat-hint">{hint}</span>
+			</button>
+			{open && (
+				<div className="task-diag-fold-body">
+					{onLoad === undefined ? (
+						children
+					) : error !== undefined ? (
+						<p className="stat-err">{error}</p>
+					) : text === undefined ? (
+						<LoadingState text="正在读取…" />
+					) : text === "" ? (
+						<p className="task-diag-note">{emptyText}</p>
+					) : (
+						<pre className="seg-body">{text}</pre>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * ② 上下文：完整的上下文组成与实际内容（2026-09-16 用户定，从设置页挪过来 ——
+ * 每个任务的上下文不一样，全局设置页放不下这个概念）。
+ *
+ * 四个成分块，两类口径不许混（shared/context-usage.ts 纪律）：
+ *   - 「占用与分类」= **现在**：pi 精确 used/total + 分类估算（~ 前缀那套）；
+ *   - 「最近一次入模拆分」= **当时**：台账最后一条 request_snapshot 的真实
+ *     计数（系统分段 + 消息组成 + hidden context 注入量）；
+ *   - 「系统提示词全文」= prompt:preview 同一条组装路径现算（不含 pi 上下文段，
+ *     页脚口径同设置页预览）；
+ *   - 「hidden context 注入块」= 宿主最近一次注入的全文（run 结束仍可看）。
+ */
 function ContextSection({
 	detail,
+	latestSnapshot,
+	axes,
+	sessionId,
 }: {
 	readonly detail: ContextUsageDetail | undefined;
+	readonly latestSnapshot: RequestSnapshotData | undefined;
+	readonly axes: { readonly sceneId: string; readonly interactionId: string; readonly expertId: string | undefined };
+	/** 当前会话 id —— hidden 注入块的换会话清态键。 */
+	readonly sessionId: string;
 }): React.JSX.Element {
 	return (
 		<section className="task-diag-section">
 			<h2 className="task-diag-heading">
-				上下文占用
+				上下文
 				<span className="stat-hint">实时</span>
 			</h2>
-			{detail === undefined ? (
-				<p className="task-diag-note">
-					还没有过带用量的响应 —— 占用读数会在第一轮结束后出现。
-					<br />
-					想看某一轮「当时」发出去的内容，点开下面台账里的那一步。
-				</p>
-			) : (
-				// 与输入条上的圆环浮层是同一个组件：分类的「估算」标注只此一份。
-				<ContextUsageBreakdown detail={detail} />
-			)}
+			<Fold label="占用与分类" hint="现在 · 分类为估算">
+				{detail === undefined ? (
+					<p className="task-diag-note">
+						还没有过带用量的响应 —— 占用读数会在第一轮结束后出现。
+					</p>
+				) : (
+					// 与输入条上的圆环浮层是同一个组件：分类的「估算」标注只此一份。
+					<ContextUsageBreakdown detail={detail} />
+				)}
+			</Fold>
+			<Fold label="最近一次入模拆分" hint="当时 · 真实计数">
+				{latestSnapshot === undefined ? (
+					<p className="task-diag-note">
+						还没有过模型调用 —— 拆分随第一轮出现。
+					</p>
+				) : (
+					<SnapshotBreakdown snapshot={latestSnapshot} />
+				)}
+			</Fold>
+			<Fold
+				label="系统提示词全文"
+				hint="按当前两轴现算 · 不含 pi 上下文段"
+				emptyText="还没有内容。"
+				resetKey={axes.sceneId + axes.interactionId + (axes.expertId ?? "")}
+				onLoad={async () => {
+					const preview = await window.kami.promptPreview({
+						sceneId: axes.sceneId,
+						modeId: axes.interactionId,
+						...(axes.expertId === undefined ? {} : { expertId: axes.expertId }),
+					});
+					return preview.segments.map((s) => s.text).join("");
+				}}
+			/>
+			<Fold
+				label="hidden context 注入块"
+				hint="最近一次 · 注入到最后一条用户消息之前"
+				emptyText="还没有跑过任何一轮 —— 注入块随第一次发送出现。"
+				resetKey={sessionId}
+				onLoad={() => window.kami.hiddenContext()}
+			/>
 		</section>
 	);
 }
@@ -516,6 +656,7 @@ export function TaskDiagnosticsPanel({
 	sessionId,
 	stats,
 	usageDetail,
+	axes,
 	width,
 	onClose,
 }: {
@@ -525,6 +666,12 @@ export function TaskDiagnosticsPanel({
 	readonly stats: SessionStatCard | undefined;
 	/** 当前上下文占用（`conversation.usageDetail`）—— ② 的数据源，就是「现在」。 */
 	readonly usageDetail: ContextUsageDetail | undefined;
+	/** 当前两轴 + 专家（② 「系统提示词全文」按它走 prompt:preview 现算）。 */
+	readonly axes: {
+		readonly sceneId: string;
+		readonly interactionId: string;
+		readonly expertId: string | undefined;
+	};
 	/** 面板宽度（px）：与 ArtifactPanel / SourcesPanel 同一份 panelWidth。 */
 	readonly width: number;
 	readonly onClose: () => void;
@@ -565,6 +712,11 @@ export function TaskDiagnosticsPanel({
 		() => indexRequestSnapshots(ledger?.entries ?? []),
 		[ledger],
 	);
+	/** 最近一次入模拆分：② 的「当时的上下文组成」数据源（真实计数）。 */
+	const latestSnapshot = useMemo(
+		() => latestRequestSnapshot(ledger?.entries ?? []),
+		[ledger],
+	);
 
 	// 再点同一行收起；点另一行换过去（不保留多个展开，避免面板被撑长）。
 	const toggleStep = useCallback((key: string) => {
@@ -587,7 +739,12 @@ export function TaskDiagnosticsPanel({
 			</header>
 			<div className="preview-view task-diag-body">
 				<SessionOverview stats={stats} />
-				<ContextSection detail={usageDetail} />
+				<ContextSection
+					detail={usageDetail}
+					latestSnapshot={latestSnapshot}
+					axes={axes}
+					sessionId={sessionId}
+				/>
 				{error !== undefined && <ErrorState message={error} />}
 				{ledger === undefined ? (
 					<LoadingState text="正在读取台账…" />

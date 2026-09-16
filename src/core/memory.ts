@@ -113,6 +113,37 @@ function readTextOrUndefined(path: string): string | undefined {
 	}
 }
 
+/**
+ * hidden context（F5）每轮注入用的记忆短指针：只报「有哪些、在哪」，
+ * 不重复系统提示词里 buildMemorySection 已带的全文 —— 系统提示词的段落是
+ * 会话建立时组装的，会话中途新写的记忆进不去；这个每轮指针的价值就是
+ * 提醒模型记忆存在、路径固定、可 read 可追加，让长会话里记忆始终「活着」。
+ *
+ * 三层全空返回 undefined（调用方整段跳过，零 token）。降级口径同上：
+ * 读不出当没有，绝不抛错。
+ */
+export function memoryReminder(cwd: string): string | undefined {
+	const wsDir = workspaceMemoryDir(cwd);
+	const hasProfile = readTextOrUndefined(profilePath()) !== undefined;
+	const hasUserMemory = readTextOrUndefined(userMemoryPath()) !== undefined;
+	const hasProjectMemory = readTextOrUndefined(join(wsDir, "MEMORY.md")) !== undefined;
+	const recentLogs = listRecentLogs(wsDir);
+	if (!hasProfile && !hasUserMemory && !hasProjectMemory && recentLogs.length === 0) {
+		return undefined;
+	}
+
+	const lines: string[] = [];
+	if (hasProfile) lines.push(`用户画像：${profilePath()}`);
+	if (hasUserMemory) lines.push(`用户级长期记忆：${userMemoryPath()}`);
+	if (hasProjectMemory || recentLogs.length > 0) {
+		lines.push(
+			`项目记忆目录：${wsDir}${recentLogs.length > 0 ? `（最近日志：${recentLogs.join("、")}）` : ""}`,
+		);
+	}
+	lines.push("细节用 read 按需查看；完成值得记录的工作后，把要点追加进对应记忆文件。");
+	return lines.join("\n");
+}
+
 /** 最近 N 个日志文件名（按文件名日期倒序）。目录读不出 = 没有日志。 */
 function listRecentLogs(wsDir: string): string[] {
 	try {

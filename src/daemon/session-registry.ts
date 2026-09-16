@@ -41,10 +41,12 @@ import type { WorktreeInfo } from "../shared/worktree.ts";
 export const MAX_IDLE_HOSTS = 5;
 
 /**
- * 每会话的子代理 spawn 预算（task 工具防失控循环：子代理输出回灌主代理后，
- * 主代理可能据此再委派，没有预算上限就是永动机）。挂在桶上按会话计 ——
+ * 每会话的子代理 spawn 预算**缺省值**（task 工具防失控循环：子代理输出回灌主
+ * 代理后，主代理可能据此再委派，没有预算上限就是永动机）。挂在桶上按会话计 ——
  * 开新桶（新建任务 / 恢复历史）即新预算；saveToWorkspace 原地换 cwd
  * 不换桶，预算不复位（同一场对话）。
+ * 可配置：preferences.spawnBudget（spec: add-team-foundations 防线参数化），
+ * 调用方开桶时现读传入，这里只兜缺省。
  */
 export const SPAWN_BUDGET_PER_SESSION = 20;
 
@@ -90,6 +92,12 @@ export interface SessionBucket<THost> {
 	worktree: WorktreeInfo | undefined;
 	/** 是否有正在进行的 run（run_started / run_finished / 折叠后的 isStreaming 维护）。 */
 	running: boolean;
+	/**
+	 * 领导桶的团队存续标记（spec: add-team-foundations 批 6）。
+	 * true 时豁免 LRU 回收 —— 逐出领导宿主会解散团队（成员产出断了回投线），
+	 * 用户切走任务回来不能发现队伍被静默清除。team_delete / 删除会话时清位。
+	 */
+	hasTeam: boolean;
 	/** 该会话在途的权限审批/问卷等待数。>0 时豁免回收 —— 用户在答的框不能随宿主一起消失。 */
 	pendingApprovals: number;
 	/** 剩余的子代理 spawn 预算（task 工具逐次扣减，见 SPAWN_BUDGET_PER_SESSION）。 */
@@ -123,6 +131,11 @@ export interface SessionBucket<THost> {
 export interface CreateBucketOptions {
 	readonly cwd: string;
 	readonly conversation: ConversationView;
+	/**
+	 * 本桶的子代理 spawn 预算（spec: add-team-foundations 防线参数化）。
+	 * 缺省回 SPAWN_BUDGET_PER_SESSION；调用方从偏好现读传入（可配置）。
+	 */
+	readonly spawnBudget?: number;
 }
 
 /** 开一个新桶（ pristine：无宿主、sessionId 未定，首次 prompt 时才建宿主）。 */
@@ -136,8 +149,9 @@ export function createBucket<THost>(options: CreateBucketOptions): SessionBucket
 		pendingWorktreeBranch: undefined,
 		worktree: undefined,
 		running: false,
+		hasTeam: false,
 		pendingApprovals: 0,
-		spawnBudgetRemaining: SPAWN_BUDGET_PER_SESSION,
+		spawnBudgetRemaining: options.spawnBudget ?? SPAWN_BUDGET_PER_SESSION,
 		pendingOps: 0,
 		tail: Promise.resolve(),
 		lastUsedAt: Date.now(),
@@ -189,6 +203,9 @@ export function pickEvictions<THost>(
 	for (const bucket of buckets) {
 		if (bucket === current) continue;
 		if (bucket.hostPromise === undefined) continue;
+		// hasTeam：领导桶豁免（spec: add-team-foundations 批 6）——
+		// 逐出领导 = 解散团队，会静默杀掉正在跑/待唤醒的成员。
+		if (bucket.hasTeam) continue;
 		if (bucket.running || bucket.pendingApprovals > 0 || bucket.pendingOps > 0) continue;
 		idle.push(bucket);
 	}
