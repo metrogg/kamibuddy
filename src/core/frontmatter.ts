@@ -223,6 +223,16 @@ export function requireString(doc: ParsedDocument, key: string, label: string): 
 	return value;
 }
 
+/** 可选字符串字段：缺席返回 undefined，写了但类型不符/为空则报错（不静默吞）。 */
+export function optionalString(doc: ParsedDocument, key: string, label: string): string | undefined {
+	const value = doc.frontmatter[key];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || value === "") {
+		throw new Error(`${label}: frontmatter 字段「${key}」应为非空字符串`);
+	}
+	return value;
+}
+
 export function optionalBoolean(doc: ParsedDocument, key: string, fallback: boolean): boolean {
 	const value = doc.frontmatter[key];
 	return typeof value === "boolean" ? value : fallback;

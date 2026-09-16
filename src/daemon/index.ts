@@ -434,7 +434,9 @@ async function composeSystemPrompt(
 	sceneId: string,
 	interactionId: string,
 	expertId: string | undefined,
-	piContext: PromptContextOptions,
+	// prompt-switch 的每轮组装带真实 piContext；resume 的估算补算与 prompt:preview
+	// 一样拿不到（要等 before_agent_start），置空 —— 组装器对缺省的容忍见 composer。
+	piContext?: PromptContextOptions,
 ): Promise<{
 	prompt: string;
 	systemTokens: number;
@@ -1519,6 +1521,18 @@ async function createHost(
 			),
 		// request_snapshot 的 system 分段 provenance：prompt-switch 的 compose 现记现取。
 		getSystemPromptSegments: () => bucket.systemPromptSegments,
+		// hidden context（F5）expert 行的显示名：现载专家库查 displayName，
+		// 查不到回落 undefined（宿主侧再回落 expertId）。专家库本身可能因打包
+		// 问题抛错 —— 这里必须自吞（钉子拿不到名字不该炸 run）。
+		getExpertLabel: () => {
+			const expertId = bucket.conversation.state.expertId;
+			if (expertId === undefined) return undefined;
+			try {
+				return loadExpertsNow().find((e) => e.name === expertId)?.displayName;
+			} catch {
+				return undefined;
+			}
+		},
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -2034,6 +2048,31 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	// 下方补发的事件在顺序上后发覆盖它。
 	const rebuilt = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
 	const contextUsage = host.state.contextUsage;
+	/*
+	 * resume 桶的系统提示词估算必须在这里现算（2026-09-16 实证修的 bug）：
+	 * compose 只在 before_agent_start（下一次发消息）跑，而新桶的
+	 * systemPromptTokens 默认 0 —— 不补算，下方补发的 context_usage 会把
+	 * sys/skills 记成 0，并且 renderer 是「后到覆盖」，把运行期桶推的正确值
+	 * 盖成 ~0（面板分类里「系统提示词 ~0」就是它）。piContext 置空与
+	 * prompt:preview 同口径（缺 pi 上下文段，估算略低——比例尺可接受）；
+	 * 组装失败降级为 0（估算缺席好过炸 resume）。
+	 */
+	try {
+		const state = bucket.conversation.state;
+		const composed = await composeSystemPrompt(
+			bucket.cwd,
+			state.sceneId,
+			state.interactionId,
+			state.expertId,
+			undefined,
+		);
+		bucket.systemPromptTokens = composed.systemTokens;
+		bucket.skillsTokens = composed.skillsTokens;
+		bucket.systemPromptSegments = composed.segments;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		eventLog.append({ kind: "ipc_error", channel: "resume:compose-estimate", message });
+	}
 	const usageDetail = deriveContextUsageDetail({
 		entries: rebuilt,
 		contextUsage,
@@ -2567,6 +2606,15 @@ const handlers: Record<string, Handler> = {
 		const hostPromise = currentBucket.hostPromise;
 		if (hostPromise === undefined) return;
 		await (await hostPromise).abort();
+	},
+
+	// 最近一次注入的 hidden context 全文（任务诊断面板 ② 的「实际内容」块）。
+	// 宿主未建（还没发过消息）直接 undefined，不为此建宿主 —— 建宿主会产生
+	// 目录与模型校验副作用，展示口不该有这些代价。
+	[INVOKE.hiddenContext]: async () => {
+		const hostPromise = currentBucket.hostPromise;
+		if (hostPromise === undefined) return undefined;
+		return (await hostPromise).peekHiddenContext();
 	},
 
 	/**

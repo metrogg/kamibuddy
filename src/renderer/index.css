@@ -3095,6 +3095,22 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
+/* 模型徽标：agent 定义声明了专用 model 时挂在名字旁（subagent-runner 按
+   声明选型）。meta 小字 + 边框胶囊，只取 modelId 段、完整 key 在 title。 */
+.task-agent-model {
+	flex: 0 0 auto;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 0 var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-full);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+}
+
 /* 动作行：运行中是最新动作（扫光在 tsx 摘挂），失败时是诊断文本（可换行）。 */
 .task-agent-action {
 	color: var(--text-secondary);
@@ -3108,6 +3124,35 @@ textarea:focus-visible {
 	--shimmer-color: var(--text-secondary);
 }
 
+/* 展开盒（过程时间线 + 成功输出）的统一容器：缩进与主列对齐（glyph 16 + gap 8）。 */
+.task-agent-detail {
+	margin: 2px 0 var(--space-1) var(--space-6);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+/* 过程时间线：左轨 + 逐条动作行（与投影 timeline 同序，最新在末尾）。
+   长任务封顶仍有十几条，限高滚动 + contain 防滚动链（DESIGN §7.8）。 */
+.task-agent-timeline {
+	max-height: 160px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	padding: var(--space-1) 0 var(--space-1) var(--space-3);
+	border-left: 2px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.task-agent-timeline-item {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
 /* 成功勾绿（--ok）/ 失败叉红（--danger），与 tool-dot 终态同色系。 */
 .task-agent-check {
 	color: var(--ok);
@@ -3117,9 +3162,8 @@ textarea:focus-visible {
 	color: var(--danger);
 }
 
-/* done 组的可展开输出盒：等宽小字，缩进与主列对齐（glyph 16 + gap 8）。 */
+/* done 组的可展开输出盒：等宽小字；缩进由外层 .task-agent-detail 统一负责。 */
 .task-agent-output {
-	margin: 2px 0 var(--space-1) var(--space-6);
 	padding: var(--space-3) var(--space-4);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
@@ -3745,6 +3789,37 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-3);
+}
+
+/* ② 的成分折叠块：头行整行可点（同 ④ 步行的按钮化套路——重置 UA 默认视觉）；
+   chevron 复用 .seg-chevron 的朝向类。hint 标注的是口径（估算 / 真实计数），
+   是纪律不是装饰，不删。 */
+.task-diag-fold {
+	display: flex;
+	flex-direction: column;
+}
+
+.task-diag-fold + .task-diag-fold {
+	margin-top: var(--space-2);
+}
+
+.task-diag-fold-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	width: 100%;
+	padding: var(--space-1) 0;
+	background: none;
+	border: 0;
+	font-family: inherit;
+	font-size: var(--text-list);
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+
+.task-diag-fold-body {
+	padding: 0 0 var(--space-2) var(--space-4);
 }
 
 /* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。

@@ -85,6 +85,12 @@ export const INVOKE = {
 	/** 中断当前 run。 */
 	abort: "session:abort",
 	/**
+	 * 当前会话最近一次注入的 hidden context 全文（任务诊断面板的展示口）。
+	 * 还没跑过任何一轮为 undefined —— 注入块按 run 冻结，这里是展示语义
+	 * （agent_end 不清，run 结束后仍可看）。
+	 */
+	hiddenContext: "session:hidden-context",
+	/**
 	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
 	 * 传入的就是**重排后**的完整队列 —— daemon 清空后按序重入队。
 	 */
@@ -783,6 +789,7 @@ export interface InvokeMap {
 	[INVOKE.snapshot]: { args: [sessionId?: string]; result: SessionSnapshot };
 	[INVOKE.prompt]: { args: [PromptRequest]; result: void };
 	[INVOKE.abort]: { args: []; result: void };
+	[INVOKE.hiddenContext]: { args: []; result: string | undefined };
 	[INVOKE.queueRewrite]: { args: [QueuedMessages]; result: void };
 	/**
 	 * 新建任务。cwd 缺省 = 空串 = 未选工作空间（待分配，首次执行才分配自动目录）——

@@ -87,6 +87,14 @@ export function SnapshotBreakdown({
 					))}
 				</tbody>
 			</table>
+			{snapshot.hiddenContextChars !== undefined && (
+				// 单列一行而不是并进 user 计数：hidden context 注入在最后一条
+				// user 消息里（上面 user 的字符数已含它），不拆出来看不出来。
+				<p className="stat-hint">
+					其中 hidden context 注入 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
+					（已含在最后一条用户消息里）
+				</p>
+			)}
 		</div>
 	);
 }

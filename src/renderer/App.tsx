@@ -1402,6 +1402,11 @@ export function App(): React.JSX.Element {
 					sessionId={conversation.state.sessionId}
 					stats={conversation.sessionStats}
 					usageDetail={conversation.usageDetail}
+					axes={{
+						sceneId: conversation.state.sceneId,
+						interactionId: conversation.state.interactionId,
+						expertId: conversation.state.expertId,
+					}}
 					width={panelWidth}
 					onClose={() => setTaskDiagOpen(false)}
 				/>

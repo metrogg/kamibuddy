@@ -20,6 +20,11 @@
  * 桥接成 subagent_progress 事件。并行多代理各自推进，文本 delta 会让进度行
  * 交错混在一行 detail 里，投影替换则幂等且天然分组；模型看到的回传
  * （content 文本）不受影响，只改 UI 进度通道。
+ *
+ * 投影里的 timeline（过程时间线）与 model（生效模型徽标）是 2026-09-16 的
+ * 表现形式升级：Trae 把子代理事件以 fromSubagent 标记实时回流主消息流，
+ * 我们保持隔离设计不转发事件，折中是在投影里带上按序动作行——用户展开
+ * 分组就能看到子代理做过什么，缓解「回传只有最后一条文本」的纠错盲区。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -69,6 +74,31 @@ interface TaskToolDetails {
 	 * 终态两者皆全，subagents 与 results 一一对应（同下标）。
 	 */
 	readonly subagents: readonly SubagentStatus[];
+}
+
+/**
+ * 时间线封顶：只保留最后 12 条**真实动作行**，溢出在最前面补「前 N 条已省略」
+ * 标记——标记不占槽位，N 按累计丢弃数算（若标记也计入，下一轮追加会把
+ * 标记当动作行再挤掉一条，计数永远差一）。
+ * 封顶的理由：长任务的工具动作行可以几十上百条，投影每变一次都全量
+ * 拷贝一遍，无封顶会让进度通道体积随任务时长线性膨胀。
+ */
+const TIMELINE_MAX = 12;
+
+const OMITTED_MARKER = /^（前 (\d+) 条已省略）$/;
+
+/** 追加一条动作行：同步更新 timeline（capped）与 activity（恒为末元素）。 */
+function appendTimeline(entry: SubagentStatus, text: string): SubagentStatus {
+	const previous = entry.timeline ?? [];
+	const omittedBefore = OMITTED_MARKER.exec(previous[0] ?? "")?.[1];
+	const real = omittedBefore === undefined ? previous : previous.slice(1);
+	const total = Number(omittedBefore ?? 0) + real.length + 1;
+	if (total <= TIMELINE_MAX) {
+		return { ...entry, timeline: [...real, text], activity: text };
+	}
+	const dropped = total - TIMELINE_MAX;
+	const keep = [...real, text].slice(-TIMELINE_MAX);
+	return { ...entry, timeline: [`（前 ${dropped} 条已省略）`, ...keep], activity: text };
 }
 
 const TaskItem = Type.Object({
@@ -191,13 +221,19 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					(singleAgent !== undefined && singleTask !== undefined
 						? [{ agent: singleAgent, task: singleTask }]
 						: []);
-				const projection: SubagentStatus[] = plan.map((p) => ({
-					agent: p.agent,
-					task: p.task,
-					status: "queued",
-					activity: "",
-					turns: 0,
-				}));
+				const projection: SubagentStatus[] = plan.map((p) => {
+					// model 徽标数据在初始化时定格（agent 定义在会话内不变）；
+					// 未声明则缺席，卡片不渲染徽标。
+					const model = agents.find((a) => a.name === p.agent)?.model;
+					return {
+						agent: p.agent,
+						task: p.task,
+						status: "queued" as const,
+						activity: "",
+						turns: 0,
+						...(model === undefined ? {} : { model }),
+					};
+				});
 				const emitProjection = (): void => {
 					// content 文本恒空：进度全走 details.subagents，文本 delta 通道
 					// 对多代理分组进度是负资产（交错混杂），details 形状与终态一致。
@@ -210,6 +246,14 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 					const current = projection[index];
 					if (current === undefined) return;
 					projection[index] = { ...current, ...patch };
+					emitProjection();
+				};
+				// 动作行更新走 appendTimeline：activity 与 timeline 同步推进，
+				// 卡片的「最新动作」与可展开过程永远一致。
+				const pushActivity = (index: number, text: string): void => {
+					const current = projection[index];
+					if (current === undefined || text === "") return;
+					projection[index] = appendTimeline(current, text);
 					emitProjection();
 				};
 				emitProjection();
@@ -246,7 +290,7 @@ export function taskExtensionFactory(options: TaskToolOptions): ExtensionFactory
 							// 排队消息（并发上限超出的「排队等待空位」）也经此落到
 							// activity：状态保持 running，等待原因对用户可见。
 							onProgress: (text) =>
-								patchEntry(index, { activity: stripPrefix(agent.name, text) }),
+								pushActivity(index, stripPrefix(agent.name, text)),
 						});
 						patchEntry(index, { status: "done", turns, output });
 						return { agent: agentName, ok: true, text: output, turns };

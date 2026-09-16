@@ -80,6 +80,32 @@ describe("正常加载", () => {
 	});
 });
 
+describe("model 字段（spec 预留，2026-09-16 落地）", () => {
+	it("声明 model → 解析为字符串", () => {
+		writeBuiltin("scout", `name: scout\ndescription: D\ntools: [read]\nmodel: deepseek/deepseek-chat`);
+		const agents = loadAgents(builtinDir, userDir);
+		expect(agents[0]?.model).toBe("deepseek/deepseek-chat");
+	});
+
+	it("缺省 model → undefined（继承主会话模型）", () => {
+		writeBuiltin("scout");
+		const agents = loadAgents(builtinDir, userDir);
+		expect(agents[0]?.model).toBeUndefined();
+	});
+
+	it("model 写成空值 → 报错（静默变 undefined 会掩盖笔误）", () => {
+		writeBuiltin("scout", "name: scout\ndescription: D\ntools: [read]\nmodel:");
+		expect(() => loadAgents(builtinDir, userDir)).toThrow(/model/);
+	});
+
+	it("同名用户覆盖时 model 以用户文件为准（整条定义替换，不逐字段合并）", () => {
+		writeBuiltin("scout", `name: scout\ndescription: D\ntools: [read]\nmodel: built-in/model`);
+		writeUser("scout", `name: scout\ndescription: 我的\ntools: [read]`);
+		const agents = loadAgents(builtinDir, userDir);
+		expect(agents[0]?.model).toBeUndefined();
+	});
+});
+
 describe("报错路径", () => {
 	it("内置目录缺失 → 抛错（打包错误）", () => {
 		expect(() => loadAgents(join(root, "没有"), userDir)).toThrow(/内置子代理目录缺失/);

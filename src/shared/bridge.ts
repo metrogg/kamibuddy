@@ -66,6 +66,8 @@ export interface KamiBridge {
 	readonly snapshot: (sessionId?: string) => Promise<SessionSnapshot>;
 	readonly prompt: (request: PromptRequest) => Promise<void>;
 	readonly abort: () => Promise<void>;
+	/** 最近一次注入的 hidden context 全文（任务诊断面板用）；还没跑过一轮为 undefined。 */
+	readonly hiddenContext: () => Promise<string | undefined>;
 	/**
 	 * 重排 steer / followUp 等待队列（排队 chips 的删除/编辑底层动作）。
 	 * 传入的是**重排后**的完整队列：daemon 清空后按序重入队。

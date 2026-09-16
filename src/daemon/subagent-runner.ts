@@ -131,7 +131,22 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): SubagentRunner {
 	async function runOne(input: SubagentRunInput): Promise<SubagentRunResult> {
 		const { agent, task, cwd } = input;
 		const catalog = await deps.getCatalog();
-		const modelKey = deps.getModelKey();
+		// 模型解析：agent 定义声明了 model 就用它（pi/opencode/codex/dsh/Trae 五家
+		// 参照的共识能力），否则继承主会话当前模型。声明了但目录里不可用必须响亮
+		// 报错——静默回落主模型会把「调研用便宜模型」的意图悄悄变成主模型费率。
+		let modelKey: string | undefined;
+		if (agent.model !== undefined) {
+			if (!catalog.isUsable(agent.model)) {
+				throw new Error(
+					`子代理「${agent.name}」声明的模型 ${agent.model} 当前不可用` +
+						"（不存在或服务商未配置）。请检查该 agent 定义的 model 字段，" +
+						"或修正后重新委派。",
+				);
+			}
+			modelKey = agent.model;
+		} else {
+			modelKey = deps.getModelKey();
+		}
 		// 与用户会话同一套把关：不擅自挑模型 —— 费用与服务商都该是用户的显式选择。
 		if (modelKey === undefined) {
 			throw new Error("还没有选择模型，请先在设置里配置 API Key 并选择模型");
@@ -212,10 +227,10 @@ export function createSubagentRunner(deps: SubagentRunnerDeps): SubagentRunner {
 				input.signal?.removeEventListener("abort", onAbort);
 			}
 
-			if (timedOut) throw new Error("timeout");
-			if (runError !== undefined) throw new Error(runError);
+			if (timedOut) throw new Error(partialDiagnosis("运行超时（10 分钟上限）", lastText, turns));
+			if (runError !== undefined) throw new Error(partialDiagnosis(runError, lastText, turns));
 			// 中断（主会话 abort / abortAll）：没跑完就是没跑完，诊断回给主代理。
-			if (cancelled) throw new Error("运行被中断");
+			if (cancelled) throw new Error(partialDiagnosis("运行被中断", lastText, turns));
 			return { output: finalizeOutput(lastText), turns };
 		} finally {
 			if (host !== undefined) activeHosts.delete(host);
@@ -248,6 +263,23 @@ function finalizeOutput(text: string): string {
 			? `${text.slice(0, OUTPUT_MAX_CHARS)}\n\n（内容过长，已截断）`
 			: text;
 	return sanitizeSubagentOutput(truncated);
+}
+
+/**
+ * 失败诊断折入部分输出（dsh 的启发：异常终止不丢 output）。
+ *
+ * 主代理收到的失败诊断若只有一句 reason，它对「子代理死前查到哪了」一无所知，
+ * 只能整单重委派（烧预算）。lastText 是已收集的最后一条 assistant 文本——
+ * 折进诊断让主代理能判断进度：是换路重试还是按已有信息继续。
+ * 诊断与成功回传同走 24k 截断 + 去毒（它是要回灌主对话的文本，口径不能放宽）。
+ */
+function partialDiagnosis(reason: string, lastText: string, turns: number): string {
+	const partial = finalizeOutput(lastText);
+	if (partial === "") return reason;
+	return (
+		`${reason}（已完成 ${turns} 轮）\n\n` +
+		`子代理中断前已有输出如下，供判断进度：\n${partial}`
+	);
 }
 
 /**

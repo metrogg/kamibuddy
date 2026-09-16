@@ -1024,6 +1024,7 @@ function createLedgerHost(
 	emit: (event: SessionEvent) => void,
 	ledger: RunLedger,
 	segments?: readonly { source: string; chars: number }[],
+	expertLabel?: string,
 ): SessionHost {
 	const options: SessionHostOptions = {
 		catalog: {} as unknown as ModelCatalog,
@@ -1036,6 +1037,7 @@ function createLedgerHost(
 		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
 		createLedger: () => ledger,
 		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
+		...(expertLabel === undefined ? {} : { getExpertLabel: () => expertLabel }),
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -1631,5 +1633,92 @@ describe("流式 delta 合批（16ms 窗口）", () => {
 			expect(deltaTrace(events)).toHaveLength(4);
 			expect(deltaTrace(events).length).toBeLessThan(script.length);
 		});
+	});
+});
+
+describe("hidden context（transformContext 注入，F5）", () => {
+	it("prompt 冻结注入块：workspace_context + 专家 + current_time 前置在最后一条 user 消息之前", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger, undefined, "前端开发");
+		await host.prompt("你好");
+
+		const hooked = agent.transformContext;
+		expect(hooked).toBeDefined();
+		const out = (await hooked?.([
+			{ role: "user", content: "早前的对话", timestamp: 1 },
+			{ role: "assistant", content: "回复", timestamp: 2 },
+			{ role: "user", content: "你好", timestamp: 3 },
+		])) as { role: string; content: string }[];
+
+		const last = out[out.length - 1];
+		expect(last?.role).toBe("user");
+		const content = String(last?.content);
+		// 隐藏块前置在用户正文之前；三类段齐全
+		expect(content.indexOf('data-role="user-context"')).toBeLessThan(content.indexOf("你好"));
+		expect(content).toContain("工作目录：C:\\test");
+		expect(content).toContain("专家：前端开发");
+		expect(content).toContain("<current_time>");
+		// 前面的消息不动（注入只落在最后一条 user 上）
+		expect(out[0]?.content).toBe("早前的对话");
+	});
+
+	it("agent_end 清账：run 结束后同一钩子不再注入", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+		await host.prompt("你好");
+		runStarted(host);
+		agentEnd(host, false);
+
+		const out = (await agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as { role: string; content: string }[];
+		expect(out[0]?.content).toBe("你好");
+	});
+
+	it("peekHiddenContext：run 结束后仍可读最近一次注入全文（展示语义，不随 pendingHidden 清账）", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+		// 还没跑过任何一轮：undefined
+		expect(host.peekHiddenContext()).toBeUndefined();
+
+		await host.prompt("你好");
+		const frozen = host.peekHiddenContext();
+		expect(frozen).toBeDefined();
+		expect(frozen).toContain("workspace_context");
+
+		runStarted(host);
+		agentEnd(host, false);
+		// pendingHidden 已清（transformContext 不再注入），但展示口仍在
+		expect(host.peekHiddenContext()).toBe(frozen);
+	});
+
+	it("request_snapshot 带上 hiddenContextChars（注入后记快照，拆出来亮明）", async () => {
+		const events: SessionEvent[] = [];
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, (e) => events.push(e), ledger, [
+			{ source: "skeleton", chars: 10 },
+		]);
+		await host.prompt("你好");
+		// run 进行中记快照（真实时序：transformContext 发生在 agent_start 之后）
+		runStarted(host);
+		await agent.transformContext?.([{ role: "user", content: "你好", timestamp: 1 }]);
+
+		const snapshot = calls.find((c) => c.kind === "request_snapshot")?.data as
+			| { hiddenContextChars?: number; messages?: unknown }
+			| undefined;
+		expect(snapshot).toBeDefined();
+		// 注入块字符数 = 注入后 user 消息里多出来的那部分，面板成分视图靠它单列一行
+		expect(snapshot?.hiddenContextChars).toBeGreaterThan(0);
 	});
 });

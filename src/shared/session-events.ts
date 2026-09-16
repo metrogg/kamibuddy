@@ -158,6 +158,18 @@ export interface SubagentStatus {
 	readonly turns: number;
 	/** 终态：成功输出或失败诊断；运行中缺省。 */
 	readonly output?: string;
+	/**
+	 * 子代理生效的模型标识（agent 定义声明了 model 才有）。
+	 * 卡片据此显示模型徽标——「调研用便宜模型」是否真的生效，用户要看得见。
+	 */
+	readonly model?: string;
+	/**
+	 * 过程动作行时间线（Trae fromSubagent 透明性的折中实现）：按发生序追加、
+	 * 最新在末尾，与 activity 内容同源（activity 恒等于末元素或空串）。
+	 * 生产方封顶保留最后 12 条，溢出在最前面补「前 N 条已省略」标记；
+	 * 消费端不假设长度、不自行裁剪。旧格式会话缺席——卡片不渲染时间线入口。
+	 */
+	readonly timeline?: readonly string[];
 }
 
 export interface ToolCard {

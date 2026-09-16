@@ -425,6 +425,13 @@ export interface RequestSnapshotData {
 		readonly toolResult: MessageClassStat;
 		readonly other: MessageClassStat;
 	};
+	/**
+	 * hidden context（F5）注入块的字符数。快照在**注入之后**记录（钩子包装
+	 * 顺序见 session-host），所以这部分字符已含在最后一条 user 消息的计数里
+	 * —— 这个字段把它拆出来亮明，面板的成分视图据此单列一行。
+	 * 缺席 = 该次调用没有注入（run 已清账后的压缩调用等）。
+	 */
+	readonly hiddenContextChars?: number;
 }
 
 /** kind → data 的分派表（append 的写入点类型校验靠它）。 */

@@ -5,6 +5,13 @@
  * 零行代码改动。frontmatter 声明 name/description/tools 白名单，正文是提示片段，
  * 与 modes/ 同款「双面文件」机制。
  *
+ * `model` 是可选字段（spec: add-subagent-task-tool 预留，2026-09-16 落地——
+ * pi/opencode/codex/dsh/Trae 五家参照全是逐 agent 独立模型，唯独我们缺）：
+ * 值为模型标识（`providerId/modelId`，与设置页同一格式），声明了就用它跑子代理，
+ * 目录里不可用则响亮报错而不是静默回落主会话模型（回落会让「调研用便宜模型」
+ * 的意图悄悄变成主模型费率）。内置四员不写 model——内置文件不知道用户的
+ * 模型目录里有什么，写了必然对大多数用户失效；这个字段是给用户级定义用的。
+ *
  * 合并语义：用户级与内置按 name 对齐，同名用户级覆盖内置（pi 的 project 覆盖
  * user 同款语义，spec: add-subagent-task-tool）。项目级 agents 明确不做——
  * repo 可控提示词是注入面。
@@ -19,12 +26,17 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
+import { optionalString, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
 export interface AgentDefinition {
 	readonly name: string;
 	readonly description: string;
 	readonly tools: readonly string[];
+	/**
+	 * 子代理专用模型标识（`providerId/modelId`）。缺省 = 继承主会话当前模型；
+	 * 声明了但目录不可用由执行器响亮报错（理由见文件头）。
+	 */
+	readonly model: string | undefined;
 	readonly body: string;
 }
 
@@ -42,6 +54,7 @@ function loadAgentFile(file: string, fileName: string): AgentDefinition {
 		name,
 		description: requireString(doc, "description", file),
 		tools,
+		model: optionalString(doc, "model", file),
 		body: doc.body,
 	};
 }
