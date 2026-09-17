@@ -1004,7 +1004,7 @@ describe("show_widget 流式通道", () => {
 		expect(finished?.type === "tool_finished" && finished.card.detail).toBe(resultJson);
 	});
 
-	it("read_me 是本地快操作：不在生成期上屏，但完成标签是「已读取」", () => {
+	it("read_me 是本地快操作：不在生成期上屏，完成标签用专属词「已读取可视化指南」", () => {
 		const events: SessionEvent[] = [];
 		const host = createHost(createFakeSession(), (e) => events.push(e));
 
@@ -1045,7 +1045,7 @@ describe("show_widget 流式通道", () => {
 		const labels = events
 			.filter((e) => e.type === "tool_started" || e.type === "tool_finished")
 			.map((e) => (e as { card: { label: string } }).card.label);
-		expect(labels).toEqual(["读取中", "已读取"]);
+		expect(labels).toEqual(["读取可视化指南中", "已读取可视化指南"]);
 	});
 });
 
@@ -1054,7 +1054,7 @@ describe("restoredToolLabel 的 show_widget 词汇", () => {
 		expect(restoredToolLabel("show_widget", "ok")).toBe("已生成");
 		expect(restoredToolLabel("show_widget", "aborted")).toBe("生成（未完成）");
 		expect(restoredToolLabel("show_widget", "error")).toBe("生成（未完成）");
-		expect(restoredToolLabel("read_me", "ok")).toBe("已读取");
+		expect(restoredToolLabel("read_me", "ok")).toBe("已读取可视化指南");
 	});
 });
 

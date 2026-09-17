@@ -237,7 +237,9 @@ export function visualizerExtensionFactory(): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "read_me",
-			label: "读取设计指南",
+			// 「可视化指南」而不是「设计指南」：与 WorkBuddy 同词（tool.visualizerReadMe），
+			// 也让界面上的这行（「读取可视化指南中 / 已读取可视化指南」）一看就知道读的不是用户文件。
+			label: "读取可视化指南",
 			description:
 				"返回 show_widget 的设计指南：CSS 变量、配色、排版、SVG 布局管线或 Chart.js 规则与示例。" +
 				"第一次调用 show_widget 之前必须先调用本工具加载对应模块；之后要换一种可视化类型时，按新模块再调一次。" +

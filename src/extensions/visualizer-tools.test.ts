@@ -110,7 +110,9 @@ function useTempResources(names: readonly string[] = Object.keys(GUIDE_MARKERS))
 describe("注册形态", () => {
 	it("注册 read_me 与 show_widget 两个工具，中文 label", () => {
 		const tools = mount();
-		expect(getTool(tools, "read_me").label).toBe("读取设计指南");
+		// 「可视化指南」是刻意选词（对齐 WorkBuddy tool.visualizerReadMe）：界面上这行要能
+		// 一眼看出读的不是用户的项目文件，而是内部准备步骤。
+		expect(getTool(tools, "read_me").label).toBe("读取可视化指南");
 		expect(getTool(tools, "show_widget").label).toBe("生成可视化");
 	});
 });

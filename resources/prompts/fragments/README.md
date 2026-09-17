@@ -18,6 +18,7 @@
 | --- | --- | --- |
 | delivery-rules.md | `<result_presentation>` / `<sharing_files>` / `<final_answer_instructions>` + 本仓库原「交付」段 | 保留本仓库自写的交付段原文（2026-09-09 present_files 漏挂事故后的护栏），合入 WorkBuddy 最终回复纪律；删 Bash 起服务、腾讯文档链接格式；URL 交付口径按本仓库实现写实（URL 只进清单不自动打开） |
 | tool-discipline.md | `<tool_use>` / `<tool_usage_policy>` / `<asking_questions>` / `<personal_files_safety>` | 工具名映射到本仓库白名单（read / write / edit / find / grep / ls / web_search / web_fetch / powershell / questionnaire / present_files）；删 Bash、TodoWrite、Agent/Explore 子代理、MCP 连接器、hooks 等我们没有的能力引用；powershell 受控按本仓库危险命令检查器（command-guard）的五类拦截写实 |
+| narration.md | **本仓库自写**（机制依据见下） | 「一批工具前一句、做完后一句」的过程叙述条款 + 失败要说人话。依据是三处机制：① 界面把工具与思考折叠起来，用户能读到的过程只有正文（`src/renderer/fold-view.ts`，对标 WorkBuddy MetaFold）；② WorkBuddy 把「里程碑处写进展」写成正面条款（`cli/product.json` 的 `tool-todowrite-description`：Mid-Session Checkpoints「每 3-5 项小结一次 / 说明还剩几项」是 CRITICAL 级硬条款）；③ CLI `# Tone and style` 里明确承认「工具调用前那句话」的存在（"text like \"Let me read the file:\" followed by a read tool call"）。中文句式示例为本仓库自写 |
 | windows-notes.md | `<windows_command_safety>` + `<personal_files_safety>` 第 8 条 + `<tool_use>` 时间戳条 | 只留 Windows 差异：绝对路径、破坏性命令的目标校验与失败不重试、.ps1/.bat 非 ASCII 编码坑、时间戳用 PowerShell 现取；删 cmd /c 套壳条（我们没有第二种 shell） |
 | regional-conventions.md | `<regional_conventions>` | 近乎原样（中文化）：默认中国用户、A 股红涨绿跌、¥ 默认 |
 

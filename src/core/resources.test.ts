@@ -210,6 +210,33 @@ describe("片段加载（prompts/fragments）", () => {
 	});
 });
 
+/*
+ * 真实 resources 的组装校验（不是 fixture）：那条「过程叙述」是**数据**
+ * （prompts/fragments/narration.md），靠场景骨架的 `{{> narration}}` 引进来。
+ * 片段写好了但没人 include 就是静默失效 —— 组装不报错、提示词里却没有那句话。
+ * 这类「数据之间的引用断了」测单个文件都测不出，只有把真实 resources 组装一遍看句子在不在。
+ */
+describe("真实 resources：过程叙述条款两个场景都在", () => {
+	const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+
+	it("work 与 code 场景的组装结果都含 narration 片段的正文", () => {
+		const { scenes, modes, fragments } = loadResources(realDir);
+		expect(scenes.map((s) => s.id).sort()).toEqual(["code", "work"]);
+
+		const modeBody = modes.find((m) => m.id === "craft")?.body ?? "";
+		for (const scene of scenes) {
+			const { text } = composePromptWithMeta({
+				sceneBody: scene.body,
+				modeBody,
+				skillsSection: "",
+				resolveFragment: (name) => fragments.get(name),
+			});
+			// 片段的代表句（改 narration.md 的标题时这里要同步）
+			expect(text, `${scene.id} 场景没有引到过程叙述片段`).toContain("过程叙述：一批一句话");
+		}
+	});
+});
+
 describe("resolveStyle（styleId 三态）", () => {
 	const STYLES: readonly StyleResource[] = [
 		{ id: "professional", label: "专业严谨", body: "专业正文" },
