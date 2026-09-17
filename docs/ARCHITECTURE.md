@@ -227,6 +227,32 @@ dsh 那套**只复制调用方自己的令牌**，不建账号、不需 UAC —�
 6. **管理员用户基本不受约束** —— Windows 安全模型的边界，不是我们的 bug。
 7. **`read-only` 会把 PowerShell 降到 ConstrainedLanguage**（该档不进沙箱，暂无影响，
    但将来改档位映射时要记着）。
+8. **程序自建的「受保护 DACL」目录在沙箱内不可写**（2026-09-17 实测）。
+   Python 3.13+ 的 `os.mkdir(path, 0o700)`（`tempfile.mkdtemp` 用的就是它）建出的
+   目录带 `D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` —— 显式的 `D:P`
+   意味着**切断继承**，我们的 capability SID 不在那份 DACL 里，
+   `WRITE_RESTRICTED` 的第二次检查就必然不过。同一个私有 temp 下的三组对照：
+   PowerShell 建的子目录可写、Python `os.mkdir` 默认 mode 建的可写、
+   **只有 `mode=0o700` 建的写不进**（`Errno 13: Permission denied`）。
+   后果：**沙箱内 `pip` 必失败**（pip 的 `TempDirectory` 恒用 `mkdtemp`，
+   与落点无关，所以「把 temp 换到哪」都救不了），`uv` / node 不受影响
+   （它们建目录时不设 DACL）。
+   试过把 `S-1-3-4`（OWNER RIGHTS）加进受限 SID 列表 —— **无效**：
+   `OW` 是拿**对象所有者**解析的，不做字面 SID 比对；这一步也反证了
+   失败发生在第二次（写）检查，不是第一次。
+
+   **三家同题的答案**（2026-09-17 查源码，结论按「能不能照抄」排序）：
+
+   | 实现 | 做法 | 对我们是 |
+   | --- | --- | --- |
+   | codex | **同一个坑，但它有解**：`elevated` 后端建专用账号 `CodexSandboxOffline/Online`（属 `CodexSandboxUsers` 组），用 `CreateProcessWithLogonW` 以该账号跑 runner，派生受限令牌时**把 token user SID 也放进受限列表**（`windows-sandbox-rs/src/token.rs:450-461`）。受限身份即对象所有者 → `OW` 在第二次检查里命中。代价：一次性管理员建号（`setup.rs:1019-1045` 走 `runas` 提权）。它的 `legacy` 后端（= 我们这条路）**同样失败**，且它主动拒绝需要更强保证的配置（`unified_exec/backends/legacy.rs:346-353`） | 机制唯一正解，但要放弃「零安装、不需要 UAC」 |
+   | dsh | **同源同模型（我们的移植源），同坑，且零记录**：`OWNER RIGHTS`/`D:P`/`pip`/`mkdtemp` 权限在全仓库 grep 零命中，已知限制清单（`sandbox-windows-acl/README.md` Known Limitations）里也没有这条。它的 denial 签名会把 pip 的 `Permission denied` 误判成「正常的策略拒绝」，然后推模型去 `danger-full-access` | 不是解，是**盲区**；但它那套「误判成拒绝 + 给出路」恰好是有用的兜底行为 |
+   | WorkBuddy | **不撞**：它的写限制是用户态规则栈（`tsbx_rules.json`，非内核驱动、非受限令牌），**根本不覆盖 TEMP/TMP**，而是把 `%LOCALAPPDATA%\Temp\**` 与各语言包管理器缓存（pip/uv/conda/npm…）列成 `inherit_user` 放行；Python 走**托管 venv**（`~/.workbuddy/binaries/python/envs/default`），提示词明禁全局 pip；越界时走「越权确认 → 该命令**单独在沙盒外执行**」（`sandbox.interceptTitle` / `interceptDesc` 文案） | 它的 temp 白名单**照抄不过来**（我们的继承洞在程序自建目录里，换 temp 落点无效）；**能抄的是后两条**：托管 venv 兜住 Python 依赖、越界走批准后单次放行 |
+
+   结论：我们这套「零安装 capability SID」模型对这个洞是**结构性**的 ——
+   要么接受并用「托管 venv + 批准后单次提权」把它绕开，
+   要么付 codex 那份管理员建号的代价。
+
 
 性能事实（实测，决定了授权时机）：首次 ACL 授权随文件数**略超线性**增长 ——
 100 文件 40ms、1000 文件 477ms、5000 文件 3134ms（约 0.6ms/文件），外推几万文件

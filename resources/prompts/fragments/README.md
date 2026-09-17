@@ -21,6 +21,7 @@
 | narration.md | **本仓库自写**（机制依据见下） | 「一批工具前一句、做完后一句」的过程叙述条款 + 失败要说人话。依据是三处机制：① 界面把工具与思考折叠起来，用户能读到的过程只有正文（`src/renderer/fold-view.ts`，对标 WorkBuddy MetaFold）；② WorkBuddy 把「里程碑处写进展」写成正面条款（`cli/product.json` 的 `tool-todowrite-description`：Mid-Session Checkpoints「每 3-5 项小结一次 / 说明还剩几项」是 CRITICAL 级硬条款）；③ CLI `# Tone and style` 里明确承认「工具调用前那句话」的存在（"text like \"Let me read the file:\" followed by a read tool call"）。中文句式示例为本仓库自写 |
 | windows-notes.md | `<windows_command_safety>` + `<personal_files_safety>` 第 8 条 + `<tool_use>` 时间戳条 | 只留 Windows 差异：绝对路径、破坏性命令的目标校验与失败不重试、.ps1/.bat 非 ASCII 编码坑、时间戳用 PowerShell 现取；删 cmd /c 套壳条（我们没有第二种 shell） |
 | regional-conventions.md | `<regional_conventions>` | 近乎原样（中文化）：默认中国用户、A 股红涨绿跌、¥ 默认 |
+| python-env.md | **本仓库自写**（机制照 WorkBuddy 的 `client-info-env.js`：把托管运行时路径随提示词注入） | 只有一个槽位 `{{pythonPath}}`，真实路径由 daemon 现取（`docx-env.ts` 的 `venvPython`）。**为什么必须写**：模型缺库的第一反应是 `pip install`，而它在沙箱里必失败（`docs/ARCHITECTURE.md` 已知边界第 8 条），所以要把 Python 的落点引导到托管 venv。两条不许改：① 不得写成「去跑 pip」（那里只有解释器可用）；② 必须留着「不要用 tempfile」那条 |
 
 身份与边界**不单独成片段**：`resources/scenes/work/prompt.md` 的
 「你是嘉立创Work…」与「能力与边界」段是本仓库自写版，比 WorkBuddy 对应段

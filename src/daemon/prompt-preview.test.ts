@@ -57,6 +57,12 @@ const SKILLS: readonly SkillDescriptor[] = [
 	{ name: "meeting-notes", description: "会议纪要", filePath: "/skills/meeting-notes/SKILL.md" },
 ];
 
+/**
+ * 托管解释器路径的固定桩。真实值由 homedir 推出来（见 docx-env.ts 的 venvPython），
+ * 测试里钉死才有可断言的字节。
+ */
+const VENV_PY = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
+
 /** 专家库 fixture：预览按 expertId 从它解析人格（与 daemon loadExpertsNow 同结构）。 */
 const EXPERTS: readonly ExpertDefinition[] = [
 	{
@@ -73,7 +79,14 @@ const EXPERTS: readonly ExpertDefinition[] = [
 ];
 
 function makeEnv(overrides: Partial<PromptPreviewEnvironment> = {}): PromptPreviewEnvironment {
-	return { skills: SKILLS, experts: EXPERTS, preferredStyleId: undefined, ...overrides };
+	return {
+		skills: SKILLS,
+		experts: EXPERTS,
+		preferredStyleId: undefined,
+		// 固定桩：真实值随机器变（homedir），钉死才能断言预览的字节。
+		pythonPath: VENV_PY,
+		...overrides,
+	};
 }
 
 describe("分段映射", () => {

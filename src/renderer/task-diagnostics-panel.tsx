@@ -328,7 +328,7 @@ function ContextSection({
 			/>
 			<Fold
 				label="hidden context 注入块"
-				hint="最近一次 · 注入到最后一条用户消息之前"
+				hint="最近一次 · 作为尾部独立消息注入（在最后一条用户消息之后）"
 				emptyText="还没有跑过任何一轮 —— 注入块随第一次发送出现。"
 				resetKey={sessionId}
 				onLoad={() => window.kami.hiddenContext()}

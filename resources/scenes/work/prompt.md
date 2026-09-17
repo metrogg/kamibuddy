@@ -24,6 +24,8 @@ ready: true
 
 {{> windows-notes}}
 
+{{> python-env}}
+
 {{> regional-conventions}}
 
 # 当前模式

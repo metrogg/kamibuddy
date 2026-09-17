@@ -21,6 +21,7 @@
  */
 
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ESCALATION_TARGETS, validateEscalationArgs } from "../shared/permissions.ts";
@@ -66,6 +67,12 @@ export type CommandRunner = (
 	 * 「能不能提、要不要问人」是策略，住 daemon/sandbox-runner.ts。
 	 */
 	escalation?: CommandEscalationRequest,
+	/**
+	 * 中断信号（可选）。pi 在用户按「停止」时 abort 它 —— 执行器**必须**据此
+	 * 把进程树收掉，不能只是放弃等待：放弃等待 = 卡片永远停在「执行中」、
+	 * 进程在后台继续跑（2026-09-17 的 pip 现场，详见 sandbox/spawn.ts 的 waitForChild）。
+	 */
+	signal?: AbortSignal,
 ) => Promise<CommandRunResult>;
 
 /** 一次提权申请。两个字段成对出现（校验在 shared/permissions.ts）。 */
@@ -136,9 +143,36 @@ interface PowershellToolDetails {
 export interface CommandOutcome {
 	readonly stdout: string;
 	readonly stderr: string;
-	/** null 表示被信号杀掉（超时路径）。 */
+	/** null 表示被信号杀掉（超时或中断路径）。 */
 	readonly exitCode: number | null;
 	readonly timedOut: boolean;
+	/** 被中断（用户按「停止」）而杀树；与超时分开是因为给模型的解释不同。 */
+	readonly aborted: boolean;
+}
+
+/**
+ * 杀掉整棵进程树（降级路径专用）。
+ *
+ * `child.kill()` 只杀直接子进程：`pip install` 拉起的 python 会变孤儿继续跑。
+ * 沙箱路径靠 Job 句柄（kill-on-close，见 sandbox/spawn.ts），降级路径没有 Job，
+ * 只能用 taskkill /T 按 PID 收整棵树 —— 所以**先 taskkill、失败再 kill**：
+ * 反过来先杀掉父进程，taskkill 就找不到它的子孙了。
+ */
+function killTree(child: ChildProcess): void {
+	const pid = child.pid;
+	if (pid === undefined) {
+		child.kill();
+		return;
+	}
+	try {
+		const killer = spawn("taskkill.exe", ["/pid", String(pid), "/T", "/F"], {
+			stdio: "ignore",
+			windowsHide: true,
+		});
+		killer.on("error", () => child.kill());
+	} catch {
+		child.kill();
+	}
 }
 
 /**
@@ -148,7 +182,15 @@ export interface CommandOutcome {
  * 导出是给 daemon 的沙箱执行器当**降级路径**用（daemon/sandbox-runner.ts）：
  * 沙箱不可用时退回这条今天就在跑的路径，而不是自己再写一遍 spawn。
  */
-export function runCommand(command: string, timeoutSeconds: number): Promise<CommandOutcome> {
+export function runCommand(
+	command: string,
+	timeoutSeconds: number,
+	// 这条路径没有沙箱可提权，也没有授权预热等待，所以前两个可选参数接了就丢
+	//（调用点的注释说明了这一点，见 execute 里的 CommandRunner 装配）。
+	_onProgress?: (text: string) => void,
+	_escalation?: CommandEscalationRequest,
+	signal?: AbortSignal,
+): Promise<CommandOutcome> {
 	return new Promise((resolve, reject) => {
 		let child;
 		try {
@@ -176,12 +218,21 @@ export function runCommand(command: string, timeoutSeconds: number): Promise<Com
 			stderr += chunk;
 		});
 		let timedOut = false;
+		let aborted = false;
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill();
+			killTree(child);
 		}, timeoutSeconds * 1000);
+		// 中断与超时同样要收掉整棵树：只是放弃等待的话，进程会在后台继续跑。
+		const onAbort = (): void => {
+			aborted = true;
+			killTree(child);
+		};
+		if (signal?.aborted === true) onAbort();
+		else signal?.addEventListener("abort", onAbort, { once: true });
 		child.on("error", (error) => {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(
 				new Error(
 					`无法启动 powershell.exe：${error.message}。` +
@@ -191,7 +242,8 @@ export function runCommand(command: string, timeoutSeconds: number): Promise<Com
 		});
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			resolve({ stdout, stderr, exitCode: code, timedOut });
+			signal?.removeEventListener("abort", onAbort);
+			resolve({ stdout, stderr, exitCode: code, timedOut, aborted });
 		});
 	});
 }
@@ -207,7 +259,10 @@ function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number, note?: s
 	readonly truncated: boolean;
 } {
 	const sections: string[] = [];
-	if (outcome.timedOut) {
+	if (outcome.aborted) {
+		// 与超时分开说：中断是「你点了停止」，不是命令有问题 —— 模型据此决定要不要换个做法重试。
+		sections.push("命令已被中断（用户停止），进程树已收掉。");
+	} else if (outcome.timedOut) {
 		sections.push(`命令超过 ${timeoutSeconds} 秒未结束，已强制终止。`);
 	} else if (outcome.exitCode !== 0) {
 		// 非零退出码必须点名：命令失败是结果的一部分，不许静默成「执行完成」。
@@ -239,15 +294,29 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 				"适合环境检查（看版本、列目录、查进程）、构建与测试（npm run build/test）、文档格式转换等本地操作。" +
 				"安全约束：命令先过危险命令检查器——动态执行、下载执行、递归强制删除、读取凭据目录、破坏系统这五类会被直接拒绝；" +
 				"权限预设可能要求每次执行都经用户批准。" +
+				"默认档位下命令在**写入沙箱**内执行：只能写当前工作目录，写别处会被操作系统直接拒绝（这类失败重试无用）。" +
 				"使用建议：一次只执行一条命令；不要用交互式命令（会话没有 stdin，会挂到超时被终止）；默认 120 秒超时；" +
 				"每次调用都填 description 写清这条命令要做什么。",
 			promptSnippet:
-				"powershell: 执行单条 PowerShell 命令（环境检查、构建、格式转换等）；危险命令会被检查器拦截，交互式命令不要用",
+				"powershell: 执行单条 PowerShell 命令（环境检查、构建、格式转换等）；危险命令会被检查器拦截，交互式命令不要用；默认只能写工作目录，pip install 在这类沙箱里装不进去",
 			promptGuidelines: [
 				"一次一条命令；多步操作分多次调用，不要拿 ; 或 && 串成一长串。",
 				"不要用交互式命令（等待输入、打开窗口的）——会话没有 stdin，进程会挂起到超时被杀。",
 				"输出超过 24k 字符会被截断；预期大输出时重定向到文件，再用 read 工具分段读取。",
 				"被检查器拦截时按返回的改法重写命令；编码、拆字符串、起别名都绕不过检查器，反而浪费轮次。",
+				/*
+				 * 下面两条讲**写入沙箱**，是 2026-09-17 那次 3 连试的教训：模型把 pip 的输出
+				 * 重定向进日志文件，于是 stderr 为空、sandbox-runner 的 denial 提示没触发，
+				 * 它只看到「失败」就一路重试到用户手动停。
+				 * 写在这里而不是场景片段：这一处覆盖所有场景（片段是按场景 include 的），
+				 * 而且恰好落在模型组命令时的决策点上。
+				 */
+				"命令只能写当前工作目录（默认档位），写到别处会被操作系统拒绝。这类失败**重试无用**：" +
+					"换写法、换路径、加 -Force 都不会通过。确需写到区外时，带 sandbox_permissions + justification " +
+					"申请一次（没有审批通道时会被明确告知不可用）。",
+				"**不要用 pip install**：它在沙箱里必定失败——pip 会在临时目录里自建一个受保护权限的子目录，" +
+					"而沙箱写不进那类目录，换安装位置、重试多少次都一样（`Errno 13 Permission denied`）。" +
+					"需要第三方 Python 库时，按上一条申请一次提权，并说清要装什么、为什么。",
 				"每次都填 description：一句简短中文说清这条命令要做什么（面向用户，如「核对侧栏的内边距」）。" +
 					"界面卡头显示的是这句话，命令原文只在悬浮提示与展开区可见。",
 			],
@@ -313,7 +382,7 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 			 * 命令跑完即消失，不会污染最终结果。
 			 * 用它而不是新开 IPC 通道：提示本就该出现在用户正在等的那张卡上。
 			 */
-			async execute(_toolCallId, params, _signal, onUpdate): Promise<{
+			async execute(_toolCallId, params, signal, onUpdate): Promise<{
 				content: Array<{ type: "text"; text: string }>;
 				details: PowershellToolDetails;
 			}> {
@@ -399,6 +468,9 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 					params.sandbox_permissions === undefined || params.justification === undefined
 						? undefined
 						: { toMode: params.sandbox_permissions, justification: params.justification },
+					// 中断信号必须传到执行器：只有它握着进程（沙箱里是 Job 句柄），
+					// 放弃等待而不杀进程 = 卡片卡在「执行中」+ 后台残留进程。
+					signal,
 				);
 				/*
 				 * 被拦下（提权未获批准等）：命令**一行都没执行**，如实这么说。
@@ -423,7 +495,7 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 					details: {
 						blocked: false,
 						category: undefined,
-						exitCode: outcome.timedOut ? undefined : outcome.exitCode,
+						exitCode: outcome.timedOut || outcome.aborted ? undefined : outcome.exitCode,
 						truncated,
 					},
 				};

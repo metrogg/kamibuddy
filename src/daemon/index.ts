@@ -197,6 +197,7 @@ import {
 	defaultSpawn,
 	ensureDocxEnv,
 	inspectVenv,
+	venvPython,
 	type EnvContext,
 } from "../documents/docx-env.ts";
 import {
@@ -696,6 +697,20 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	loadExperts: loadExpertsNow,
 	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
 	enabledSkills: (expertId) => toSkillDescriptors(enabledSkills(expertId)),
+	/*
+	 * 托管 Python 解释器路径进提示词（resources/prompts/fragments/python-env.md
+	 * 的 {{pythonPath}}），照 WorkBuddy 的 client-info-env 做法。
+	 *
+	 * 为什么值得进提示词：模型拿系统 Python 写脚本时，缺库的第一反应就是
+	 * `pip install` —— 而那在沙箱里**必定失败**（2026-09-17 现场，见
+	 * docs/ARCHITECTURE.md 已知边界第 8 条）。给出真实路径，Python 任务才会
+	 * 落在我们受控且已备依赖的环境上。
+	 *
+	 * 取值在这里**算一次**（模块初始化期）：它只取决于 homedir / platform /
+	 * HTML_TO_DOCX_VENV，进程内恒定 —— 逐轮现算既无必要，也会让「系统提示词
+	 * 字节稳定」这条不变量多一个可以出错的入口。
+	 */
+	pythonPath: venvPython(docxEnvContext()),
 	// 风格配置漂移记进事件日志：降级可以是体验取舍，但不能无痕。
 	onStyleDrift: ({ requested, fallback }) => {
 		eventLog.append({ kind: "style_drift", requested, fallback });
@@ -4514,6 +4529,8 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
+			// 同一处取值（venvPython 是纯函数，两次算出的字节必然相同）。
+			pythonPath: venvPython(docxEnvContext()),
 		});
 	},
 

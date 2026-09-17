@@ -35,6 +35,9 @@ interface FakeToolResult {
 interface FakeToolDef {
 	readonly name: string;
 	readonly label: string;
+	readonly description: string;
+	readonly promptSnippet: string;
+	readonly promptGuidelines: readonly string[];
 	readonly parameters: unknown;
 	/**
 	 * 参数顺序照 pi 的真实签名：`(toolCallId, params, signal, onUpdate, ctx)`。
@@ -80,11 +83,38 @@ function fakeRunner(
 				stderr: "",
 				exitCode: 0,
 				timedOut: false,
+				aborted: false,
 				...outcome,
 			};
 		},
 	};
 }
+
+/*
+ * 沙箱约束的**模型可见契约**（2026-09-17 pip 现场）。
+ *
+ * 为什么要钉文案：那次模型把 pip 的输出重定向进日志文件，stderr 为空 ——
+ * sandbox-runner 的 denial 提示（只在 stderr 命中签名时追加）没触发，
+ * 它只看得到「失败」，于是换着法重试到用户手动停。工具描述是**唯一**能覆盖
+ * 所有场景（片段按场景 include，code 场景就不含 windows-notes）又落在决策点
+ * （组命令时）的位置，所以这条契约值得有测试盯着。
+ */
+describe("写入沙箱的模型可见约束", () => {
+	const tool = mount();
+	const modelFacingText = [tool.description, tool.promptSnippet, ...tool.promptGuidelines].join(
+		"\n",
+	);
+
+	it("说清「只能写工作目录、这类失败重试无用」", () => {
+		expect(modelFacingText).toContain("只能写当前工作目录");
+		expect(modelFacingText).toContain("重试无用");
+	});
+
+	it("**明确劝退 pip install**（并给出提权这条路）", () => {
+		expect(modelFacingText).toContain("不要用 pip install");
+		expect(modelFacingText).toContain("sandbox_permissions");
+	});
+});
 
 describe("schema 边界（pi 执行前校验，工具不再重复校验）", () => {
 	const tool = mount();
@@ -211,6 +241,41 @@ describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", ()
 		expect(result.content[0]?.text).toContain("boom");
 	});
 
+	it("中断（用户停止）与超时说成两回事，且退出码不谎报", async () => {
+		/*
+		 * 两者给模型的下一步不同：中断是「你点了停止」→ 该考虑换个做法；
+		 * 超时是「命令太慢」→ 该考虑加 timeout 或拆小。混成一句会让它判错方向。
+		 */
+		const { runner } = fakeRunner({ exitCode: null, aborted: true });
+		const tool = mount({ runner });
+		const result = await tool.execute("t1", { command: "python -m pip install x" });
+
+		expect(result.content[0]?.text).toContain("已被中断（用户停止）");
+		expect(result.content[0]?.text).not.toContain("超过");
+		// 被杀的进程没有有意义的退出码：不许把 null 当成 0 或 1 报出去。
+		expect(result.details.exitCode).toBeUndefined();
+	});
+
+	it("**中断信号真的传到执行器**（不传 = 进程继续跑、卡片永远停在执行中）", async () => {
+		/*
+		 * 2026-09-17 pip 现场的回归闸门：工具收到 signal 却不往下传，执行器只能干等 ——
+		 * 用户按停止后 python 继续烧 CPU，而 execute 的 promise 永不 settle
+		 * （pi 的 agent loop 只 await 工具 promise，不与 signal race），
+		 * 于是卡片永远停在「执行中」，用户点三次停止也停不下来。
+		 * 这里断言的是「同一个 signal 对象到了执行器手里」，不是它的内容。
+		 */
+		const controller = new AbortController();
+		let received: AbortSignal | undefined;
+		const runner: CommandRunner = async (_command, _timeout, _onProgress, _escalation, signal) => {
+			received = signal;
+			return { stdout: "", stderr: "", exitCode: 0, timedOut: false, aborted: false };
+		};
+		const tool = mount({ runner });
+		await tool.execute("t1", { command: "Get-Date" }, controller.signal);
+
+		expect(received).toBe(controller.signal);
+	});
+
 	/*
 	 * 下面两条钉的是**三道闸的顺序**（unattended → 检查器 → 执行器）。
 	 * 顺序本身就是安全语义：执行器在最后，所以前两道拦下的命令
@@ -244,7 +309,7 @@ describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", ()
 		const updates: Array<{ text: string; blocked: boolean }> = [];
 		const runner: CommandRunner = async (_command, _timeout, onProgress) => {
 			onProgress?.("正在配置写入约束……");
-			return { stdout: "done", stderr: "", exitCode: 0, timedOut: false };
+			return { stdout: "done", stderr: "", exitCode: 0, timedOut: false, aborted: false };
 		};
 		const tool = mount({ runner });
 		// signal 位（第 3 参）传 undefined：onUpdate 在第 4 位。

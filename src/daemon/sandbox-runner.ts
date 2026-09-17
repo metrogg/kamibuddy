@@ -275,8 +275,18 @@ export interface SandboxRunnerOptions {
 	 * 在这一层拒绝命令。让类型承载这个不变式，而不是靠注释约定：
 	 * 否则 degrade 里 spread 它的返回值就可能悄悄合成出一个既 blocked
 	 * 又带 stdout 的畸形结果。
+	 *
+	 * 位置参数**与 `CommandRunner` 逐一对齐**：这样 `runCommand` 能直接接上来
+	 * （它把前四个里用不上的接了就丢），本层也不必为「谁来接信号」写适配层。
+	 * 参数顺序一旦分叉，唯一的调用点就会静默传错位置。
 	 */
-	readonly fallback: (command: string, timeoutSeconds: number) => Promise<CommandOutcome>;
+	readonly fallback: (
+		command: string,
+		timeoutSeconds: number,
+		onProgress?: (text: string) => void,
+		escalation?: CommandEscalationRequest,
+		signal?: AbortSignal,
+	) => Promise<CommandOutcome>;
 	/** 诊断变化时回调（探测结论、降级原因）。同一结论只报一次。 */
 	readonly onDiagnostics?: (diagnostics: SandboxDiagnostics) => void;
 	/**
@@ -456,7 +466,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		};
 	}
 
-	return async (command, timeoutSeconds, onProgress, escalation) => {
+	return async (command, timeoutSeconds, onProgress, escalation, signal) => {
 		const settings = options.getSettings();
 
 		/*
@@ -484,7 +494,19 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 		 * （让模型知道放宽了、且只此一次）。
 		 */
 		if (mode === "danger-full-access") {
-			const outcome = await options.fallback(command, timeoutSeconds);
+			/*
+			 * 提权申请在这一支已经判定完了（要么是用户自己选的档，要么已获批），
+			 * 不再往下传：这条路没有策略层能消费它。
+			 * 信号仍然要传 —— 直连 spawn 的 powershell 同样得能被「停止」收掉
+			 * （否则它和沙箱里的进程一样会挂到用户以为已经停掉之后）。
+			 */
+			const outcome = await options.fallback(
+				command,
+				timeoutSeconds,
+				onProgress,
+				undefined,
+				signal,
+			);
 			return escalated ? { ...outcome, note: ESCALATED_NOTE } : outcome;
 		}
 
@@ -516,6 +538,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 					writableDirs: [],
 					timeoutMs: timeoutSeconds * 1000,
 					mode: "read-only",
+					signal,
 				});
 				report({ available: true });
 				if (looksDenied(outcome.stderr)) {
@@ -552,6 +575,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				writableDirs: [workspaceDir],
 				timeoutMs: timeoutSeconds * 1000,
 				mode: "workspace-write",
+				signal,
 			});
 			report({ available: true, prepare: prepareReportOf(prepared) });
 			/*

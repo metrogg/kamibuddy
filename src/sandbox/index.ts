@@ -66,6 +66,14 @@ export interface SandboxRunRequest {
 	readonly writableDirs: readonly string[];
 	readonly timeoutMs: number;
 	readonly mode: ConfinementMode;
+	/**
+	 * 调用方的中断信号（用户按「停止」时由 pi 触发）。
+	 *
+	 * 必须由本层处理而不是让上层放弃等待：进程在**沙箱里**，只有这里握着
+	 * Job 句柄，杀整棵树的唯一手段是关它（见 spawn.ts 的 waitForChild）。
+	 * 上层不传信号时行为与今天完全一致。
+	 */
+	readonly signal?: AbortSignal;
 }
 
 /**
@@ -76,9 +84,11 @@ export interface SandboxRunRequest {
 export interface SandboxRunOutcome {
 	readonly stdout: string;
 	readonly stderr: string;
-	/** null 表示进程被杀（超时路径）。 */
+	/** null 表示进程被杀（超时或中断路径）。 */
 	readonly exitCode: number | null;
 	readonly timedOut: boolean;
+	/** 被中断而杀树（与超时区分：文案与详情不同）。 */
+	readonly aborted: boolean;
 }
 
 /* ── 探测 ────────────────────────────────────────────────────────── */
@@ -501,7 +511,7 @@ export async function runSandboxed(request: SandboxRunRequest): Promise<SandboxR
 		const [stdoutBuffer, stderrBuffer, waited] = await Promise.all([
 			drainPipe(api, child.stdoutRead),
 			drainPipe(api, child.stderrRead),
-			waitForChild(api, child, request.timeoutMs),
+			waitForChild(api, child, request.timeoutMs, request.signal),
 		]);
 
 		return {
@@ -510,6 +520,7 @@ export async function runSandboxed(request: SandboxRunRequest): Promise<SandboxR
 			// undefined → null：对齐 powershell 工具的 CommandOutcome 形状。
 			exitCode: waited.exitCode ?? null,
 			timedOut: waited.timedOut,
+			aborted: waited.aborted,
 		};
 	} finally {
 		for (const sid of owned) freeNative(sid);

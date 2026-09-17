@@ -104,6 +104,17 @@ export interface ComposePromptInput {
 	/** 技能清单段，填入 {{skills}}。空串表示无技能，对应行会被压平。 */
 	readonly skillsSection: string;
 	/**
+	 * 托管 Python 解释器的**真实路径**，填入 `{{pythonPath}}`。
+	 *
+	 * 为什么要有这个槽位（照 WorkBuddy 的 client-info-env）：路径随机器与
+	 * `HTML_TO_DOCX_VENV` 而变，没法写死在 resources 的数据文件里；而它同时是
+	 * 会话内恒定的（进程级环境，不逐轮变），符合进系统提示词的纪律。
+	 *
+	 * 缺省 = 不给值。那时若某个片段仍写着 `{{pythonPath}}`，fillSlots **抛错**
+	 * （理由见那里的注释：空路径进提示词是最难查的那种故障）。
+	 */
+	readonly pythonPath?: string;
+	/**
 	 * 会话绑定专家的人格。专家与交互模式正交：只按 expertId 是否绑定决定有没有值，
 	 * 与模式无关（见 daemon 的 composeSystemPrompt / resolveSessionExpert）。
 	 * 提供时注入前部槽位人格段（骨架之后、模式行为段之前，带 Role Override 声明）
@@ -263,7 +274,8 @@ const MAX_FRAGMENT_DEPTH = 8;
  * 分段来源（provenance）。skeleton = 骨架的非片段部分；fragment:<名> = 片段内容；
  * mode:<id> = 交互模式行为段；skills / pi-context / expert 同名段落；
  * style:<id> = 回复风格段（注入点在交互段之后，见 composePromptWithMeta）；
- * memory-system = 记忆行为纪律段。
+ * memory-system = 记忆行为纪律段；
+ * python-env = `{{pythonPath}}` 的取值段（托管 Python 解释器路径，随机器变但会话内恒定）。
  *
  * **time / memory / personalization 不在这里**：它们是逐轮会变的事实，不进系统
  * 提示词 —— memory / personalization 由 formatRuntimeContext 组装成注入消息，
@@ -275,6 +287,7 @@ export type PromptSegmentSource =
 	| "pi-context"
 	| "expert"
 	| "memory-system"
+	| "python-env"
 	| `fragment:${string}`
 	| `mode:${string}`
 	| `style:${string}`;
@@ -472,9 +485,16 @@ function expandIncludes(
  * 片段里出现这两个以外的任何 `{{xxx}}` 都在这里响亮抛错。
  */
 function fillSlots(piece: DraftSegment, input: ComposePromptInput, out: DraftSegment[]): void {
-	const slots: Record<string, string> = {
+	/*
+	 * 槽位取值表。`undefined` 表示**组装方没提供这个槽位的取值**，与「未支持的槽位」
+	 * 分开报（下面两支抛错）。为什么两者都要响亮：`{{pythonPath}}` 只在托管 Python
+	 * 环境那条片段里出现，而没接宿主的组装（纯 composer 单测）不会给值 ——
+	 * 若在这里替换成空串，提示词里就会出现「解释器路径：（空）」这种最难查的故障。
+	 */
+	const slots: Record<string, string | undefined> = {
 		interaction: input.modeBody,
 		skills: input.skillsSection,
+		pythonPath: input.pythonPath,
 	};
 
 	let last = 0;
@@ -483,22 +503,33 @@ function fillSlots(piece: DraftSegment, input: ComposePromptInput, out: DraftSeg
 		const name = m[1];
 		if (idx === undefined || name === undefined) continue;
 		const raw = m[0];
+		if (!(name in slots)) {
+			throw new Error(
+				`提示词骨架包含未支持的槽位「${raw}」。支持的槽位：${Object.keys(slots).join(" / ")}`,
+			);
+		}
 		const value = slots[name];
 		if (value === undefined) {
 			throw new Error(
-				`提示词骨架包含未支持的槽位「${raw}」。支持的槽位：${Object.keys(slots).join(" / ")}`,
+				`提示词用了槽位「${raw}」，但组装方没有提供取值。` +
+					"缺值不许替换成空串 —— 空值进提示词比组装期报错难查得多。",
 			);
 		}
 		if (idx > last) out.push({ source: piece.source, text: piece.text.slice(last, idx) });
 		// 值段剥首尾换行（同片段内容的处理）：段落的边界空行归骨架作者控制，
 		// 值自身不带 —— 按段压平与旧的整体压平等价就靠这条（finalizeCore）。
 		out.push({
-			source: name === "interaction" ? `mode:${input.modeId ?? "unknown"}` : "skills",
+			source: name === "interaction" ? `mode:${input.modeId ?? "unknown"}` : sourceOfSlot(name),
 			text: value.replace(/^\n+/, "").replace(/\n+$/, ""),
 		});
 		last = idx + raw.length;
 	}
 	if (last < piece.text.length) out.push({ source: piece.source, text: piece.text.slice(last) });
+}
+
+/** 槽位值段的 provenance（`interaction` 单独处理，它要带模式 id）。 */
+function sourceOfSlot(name: string): PromptSegmentSource {
+	return name === "skills" ? "skills" : "python-env";
 }
 
 /**

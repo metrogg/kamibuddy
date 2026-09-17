@@ -14,6 +14,12 @@ import { loadResources, resolveStyle, toDescriptors, type StyleResource } from "
 
 let dir: string;
 
+/**
+ * 真实资源的组装需要「托管解释器路径」这个槽位取值（片段 python-env 里的
+ * `{{pythonPath}}`）。真实值由 daemon 现取（venvPython），测试里给固定桩。
+ */
+const VENV_PY = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
+
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "kami-res-"));
 	// styles/ 基线 fixture（理由见 writeStyle 注释）。
@@ -229,10 +235,36 @@ describe("真实 resources：过程叙述条款两个场景都在", () => {
 				sceneBody: scene.body,
 				modeBody,
 				skillsSection: "",
+				pythonPath: VENV_PY,
 				resolveFragment: (name) => fragments.get(name),
 			});
 			// 片段的代表句（改 narration.md 的标题时这里要同步）
 			expect(text, `${scene.id} 场景没有引到过程叙述片段`).toContain("过程叙述：一批一句话");
+		}
+	});
+
+	it("**work 与 code 都引到 python-env，且路径真的填进去了**", () => {
+		/*
+		 * 2026-09-17 的 pip 现场留下的契约：模型缺库的第一反应是 pip install，
+		 * 而它在写入沙箱里必失败（docs/ARCHITECTURE.md 已知边界第 8 条）。
+		 * 两个场景都必须把托管解释器的真实路径交给它 —— 漏掉哪个场景，
+		 * 哪个场景就会重演「反复 pip 重试到用户手动停」。
+		 */
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { scenes, modes, fragments } = loadResources(realDir);
+		const modeBody = modes.find((m) => m.id === "craft")?.body ?? "";
+		for (const scene of scenes) {
+			const { text, segments } = composePromptWithMeta({
+				sceneBody: scene.body,
+				modeBody,
+				skillsSection: "",
+				pythonPath: VENV_PY,
+				resolveFragment: (name) => fragments.get(name),
+			});
+			expect(text, `${scene.id} 场景没有把托管解释器路径填进去`).toContain(VENV_PY);
+			expect(text, `${scene.id} 场景没有劝退 pip`).toContain("不要 `pip install`");
+			// 路径那一段有独立 provenance：排查「哪一段在变」时看得见。
+			expect(segments.some((s) => s.source === "python-env")).toBe(true);
 		}
 	});
 });
@@ -379,6 +411,7 @@ describe("真实 resources/ 的回归约束", () => {
 				modeBody: mode.body,
 				skillsSection: "",
 				modeId: mode.id,
+				pythonPath: VENV_PY,
 				resolveFragment: (name) => resources.fragments.get(name),
 			});
 			expect(composed.text, `code × ${mode.id} 不应有残留槽位`).not.toMatch(/\{\{[^{}]*\}\}/);
@@ -396,6 +429,7 @@ describe("真实 resources/ 的回归约束", () => {
 			modeBody: craft?.body ?? "",
 			skillsSection: "",
 			modeId: "craft",
+			pythonPath: VENV_PY,
 			resolveFragment: (name) => resources.fragments.get(name),
 		}).text;
 		for (const section of ["# 交付", "# 个人文件安全", "# 当前模式", "present_files"]) {

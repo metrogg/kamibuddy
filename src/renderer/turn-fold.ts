@@ -19,6 +19,7 @@
  * （viewCacheRef 同款机制），chat-view 挂载/切会话按桶存取；不落盘。
  */
 
+import { lastTurnId } from "@shared/conversation.ts";
 import type { ConversationEntry, MessageId, UserMessage } from "@shared/session-events.ts";
 import { buildFoldPlan } from "./fold-view.ts";
 import type { FoldPlan, TurnState } from "./fold-view.ts";
@@ -100,7 +101,8 @@ export function buildTurnViews(
 	options: TurnViewOptions,
 ): readonly TurnView[] {
 	const { streaming, cancelledTurns = [] } = options;
-	const lastUserId = entries.findLast((e) => e.role === "user")?.id;
+	// 轮边界取自 shared 的唯一实现处（页脚 fold 与回合头部同边界，AGENTS.md §4）。
+	const lastUserId = lastTurnId(entries);
 
 	const views: TurnView[] = [];
 	let user: UserMessage | undefined;

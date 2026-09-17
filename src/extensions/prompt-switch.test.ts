@@ -277,6 +277,8 @@ beforeAll(() => {
 		//（这也是 daemon 侧的既定语义 —— 未绑定专家不走专家库那条从紧的读路径）。
 		loadExperts: () => [],
 		enabledSkills: () => realSkills,
+		// 真实片段 python-env 里有 {{pythonPath}}，缺值组装会抛错 —— 给固定桩。
+		pythonPath: "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe",
 		onStyleDrift: () => {
 			// 偏好注入了固定值（无 styleId），本用例不该出现漂移；漂移落点在
 			// 生产里是事件日志，这里不需要。

@@ -21,10 +21,13 @@
  * （AGENTS.md §1），这一层是我们最重的模块，测试是 AI 写它时唯一的护栏 ——
  * 全部迁移都能用 fake spawn 在单测里跑完，不需要真装 Python。
  *
- * 与 agent shell 能力的关系：ensure/convert 都是 daemon 进程内受控 spawn
- * （命令与参数全部写死在本文件，模型只能给 HTML 输入与产物路径），
- * 不等于把 shell 暴露给 agent —— 模型经 powershell 自由 shell 调 python/uv
- * 是明确禁止的（spec Requirement: 转换调用受控）。
+ * 与 agent shell 能力的关系（2026-09-17 修订，见 spec：转换调用受控）：
+ * ensure/convert 都是 daemon 进程内受控 spawn（命令与参数全部写死在本文件，
+ * 模型只能给 HTML 输入与产物路径），**转换这条链路**仍然不经 agent 的 shell。
+ * 但解释器路径本身会随提示词注入（resources/prompts/fragments/python-env.md 的
+ * `{{pythonPath}}`），模型可以用它跑自己写的脚本 —— 原因是模型缺库时会去
+ * `pip install`，而 pip 在写入沙箱里必定失败（Python 的 tempfile 用 0700 建
+ * 受保护 DACL，见 AGENTS.md 引的 docs/ARCHITECTURE.md 已知边界第 8 条）。
  */
 
 import { spawn } from "node:child_process";
