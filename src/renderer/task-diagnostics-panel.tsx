@@ -335,9 +335,12 @@ function ContextSection({
 function StepDetail({
 	call,
 	snapshot,
+	cacheReported,
 }: {
 	readonly call: LlmCallData;
 	readonly snapshot: RequestSnapshotData | undefined;
+	/** provider 是否上报过缓存活动（会话级，见 StepRow）。 */
+	readonly cacheReported: boolean;
 }): React.JSX.Element {
 	const usage = call.usage;
 	// 解码窗口与 daemon 的会话级累加共用一处判定（shared 的 stepDecode）——
@@ -345,7 +348,7 @@ function StepDetail({
 	const decode = stepDecode(call);
 	const throughput =
 		decode === undefined || decode.ms === 0 ? undefined : decode.tokens / (decode.ms / 1_000);
-	const hit = usage === undefined ? undefined : cacheHitRate(usage);
+	const hit = usage === undefined ? undefined : cacheHitRate(usage, cacheReported);
 
 	return (
 		<div className="task-diag-detail">
@@ -488,6 +491,7 @@ function StepBlock({
 	stepKey,
 	run,
 	snapshots,
+	cacheReported,
 	expanded,
 	onToggle,
 }: {
@@ -495,6 +499,7 @@ function StepBlock({
 	readonly stepKey: string;
 	readonly run: LedgerRun;
 	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	readonly cacheReported: boolean;
 	readonly expanded: boolean;
 	readonly onToggle: (key: string) => void;
 }): React.JSX.Element {
@@ -511,6 +516,7 @@ function StepBlock({
 			) : (
 				<StepRow
 					data={call}
+					cacheReported={cacheReported}
 					expanded={expanded}
 					onToggle={() => onToggle(stepKey)}
 				/>
@@ -518,6 +524,7 @@ function StepBlock({
 			{expanded && call !== undefined && (
 				<StepDetail
 					call={call}
+					cacheReported={cacheReported}
 					snapshot={snapshots.get(snapshotKey(run.runId, call.turnIndex))}
 				/>
 			)}
@@ -532,15 +539,22 @@ function StepBlock({
 /** 一步（模型调用）的可点开行：耗时 / tokens / TTFT / 速度 / 缓存，一行看齐。 */
 function StepRow({
 	data,
+	cacheReported,
 	expanded,
 	onToggle,
 }: {
 	readonly data: LlmCallData;
+	/**
+	 * provider 是否上报过缓存活动。**来自会话卡**（SessionStatCard.cacheReported）
+	 * 而不是这一步自己的 usage：单步看不出「0 命中」是「真的全 miss」还是
+	 * 「这个 provider 不报缓存」，拿单步现算会把后者说成 0%。
+	 */
+	readonly cacheReported: boolean;
 	readonly expanded: boolean;
 	readonly onToggle: () => void;
 }): React.JSX.Element {
 	const usage = data.usage;
-	const hit = usage === undefined ? undefined : cacheHitRate(usage);
+	const hit = usage === undefined ? undefined : cacheHitRate(usage, cacheReported);
 	const decode = stepDecode(data);
 	const throughput =
 		decode === undefined || decode.ms === 0 ? undefined : decode.tokens / (decode.ms / 1_000);
@@ -590,15 +604,18 @@ function isNormalStop(reason: string): boolean {
 function RunBlock({
 	run,
 	snapshots,
+	cacheReported,
 	expandedStep,
 	onToggleStep,
 }: {
 	readonly run: LedgerRun;
 	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	/** provider 是否上报过缓存活动（会话级，见 StepRow）。 */
+	readonly cacheReported: boolean;
 	readonly expandedStep: string | undefined;
 	readonly onToggleStep: (key: string) => void;
 }): React.JSX.Element {
-	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage);
+	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage, cacheReported);
 	// 工具属于「发出它的那次模型调用」——这个关系台账没记，按位置推（foldRunSteps）。
 	const steps = useMemo(() => foldRunSteps(run.items), [run.items]);
 	const base = runKeyOf(run);
@@ -622,6 +639,7 @@ function RunBlock({
 						stepKey={stepKey}
 						run={run}
 						snapshots={snapshots}
+						cacheReported={cacheReported}
 						expanded={expandedStep === stepKey}
 						onToggle={onToggleStep}
 					/>
@@ -708,6 +726,13 @@ export function TaskDiagnosticsPanel({
 	}, [refresh]);
 
 	const runs = useMemo(() => foldRunLedger(ledger?.entries ?? []), [ledger]);
+	/**
+	 * provider 是否上报过缓存活动（会话级）。单步行/单轮收束行的「缓存 N%」按它决定
+	 * 显示数字还是「—」—— 单步自己判别不了「全 miss」与「provider 不报缓存」，
+	 * 所以判定只认会话卡这一处（AGENTS.md §1.3：renderer 不另算口径）。
+	 * 卡片还没到就按「未知」处理（显示「—」），不拿 0% 冒充。
+	 */
+	const cacheReported = stats?.cacheReported ?? false;
 	const snapshots = useMemo(
 		() => indexRequestSnapshots(ledger?.entries ?? []),
 		[ledger],
@@ -763,6 +788,7 @@ export function TaskDiagnosticsPanel({
 									key={`${run.runId}-${run.startedAt}-${index}`}
 									run={run}
 									snapshots={snapshots}
+									cacheReported={cacheReported}
 									expandedStep={expandedStep}
 									onToggleStep={toggleStep}
 								/>

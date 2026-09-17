@@ -240,13 +240,13 @@ function spanStyle(
 }
 
 /** llm 行的悬停摘要：耗时/TTFT/token/cost/缓存命中/stopReason 一行看齐。 */
-function llmTitle(d: LlmCallData): string {
+function llmTitle(d: LlmCallData, cacheReported: boolean): string {
 	const parts = [`模型调用 ${formatMs(d.endedAt - d.startedAt)}`];
 	if (d.ttftMs !== undefined) parts.push(`TTFT ${formatMs(d.ttftMs)}`);
 	if (d.usage !== undefined) {
 		parts.push(`tokens ${formatTokens(d.usage.totalTokens)}`);
 		parts.push(`费用 ${formatCost(d.usage.cost)}`);
-		const hit = cacheHitRate(d.usage);
+		const hit = cacheHitRate(d.usage, cacheReported);
 		if (hit !== undefined) parts.push(`缓存命中 ${(hit * 100).toFixed(1)}%`);
 	}
 	if (d.stopReason !== undefined) parts.push(`停止 ${d.stopReason}`);
@@ -258,12 +258,15 @@ function llmTitle(d: LlmCallData): string {
 function LlmDetail({
 	call,
 	snapshot,
+	cacheReported,
 }: {
 	call: LlmCallData;
 	snapshot: RequestSnapshotData | undefined;
+	/** provider 是否上报过缓存活动（会话级，见 LedgerRunView）。 */
+	cacheReported: boolean;
 }): React.JSX.Element {
 	const u = call.usage;
-	const hit = u === undefined ? undefined : cacheHitRate(u);
+	const hit = u === undefined ? undefined : cacheHitRate(u, cacheReported);
 	return (
 		<div className="timeline-detail">
 			<div className="kv-grid">
@@ -320,11 +323,14 @@ function LlmDetail({
 function LedgerRunView({
 	run,
 	snapshots,
+	cacheReported,
 	selectedLlm,
 	onSelectLlm,
 }: {
 	run: LedgerRun;
 	snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	/** provider 是否上报过缓存活动（会话级，取该会话的 SessionStatCard.cacheReported）。 */
+	cacheReported: boolean;
 	selectedLlm: { readonly runId: string; readonly turnIndex: number } | undefined;
 	onSelectLlm: (sel: { readonly runId: string; readonly turnIndex: number }) => void;
 }): React.JSX.Element {
@@ -336,7 +342,7 @@ function LedgerRunView({
 			const { e } = itemBounds(item);
 			return Math.max(max, e);
 		}, axisStart);
-	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage);
+	const hit = run.usage === undefined ? undefined : cacheHitRate(run.usage, cacheReported);
 	const selectedCall =
 		selectedLlm === undefined || selectedLlm.runId !== run.runId
 			? undefined
@@ -386,7 +392,7 @@ function LedgerRunView({
 							<div
 								key={`llm-${d.turnIndex}-${i}`}
 								className={`timeline-row clickable${selected ? " selected" : ""}`}
-								title={`${llmTitle(d)}（点击查看上下文拆分）`}
+								title={`${llmTitle(d, cacheReported)}（点击查看上下文拆分）`}
 								onClick={() =>
 									onSelectLlm({ runId: run.runId, turnIndex: d.turnIndex })
 								}
@@ -483,6 +489,7 @@ function LedgerRunView({
 			{selectedCall !== undefined && selectedLlm !== undefined && (
 				<LlmDetail
 					call={selectedCall.data}
+					cacheReported={cacheReported}
 					snapshot={snapshots.get(
 						snapshotKey(
 							selectedCall.data.runId ??
@@ -764,8 +771,18 @@ export function DiagnosticsView({
 		[ledgerRuns],
 	);
 
+	// 进程级合计：只要有任何一个会话报过缓存，这个数字就有意义（没有就是「—」）。
+	const processCacheReported = snapshot?.sessions.some((s) => s.cacheReported) ?? false;
 	const hitRate =
-		snapshot === undefined ? undefined : cacheHitRate(snapshot.totalUsage);
+		snapshot === undefined
+			? undefined
+			: cacheHitRate(snapshot.totalUsage, processCacheReported);
+	/**
+	 * 台账分区的缓存判定按**该会话**的卡片取（是否报缓存是会话级属性，不是进程级）。
+	 * 卡片不在窗口里（很旧的会话）就按未知处理 —— 单步自己没有判别能力。
+	 */
+	const ledgerCacheReported =
+		snapshot?.sessions.find((s) => s.sessionId === ledger?.sessionId)?.cacheReported ?? false;
 	const selectedRun =
 		snapshot?.runs.find((r) => r.runId === selectedRunId) ?? snapshot?.runs[0];
 
@@ -1031,6 +1048,7 @@ export function DiagnosticsView({
 										key={`${run.runId}-${run.startedAt}-${i}`}
 										run={run}
 										snapshots={ledgerSnapshots}
+										cacheReported={ledgerCacheReported}
 										selectedLlm={selectedLlm}
 										onSelectLlm={setSelectedLlm}
 									/>

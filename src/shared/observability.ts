@@ -67,15 +67,39 @@ export function billedInputTokens(usage: TokenUsage): number {
 }
 
 /**
+ * 一次调用是否上报了缓存活动（cacheRead / cacheWrite 任一非零）。
+ *
+ * 字段收成可选视图：调用方可能只持有 usage 的一部分（renderer 的 turn-metrics
+ * 按「字段有没有上报」fold，缺字段与 0 是两回事），判定规则只此一处。
+ */
+export function reportsCacheActivity(usage: {
+	readonly cacheRead?: number;
+	readonly cacheWrite?: number;
+}): boolean {
+	return (usage.cacheRead ?? 0) > 0 || (usage.cacheWrite ?? 0) > 0;
+}
+
+/**
  * 缓存命中率：cacheRead 占全部 prompt 侧计费 token 的比例。
- * undefined 表示还没有过一次带用量的响应，UI 显示「—」而不是误导性的 0%。
+ * undefined 表示「这个数字不可信」，UI 显示「—」而不是误导性的 0%，两种情况：
+ *
+ *   1. prompt 侧三桶全为 0（还没有过一次带用量的响应）；
+ *   2. `cacheReported` 为 false —— 这个 provider 至今没有上报过任何缓存活动。
+ *
+ * **`cacheReported` 必须由调用方给**（2026-09-17 修正）：pi 的 Usage 字段是必填
+ * 数字，没有缓存能力的服务商被一律填 0，于是「真的全 miss（0%）」与「压根没有
+ * 这个数据」在数字上完全一样。判定口径同 pi cache-stats 的 reportedCache：
+ * 序列里出现过非零 cacheRead/cacheWrite 才算它在报缓存。会话级由
+ * `core/observability.ts` 的 fold 判定并落进 `SessionStatCard.cacheReported`，
+ * renderer 一律从会话卡取（不许各端自己现算一份）。
  *
  * **分母用 billedInputTokens（三桶之和），不是 input + cacheRead**
  *（2026-09-15 修正）：cacheWrite 是「本轮新写入缓存、本轮并未命中」的那部分，
  * 本就该占分母；漏掉它会让命中率系统性偏高，且写缓存越多的轮次偏得越狠。
  * 修正后口径与 dsh `cacheHitPercent` 一致。
  */
-export function cacheHitRate(usage: TokenUsage): number | undefined {
+export function cacheHitRate(usage: TokenUsage, cacheReported: boolean): number | undefined {
+	if (!cacheReported) return undefined;
 	const promptTokens = billedInputTokens(usage);
 	if (promptTokens === 0) return undefined;
 	return usage.cacheRead / promptTokens;
@@ -191,6 +215,13 @@ export interface SessionStatCard {
 	readonly usage: TokenUsage;
 	/** cacheRead 占 prompt 侧三桶之和（billedInputTokens）的比例；还没有过带用量的响应为 undefined。 */
 	readonly cacheHitRate: number | undefined;
+	/**
+	 * 这个会话的 provider 是否上报过缓存活动（判定口径见 `cacheHitRate`）。
+	 * 从未上报过时命中率整体不显示 —— 「不支持缓存」与「命中 0%」不是一回事。
+	 * 与 cacheHitRate 分开存：renderer 的单步行要按同一个判定显示「—」，
+	 * 而单步自己没有足够信息判断 provider 是否支持缓存。
+	 */
+	readonly cacheReported: boolean;
 	/** 最新一条台账条目的时刻，卡片排序（最近活跃在前）用。 */
 	readonly lastActiveAt: number;
 }
@@ -305,9 +336,17 @@ export interface RunEndData {
 }
 
 /**
- * 单次模型调用的边界（映射 pi 的 turn_start/end；UI 不呈现「轮」，只进台账）。
- * 条目在调用完成时整条写入（startedAt 在 turn_start 时记账）——崩溃丢失的是
- * 这一次调用本身，由 run 级合成闭合兜底，不补半成品条目。
+ * 单次模型调用的边界（映射 pi 的 turn_start → 助手 message_end；UI 不呈现「轮」，
+ * 只进台账）。条目在助手消息完成时整条写入 —— 崩溃丢失的是这一次调用本身，
+ * 由 run 级合成闭合兜底，不补半成品条目。
+ *
+ * **endedAt 取 message_end 而不是 pi 的 turn_end**（2026-09-17 修正）：pi 的
+ * turn_end 是「这一轮全部结束」——工具结果都 append 完才 emit（agent-session.js
+ * "A turn ends after its assistant message and every tool result has been
+ * appended"）。挂在 turn_end 会把本轮工具执行时间算进模型耗时：tok/s 的分母
+ * 虚高（多 agent 场景一个 task 工具就是几分钟，面板上的 3 tok/s 即由此来）、
+ * llmMs 与 toolMs 相互重叠，而且台账顺序会变成「先工具后 llm_call」—— renderer
+ * 的 foldRunSteps 按位置归属工具，于是每轮的工具都挂到上一步头上。
  */
 export interface LlmCallData {
 	readonly runId?: RunId;
@@ -315,11 +354,16 @@ export interface LlmCallData {
 	readonly turnIndex: number;
 	readonly startedAt: number;
 	readonly endedAt: number;
-	/** 首个 text/thinking delta 到达时刻 − startedAt（毫秒）。无 delta 的轮（纯工具调用）缺省。 */
+	/**
+	 * 首个模型输出到达时刻 − startedAt（毫秒）。正文 / 思考 / 工具调用参数
+	 * 任一先到都算（纯工具调用的轮次也有首字）。整轮没有任何输出 delta 时缺省
+	 * —— 缺它就取不到解码窗口样本（stepDecode 返回 undefined），不拿全程耗时
+	 * 冒充解码时长。
+	 */
 	readonly ttftMs?: number;
 	/** pi StopReason（stop/length/toolUse/error/aborted…）。 */
 	readonly stopReason?: string;
-	/** 本轮 usage 全字段（turn_end 的 assistant 消息携带）。 */
+	/** 本轮 usage 全字段（助手 message_end 携带）。 */
 	readonly usage?: TokenUsage;
 	readonly errorMessage?: string;
 }
@@ -334,6 +378,9 @@ export interface LlmCallData {
  * 只有 `ttftMs` 与 `usage` 兼备时才有样本（同 dsh「仅统计 ttftMs 与 output
  * 兼备的步」）：缺任一项就返回 undefined，而不是拿全程耗时当分母 ——
  * 那会把没有首字记录的轮次算成极慢。
+ *
+ * 分母的纯度由 `LlmCallData.endedAt` 的取值保证（助手 message_end，不含本轮
+ * 工具执行）—— 见该类型的注释，改那边等于改这里。
  */
 export function stepDecode(
 	data: LlmCallData,
