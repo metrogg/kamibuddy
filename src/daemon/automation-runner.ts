@@ -75,6 +75,14 @@ export interface AutomationRunExecutorDeps {
 	readonly composeRuntimeContext: (cwd: string) => string;
 	readonly getPermissions: () => PermissionSettings;
 	/**
+	 * 托管 Python 解释器的绝对路径（daemon 的 docxPythonPath），进 run 会话
+	 * hidden context 的 `python_env` 段。run 会话的提示词是 work 骨架（含
+	 * python-env 片段），模型要靠这一段才知道该用哪个解释器 —— 该事实随机器变，
+	 * 不能进系统提示词（spec: stabilize-prompt-prefix；片段里那个 `{{pythonPath}}`
+	 * 槽位已删）。
+	 */
+	readonly pythonPath: string;
+	/**
 	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。run 会话每次新建，
 	 * 逐会话还原不适用；无人值守会话没有会话内切换入口，全局默认即口径。
 	 */
@@ -129,6 +137,9 @@ export function createAutomationRunExecutor(
 				interactionId: "craft",
 				emit,
 				resources: deps.resources,
+				// 托管解释器路径进 hidden context 的 python_env（run 会话的提示词
+				// 是 work 骨架，其中有 python-env 片段；那条事实随机器变，只能走注入）。
+				pythonPath: deps.pythonPath,
 				// 初始档 = 全局默认；未配置时为 undefined，SessionHost 只把非
 				// undefined 传给 pi（pi 走自己的 medium 默认链）。
 				thinkingLevel: deps.getThinkingLevel(),

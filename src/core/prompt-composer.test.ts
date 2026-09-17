@@ -51,22 +51,6 @@ describe("槽位替换", () => {
 		// 压平后不应出现三个以上连续换行。
 		expect(out).not.toMatch(/\n{3,}/);
 	});
-
-	it("{{pythonPath}} 按给定值填入，且单独成段（provenance = python-env）", () => {
-		/*
-		 * 这条槽位是为「把托管解释器路径交给模型」开的（spec: 转换调用受控 的
-		 * 2026-09-17 修订）。单独成段的理由与 interaction/skills 同款：
-		 * 排查「哪一段在变」时，观测台账里要能一眼看出是它动了。
-		 */
-		const { text, segments } = composePromptWithMeta({
-			...BASE,
-			sceneBody: "用这个解释器：{{pythonPath}}。",
-			pythonPath: "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe",
-		});
-		expect(text).toContain("C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe");
-		expect(text).not.toContain("{{pythonPath}}");
-		expect(segments.some((s) => s.source === "python-env")).toBe(true);
-	});
 });
 
 describe("报错路径", () => {
@@ -76,27 +60,24 @@ describe("报错路径", () => {
 		).toThrow(/未支持的槽位/);
 	});
 
-	it("已删的槽位 {{cwd}} / {{model}} 同样响亮抛错（护栏不放松）", () => {
-		// 两个槽位都是有意删掉的：工作目录归 pi 内置 cwd section，{{model}} 无使用者。
-		// 骨架里再写出来就是拼错的模板 —— 不能静默留成空洞给模型看。
+	it("已删的槽位 {{cwd}} / {{model}} / {{pythonPath}} 同样响亮抛错（护栏不放松）", () => {
+		/*
+		 * 三个槽位都是有意删掉的：工作目录归 hidden context 的 workspace_context；
+		 * {{model}} 无使用者；{{pythonPath}} 曾是「托管解释器路径」的入口，但它
+		 * **随机器变**（homedir / 安装位置 / HTML_TO_DOCX_VENV），进系统提示词就是
+		 * 「换机 / 重建 venv 即断前缀」—— 改由 hidden context 的 python_env 段注入
+		 * （spec: stabilize-prompt-prefix）。骨架/片段里再写出来就是拼错的模板 ——
+		 * 不能静默留成空洞给模型看，也不能让某个片段把它悄悄带回提示词。
+		 */
 		expect(() => composePrompt({ ...BASE, sceneBody: "当前工作目录：{{cwd}}" })).toThrow(
 			/未支持的槽位/,
 		);
 		expect(() => composePrompt({ ...BASE, sceneBody: "模型：{{model}}" })).toThrow(
 			/未支持的槽位/,
 		);
-	});
-
-	it("**用了 {{pythonPath}} 却没给取值 → 抛错，不许替换成空串**", () => {
-		/*
-		 * 「支持的槽位」与「组装方给了值」是两件事：骨架/片段里写了 {{pythonPath}}
-		 * 而调用方没传 pythonPath 时，替换成空串会在提示词里留下
-		 * 「解释器：（空）」—— 模型会拿着一个空路径去试，而且这种故障在
-		 * 观测台账里看不出来（段是有的，只是内容为空）。所以这里响亮抛错。
-		 */
-		expect(() => composePrompt({ ...BASE, sceneBody: "解释器：{{pythonPath}}" })).toThrow(
-			/没有提供取值/,
-		);
+		expect(() =>
+			composePrompt({ ...BASE, sceneBody: "解释器：{{pythonPath}}" }),
+		).toThrow(/未支持的槽位/);
 	});
 
 	it("非 ASCII 的花括号写法（{{中文}}）也必须被拦下", () => {

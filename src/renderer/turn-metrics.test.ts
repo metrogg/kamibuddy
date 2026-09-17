@@ -10,11 +10,14 @@
  *      与命中率同分母 —— 这是 2026-09-17 与面板/底栏统一的口径，不会静默改回去）
  *   6. 跨宿主代际（id 撞名）下页脚 = 台账按 run 聚合 —— 见「多步轮 / 工具调用 /
  *      宿主重建」那组的说明：这条缺陷出在 reducer 的折叠上，折叠修好页脚才作数
+ *   7. **run 边界**（2026-09-17）：steer 落在 run 中间不切边界、空闲压缩不移动
+ *      窗口 —— 见文件末尾两组；两者都钉「页脚 = 台账按 run 聚合」
  */
 
 import { describe, expect, it } from "vitest";
 import {
 	conversationReducer,
+	currentRunStartIndex,
 	initialConversation,
 	type ConversationView,
 } from "@shared/conversation.ts";
@@ -233,19 +236,23 @@ describe("多步轮 / 工具调用 / 宿主重建：页脚 = 台账按 run 聚�
 	 * 两代宿主的事件流（id 序列 user-2/assistant-3… 被两代复用，与真实会话
 	 * 01a0ae75 的事件日志同形态）。第 2 代的轮多步、带两次工具调用，并夹了
 	 * 一条无 usage 的 assistant 条目与一条产物条目（非 usage 条目不该影响求和）。
+	 *
+	 * **run id 两代不同**（run-g1-1 / run-g2-4）：run id 同样出自宿主的 nextId，
+	 * 2026-09-17 起带宿主代际号，不可能跨代复用 —— 这里与真实形态保持一致，
+	 * 否则窗口判据会把两代算成同一个 run（而本组要钉的正是「消息 id 撞名」）。
 	 */
 	function replay(): { readonly view: ConversationView; readonly runBilled: readonly number[] } {
 		const events: readonly SessionEvent[] = [
 			// ── 第 1 代宿主：轮 1 ──
-			{ type: "run_started", runId: "run-1" },
+			{ type: "run_started", runId: "run-g1-1" },
 			{ type: "user_message", message: user("user-2") },
 			{ type: "assistant_started", messageId: "assistant-3", at: 2 },
 			{ type: "assistant_done", message: assistant("assistant-3", RUN1) },
-			{ type: "run_finished", runId: "run-1", outcome: "completed" },
+			{ type: "run_finished", runId: "run-g1-1", outcome: "completed" },
 			// ── 宿主重建（daemon 重启 / resume remount）：id 计数器回零 ──
 			{ type: "session_state", state: { ...initialConversation.state, sessionId: "s1" } },
 			// ── 第 2 代宿主：轮 2（3 步 / 2 次工具调用）──
-			{ type: "run_started", runId: "run-1" },
+			{ type: "run_started", runId: "run-g2-4" },
 			{ type: "user_message", message: user("user-2") },
 			{ type: "assistant_started", messageId: "assistant-3", at: 20 },
 			{ type: "assistant_done", message: assistant("assistant-3", STEP1) },
@@ -260,7 +267,7 @@ describe("多步轮 / 工具调用 / 宿主重建：页脚 = 台账按 run 聚�
 			{ type: "tool_finished", card: toolCardFixture("call_b", "ok") },
 			{ type: "assistant_started", messageId: "assistant-6", at: 23 },
 			{ type: "assistant_done", message: assistant("assistant-6", STEP3) },
-			{ type: "run_finished", runId: "run-1", outcome: "completed" },
+			{ type: "run_finished", runId: "run-g2-4", outcome: "completed" },
 		];
 		const view = events.reduce<ConversationView>(
 			(acc, event) => conversationReducer(acc, { type: "event", event }),
@@ -286,5 +293,137 @@ describe("多步轮 / 工具调用 / 宿主重建：页脚 = 台账按 run 聚�
 		const firstTurn = view.entries.slice(start, nextUser);
 		const metrics = foldTurnMetrics(firstTurn, { startedAt: 1, endedAt: 2 }, 2);
 		expect(metrics.billedInputTokens).toBe(runBilled[0]);
+	});
+});
+
+/* ── run 边界（steer / 压缩）────────────────────────────────────────── */
+
+/** 三桶齐全的 Σbilled（同上：直接相加，缺字段语义由 foldTurnMetrics 自己处理）。 */
+function billedTotal(u: TokenUsage): number {
+	return u.input + u.cacheRead + u.cacheWrite;
+}
+
+function card(id: string, outcome: ToolCard["outcome"]): ToolCard {
+	return {
+		id,
+		role: "tool",
+		toolName: "powershell",
+		label: "运行命令",
+		summary: "npm test",
+		outcome,
+		detail: undefined,
+		at: 30,
+	};
+}
+
+function foldEvents(events: readonly SessionEvent[]): ConversationView {
+	return events.reduce<ConversationView>(
+		(acc, event) => conversationReducer(acc, { type: "event", event }),
+		initialConversation,
+	);
+}
+
+/**
+ * 回归门禁（2026-09-17 修）：**steer 不切「本轮」边界**。
+ *
+ * 现场：pi 的 steer 把排队消息作为 user 消息插进**当前 run**（触发 user_message，
+ * pi 不发新的 agent_start）。页脚原先按「最后一条 user 消息」猜轮边界 —— 于是
+ * 只统计 steer 之后的步，而台账按 run 聚合是整轮，两者不等（steer 越早，页脚
+ * 小得越多；这正是「页脚 < 面板」那条）。
+ *
+ * 修法：reducer 给 run 期间追加的条目盖 run 身份（shared/conversation.ts 的
+ * activeRunId），页脚窗口 = currentRunStartIndex 起的那一段 —— 与 turn-fold 的
+ * 活轮判定、chat-view 的指标挂点共用同一份实现（AGENTS.md §4）。真值口径同上一组：
+ * 台账每条 message_end 写一条 llm_call，与 assistant_done 一一对应。
+ */
+describe("steer：页脚 = 台账按 run 聚合（steer 不切边界）", () => {
+	const STEP1 = usage({ input: 5_135, output: 4_714, cacheRead: 64_256, cacheWrite: 0 });
+	const STEP2 = usage({ input: 1_322, output: 296, cacheRead: 12_672, cacheWrite: 0 });
+	/** steer 落地之后那一步 —— 旧口径下页脚只剩它。 */
+	const STEP3 = usage({ input: 884, output: 861, cacheRead: 12_160, cacheWrite: 0 });
+
+	/** 单 run / 三条 assistant（中间一次工具调用），第二条 user 是 steer。 */
+	function replaySteer(): ConversationView {
+		return foldEvents([
+			{ type: "run_started", runId: "run-g1-1" },
+			{ type: "user_message", message: user("user-g1-2") },
+			{ type: "assistant_started", messageId: "assistant-g1-3", at: 2 },
+			{ type: "assistant_done", message: assistant("assistant-g1-3", STEP1) },
+			{ type: "tool_started", card: card("call_a", "ok") },
+			{ type: "assistant_started", messageId: "assistant-g1-4", at: 3 },
+			{ type: "assistant_done", message: assistant("assistant-g1-4", STEP2) },
+			// steer：同一 run 内的 user 消息（没有新的 run_started）。
+			{ type: "user_message", message: user("user-g1-5") },
+			{ type: "assistant_started", messageId: "assistant-g1-6", at: 4 },
+			{ type: "assistant_done", message: assistant("assistant-g1-6", STEP3) },
+			{ type: "run_finished", runId: "run-g1-1", outcome: "completed" },
+		]);
+	}
+
+	it("窗口从 run 的首条 user 起，而不是从 steer 那条 user 起", () => {
+		const view = replaySteer();
+		const ids = view.entries.map((entry) => entry.id);
+		// 旧口径的切点 = 「最后一条 user」= user-g1-5（下标 4）之后 —— 页脚会只剩
+		// assistant-g1-6 那一步。窗口若落在那里就是缺陷本身。
+		expect(ids.indexOf("user-g1-5")).toBe(4);
+		expect(currentRunStartIndex(view.entries)).toBe(0);
+	});
+
+	it("页脚读数 = 该 run 全部步的 Σ（steer 之前 + 之后的步一起算）", () => {
+		const view = replaySteer();
+		const metrics = foldTurnMetrics(view.entries, { startedAt: 1, endedAt: 2 }, 2);
+		expect(metrics.billedInputTokens).toBe(
+			billedTotal(STEP1) + billedTotal(STEP2) + billedTotal(STEP3),
+		);
+		expect(metrics.outputTokens).toBe(STEP1.output + STEP2.output + STEP3.output);
+		expect(metrics.cacheReadTokens).toBe(STEP1.cacheRead + STEP2.cacheRead + STEP3.cacheRead);
+	});
+});
+
+/**
+ * 回归门禁（2026-09-17 测）：**空闲压缩不进页脚，也不移动本轮窗口**。
+ *
+ * 实测（把 agent.streamFunction 换成桩、跑真实的 `session.compact()`）：压缩的
+ * 摘要调用走 streamFunction、**不进 agent 循环**，期间收到的 pi 事件只有
+ * compaction_start 与 compaction_end —— 没有 message_start/message_end，因此
+ * **不会有 assistant_done** 流到页脚，也不会有 llm_call 进台账。
+ *
+ * 于是「页脚 = 台账按 run 聚合」在压缩上是**天然成立**的（两边都没有数），本组
+ * 钉住它的两条可观测后果：
+ *   1. 压缩 run 不产生任何条目（页脚无处可计）；
+ *   2. 页脚窗口不因压缩 run 移动 —— 读数仍是上一个有内容的 run 的聚合值。
+ * 若哪天压缩改走 agent 循环，或 reducer 让「空 run」顶掉窗口，这两条会红。
+ */
+describe("空闲压缩：不进页脚，也不移动本轮窗口", () => {
+	const STEP1 = usage({ input: 8_449, output: 580, cacheRead: 3_456, cacheWrite: 0 });
+
+	function replayCompaction(): ConversationView {
+		return foldEvents([
+			{ type: "run_started", runId: "run-g1-1" },
+			{ type: "user_message", message: user("user-g1-2") },
+			{ type: "assistant_started", messageId: "assistant-g1-3", at: 2 },
+			{ type: "assistant_done", message: assistant("assistant-g1-3", STEP1) },
+			{ type: "run_finished", runId: "run-g1-1", outcome: "completed" },
+			// 空闲手动压缩：session-host 复用 run 记账（run_started + compaction_started），
+			// 但压缩的模型调用不发任何 message 事件（见上）。
+			{ type: "run_started", runId: "run-g2-4" },
+			{ type: "compaction_started", reason: "manual" },
+			{ type: "compaction_finished", aborted: false },
+			{ type: "run_finished", runId: "run-g2-4", outcome: "completed" },
+		]);
+	}
+
+	it("压缩 run 不产生条目（页脚没有任何可计入的东西）", () => {
+		const view = replayCompaction();
+		expect(view.entries.map((entry) => entry.role)).toEqual(["user", "assistant"]);
+		expect(view.entries.some((entry) => entry.runId === "run-g2-4")).toBe(false);
+	});
+
+	it("窗口不移动：读数仍是上一个有内容的 run（= 台账该 run 的聚合）", () => {
+		const view = replayCompaction();
+		expect(currentRunStartIndex(view.entries)).toBe(0);
+		const metrics = foldTurnMetrics(view.entries, { startedAt: 1, endedAt: 2 }, 2);
+		expect(metrics.billedInputTokens).toBe(billedTotal(STEP1));
+		expect(metrics.outputTokens).toBe(STEP1.output);
 	});
 });

@@ -8,7 +8,12 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
-import { lastUserEntryIndex, removeQueuedMessage, insertQueuedNow } from "@shared/conversation.ts";
+import {
+	currentRunStartIndex,
+	lastUserEntryIndex,
+	removeQueuedMessage,
+	insertQueuedNow,
+} from "@shared/conversation.ts";
 import { formatTokenCount } from "@shared/context-usage.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
@@ -1758,9 +1763,12 @@ export function ChatView({
 		() => buildTurnViews(entries, { streaming, cancelledTurns: conversation.cancelledTurns }),
 		[entries, streaming, conversation.cancelledTurns],
 	);
-	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
-	// 边界取自 shared 的唯一实现处（shared/conversation.ts 的 lastUserEntryIndex），
-	// 不在本文件再写一遍 findLast —— 页脚 fold 与回合切分必须同边界（AGENTS.md §4）。
+	// 最后一个 user 消息：**回合头部的计时查表键**与**分支/重试的锚点**（要重发的
+	// 是用户打过的那句话）。边界取自 shared 的唯一实现处（shared/conversation.ts
+	// 的 lastUserEntryIndex），不在本文件再写一遍 findLast。
+	// 注意分工：「本轮」的读数与挂点是 **run 边界**（下面的 metricsAnchorId 与
+	// turn-metrics 的求和窗口走 currentRunStartIndex）—— steer 的消息也是 user
+	// 消息但不是新一轮，两者的边界在这一处刻意分开（2026-09-17）。
 	// 反查要扫到「最后一个 user」为止（长会话末尾常是一串工具卡），按 [entries] memo，
 	// 与消息流无关的重渲染（折叠开合、面板交互）不再重扫。
 	const lastUserEntry = useMemo(() => {
@@ -1804,19 +1812,24 @@ export function ChatView({
 	*/
 	const metricsTurn = lastUserId === undefined ? undefined : conversation.turnTimings?.[lastUserId];
 	/*
-		操作条尾部读数（指标 / 模型名）与「重试」的挂点：**当前回合的最后一条
-		assistant 消息**（最后一条 user 之后那一段里的最后一条 assistant），与
-		WorkBuddy 把 credit 挂在 isLastMessageOfRequest 上同口径。
+		操作条尾部读数（指标 / 模型名）与「重试」的挂点：**当前 run 的最后一条
+		assistant 消息**，与 WorkBuddy 把 credit 挂在 isLastMessageOfRequest 上同口径。
 
-		为什么按「最后一条 user 之后」而不是「最后一条 assistant」：等待首响应时
+		为什么按「当前 run」而不是「最后一条 user 之后」：steer 的消息以 user 消息
+		落地、落在 run 中间，按它切会把挂点推到 steer 之后 —— 而页脚读数（
+		turn-metrics 的 foldTurnMetrics）按 run 聚合整轮，两处边界不一致就会出现
+		「挂在 A 条的读数说的是 B 段」。边界只有一处实现：shared/conversation.ts 的
+		currentRunStartIndex（与 turn-fold 的活轮判定、turn-metrics 的求和窗口同一个）。
+
+		为什么按「run 的末条 assistant」而不是「最后一条 assistant」：等待首响应时
 		本轮还没有 assistant，直接取 findLast(assistant) 会挂到**上一轮**的回答上，
-		却显示本轮的计时 —— 错位比缺席更糟。三条读数共享同一挂点，不会出现
+		却显示本轮的读数 —— 错位比缺席更糟。三条读数共享同一挂点，不会出现
 		「指标在 A 条、模型名在 B 条」的错配。
 	*/
 	const metricsAnchorId = useMemo(() => {
-		const lastUserIndex = lastUserEntryIndex(entries);
+		const runStart = currentRunStartIndex(entries);
 		const lastAssistantIndex = entries.findLastIndex((e) => e.role === "assistant");
-		if (lastAssistantIndex <= lastUserIndex) return undefined;
+		if (lastAssistantIndex < runStart) return undefined;
 		return entries[lastAssistantIndex]?.id;
 	}, [entries]);
 	/*

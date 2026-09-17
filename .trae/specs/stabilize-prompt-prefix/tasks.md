@@ -256,3 +256,58 @@ hidden 改贴到新的最后一条 user。
 **另需提醒（属并行工作流的决定，本改动未碰）**：`resources/prompts/fragments/python-env.md` 的 `{{pythonPath}}` 接进 work/code 骨架且字段变必填 ——
 这是把**机器相关的绝对路径写进系统提示词**；本机恒定（不破坏逐轮稳定），但 venv 路径一变，**整个提示词前缀会从该处作废**。
 按本项目刚立的纪律，这类值更适合走 hidden context / runtime 注入。
+
+# 第六轮：条目身份收尾 + pythonPath 移出提示词（2026-09-17）
+
+- [x] ① id 跨宿主代际复用的**根治**
+  - 根因：`idSeq` 是**宿主实例内**的计数器（`core/session-host.ts`），`remountHostInBucket` 重建后从 1 重来
+    （daemon 重启 / resume / 转正失败 reopenHost 都会触发）⇒ 同一串 `assistant-3` / `user-2` 对应多条真实不同的消息
+    （真实日志里多个 id 跨代复用（`run-1` / `user-2` / `assistant-3` 各 3 次，另有数个 assistant id 各 2 次））
+  - 修法：id 改为 `<角色>-g<代际>-<本代序号>`（`nextHostGeneration()` 模块级自增，`nextId` 拼三段），**全局唯一**；
+    顺带修掉 React key 重复与 `turnTimings` 同名覆盖
+  - 消费点**逐一核对过，无一处解析 id 形式**：React key（`chat-view` 用 `entry.id`）/ `data-entry-id` 查询 /
+    `turnTimings` 键 / `cancelledTurns` / `metricsAnchorId` / `branchTargets` / `fold-view` 锚点；
+    分支与重试走**用户消息序号**，与 id 形式无关
+  - 自证：改坏实测 **2 例红**，还原全绿
+- [x] ② compaction（空闲压缩）—— **实测后不写新代码**，只订正注释 + 补防回归断言
+  - **实测判定这类调用不发 `assistant_done`**：源码路径为 `compact()` → `agent.streamFunction`（不进 agent 循环，
+    因而没有 `turn_start` / `message_start` / `message_end`）；**桩 `streamFunction` 可控复现** ——
+    期间只收到 `compaction_start` / `compaction_end`，**无 assistant 类事件**。
+    （线上事件日志里 0 条 compaction 事件，故必须可控复现才能取证。）
+  - 因此**不写新代码**：只把 `settleLlmCall` 那条分支的错误注释（原写「空闲压缩」）改为实测结论
+    （`turn_start` 缺失就不造条目，是留给「pi 若把某类模型调用挪出循环」这一契约变化的），并补**两条防回归断言**
+  - 自证：改坏实测 **1 例红**，还原全绿
+- [x] ③ steer / followUp 的页脚边界改为**按 run 聚合**
+  - `src/shared/conversation.ts` 的 `currentRunStartIndex` 为**唯一实现**（判据 = 条目自带的 run 身份，
+    取「最后一条有身份条目所属的那段连续后缀」），三处共用：`renderer/turn-metrics.ts`（页脚求和窗口）、
+    `renderer/chat-view.tsx`（`metricsAnchorId`）、`renderer/turn-fold.ts`（活轮判定）
+  - `lastUserEntryIndex` **未删**，注释写明它仍需服务的**三条用途**：① 回合计时映射的键
+    （`recordTurnTiming` / `TurnHeader`）；② 分支 / 重试的锚点（`lastUserEntry` → `branchTargets` / `retryTarget`）；
+    ③ **无 run 身份时**的兜底边界（恢复重建的历史条目没有 run 记录）
+  - 自证：改坏实测 `expected 13044 to be 96429` **1 例红**，还原全绿
+- [x] pythonPath 移出系统提示词
+  - `{{pythonPath}}` 槽位与 `SystemPromptComposerDefaults.pythonPath` 必填字段**全部移除**（组装期残留槽位仍**响亮抛错**，
+    护栏未放松；`resources/prompts/fragments/python-env.md` 只留恒定纪律文字）
+  - 解释器路径改由 **hidden context 新增的 `<python_env>` 段**给出（`role: "user-context"`，**尾部独立消息**）。
+    注入块渲染文本要点：`<system-reminder data-role="user-context">` 内的
+    `<python_env>\nPython 解释器：<绝对路径>\n</python_env>`（与 `workspace_context` 同容器、同「尾部独立消息」形态；
+    缺省整段缺席、不留空壳 —— 子代理 / 成员会话本来就没有这条信息）
+  - 取值点收敛到 `daemon/index.ts` 的 `docxPythonPath()`，经 `SessionHostOptions.pythonPath` 注入
+    （用户会话与定时任务 run 会话同源）
+  - 判据：**系统提示词产物「含机器相关绝对路径 = false」已消除**；新增门禁
+    「生产组装入口产物不含机器相关绝对路径形态」（家目录字面量 / `%USERPROFILE%` / 盘符家目录链 /
+    `.venv-html-to-docx` / `python.exe` / `{{pythonPath}}` 残留检查；技能清单段是既定例外，见下）
+  - 自证：改坏 —— 往片段塞回本机路径 → **2 例红**，还原全绿
+  - 探针复跑：A 组三轮产物**逐字一致**、同会话逐轮仍**字节稳定**
+
+**合并态**：`npm run check` exit 0（typecheck + check:deps + check:tokens）；`npm test` **126 文件全绿**
+（2329 passed / 1 skipped）。
+
+**仍未解决（如实抄录）**：
+1. 子代理链路没有解释器指引（改动前也没有）
+2. 门禁口径**有意收窄**（非家目录形态的机器路径不拦）
+3. pi 技能清单段的绝对 `<location>` 属同类前缀风险（要动 pi 的清单格式）
+4. 未做「模型是否照 `<python_env>` 去跑 Python」的端到端行为验证
+5. dsh 式「整轮证据齐备性门控」未采纳（某步缺 usage 会少报而不报错）
+6. steer 等待首响应瞬间读数挂在 steer 之前那条 assistant（属刻意取舍，未做 UI 验证）
+7. 回合计时仍是 **user 键**（steer 场景下被打断那轮显示裸「已完成」）

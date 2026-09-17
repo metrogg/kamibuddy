@@ -17,8 +17,9 @@
  * 两段信息必须分清楚（本文件唯一的纪律）：
  *   - **会话内字节稳定**的内容（骨架 / 片段 / 模式 / 风格 / 人格 / 技能清单 /
  *     记忆行为纪律段 / pi-context）才进系统提示词；
- *   - 逐轮可能变的事实（运行时间、三层记忆内容、个性化、cwd）一律走 append-only
- *     的消息注入，**不进这里**（见 core/prompt-composer.ts 文件头）。
+ *   - 逐轮可能变的事实（运行时间、三层记忆内容、个性化、cwd）与**随机器变的事实**
+ *     （托管 Python 解释器的绝对路径：venv 重建 / 换机器 / 换安装位置都会变）一律走
+ *     append-only 的消息注入，**不进这里**（见 core/prompt-composer.ts 文件头）。
  *
  * 纪律的完整来历与对照：docs/提示词前缀缓存契约.md（dsh 的 PromptContext /
  * in-history 契约、计量纪律与门禁做法的消化稿，含我们仍未对齐的差距）。
@@ -91,11 +92,6 @@ export interface AssembleSystemPromptInput {
 	readonly expert?: ExpertPersona;
 	/** 记忆**行为纪律**段（不是记忆内容 —— 内容走注入路径）。 */
 	readonly memorySystemBody?: string;
-	/**
-	 * 托管 Python 解释器路径，填入片段里的 `{{pythonPath}}`。
-	 * 与会话无关（进程级环境），所以由调用方按机器给一次即可。
-	 */
-	readonly pythonPath?: string;
 	readonly piContext?: PromptContextOptions;
 }
 
@@ -126,7 +122,6 @@ export function assembleSystemPrompt(input: AssembleSystemPromptInput): Assemble
 		resolveFragment: (name) => input.resources.fragments.get(name),
 		...(input.style === undefined ? {} : { style: input.style }),
 		...(input.memorySystemBody === undefined ? {} : { memorySystemBody: input.memorySystemBody }),
-		...(input.pythonPath === undefined ? {} : { pythonPath: input.pythonPath }),
 		...(input.expert === undefined ? {} : { expert: input.expert }),
 		piContext: input.piContext,
 	});
@@ -160,11 +155,6 @@ export interface SystemPromptComposerDeps {
 	readonly readPreferences: () => Preferences;
 	/** 记忆行为纪律段现读（loadMemorySystemPrompt(resourcesDir) 的产物）。 */
 	readonly loadMemorySystemBody: () => string | undefined;
-	/**
-	 * 托管 Python 解释器路径（documents/docx-env.ts 的 venvPython）。
-	 * 缺省 = 不提供；此时片段里若还用着 `{{pythonPath}}`，组装会抛错（不静默留空）。
-	 */
-	readonly pythonPath?: string;
 	/** 风格漂移的落点（daemon 写事件日志；探针打印）。 */
 	readonly onStyleDrift: (drift: StyleDrift) => void;
 	/** token 估算（core/observability.ts 的 estimateTokens）。 */
@@ -208,7 +198,6 @@ export function createSystemPromptComposer(deps: SystemPromptComposerDeps): Syst
 			...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 			...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
 			...(memorySystemBody === undefined ? {} : { memorySystemBody }),
-			...(deps.pythonPath === undefined ? {} : { pythonPath: deps.pythonPath }),
 			piContext: input.piContext,
 		});
 		return {
@@ -239,14 +228,6 @@ export interface SystemPromptComposerDefaults {
 	/** 风格漂移落点（daemon 写事件日志）。 */
 	readonly onStyleDrift: (drift: StyleDrift) => void;
 	/**
-	 * 托管 Python 解释器的真实路径（documents/docx-env.ts 的 venvPython 产物）。
-	 *
-	 * **生产入口恒必填**（不像 deps 里那样可选）：它是要写进提示词的事实，
-	 * 写错或漏给都会变成模型手里的假路径 —— 而假路径不会报错，只会让模型白白
-	 * 试一次。让类型在这一层就把它钉住，别留给运行期。
-	 */
-	readonly pythonPath: string;
-	/**
 	 * 偏好读取。缺省 = 真实 preferences.json；**测试与探针可注入固定值**（偏好是
 	 * 用户数据，读进来会让提示词随机器变，那样钉不住字节稳定这条不变量）。
 	 */
@@ -269,7 +250,6 @@ export function createSystemPromptComposerFromDefaults(
 		enabledSkills: options.enabledSkills,
 		onStyleDrift: options.onStyleDrift,
 		loadMemorySystemBody: () => loadMemorySystemPrompt(options.resourcesDir),
-		pythonPath: options.pythonPath,
 		estimateTokens,
 		readPreferences: options.readPreferences ?? readPreferences,
 	});

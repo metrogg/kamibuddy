@@ -160,6 +160,41 @@ describe("轮终态推导与计划接线", () => {
 	});
 });
 
+/**
+ * 活轮的判据是 **run 身份**（shared/conversation.ts 的 currentRunStartIndex），
+ * 不再是「最后一条 user 消息」（2026-09-17）：steer 的消息也是 user 消息，但它
+ * 落在当前 run 的中间 —— 按 user 判活轮会把页脚/挂点说的那一轮判到别的段去。
+ * 真条目由 reducer 盖章（activeRunId），这里按同一形态手搓。
+ */
+describe("活轮按 run 身份判定", () => {
+	/** 带 run 身份的消息/卡片（reducer 盖章后的形态）。 */
+	function inRun<T extends { readonly runId?: string }>(entry: T, runId: string): T {
+		return { ...entry, runId };
+	}
+
+	it("steer 落在 run 中间：活轮仍是 run 末条所在的那一轮（steer 那条 user 之后）", () => {
+		// 观测形态：同一 run（R）内的 [user, assistant, steer 的 user, 生成中的 assistant]。
+		const views = buildTurnViews(
+			[
+				inRun(user("u1"), "R"),
+				inRun(assistant("a1", "上半段"), "R"),
+				inRun(user("u2"), "R"),
+				inRun(assistant("a2", ""), "R"),
+			],
+			{ streaming: true },
+		);
+		expect(views.map((v) => [v.turnId, v.state])).toEqual([
+			["u1", "finished"],
+			["u2", "streaming"],
+		]);
+	});
+
+	it("无 user 消息、只有 run 内条目：前缀轮就是活轮", () => {
+		const views = buildTurnViews([inRun(tool("t1"), "R")], { streaming: true });
+		expect(views[0]?.state).toBe("streaming");
+	});
+});
+
 describe("操作条挂点", () => {
 	it("挂在本轮末条 assistant 上：中间的过程条目不挂（否则每段过程下面一个复制钮）", () => {
 		const views = buildTurnViews(

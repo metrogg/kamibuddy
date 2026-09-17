@@ -14,7 +14,7 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSkills, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import type { PromptContextOptions, SkillDescriptor } from "../core/prompt-compo
 import {
 	createSystemPromptComposerFromDefaults,
 	type SystemPromptComposer,
+	type SystemPromptComposerDefaults,
 } from "../core/system-prompt-composer.ts";
 import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
@@ -258,6 +259,35 @@ let skillsAgentDir: string;
  */
 let compose: SystemPromptComposer;
 
+/**
+ * 门禁专用组装器：与上面那个同函数、同真资源，**只把技能清单置空**。
+ *
+ * 为什么单开一个而不是复用 `compose`：pi 的 formatSkillsForPrompt 会把每个技能的
+ * 绝对 `<location>` 写进技能清单段（本机上就是本仓库 resources/skills 的路径），
+ * 那是 pi 的形态、随**应用安装位置**变 —— 它属「机器相关路径」门禁的既定例外
+ * （随安装位置变是事实，但拦它要动 pi 的清单格式，不在本改动范围）。把技能段算进
+ * 门禁有两个坏处：① 项目恰好放在用户家目录下的机器会把门禁扫红（与改动质量无关）；
+ * ② 真出问题时说不清是「我们塞了路径」还是「pi 的技能清单本来就这样」。
+ * 置空后本门禁钉的东西是确定的：**我们自己的资源（骨架 / 片段 / 模式 / 风格 /
+ * 记忆纪律段）里不许有任何机器相关绝对路径**。
+ */
+let composeWithoutSkills: SystemPromptComposer;
+
+/**
+ * 两个组装器共用的注入项（技能清单是唯一差异）。
+ *   - 不绑专家：组装器对 expertId === undefined 短路，专家库不会被读到
+ *     （这也是 daemon 侧的既定语义 —— 未绑定专家不走专家库那条从紧的读路径）。
+ *   - 偏好是**用户数据**：注入固定值，免得测试机上的风格设置改变产物
+ *     （与「真实 resources/」不冲突：资源是随应用分发的，偏好不是）。
+ *   - 风格漂移落点在本用例不该被触发（偏好里没有 styleId）；生产里它写事件日志。
+ */
+const COMPOSER_DEFAULTS: Omit<SystemPromptComposerDefaults, "enabledSkills"> = {
+	resourcesDir: getResourcesDir(),
+	loadExperts: () => [],
+	onStyleDrift: () => {},
+	readPreferences: () => ({ activeModelKey: undefined }),
+};
+
 beforeAll(() => {
 	skillsAgentDir = mkdtempSync(join(tmpdir(), "kami-prompt-stability-"));
 	realSkills = loadSkills({
@@ -272,20 +302,12 @@ beforeAll(() => {
 		disableModelInvocation: skill.disableModelInvocation === true,
 	}));
 	compose = createSystemPromptComposerFromDefaults({
-		resourcesDir: getResourcesDir(),
-		// 本用例不绑专家：组装器对 expertId === undefined 短路，专家库不会被读到
-		//（这也是 daemon 侧的既定语义 —— 未绑定专家不走专家库那条从紧的读路径）。
-		loadExperts: () => [],
+		...COMPOSER_DEFAULTS,
 		enabledSkills: () => realSkills,
-		// 真实片段 python-env 里有 {{pythonPath}}，缺值组装会抛错 —— 给固定桩。
-		pythonPath: "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe",
-		onStyleDrift: () => {
-			// 偏好注入了固定值（无 styleId），本用例不该出现漂移；漂移落点在
-			// 生产里是事件日志，这里不需要。
-		},
-		// 偏好是**用户数据**：注入固定值，免得测试机上的风格设置改变产物
-		//（与「真实 resources/」不冲突：资源是随应用分发的，偏好不是）。
-		readPreferences: () => ({ activeModelKey: undefined }),
+	});
+	composeWithoutSkills = createSystemPromptComposerFromDefaults({
+		...COMPOSER_DEFAULTS,
+		enabledSkills: () => [],
 	});
 });
 
@@ -399,6 +421,58 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		// 分段 provenance 同样不许出现曾经的时间段来源。
 		for (const segment of composed.segments) {
 			expect(segment.source).not.toBe("time");
+		}
+	});
+
+	it("生产组装入口的产物不含任何机器相关的绝对路径形态（堵「有人把本机路径塞进提示词」的洞）", () => {
+		/*
+		 * 与上面那条同款、针对同一类事故的另一种载体：**随机器变的事实**。
+		 * 托管 Python 解释器的绝对路径曾以 `{{pythonPath}}` 槽位拼进骨架片段
+		 * （spec: 转换调用受控的 2026-09-17 修订），它随 homedir / 应用安装位置 /
+		 * HTML_TO_DOCX_VENV 变 —— 而系统提示词位于整段对话历史之前，所以
+		 * 「重建 venv / 换机器 / 私有化换个安装位置」会让该处之后的整段提示词与
+		 * 整段历史一起在 provider 前缀缓存里失配。槽位与取值链已删、路径改走
+		 * hidden context 的 `python_env` 段（spec: stabilize-prompt-prefix）。
+		 * 本用例就是那条纪律的反向钉子：谁把机器路径写回资源里，这里红。
+		 *
+		 * **口径（为什么不是「任何盘符」）**：resources 里有**与本机无关的通用示例**
+		 * —— windows-notes 的 `D:\work\报告.docx`、code 骨架禁区段的 `C:\`、
+		 * skill 文档里的 `python3`。它们在任何机器上字节相同，不属「机器相关」；
+		 * 把门禁写成「任何盘符 / 任何绝对路径」只会被白名单一项项放宽，那才是真
+		 * 漏洞。这里钉的是**本机身份**的载体：
+		 *   ① 用户家目录（`homedir()` 的字面量 + `%USERPROFILE%` + 盘符/POSIX
+		 *      家目录链形态）：藏在提示词里的任何用户目录路径都会命中；
+		 *   ② 托管 venv 的指纹（`.venv-html-to-docx` / `python.exe`）与那个槽位；
+		 * 技能清单段不在扫描范围（pi 的 formatSkillsForPrompt 会写技能的绝对
+		 * `<location>`，是 pi 的形态、随应用安装位置变 —— 见 composeWithoutSkills 注释）。
+		 */
+		vi.setSystemTime(FIRST_TURN_AT);
+		const composed = composeWithoutSkills({
+			sceneId: "work",
+			interactionId: "craft",
+			expertId: undefined,
+		});
+		// 非空守卫：空串能通过任何「不含」断言。
+		expect(composed.prompt.length).toBeGreaterThan(1_000);
+		expect(composed.prompt, "组装里出现了本机家目录").not.toContain(homedir());
+		for (const pattern of [
+			/[A-Za-z]:\\{1,2}(?:Users|用户)\\/i, // C:\Users\… / C:\用户\…
+			/\/Users\/[^/\s]/,
+			/\/home\/[^/\s]/,
+			/%USERPROFILE%/i,
+			/\.venv-html-to-docx/,
+			/python\.exe/,
+			/\{\{pythonPath\}\}/,
+		]) {
+			expect(composed.prompt).not.toMatch(pattern);
+		}
+		// 三个场景 × 三个模式的产物都过一遍（只有 work 之外的骨架漏了路径才是真事故）。
+		for (const sceneId of SCENES) {
+			for (const modeId of MODES) {
+				const other = composeWithoutSkills({ sceneId, interactionId: modeId, expertId: undefined });
+				expect(other.prompt.length, `${sceneId} × ${modeId} 组装为空`).toBeGreaterThan(1_000);
+				expect(other.prompt, `${sceneId} × ${modeId} 含本机家目录`).not.toContain(homedir());
+			}
 		}
 	});
 

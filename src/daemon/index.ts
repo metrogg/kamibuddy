@@ -690,26 +690,16 @@ function buildRuntimeContext(cwd: string): string {
  * `context` 事件作为消息注入，时间由会话侧 hidden context 的 `current_time`
  * 每轮注入（session-host.ts）。工作目录同样不进提示词：工作目录的唯一来源是
  * hidden context 的 workspace_context。
+ *
+ * **随机器变的事实同样不在这里**：托管 Python 解释器的绝对路径（venv 重建 /
+ * 换机器 / 换安装位置都会改字节）由会话侧 hidden context 的 `python_env` 段送达
+ * —— 见 SessionHost.create 的 `pythonPath` 入参与其注释。
  */
 const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	resourcesDir: getResourcesDir(),
 	loadExperts: loadExpertsNow,
 	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
 	enabledSkills: (expertId) => toSkillDescriptors(enabledSkills(expertId)),
-	/*
-	 * 托管 Python 解释器路径进提示词（resources/prompts/fragments/python-env.md
-	 * 的 {{pythonPath}}），照 WorkBuddy 的 client-info-env 做法。
-	 *
-	 * 为什么值得进提示词：模型拿系统 Python 写脚本时，缺库的第一反应就是
-	 * `pip install` —— 而那在沙箱里**必定失败**（2026-09-17 现场，见
-	 * docs/ARCHITECTURE.md 已知边界第 8 条）。给出真实路径，Python 任务才会
-	 * 落在我们受控且已备依赖的环境上。
-	 *
-	 * 取值在这里**算一次**（模块初始化期）：它只取决于 homedir / platform /
-	 * HTML_TO_DOCX_VENV，进程内恒定 —— 逐轮现算既无必要，也会让「系统提示词
-	 * 字节稳定」这条不变量多一个可以出错的入口。
-	 */
-	pythonPath: venvPython(docxEnvContext()),
 	// 风格配置漂移记进事件日志：降级可以是体验取舍，但不能无痕。
 	onStyleDrift: ({ requested, fallback }) => {
 		eventLog.append({ kind: "style_drift", requested, fallback });
@@ -763,6 +753,15 @@ function tempTasksDir(): string {
  */
 function docxEnvContext(): EnvContext {
 	return createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform);
+}
+
+/**
+ * 托管 venv 的解释器绝对路径 —— hidden context 的 `python_env` 段与 run 会话
+ * 共用的唯一取值处（venvPython 是纯函数，但「引擎目录怎么拼」这项知识只该有一份，
+ * 免得用户会话与 run 会话悄悄给模型两个不同的路径）。
+ */
+function docxPythonPath(): string {
+	return venvPython(docxEnvContext());
 }
 
 /**
@@ -978,6 +977,10 @@ const automationScheduler = new AutomationScheduler({
 		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
 		// 工具调用都要读）。用户在设置页改完，下一次 run 即刻生效。
 		getThinkingLevel: () => readPreferences().thinkingLevel,
+		// 托管解释器路径 → run 会话 hidden context 的 python_env 段。run 会话的
+		// 提示词同样是 work 骨架（含 python-env 片段），模型需要这条才知道该用
+		// 哪个解释器（值与用户会话同一处取值：docxPythonPath）。
+		pythonPath: docxPythonPath(),
 		protectedDirs: PROTECTED_DIRS,
 		isTempCwd,
 		isOwnWorkspace: (dir) =>
@@ -2065,6 +2068,23 @@ async function createHost(
 				return undefined;
 			}
 		},
+		/*
+		 * 托管 Python 解释器的绝对路径 → hidden context 的 python_env 段。
+		 * 照 WorkBuddy 的 client-info-env 做法（把托管运行时路径交给模型），但
+		 * 位置从系统提示词挪到了注入块（spec: stabilize-prompt-prefix）：
+		 *
+		 * 为什么必须让模型知道：它拿系统 Python 写脚本时，缺库的第一反应就是
+		 * `pip install` —— 而那在沙箱里**必定失败**（2026-09-17 现场，见
+		 * docs/ARCHITECTURE.md 已知边界第 8 条）。给出真实路径，Python 任务才会
+		 * 落在我们受控且已备依赖的环境上。
+		 *
+		 * 为什么不能在系统提示词里：它随机器变（homedir / 安装位置 /
+		 * HTML_TO_DOCX_VENV），而系统提示词位于整段对话历史之前 —— venv 一重建、
+		 * 一换机器、私有化部署换个安装位置，该处之后的整段提示词与整段历史一起
+		 * 在 provider 前缀缓存里失配。`venvPython` 是纯函数，这里每建宿主现算一次，
+		 * 与会话内字节稳定不冲突（注入块在历史之后）。
+		 */
+		pythonPath: docxPythonPath(),
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -4485,7 +4505,8 @@ const handlers: Record<string, Handler> = {
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
 	// 技能清单 / 专家库 / 风格偏好现读（与 composeSystemPrompt 同一口径）。
 	// 预览只组装系统提示词，不产出逐轮可变事实（时间/记忆内容/个性化 —— 它们走
-	// prompt-switch 的注入，不在提示词里）与工作目录（pi 内置 cwd section）。
+	// prompt-switch 的注入，不在提示词里）与工作目录（hidden context 的
+	// workspace_context）、托管解释器路径（hidden context 的 python_env）。
 	[INVOKE.promptPreview]: async ([request]) => {
 		const preview = request as PromptPreviewRequest;
 		/*
@@ -4512,8 +4533,6 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-			// 同一处取值（venvPython 是纯函数，两次算出的字节必然相同）。
-			pythonPath: venvPython(docxEnvContext()),
 		});
 	},
 

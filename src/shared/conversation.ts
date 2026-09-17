@@ -18,6 +18,7 @@ import type {
 	ConversationEntry,
 	MessageId,
 	QueuedMessages,
+	RunId,
 	RunRetryState,
 	SessionEvent,
 	SessionSnapshot,
@@ -84,6 +85,20 @@ export interface ConversationView {
 	 * 压缩态不属于被重推的 state，重推后若还留着就是幽灵状态行（悬浮不消失）。
 	 */
 	readonly compacting?: CompactionState;
+	/**
+	 * 当前正在给新条目盖章的 run id（`run_started` 置位，`history_reset` 清）。
+	 *
+	 * 为什么 reducer 自己盖章而不靠消费方猜：**轮边界的唯一权威是 run**（见
+	 * currentRunStartIndex）。steer / followUp 的消息会以 user 消息落地并触发
+	 * user_message，但它落在**当前 run 中间**，不是新一轮 —— 所以「本轮」不能
+	 * 按「最后一条 user 消息」推，只能按 run 身份认。run_started 一定先于该 run
+	 * 的首条条目到达（实测日志 24/24 命中这个顺序），所以「置位后追加的条目」
+	 * 就是该 run 的条目，不存在需要回填的窗口。
+	 *
+	 * 缺省 = 没有进行过 run（快照恢复的历史条目、旧视图）：那时条目不带 runId，
+	 * currentRunStartIndex 按无身份处理。
+	 */
+	readonly activeRunId?: RunId;
 }
 
 export type ConversationAction =
@@ -166,14 +181,11 @@ function dropFirstMatch(list: readonly string[], text: string): readonly string[
  *
  *   - `"first"`（缺省）：**id 全局唯一**的条用（工具卡的 id 是 provider 生成的
  *     toolCallId，天然不重；first/last 等价，保持既有语义）。
- *   - `"last"`：**assistant 消息条目必须用它**。消息 id 是宿主进程内自增计数器
- *     的产物（core/session-host.ts 的 idSeq），**宿主重建后计数器从 1 重来** ——
- *     daemon 重启 / resume 的 remountHostInBucket 都会重建宿主，于是同一串
- *     `assistant-3` 在同一个 entries 数组里对应**多条真实不同的消息**。
- *     这时只有「最后那条」是本次 `assistant_started` 开的气泡；写成 first 会把
- *     新消息的正文与 usage 盖进上一代的老条目上，而老条目在数组里的位置属于
- *     **更早的轮** —— usage 就此跨轮搬家：本轮的窗口被空壳占住（少算），
- *     更早那轮的窗口里冒出别轮的 usage（多算）。
+ *   - `"last"`：**assistant 消息条目用它** —— 流式更新（started → delta → done）
+ *     认的永远是「这个 id 最新的那条」。这条缺陷的根因（消息 id 跨宿主代际复用，
+ *     见 core/session-host.ts 的 hostGeneration）已在 2026-09-17 由 id 命名空间
+ *     根治，但语义选择与命名空间无关：同 id 时改最新那条永远是对的，改第一条是
+ *     在赌「id 不会重复」。
  *
  *     实测（2026-09-17，会话 01a0ae75，6 轮 / 50 步，事件日志里宿主代际切换 4 次，
  *     id 序列 user-2/assistant-3… 被三代复用）：按 first 替换时，页脚给第 2 轮
@@ -197,6 +209,24 @@ function replaceEntry(
 	const next = entries.slice();
 	next[index] = update(existing);
 	return next;
+}
+
+/**
+ * 给新条目盖上当前 run 的身份（语义见 RunId 与 activeRunId 注释）。
+ *
+ * 只在有 run 在进行时盖章：历史重建的条目、旧视图里的条目没有 run 记录，
+ * 编一个假身份出来会让「本轮」把它们算进来。
+ */
+function taggedWithRun(entry: ConversationEntry, runId: RunId | undefined): ConversationEntry {
+	return runId === undefined ? entry : { ...entry, runId };
+}
+
+/**
+ * 本条目的 run 身份（缺席则回落到当前 run）—— 替换已有条目时用：条目自己带的
+ * 身份比 view.activeRunId 更准（迟到的 tool_finished 可能落在下一个 run 里）。
+ */
+function runOf(entry: ConversationEntry, fallback: RunId | undefined): RunId | undefined {
+	return entry.runId ?? fallback;
 }
 
 /**
@@ -252,18 +282,60 @@ const MAX_TURN_TIMINGS = 100;
 /**
  * 当前回合的起点下标 = **最后一条 user 消息**的下标；没有 user 消息时为 −1。
  *
- * **轮边界的唯一实现处**（2026-09-17 收拢）：它此前在五处各写一遍
- * （本文件的 lastTurnId / markTurnCancelled、renderer 的 turn-fold
- * buildTurnViews、turn-metrics foldTurnMetrics、chat-view 的 lastUserEntry 与
- * metricsAnchorId），五个地方写的都是 `findLast(role === "user")` 的同义改写 ——
- * 而页脚的「本轮」读数、回合头部的计时、回合折叠的切分全依赖这一条边界，
- * 任一处漂移都会让同屏两个读数说的是不同的轮（AGENTS.md §4 防重复）。
+ * **它不再是「本轮」的边界**（2026-09-17）：页脚的读数、指标挂点、轮折叠的活轮
+ * 判定统一改看 run 身份（见 currentRunStartIndex）—— steer 的消息会以 user 消息
+ * 落在 run 中间，按「最后一条 user」猜边界会把整轮切成两半（页脚只显示 steer
+ * 之后的步，而台账按 run 聚合是整轮）。
+ *
+ * 它仍然要留着的三处用法，都真的需要「用户消息」这个语义而不是 run：
+ *   1. **回合计时映射的键**（recordTurnTiming / chat-view 的 TurnHeader）：
+ *      计时是「用户发出 → run 结束」，起点就是用户的落库时间，历史轮的头部按
+ *      「开启该轮的 user 消息 id」查回计时；
+ *   2. **分支 / 重试的锚点**（chat-view 的 lastUserEntry → branchTargets /
+ *      retryTarget）：要重发的是用户打过的那句话，只有 user 消息有；
+ *   3. **无 run 身份时的兜底边界**（currentRunStartIndex）：恢复重建的历史条目
+ *      没有 run 记录，那时只有这条边界有依据。
  *
  * 语义：最后一条 user 之后（到下一条 user 之前）为本轮；没有 user 消息时
  * 整体视作前缀轮（同 buildTurnViews 的最后一段）。
  */
 export function lastUserEntryIndex(entries: readonly ConversationEntry[]): number {
 	return entries.findLastIndex((e) => e.role === "user");
+}
+
+/**
+ * 当前 run 的窗口起点（entries 下标）—— **「本轮」的唯一实现处**（2026-09-17）。
+ *
+ * 消费方三处，都只许读这一个函数（AGENTS.md §4）：
+ *   - `renderer/turn-metrics.ts` 的 foldTurnMetrics：页脚 ↑/↓/命中的求和窗口；
+ *   - `renderer/chat-view.tsx` 的 metricsAnchorId：操作条读数与模型名的挂点；
+ *   - `renderer/turn-fold.ts` 的 buildTurnViews：哪一轮是活轮（不折叠）。
+ *
+ * 判据：条目自带的 run 身份（reducer 在 run_started 之后盖的章）。窗口取
+ * 「最后一条有身份的条目所属的那一段**连续后缀**」——
+ *   - steer / followUp 的 user 消息与它之前的步同属一个 run ⇒ 一起进窗口，
+ *     这正是「页脚 = 台账按 run 聚合」的关键；
+ *   - 空闲压缩会开一个 run 但**不产生任何条目**（压缩的模型调用走
+ *     agent.streamFunction，不进 agent 循环、不发 message 事件 —— 2026-09-17 实测
+ *     `compact()` 期间只有 compaction_start/end 两个事件），于是窗口自动停在
+ *     上一个有内容的 run 上，页脚读数不会被一次压缩清空。
+ *
+ * 全无 run 身份时退回「最后一条 user 消息」：那只发生在恢复路径重建出的历史
+ * （core/session-rebuild.ts，会话文件里没有 run 记录）——把整段历史算成同一轮
+ * 会让页脚读出一个跨会话的巨值，而「最后一条 user 之后」是该视图下唯一有依据的
+ * 边界（与 run 身份落地前的口径一致）。
+ */
+export function currentRunStartIndex(entries: readonly ConversationEntry[]): number {
+	const taggedIndex = entries.findLastIndex((e) => e.runId !== undefined);
+	if (taggedIndex === -1) {
+		const lastUser = lastUserEntryIndex(entries);
+		return lastUser === -1 ? 0 : lastUser;
+	}
+	const runId = entries[taggedIndex]?.runId;
+	// 从尾部往回走：run 的条目是连续后缀，回走到身份变掉为止。
+	let start = taggedIndex;
+	while (start > 0 && entries[start - 1]?.runId === runId) start -= 1;
+	return start;
 }
 
 /** 当前回合 id = 最后一条 user 消息 id（即 lastUserEntryIndex 指的那条）。 */
@@ -275,10 +347,10 @@ export function lastTurnId(entries: readonly ConversationEntry[]): MessageId | u
 /**
  * 写入某回合计时，超出上限时丢最早的键。
  *
- * 键是 `user-N` 形态（core/session-host.ts 的 nextId），非整数样字符串 ——
- * JS 对象对这类键保持插入顺序，故 Object.keys 的前几个就是最早的回合，从头
- * 裁剪即丢最旧（若键变成整数样字符串会按数值排序，此假设失效）。更新已有键
- * 不改其插入位置，「回合结束补 endedAt」不会把它挪成最新。
+ * 键是 `user-g<代际>-<序号>` 形态（core/session-host.ts 的 nextId），非整数样
+ * 字符串 —— JS 对象对这类键保持插入顺序，故 Object.keys 的前几个就是最早的回合，
+ * 从头裁剪即丢最旧（若键变成整数样字符串会按数值排序，此假设失效）。
+ * 更新已有键不改其插入位置，「回合结束补 endedAt」不会把它挪成最新。
  */
 function recordTurnTiming(
 	timings: Readonly<Record<string, TurnTiming>> | undefined,
@@ -314,6 +386,10 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			turnTimings:
 				(action.snapshot as { readonly turnTimings?: Readonly<Record<string, TurnTiming>> })
 					.turnTimings ?? {},
+			// 同 turnTimings：SessionSnapshot 未声明该字段，而运行期快照就是 daemon 的
+			// 那份 ConversationView（条目上的 run 身份已在其中），按结构窄化读取。
+			// 缺省（旧快照 / 重建后的历史）→ 后续条目不带 run 身份，见 activeRunId 注释。
+			activeRunId: (action.snapshot as { readonly activeRunId?: RunId }).activeRunId,
 			cancelledTurns: action.snapshot.cancelledTurns ?? [],
 			artifacts: action.snapshot.artifacts,
 			retry: action.snapshot.retry,
@@ -345,6 +421,8 @@ export function conversationReducer(view: ConversationView, action: Conversation
 				queued: undefined,
 				// 压缩态同属运行现场，一并清零（历史都清了，不该还挂着「正在压缩」）。
 				compacting: undefined,
+				// run 身份随之作废：新历史的条目不该被旧 run 盖章。
+				activeRunId: undefined,
 			};
 
 		case "run_started": {
@@ -361,6 +439,8 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			return {
 				...view,
 				state: { ...view.state, isStreaming: true },
+				// 本 run 的身份就位：此后追加的条目都盖这个章（currentRunStartIndex 的判据）。
+				activeRunId: event.runId,
 				turnTimings:
 					liveTurn !== undefined && liveTurn.endedAt === undefined && turnId !== undefined
 						? recordTurnTiming(view.turnTimings, turnId, liveTurn)
@@ -426,7 +506,7 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			// 不由这里清 —— queue_changed 会给出新值，新消息可能只是进队而不是立即发出。
 			return {
 				...view,
-				entries: [...view.entries, event.message],
+				entries: [...view.entries, taggedWithRun(event.message, view.activeRunId)],
 				turn: { startedAt: event.message.at },
 				// 以「开轮 user 消息 id」为键记入计时映射：与 renderer 的轮切分
 				// （turn-fold.ts 用 user.id 作 turnId）同一口径，历史回合头部据此查回计时。
@@ -439,7 +519,10 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "assistant_started":
 			return {
 				...view,
-				entries: [...view.entries, { id: event.messageId, role: "assistant", text: "", at: event.at }],
+				entries: [
+					...view.entries,
+					taggedWithRun({ id: event.messageId, role: "assistant", text: "", at: event.at }, view.activeRunId),
+				],
 			};
 
 		case "assistant_text_delta":
@@ -470,10 +553,14 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "assistant_done": {
 			// 用终态整条覆盖，校正累积增量可能的偏差。
 			const done: AssistantMessage = event.message;
-			// "last"：id 撞名时只认本次消息自己那条（根因见 replaceEntry 注释）。
-			const replaced = replaceEntry(view.entries, done.id, () => done, "last");
+			// "last"：同 id 撞名时只认本次消息自己那条（根因见 replaceEntry 注释）。
+			// run 身份沿用原条目的（同一条消息不该换 run），缺席才回落当前 run。
+			const replaced = replaceEntry(view.entries, done.id, (entry) => taggedWithRun(done, runOf(entry, view.activeRunId)), "last");
 			// 没找到说明漏了 assistant_started，补进去而不是丢掉内容。
-			return { ...view, entries: replaced === view.entries ? [...view.entries, done] : replaced };
+			return {
+				...view,
+				entries: replaced === view.entries ? [...view.entries, taggedWithRun(done, view.activeRunId)] : replaced,
+			};
 		}
 
 		case "tool_stream_started":
@@ -482,8 +569,11 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			// 把同一张卡翻转为执行态 —— 一次工具调用始终只有一张卡（WorkBuddy 同构）。
 			// 缺了 stream_started 的旧流程（或乱序）下找不到 id，退化为追加。
 			const card = event.card;
-			const replaced = replaceEntry(view.entries, card.id, () => card);
-			return { ...view, entries: replaced === view.entries ? [...view.entries, card] : replaced };
+			const replaced = replaceEntry(view.entries, card.id, (entry) => taggedWithRun(card, runOf(entry, view.activeRunId)));
+			return {
+				...view,
+				entries: replaced === view.entries ? [...view.entries, taggedWithRun(card, view.activeRunId)] : replaced,
+			};
 		}
 
 		case "tool_stream_progress":
@@ -555,8 +645,11 @@ export function conversationReducer(view: ConversationView, action: Conversation
 
 		case "tool_finished": {
 			const card: ToolCard = event.card;
-			const replaced = replaceEntry(view.entries, card.id, () => card);
-			return { ...view, entries: replaced === view.entries ? [...view.entries, card] : replaced };
+			const replaced = replaceEntry(view.entries, card.id, (entry) => taggedWithRun(card, runOf(entry, view.activeRunId)));
+			return {
+				...view,
+				entries: replaced === view.entries ? [...view.entries, taggedWithRun(card, view.activeRunId)] : replaced,
+			};
 		}
 
 		case "session_state":

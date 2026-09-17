@@ -1085,6 +1085,12 @@ describe("压缩态（compaction_started / compaction_finished）", () => {
  * 这里钉住「后一代的消息只写它自己的条目」：写成同 id 的第一条，会让新一代的
  * 正文与 usage 盖进上一代的老条目（位置属于更早的轮）—— 页脚的「本轮」读数
  * 随之跨轮串账（实测见 renderer/turn-metrics.ts 文件头）。
+ *
+ * **撞名的根因已在 2026-09-17 根治**（id 带宿主代际号，core/session-host.ts 的
+ * hostGeneration；那一侧的钉子见 session-host.test.ts 的「id 代际命名空间」组）。
+ * 本组因此不再是「复现线上形态」，而是钉 reducer 的**语义选择**：同 id 出现多条时
+ * 更新最新那条（replaceEntry 的 match:"last"）—— 换掉命名空间也好、拿到旧快照也好，
+ * 这条语义都该成立。
  */
 describe("同 id 复用（宿主重建后 id 撞名）", () => {
 	/** 两代宿主各发一条 id 相同的助手消息（第二代的 usage 与正文都不同）。 */

@@ -19,7 +19,7 @@
  * （viewCacheRef 同款机制），chat-view 挂载/切会话按桶存取；不落盘。
  */
 
-import { lastTurnId } from "@shared/conversation.ts";
+import { currentRunStartIndex } from "@shared/conversation.ts";
 import type { ConversationEntry, MessageId, UserMessage } from "@shared/session-events.ts";
 import { buildFoldPlan } from "./fold-view.ts";
 import type { FoldPlan, TurnState } from "./fold-view.ts";
@@ -91,28 +91,38 @@ export interface TurnViewOptions {
 /**
  * entries → 轮视图序列。
  *
- * 轮终态推导：流式中且是最后一条 user 所在轮 → streaming；内容含错误条目
+ * 轮终态推导：流式中且**含当前 run 窗口末条**的轮 → streaming；内容含错误条目
  * → error（折叠行为与 finished 相同，错误卡靠豁免留出，语义单列）；其余
- * → finished（含被取消轮与历史轮）。没有 user 消息的前缀轮跟随「是否连
- * 最后一条 user 都不存在」判定流式——连轮边界都没有时它就是活的那一段。
+ * → finished（含被取消轮与历史轮）。
+ *
+ * 活轮的判据从「最后一条 user 所在轮」改成「当前 run 窗口的末条所在轮」
+ * （2026-09-17，与页脚读数/指标挂点共用同一个边界，AGENTS.md §4）：steer 会让
+ * 一条 user 消息落在 run 中间，按它判活轮等于承认「steer 开了新轮」，而页脚与
+ * 台账都按 run 聚合整轮 —— 两处说的就不是同一件事了。窗口是连续后缀（见
+ * currentRunStartIndex），所以活轮就是最后一段；一次空闲压缩不开新段（不产生
+ * 条目），活轮照旧停在上一轮。
  */
 export function buildTurnViews(
 	entries: readonly ConversationEntry[],
 	options: TurnViewOptions,
 ): readonly TurnView[] {
 	const { streaming, cancelledTurns = [] } = options;
-	// 轮边界取自 shared 的唯一实现处（页脚 fold 与回合头部同边界，AGENTS.md §4）。
-	const lastUserId = lastTurnId(entries);
+	// 「本轮」边界取自 shared 的唯一实现处（页脚 fold 与指标挂点同边界）。
+	const runStart = currentRunStartIndex(entries);
+	// 窗口 = [runStart, entries.length)；末条即 entries 末条（窗口非空时）。
+	const liveIndex = runStart < entries.length ? entries.length - 1 : -1;
 
 	const views: TurnView[] = [];
 	let user: UserMessage | undefined;
+	/** 本轮的区间起点（含）：user 轮是那条 user 的下标，前缀轮是 0。 */
+	let start = 0;
 	let content: ConversationEntry[] = [];
 
-	const flush = (): void => {
+	const flush = (endExclusive: number): void => {
 		// 空前缀（entries 以 user 开头或为空）不产轮；空轮（连续 user）保留——
 		// 回合头部要照常落位（metafold v1「连续 user 各有头部」同口径）。
 		if (user === undefined && content.length === 0) return;
-		const isLive = user === undefined ? lastUserId === undefined : user.id === lastUserId;
+		const isLive = liveIndex >= start && liveIndex < endExclusive;
 		const state: TurnState = streaming && isLive
 			? "streaming"
 			: content.some((e) => e.role === "error")
@@ -132,15 +142,16 @@ export function buildTurnViews(
 		});
 	};
 
-	for (const entry of entries) {
+	for (const [index, entry] of entries.entries()) {
 		if (entry.role === "user") {
-			flush();
+			flush(index);
 			user = entry;
+			start = index;
 			content = [];
 			continue;
 		}
 		content.push(entry);
 	}
-	flush();
+	flush(entries.length);
 	return views;
 }
