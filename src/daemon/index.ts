@@ -48,7 +48,7 @@ import {
 	writeMcpConfig,
 } from "../core/mcp-config.ts";
 import { ModelCatalog, parseModelKey } from "../core/model-catalog.ts";
-import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
+import { ObservabilityStore } from "../core/observability.ts";
 import {
 	appendPermissionRule,
 	loadPermissionRules,
@@ -69,17 +69,15 @@ import {
 	statSessionArtifact,
 } from "./session-cwd-reads.ts";
 import {
-	composePromptWithMeta,
+	formatRuntimeContext,
 	requireExpertPersona,
 	resolveSessionExpert,
 	sessionSkillPaths,
-	skillsSectionForMode,
-	toExpertPersona,
 	type PersonalizationSection,
-	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
-import { DEFAULT_STYLE_ID, loadResources, resolveStyle, toDescriptors } from "../core/resources.ts";
+import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resources.ts";
+import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
 import { importSkill, readInstalledMeta, userSkillsDir } from "../core/skill-install.ts";
 import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
 import { computeSkillsCost } from "../core/skills-cost.ts";
@@ -95,7 +93,6 @@ import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from ".
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
 import { TeamRegistry } from "./team-runtime.ts";
-import type { SystemSegmentStat } from "../shared/observability.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import {
 	readDisplayNames,
@@ -122,6 +119,7 @@ import {
 	createSandboxedRunner,
 	warmUpSandbox,
 	type SandboxDiagnostics,
+	type SandboxPrepareReport,
 } from "./sandbox-runner.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
 import { teamExtensionFactory } from "../extensions/team-tools.ts";
@@ -209,6 +207,7 @@ import {
 	type WebSearchTestResult,
 } from "../shared/settings.ts";
 import { readApiKey } from "../core/api-keys.ts";
+import { ensureAgentTools } from "../core/agent-tools.ts";
 import { probeModel } from "../core/model-probe.ts";
 import { searchWeb } from "../core/web-search.ts";
 import {
@@ -636,16 +635,10 @@ function getWebSearchConfig(): WebSearchConfig | undefined {
 }
 
 /**
- * 组装指定 cwd 与两轴下的系统提示词。用户会话与定时任务 run 会话共用 ——
- * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
- * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
- * run 会话没有诊断视图、直接丢弃）。
- */
-/**
- * 个性化注入段单点现读（composeSystemPrompt 与 prompt:preview 共用，
- * 预览不静默漂移）。只投 4 个注入字段：两个 boolean 是 UI 开关不进提示词
+ * 个性化注入段单点现读（buildRuntimeContext 的唯一读点）。
+ * 只投 4 个注入字段：两个 boolean 是 UI 开关不进模型可见文本
  * （core/prompt-composer.ts PersonalizationSection 的注释钉住了这条）。
- * 每轮现读偏好：设置页改完下一轮对话即生效（同技能清单/风格口径）。
+ * 每轮现读偏好：设置页改完下一次模型调用即生效（同技能清单/风格口径）。
  */
 function readPersonalizationSection(): PersonalizationSection {
 	const prefs = readPreferences();
@@ -657,82 +650,56 @@ function readPersonalizationSection(): PersonalizationSection {
 	};
 }
 
-async function composeSystemPrompt(
-	cwd: string,
-	sceneId: string,
-	interactionId: string,
-	expertId: string | undefined,
-	// prompt-switch 的每轮组装带真实 piContext；resume 的估算补算与 prompt:preview
-	// 一样拿不到（要等 before_agent_start），置空 —— 组装器对缺省的容忍见 composer。
-	piContext?: PromptContextOptions,
-): Promise<{
-	prompt: string;
-	systemTokens: number;
-	skillsTokens: number;
-	/** 分段 provenance（source + 字符数），台账 request_snapshot 的 system 部分。 */
-	segments: readonly SystemSegmentStat[];
-}> {
-	const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
-	const mode = RESOURCES.modes.find((m) => m.id === interactionId);
-	if (scene === undefined || mode === undefined) {
-		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
-	}
-	// 专家与交互模式正交：只按 expertId 是否绑定决定是否解析专家，与模式无关
-	//（选专家不改模式，切模式不清专家）。一轮组装里人格与私有技能目录都要用它，
-	// 只查一次共用（expertId 有值但不在库中在这里响亮抛错，见 resolveSessionExpert）。
-	// 未绑定专家不走这条读路径：专家库加载从紧（坏文件抛错），三模式会话不该被
-	// 一个坏专家包拖垮（短路求值刻意保留）。
-	const expert = expertId === undefined ? undefined : resolveSessionExpert(loadExpertsNow(), expertId);
-	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。技能与 use_skill
-	// 工具走同一个出口（skillSets）：绑定专家时其私有技能既进清单段、也进工具。
-	// 清单段只放**已启用**的（enabledSkills）—— 三处同源的那一份过滤，见 enabledSkills 注释。
-	const skills: SkillDescriptor[] = toSkillDescriptors(enabledSkills(expertId));
-	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里 read / bash / use_skill 一个
-	// 都没有时，不注入技能段（见 core/prompt-composer.ts skillsSectionForMode）
-	// —— 否则会让模型去调用一个并不存在的工具（plan 这类只读配置就是这个坑）。
-	const skillsSection = skillsSectionForMode(mode.tools, skills);
-	/*
-	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
-	 * 无需重启）。三态：未配置 = 默认专业 / 空串 = 关闭 / 某 id = 指定。
-	 * 指定 id 不在资源库 = 配置漂移（风格被改名/删除）—— resolveStyle 降级
-	 * 默认风格，这里把漂移记进事件日志：降级可以是体验取舍，但不能无痕。
-	 */
-	const { style, driftedFrom } = resolveStyle(RESOURCES.styles, readPreferences().styleId);
-	if (driftedFrom !== undefined) {
-		eventLog.append({
-			kind: "style_drift",
-			requested: driftedFrom,
-			fallback: style?.id ?? DEFAULT_STYLE_ID,
-		});
-	}
-	// 记忆段每轮现读（同技能清单口径：模型用 edit 改了 MEMORY.md，下一轮即生效）。
-	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
-	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
-	const memoryContent = buildSessionMemorySection(cwd);
-	const composed = composePromptWithMeta({
-		sceneBody: scene.body,
-		modeBody: mode.body,
-		skillsSection,
-		cwd,
-		modeId: interactionId,
-		// 片段库查表：找不到返回 undefined → composer 抛错（不静默留洞上线）。
-		resolveFragment: (name) => RESOURCES.fragments.get(name),
-		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
-		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
-		...(memoryContent === undefined ? {} : { memoryContent }),
+/**
+ * 逐轮可变事实注入块单点现读（prompt-switch 的 `context` 事件每请求取一次，
+ * 见 extensions/prompt-switch.ts 的 composeRuntimeContext）：三层记忆内容 + 个性化。
+ * 两段都走读侧既有的降级口径（记忆读不出当没有、偏好读不出当未配置），
+ * 因为 `context` handler 抛错会被 pi 吞掉 —— 这里不制造会被吞的异常。
+ *
+ * 时间**不在这里**：会话内时间只有 hidden context 的 `current_time` 一个来源
+ * （session-host.ts，run 开始冻结；spec: stabilize-prompt-prefix 的时间收敛）。
+ *
+ * 与 composeSystemPrompt 同源现读：设置页改完个性化、模型自己写完记忆，
+ * 下一次模型调用就带上新值（run 内的后续回合同样如此，这正是「逐请求注入」
+ * 比「每 run 冻结一份」更准的地方）。
+ */
+function buildRuntimeContext(cwd: string): string {
+	return formatRuntimeContext({
+		memoryContent: buildSessionMemorySection(cwd),
 		personalization: readPersonalizationSection(),
-		...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
-		piContext,
 	});
-	return {
-		prompt: composed.text,
-		systemTokens: estimateTokens(composed.text),
-		skillsTokens: estimateTokens(skillsSection),
-		// 分段只取 provenance（source + 字符数）：正文不进桶更不进台账
-		//（request_snapshot 不记正文的口径，见 shared/observability.ts）。
-		segments: composed.segments.map((s) => ({ source: s.source, chars: s.text.length })),
-	};
 }
+
+/**
+ * 系统提示词的**唯一组装入口**。用户会话与定时任务 run 会话共用 ——
+ * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
+ * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
+ * run 会话没有诊断视图、直接丢弃）。
+ *
+ * 组装**本体**（骨架 / 片段 / 模式 / 风格 / 人格 / 技能清单 / 记忆纪律段的段序
+ * 与护栏）在 core/system-prompt-composer.ts —— 这里只把 daemon 侧的三样来源接上
+ * 去（专家库现载 / 已启用技能 / 风格漂移落事件日志），**返回值不得再加工**：
+ * 系统提示词位于整段对话历史之前，多拼一处逐轮可变的事实就等于每轮断掉
+ * provider 的前缀缓存（spec: stabilize-prompt-prefix），而 daemon 这层门禁测试
+ * 看不见（daemon 顶层要 process.parentPort，import 不进来）——所以「能加工的
+ * 只有组装本体」本身就是护栏。
+ *
+ * **组装产物不含逐轮会变的事实**：运行时间、三层记忆内容、个性化都不进系统
+ * 提示词 —— 记忆内容与个性化由 buildRuntimeContext 组装、经 prompt-switch 的
+ * `context` 事件作为消息注入，时间由会话侧 hidden context 的 `current_time`
+ * 每轮注入（session-host.ts）。工作目录同样不进提示词：工作目录的唯一来源是
+ * hidden context 的 workspace_context。
+ */
+const composeSystemPrompt = createSystemPromptComposerFromDefaults({
+	resourcesDir: getResourcesDir(),
+	loadExperts: loadExpertsNow,
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
+	enabledSkills: (expertId) => toSkillDescriptors(enabledSkills(expertId)),
+	// 风格配置漂移记进事件日志：降级可以是体验取舍，但不能无痕。
+	onStyleDrift: ({ requested, fallback }) => {
+		eventLog.append({ kind: "style_drift", requested, fallback });
+	},
+});
 
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
@@ -986,8 +953,11 @@ const automationScheduler = new AutomationScheduler({
 		resources: RESOURCES,
 		// 定时任务 run 会话保持 work+craft 不起专家（spec: rework-expert-orthogonal-and-skills
 		// —— 专家绑定是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
-		compose: async (cwd, sceneId, interactionId, piContext) =>
-			(await composeSystemPrompt(cwd, sceneId, interactionId, undefined, piContext)).prompt,
+		compose: async (_cwd, sceneId, interactionId, piContext) =>
+			composeSystemPrompt({ sceneId, interactionId, expertId: undefined, piContext }).prompt,
+		// run 会话同样是多轮会话，逐轮可变事实走注入（提示词里不再有它们）——
+		// 注入块按 run 的 cwd 现读记忆与个性化，与用户会话同一个组装函数。
+		composeRuntimeContext: buildRuntimeContext,
 		getPermissions: () => activePermissions,
 		// 全局默认推理强度现读偏好不缓存：run 会话建宿主才走这条读路径，
 		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
@@ -1269,7 +1239,7 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 	 * 读全局值就是 2026-09-16 修掉的那个 bug 的形状（陈旧的 available:true
 	 * = 在没有写约束的工作区里免审批执行命令）。
 	 */
-	const sandbox = latestSandboxDiagnostics;
+	const sandbox = latestSandboxDiagnostics?.diagnostics;
 	let sandboxNote = "";
 	if (sandbox !== undefined) {
 		sandboxNote = sandbox.available
@@ -1294,7 +1264,47 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 		// 沙箱状态并进这段文案（设置页整段渲染）；机器可读的诊断在事件日志的
 		// sandbox_status 里，不另开没有读取方的结构化字段。
 		enforcementNote: `${base}${sandboxNote}`,
+		// 授权成本单列一段：它只进设置页，**不进 chip 的 hover 提示**
+		//（permission-menu 也读 enforcementNote，那里塞一串数字是噪音）。
+		...(latestSandboxDiagnostics?.diagnostics.prepare === undefined
+			? {}
+			: {
+					sandboxPrepareNote: sandboxPrepareNoteOf(
+						latestSandboxDiagnostics.workspace,
+						latestSandboxDiagnostics.diagnostics.prepare,
+					),
+				}),
 	};
+}
+
+/**
+ * 「首次授权为什么要等」那段文案。
+ *
+ * 用户 2026-09-17 报的现象是「发送后白好一会才动」（实测 19.7 秒），
+ * 而这句话要回答两件事：**这次等了多少**、**为什么**（目录条目数）、
+ * 以及**会不会每次都这样**（不会：ACE 常驻，之后是幂等命中）。
+ * 三件事缺一件，用户就会以为「这个应用很慢」而不是「这个大目录第一次要准备一下」。
+ *
+ * 用秒而不是毫秒：这一段讲的是「几十秒」量级的等待，1,547ms 这种精度没有意义。
+ */
+function sandboxPrepareNoteOf(workspace: string, prepare: SandboxPrepareReport): string {
+	const seconds = Math.max(0, prepare.elapsedMs) / 1000;
+	const cost = seconds >= 10 ? `${Math.round(seconds)} 秒` : `${seconds.toFixed(1)} 秒`;
+	/*
+	 * entries 缺省 = 这次授权没走 worker（进程内直调，测试/冒烟路径），
+	 * 那就只说耗时 —— 编不出条目数，也不该编。
+	 */
+	const scale =
+		prepare.entries === undefined
+			? ""
+			: `（目录内约 ${prepare.entries.toLocaleString("zh-CN")} 个条目${prepare.capped === true ? "，已达扫描上限，实际更多" : ""}）`;
+	const state = prepare.fastPath
+		? "幂等命中，未重新传播"
+		: "首次为该目录传播写入权限";
+	return (
+		`　最近一次沙箱授权：${workspace} —— ${state}，耗时 ${cost}${scale}。` +
+		"同一目录此后每次都是毫秒级（权限标记常驻）。"
+	);
 }
 
 /**
@@ -1315,15 +1325,20 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 const sandboxDiagnosticsByWorkspace = new Map<string, SandboxDiagnostics>();
 
 /**
- * 最近一次的诊断结论，**仅供设置页的全局文案**。
+ * 最近一次的诊断结论**与它对应的工作区**，**仅供设置页的全局文案**。
  *
  * 为什么还留一个全局值：`buildPermissionInfo` 没有「当前是哪个工作区」的上下文
  * （权限设置是全局的，设置页也不属于某个会话）。所以那段文案只能表达
  * 「最近一次探测到的情况」—— 多工作区并存时它可能指的是另一个工作区。
  * 这只是**展示**的近似；执行层的沙箱可用性由 runner 执行时现场探测决定
  * （对齐 dsh 的 confine 同构），不依赖这个全局值。
+ *
+ * 工作区路径与结论**存在同一个对象里**（而不是两个模块级变量）：成本文案
+ * 必须说清「是哪个目录花了 19 秒」，两者一旦分开存，就会出现「A 的耗时配 B 的路径」。
  */
-let latestSandboxDiagnostics: SandboxDiagnostics | undefined;
+let latestSandboxDiagnostics:
+	| { readonly diagnostics: SandboxDiagnostics; readonly workspace: string }
+	| undefined;
 
 /** 原因枚举 → 给用户看的一句话。不把枚举名直接抛给界面。 */
 function describeSandboxReason(reason: SandboxUnavailableReason | undefined): string {
@@ -1342,6 +1357,10 @@ function describeSandboxReason(reason: SandboxUnavailableReason | undefined): st
 			// 说「启动自检未通过」而不是「进程起不来」：后者像是用户的命令有问题，
 			// 而这其实是沙箱环境的问题，且此时命令仍可正常执行（已降级）。
 			return "命令执行环境的启动自检未通过";
+		case "prepare-worker-failed":
+			// 「授权组件」= 跑授权那条 worker（见 sandbox-prepare-client.ts）。
+			// 说清是「组件没起来」而不是「授权被拒」——两者的排查方向完全不同。
+			return "授权组件未能启动";
 		case "disabled-by-setting":
 			return "已被设置关闭";
 		default:
@@ -1362,11 +1381,14 @@ function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string):
 	 */
 	const previous = sandboxDiagnosticsByWorkspace.get(key);
 	sandboxDiagnosticsByWorkspace.set(key, diagnostics);
-	latestSandboxDiagnostics = diagnostics;
+	latestSandboxDiagnostics = { diagnostics, workspace: cwd };
 	if (
 		previous !== undefined &&
 		previous.available === diagnostics.available &&
-		previous.reason === diagnostics.reason
+		previous.reason === diagnostics.reason &&
+		// 授权成本也是「有新东西可看」的一种：首次授权（几十秒）与幂等命中（毫秒）
+		// 的 available/reason 完全一样，只看那两个字段的话这次测量就永远不进日志。
+		previous.prepare === undefined
 	) {
 		return;
 	}
@@ -1375,6 +1397,20 @@ function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string):
 		available: diagnostics.available,
 		...(diagnostics.reason === undefined ? {} : { reason: diagnostics.reason }),
 		...(diagnostics.detail === undefined ? {} : { detail: diagnostics.detail }),
+		...(diagnostics.prepare === undefined
+			? {}
+			: {
+					prepare: {
+						elapsedMs: diagnostics.prepare.elapsedMs,
+						fastPath: diagnostics.prepare.fastPath,
+						...(diagnostics.prepare.entries === undefined
+							? {}
+							: { entries: diagnostics.prepare.entries }),
+						...(diagnostics.prepare.capped === undefined
+							? {}
+							: { capped: diagnostics.prepare.capped }),
+					},
+				}),
 		cwd,
 	});
 }
@@ -1859,7 +1895,7 @@ async function createHost(
 	 *（见 SessionBucket.pendingWorktreeBranch 的注释）。
 	 *
 	 * 位置必须在 cwd 分配之后、建宿主之前 —— 副本路径就是本轮会话的 cwd，
-	 * 工具集、权限门、预览服务、系统提示词里的「当前工作目录」全都按它注入，
+	 * 工具集、权限门、预览服务、注入块里的工作目录全都按它注入，
 	 * 晚一步就白建了。
 	 *
 	 * 失败**降级回原目录继续**（对齐 WorkBuddy 的 createFailedFallback）：
@@ -2101,7 +2137,7 @@ async function createHost(
 					expertId: bucket.conversation.state.expertId,
 				}),
 				compose: async (sceneId, interactionId, expertId, piContext) => {
-					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, expertId, piContext);
+					const composed = composeSystemPrompt({ sceneId, interactionId, expertId, piContext });
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
@@ -2112,6 +2148,10 @@ async function createHost(
 					bucket.systemPromptSegments = composed.segments;
 					return composed.prompt;
 				},
+				// 逐轮可变事实（记忆内容/个性化）的注入块：每请求现读本会话 cwd。
+				// 提示词里已不含它们（见 composeSystemPrompt 注释）；时间不走这里，
+				// 由本会话 SessionHost 的 hidden context `current_time` 送达。
+				composeRuntimeContext: () => buildRuntimeContext(cwd),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -2440,6 +2480,25 @@ async function applyWorkspace(dir: string): Promise<string> {
 		// 多根预览池：按 cwd 各起一个实例，不再关旧根。仍 await —— 服务起不来时
 		// 工作区切换应该响亮失败（沿用旧 setRoot 的口径），而不是带病继续。
 		await previewServers.ensure(dir);
+
+		/*
+		 * 沙箱预热：**选定工作空间/目录的这一刻**就开始授权，不等第一条消息。
+		 *
+		 * 为什么提前到这里：授权在大目录上是几十秒的同步 ACE 传播
+		 *（实测 43,723 个条目 19.3 秒）。用户从「选目录」到「按下发送」通常还要
+		 * 写一段话，这段时间刚好够它跑完 —— 而此前预热挂在会话建立（= 首次发送）
+		 * 那一刻，用户就得盯着空屏等（2026-09-17 报的那个现象）。
+		 *
+		 * 为什么可以放心提前：授权本身跑在 worker_thread 里
+		 *（见 sandbox-prepare-client.ts），不堵 daemon 主线程，所以这一步
+		 * 既不会卡住「切空间」这个动作，也不会影响别的会话的 IPC。
+		 * 非 workspace-write 档位在 warmUpSandbox 里秒退（不留 ACE、不起线程）。
+		 */
+		void warmUpSandbox({
+			workspaceDir: dir,
+			mode: activePermissions.sandbox,
+			onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, dir),
+		});
 	}
 	defaultWorkspaceDir = dir;
 
@@ -2849,13 +2908,12 @@ async function buildConversationForBucket(
 	 */
 	try {
 		const state = bucket.conversation.state;
-		const composed = await composeSystemPrompt(
-			bucket.cwd,
-			state.sceneId,
-			state.interactionId,
-			state.expertId,
-			undefined,
-		);
+		const composed = composeSystemPrompt({
+			sceneId: state.sceneId,
+			interactionId: state.interactionId,
+			expertId: state.expertId,
+			piContext: undefined,
+		});
 		bucket.systemPromptTokens = composed.systemTokens;
 		bucket.skillsTokens = composed.skillsTokens;
 		bucket.systemPromptSegments = composed.segments;
@@ -4408,8 +4466,9 @@ const handlers: Record<string, Handler> = {
 	/* ── 提示词预览（设置页，spec: systematize-prompt-architecture Task 5） ── */
 
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
-	// cwd = 当前会话工作区（预览反映「此刻发消息会看到的提示词」），
 	// 技能清单 / 专家库 / 风格偏好现读（与 composeSystemPrompt 同一口径）。
+	// 预览只组装系统提示词，不产出逐轮可变事实（时间/记忆内容/个性化 —— 它们走
+	// prompt-switch 的注入，不在提示词里）与工作目录（pi 内置 cwd section）。
 	[INVOKE.promptPreview]: async ([request]) => {
 		const preview = request as PromptPreviewRequest;
 		/*
@@ -4421,7 +4480,6 @@ const handlers: Record<string, Handler> = {
 		const experts = loadExpertsNow();
 		const expert = resolveSessionExpert(experts, preview.expertId);
 		return buildPromptPreview(RESOURCES, preview, {
-			cwd: currentBucket.cwd,
 			/*
 			 * 技能清单要过**同一份**启用过滤（enabledSkills 用的也是这个纯函数）：
 			 * 预览里出现一个「此刻发消息根本看不到」的技能，就是与真实组装的静默漂移。
@@ -4437,8 +4495,6 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-			memoryContent: buildSessionMemorySection(currentBucket.cwd),
-			personalization: readPersonalizationSection(),
 		});
 	},
 
@@ -4829,6 +4885,41 @@ function start(): void {
 		node: process.version,
 		platform: `${process.platform}-${process.arch}`,
 	});
+
+	/*
+	 * pi 的外部二进制（fd / rg）就位检查。
+	 *
+	 * 为什么在启动时做：pi 的 find/grep 工具靠这两个 exe，找不到它就去 GitHub 下 ——
+	 * 国内网络下那条路不通，而且**每次调用白等 10 秒**、失败原因还被 pi 吞掉
+	 * （实测 2026-09-17，详见 core/agent-tools.ts 的文件头）。所以二进制随包带，
+	 * 这里补到 pi 的 bin 目录；命中之后 pi 一次网络都不会发。
+	 *
+	 * 幂等：已就位时零输出（连日志都不写），只有真的补了、或随包资产本身缺失才记一笔。
+	 */
+	{
+		const agentTools = ensureAgentTools();
+		if (agentTools.installed.length > 0 || agentTools.missing.length > 0) {
+			eventLog.append({
+				kind: "agent_tools",
+				target: agentTools.targetDir,
+				installed: [...agentTools.installed],
+				present: [...agentTools.present],
+				missing: [...agentTools.missing],
+			});
+		}
+		if (agentTools.missing.length > 0) {
+			// 响亮：缺了就是 find/grep 不可用（模型会每轮白等 10 秒的联网下载），
+			// 这必须在启动日志里看得见，不能只体现在工具报错上。
+			console.error(
+				`pi 的外部二进制缺失（find/grep 将不可用）：${agentTools.missing.join(", ")} —— 检查 resources/bin/`,
+			);
+		}
+		if (agentTools.installed.length > 0) {
+			console.log(
+				`已就位 pi 外部二进制：${agentTools.installed.join(", ")} → ${agentTools.targetDir}`,
+			);
+		}
+	}
 
 	// 初始默认落点的预览服务（多根池里第一个实例）。默认落点可能是空串（待分配，
 	// 未选工作空间的新任务首次执行时才分配目录）—— 没有目录可服务，跳过；那种 cwd 的

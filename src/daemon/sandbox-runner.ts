@@ -23,10 +23,10 @@ import type {
 } from "../extensions/powershell-tool.ts";
 import {
 	classifyFailure,
-	prepareSandbox,
 	probeSandbox,
 	runSandboxed,
 	type SandboxAvailability,
+	type SandboxPrepareResult,
 } from "../sandbox/index.ts";
 import {
 	canEscalate,
@@ -35,6 +35,10 @@ import {
 	type SandboxMode,
 	type SandboxUnavailableReason,
 } from "../shared/permissions.ts";
+import {
+	prepareSandboxInWorker,
+	type PrepareRequest,
+} from "./sandbox-prepare-client.ts";
 
 /**
  * 授权超过这个时长才提示。
@@ -219,6 +223,32 @@ export interface SandboxDiagnostics {
 	readonly available: boolean;
 	readonly reason?: SandboxUnavailableReason;
 	readonly detail?: string;
+	/**
+	 * 最近一次授权（prepare）的实测成本。**幂等命中也会报**（elapsedMs ≈ 1ms），
+	 * 于是设置页能同时说清「第一次多少钱」与「之后多少钱」。
+	 *
+	 * 只上报不参与任何判定：可用性判定仍走 probe（执行时现场探测）。
+	 */
+	readonly prepare?: SandboxPrepareReport;
+}
+
+/**
+ * 一次授权的成本读数。
+ *
+ * `elapsedMs` 是 `prepareSandbox` 已经算出来的值（此前被本层丢弃），
+ * `entries`/`capped` 来自 worker 侧的有界扫描 —— 两个一起才回答得了用户的
+ * 「为什么这次等这么久」（4 万条目 → 19 秒），单给耗时是答不完整的。
+ */
+export interface SandboxPrepareReport {
+	readonly elapsedMs: number;
+	/** 幂等快路径命中：ACE 已存在，这次没触发传播。 */
+	readonly fastPath: boolean;
+	/** 目录条目数（文件 + 子目录）；进程内直调路径没有这一项。 */
+	readonly entries?: number;
+	/** `entries` 达到扫描上限 → 它是下界。 */
+	readonly capped?: boolean;
+	/** 这次授权发生的时刻。 */
+	readonly at: number;
 }
 
 export interface SandboxRunnerOptions {
@@ -281,13 +311,19 @@ export interface SandboxRunnerOptions {
 /** 本层用到的沙箱能力面。抽出来是为了可注入（见 SandboxRunnerOptions.sandbox）。 */
 export interface SandboxFacade {
 	readonly probe: typeof probeSandbox;
-	readonly prepare: typeof prepareSandbox;
+	readonly prepare: (request: PrepareRequest) => Promise<SandboxPrepareResult>;
 	readonly run: typeof runSandboxed;
 }
 
 const REAL_SANDBOX: SandboxFacade = {
 	probe: probeSandbox,
-	prepare: prepareSandbox,
+	/*
+	 * prepare 走 worker：它是唯一会**同步**堵住 daemon 的一步
+	 *（SetNamedSecurityInfoW 在整棵子树上传播继承 ACE）。probe 与 run 都不换 ——
+	 * 前者只是几次 Win32 调用（有缓存），后者本来就是起子进程等结果。
+	 * 现场与数据见 sandbox-prepare-protocol.ts 的文件头。
+	 */
+	prepare: prepareSandboxInWorker,
 	run: runSandboxed,
 };
 
@@ -299,9 +335,10 @@ const REAL_SANDBOX: SandboxFacade = {
  * 共用同一工作区时也只授权一次。
  *
  * 存 promise 而不是布尔：并发的第一批调用会 await 同一个在途授权，
- * 不会各自触发一遍传播。
+ * 不会各自触发一遍传播。**存结果而不只是存「好了」**：授权耗时与目录规模
+ * 是设置页要用的成本读数，丢掉就再也拿不回来（此前确实被丢掉了）。
  */
-const prepareByDir = new Map<string, Promise<void>>();
+const prepareByDir = new Map<string, Promise<SandboxPrepareResult>>();
 
 /** 仅供测试：清掉按目录的授权记忆。 */
 export function resetSandboxRunnerForTest(): void {
@@ -313,10 +350,13 @@ export function resetSandboxRunnerForTest(): void {
  * 授权失败通常是结构性的（目录不归当前用户、卷不支持 ACL），
  * 每条命令重试一遍只是让每次执行都多等一次失败。
  */
-function ensurePrepared(workspaceDir: string, prepare: SandboxFacade["prepare"]): Promise<void> {
+function ensurePrepared(
+	workspaceDir: string,
+	prepare: SandboxFacade["prepare"],
+): Promise<SandboxPrepareResult> {
 	const existing = prepareByDir.get(workspaceDir);
 	if (existing !== undefined) return existing;
-	const started = prepare({ workspaceDir, writableDirs: [workspaceDir] }).then(() => undefined);
+	const started = prepare({ workspaceDir, writableDirs: [workspaceDir] });
 	prepareByDir.set(workspaceDir, started);
 	return started;
 }
@@ -357,8 +397,9 @@ export function warmUpSandbox(options: {
 				return;
 			}
 			try {
-				await ensurePrepared(workspaceDir, sandbox.prepare);
-				onDiagnostics?.({ available: true });
+				const outcome = await ensurePrepared(workspaceDir, sandbox.prepare);
+				// 成本读数随诊断一起上报：设置页据此说清「这次为什么慢、之后还慢不慢」。
+				onDiagnostics?.({ available: true, prepare: prepareReportOf(outcome) });
 			} catch (error) {
 				// 授权失败也是「沙箱用不了」，与探测失败同口径上报。
 				onDiagnostics?.({
@@ -491,8 +532,9 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 			}
 		}
 
+		let prepared: SandboxPrepareResult;
 		try {
-			await awaitWithNotice(ensurePrepared(workspaceDir, sandbox.prepare), onProgress);
+			prepared = await awaitWithNotice(ensurePrepared(workspaceDir, sandbox.prepare), onProgress);
 		} catch (error) {
 			// 授权失败 = 沙箱装不起来 → 拒绝（未授权的沙箱会把区内写入也拒掉，
 			// 无约束跑则写约束静默消失——两条路都不如拒）。
@@ -511,7 +553,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				timeoutMs: timeoutSeconds * 1000,
 				mode: "workspace-write",
 			});
-			report({ available: true });
+			report({ available: true, prepare: prepareReportOf(prepared) });
 			/*
 			 * 沙箱**是好的**，命令自己被拒了 —— 如实回传结果（不重跑），
 			 * 只追加一段让模型看得懂的说明。
@@ -555,6 +597,8 @@ function describeReason(reason: SandboxUnavailableReason): string {
 			return "工作目录所在磁盘不支持权限控制";
 		case "process-start-failed":
 			return "命令执行环境的启动自检未通过";
+		case "prepare-worker-failed":
+			return "授权组件未能启动";
 		case "disabled-by-setting":
 			return "已被设置关闭";
 		default:
@@ -587,4 +631,21 @@ async function awaitWithNotice<T>(
 
 function errorDetail(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 授权结果 → 上报用的成本读数。
+ *
+ * 时刻取「上报这一刻」而不是 `prepareSandbox` 内部的起点：本函数只服务于
+ * 「最近一次授权是什么时候」，精度到秒就够，为一个展示字段去改 prepare 的
+ * 返回形状不划算。
+ */
+function prepareReportOf(outcome: SandboxPrepareResult): SandboxPrepareReport {
+	return {
+		elapsedMs: outcome.elapsedMs,
+		fastPath: outcome.fastPath,
+		...(outcome.entries === undefined ? {} : { entries: outcome.entries }),
+		...(outcome.capped === undefined ? {} : { capped: outcome.capped }),
+		at: Date.now(),
+	};
 }

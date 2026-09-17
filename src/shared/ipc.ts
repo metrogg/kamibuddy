@@ -850,7 +850,10 @@ export interface PromptPreviewRequest {
  * 一个提示词分段（prompt:preview 的结果元素）。
  * source 是 core PromptSegmentSource 的 IPC 镜像 —— shared 不许 import core，
  * 这里按值传递字符串；取值集合：skeleton / fragment:<名> / mode:<id> /
- * style:<id> / skills / pi-context / time / expert，renderer 按「:」前缀归类着色。
+ * style:<id> / skills / pi-context / memory-system / expert，renderer 按「:」前缀归类着色。
+ * （逐轮可变事实的 time / memory / personalization 不在集合里：它们不进系统提示词
+ * —— memory / personalization 走 prompt-switch 的消息注入（core/prompt-composer.ts
+ * 的 formatRuntimeContext），time 走会话侧 hidden context 的 current_time。）
  */
 export interface PromptPreviewSegment {
 	readonly source: string;

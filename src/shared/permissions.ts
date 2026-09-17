@@ -91,6 +91,14 @@ export type SandboxUnavailableReason =
 	 * selfCheckSandbox：为什么自检只能放在探测期而不是每条命令）。
 	 */
 	| "process-start-failed"
+	/**
+	 * 授权 worker 起不来或中途死掉（见 daemon/sandbox-prepare-client.ts）。
+	 *
+	 * 单独立一档的理由：授权本身跑在 worker_thread 里，于是「worker 没起来」
+	 * 与「授权被系统拒了」是两回事 —— 前者通常是打包漏了产物或线程起不来，
+	 * 后者是目录所有权问题。混在一起会把排查方向指歪。
+	 */
+	| "prepare-worker-failed"
 	/** 被设置显式关闭。 */
 	| "disabled-by-setting";
 
@@ -180,6 +188,15 @@ export interface PermissionInfo {
 	 * 需要机器可读的诊断时看事件日志的 `sandbox_status`（那里有原因枚举与细节）。
 	 */
 	readonly enforcementNote: string;
+	/**
+	 * 最近一次沙箱授权的成本（哪个目录、首次还是幂等、耗时、目录规模）。
+	 * 没有授权记录时为 undefined（还没跑过需要沙箱的命令）。
+	 *
+	 * **单独一个字段而不是并进 enforcementNote**：那段文案还被权限 chip 的
+	 * hover 提示复用（renderer/permission-menu.tsx），把「19.3 秒 / 43,723 个条目」
+	 * 塞进 tooltip 是噪音。这里只服务于设置页那一行。
+	 */
+	readonly sandboxPrepareNote?: string;
 }
 
 /** 由旋钮反查预设 id；无匹配返回 `custom`。 */

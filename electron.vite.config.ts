@@ -28,6 +28,12 @@ export default defineConfig({
 					index: resolve("src/main/index.ts"),
 					// daemon 跑在 utilityProcess 里，是独立入口而非 main 的一部分。
 					daemon: resolve("src/daemon/index.ts"),
+					/*
+					 * 沙箱授权（那条同步传播 ACE 的 SetNamedSecurityInfoW）跑在
+					 * worker_thread 里，所以它也是独立入口。产物必须与 daemon 同目录：
+					 * 客户端按 import.meta.url 相对找它（sandbox-prepare-client.ts）。
+					 */
+					"sandbox-prepare-worker": resolve("src/daemon/sandbox-prepare-worker.ts"),
 				},
 				// 必须显式指定 .mjs：Electron 的 ESM 主进程按**扩展名**判断模块类型，
 				// `.js` 会走到 CJS 互操作路径，导致 `import { BrowserWindow } from "electron"`

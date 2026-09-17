@@ -351,7 +351,6 @@ describe("真实 resources/ 的回归约束", () => {
 				sceneBody: code?.body ?? "",
 				modeBody: mode.body,
 				skillsSection: "",
-				cwd: "C:\\ws",
 				modeId: mode.id,
 				resolveFragment: (name) => resources.fragments.get(name),
 			});
@@ -363,19 +362,21 @@ describe("真实 resources/ 的回归约束", () => {
 			expect(composed.segments.some((s) => s.source === "skeleton")).toBe(true);
 			expect(composed.segments.some((s) => s.source === `mode:${mode.id}`)).toBe(true);
 		}
-		// 关键段落钉住（craft / expert 模式正文引用「上方『交付』段」，骨架缺了引用就落空）。
+		// 关键段落钉住（craft 模式正文引用「上方『交付』段」，骨架缺了引用就落空）。
 		const craft = resources.modes.find((m) => m.id === "craft");
 		const text = composePromptWithMeta({
 			sceneBody: code?.body ?? "",
 			modeBody: craft?.body ?? "",
 			skillsSection: "",
-			cwd: "C:\\ws",
 			modeId: "craft",
 			resolveFragment: (name) => resources.fragments.get(name),
 		}).text;
-		for (const section of ["# 交付", "# 个人文件安全", "# 当前模式", "present_files", "当前工作目录：C:\\ws"]) {
+		for (const section of ["# 交付", "# 个人文件安全", "# 当前模式", "present_files"]) {
 			expect(text, `code 骨架应含「${section}」`).toContain(section);
 		}
+		// 工作目录不进骨架了（spec: stabilize-prompt-prefix）：pi 有内置 cwd section，
+		// 手写一行既重复又落在对话历史之前。
+		expect(text).not.toContain("当前工作目录：");
 	});
 
 	it("questionnaire 三模式白名单都有；powershell 只在 craft", () => {

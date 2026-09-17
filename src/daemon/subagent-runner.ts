@@ -339,6 +339,14 @@ export function buildSubagentExtensions(
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
 			compose: (_sceneId, _interactionId, _expertId, piContext) =>
 				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
+			/*
+			 * 逐轮可变事实**一律不注入子代理**（恒空串 → `context` handler 不产生
+			 * 任何消息）：记忆内容与个性化看的是用户侧设定，注入等于把用户/产品身份
+			 * 灌进子代理（composeSubagentPrompt 的注释）；时间不进提示词（进了就
+			 * 逐轮断前缀），它由子代理/成员会话自己那个 SessionHost 的 hidden
+			 * context `current_time` 送达（与用户会话同一条路径）。
+			 */
+			composeRuntimeContext: () => "",
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

@@ -16,7 +16,13 @@ import { join } from "node:path";
 import type { ModeDescriptor } from "../shared/session-events.ts";
 import { optionalBoolean, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
-/** 一个场景：骨架正文含 {{interaction}} / {{skills}} / {{cwd}} 槽位。 */
+/**
+ * 一个场景：骨架正文含 {{interaction}} / {{skills}} 槽位。
+ *
+ * cwd 不再是槽位（工作目录改由 hidden context 的 `workspace_context` 唯一提供，
+ * 理由见 core/prompt-composer.ts 文件头：提示词位于整段历史之前，cwd 行在提示词
+ * 里会让换工作区即断掉 provider 前缀缓存）；骨架里写 {{cwd}} 会被组装器响亮拒掉。
+ */
 export interface SceneResource {
 	readonly id: string;
 	readonly label: string;

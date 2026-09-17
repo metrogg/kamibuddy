@@ -27,4 +27,3 @@ ready: true
 # 当前模式
 
 {{interaction}}{{skills}}
-当前工作目录：{{cwd}}

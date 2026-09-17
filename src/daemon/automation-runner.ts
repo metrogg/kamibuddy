@@ -66,6 +66,13 @@ export interface AutomationRunExecutorDeps {
 		interactionId: string,
 		piContext: PromptContextOptions,
 	) => Promise<string>;
+	/**
+	 * 逐轮可变事实注入块（daemon 的 buildRuntimeContext：三层记忆内容 + 个性化）。
+	 * 系统提示词里已不含它们（spec: stabilize-prompt-prefix）—— 与用户会话同一份
+	 * 实现，按 run 的 cwd 每请求现读。时间不在这里：run 会话同样建 SessionHost，
+	 * hidden context 的 `current_time` 是它唯一的来源。
+	 */
+	readonly composeRuntimeContext: (cwd: string) => string;
 	readonly getPermissions: () => PermissionSettings;
 	/**
 	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。run 会话每次新建，
@@ -206,6 +213,8 @@ function buildRunExtensions(
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
 			compose: (sceneId, interactionId, _expertId, piContext) =>
 				deps.compose(cwd, sceneId, interactionId, piContext),
+			// 时间/记忆内容/个性化按 run 的 cwd 每请求现读（提示词里已不含它们）。
+			composeRuntimeContext: () => deps.composeRuntimeContext(cwd),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

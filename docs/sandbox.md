@@ -103,7 +103,7 @@
 
 每一条都有实测或事故支撑，改动前请先看理由。
 
-### 1. 首次授权放在会话建立时「预热」，不懒加载
+### 1. 授权跑在 worker 里；预热时机 = 选定工作空间那一刻
 
 实测授权开销随文件数**略超线性**增长：
 
@@ -112,8 +112,22 @@
 | 100 | 40 ms | 1 ms |
 | 1000 | 477 ms | 1 ms |
 | 5000 | **3134 ms** | 1 ms |
+| 25020 | 5262 ms | 3 ms |
+| **43723** | **19.3 s** | 1 ms |
 
-ACE 是即时传播的（授一个目录，其整棵子树立刻生效），几万文件的目录会到几十秒。若等到模型第一条命令才做，用户会莫名等住且毫无解释。所以放在建会话时**后台开始**，第一条命令只等剩余部分。
+那条 `SetNamedSecurityInfoW` 是**同步**的：Windows 在这一次调用里把继承 ACE 传播到整棵子树。2026-09-17 从事件日志定到的现场（`session:prompt` → `run_started` 的间隔）：
+
+| 工作区 | 首条消息 → agent 起跑 |
+| --- | --- |
+| 空临时任务目录（45 / 94 / 154 / 423 ms 四次） | 最快 |
+| 真实项目目录 AgentHub（43,723 条目） | **19,657 ms** |
+
+第二条就是用户报的「发送后白好一会才动」：授权堵在 daemon 的**单线程**上，那 19.6 秒里它连「消息已收到」都发不出去（用户气泡由 daemon 确认后回显，不是 UI 乐观插入）。所以两条一起改：
+
+- **授权搬进 `worker_thread`**（`src/daemon/sandbox-prepare-{protocol,worker,client}.ts`）：主线程只等 promise，同步 FFI 落在 worker 里。验收看 `scripts/probe-sandbox-worker.mts` —— 25,020 条目授权 5,262 ms 期间，主线程事件循环最大滞后只有 **10 ms**。这是三家唯一有一条现成范式的做法：codex 对**读根**的 ACL 就是这么做的（后台 helper + 单飞互斥），写根仍留在 spawn 路径上；dsh 与 WorkBuddy 都没有（dsh 把「首次全树传播」写进了 Known Limitations，WorkBuddy 换成了不落 ACL 的规则引擎）。
+- **预热提前到「选定工作空间/目录」那一刻**（daemon 的 `applyWorkspace`），不等第一条消息 —— 用户从选目录到按下发送通常还要写一段话，够它跑完。会话建立时仍会兜一道（resume、启动默认目录等不经 applyWorkspace 的路径）。非 `workspace-write` 档位秒退（不留 ACE、不起线程）。
+
+授权成本会随诊断上报：设置页权限区多一行「最近一次沙箱授权：哪个目录 / 首次还是幂等 / 耗时 / 目录条目数」，事件日志的 `sandbox_status` 也带上同一组数字（`prepare` 字段）。
 
 ### 2. ACE 常驻，不撤销
 
@@ -326,11 +340,12 @@ PowerShell 按控制台代码页（中文机器 936/GBK）输出 stderr，而 `r
 | --- | --- | --- |
 | 纯函数单测 | `npm test` | 引号规则、SID 派生、环境块、失败文案……不需要特权，任何平台可跑 |
 | 集成测试 | `npm test`（Windows 上跑） | 真派令牌 + 真授权 + 真 spawn：区内可写、**区外被拒**、超时杀树 |
-| **真实进程冒烟** | `npm run smoke:sandbox` | **在 Electron utilityProcess 里**（= daemon 的真实形态）跑 9 项断言 |
+| **真实进程冒烟** | `npm run smoke:sandbox` | **在 Electron utilityProcess 里**（= daemon 的真实形态）跑 10 项断言，其中一项是**授权 worker**（把这个新入口 + koffi 在 worker_thread 里的加载放在生产进程类型下验证）。授权 worker 那条要求先 `npm run build`（它是独立构建产物；没构建过会打印一行「跳过」而不是静默通过） |
 | 判别矩阵 | `npm run smoke:sandbox -- --diagnose` | 沙箱在某台机器上异常时，二分定位。可复跑 |
 | **链接穿越探针** | `npx tsx scripts/probe-junction-containment.ts` | 权限门的归属判定能不能被 junction 绕过。**改动前 3×GAP，改动后 3×CLOSED** —— 既是缺口证据也是修复验收（含对照组，防布景搭错给出假结论） |
 | 拒写文本探针 | `npx tsx scripts/probe-denial-text.ts` | 受限令牌拒写时 stderr 的**真实**文本（决策 13 签名表的唯一依据；换机器/换语言版 Windows 时复跑） |
 | 首响延迟 | `npx tsx scripts/probe-first-response.mts` | 真实模型请求的「第一条 → 首 token」耗时与重试次数 |
+| **授权 worker** | `npx tsx scripts/probe-sandbox-worker.mts [文件数]` | 授权搬进 worker 之后：主线程事件循环在授权期间**没有被打断**（25,020 条目 / 5,262 ms 授权 / 最大滞后 10 ms）、首次真传播、幂等命中仍生效。需先 `npm run build`（worker 是独立产物） |
 
 **探针与测试的分工**：探针回答「这个缺口/事实存在吗」，跑在真实文件系统与真实沙箱上、可复跑；测试回答「它有没有回退」。两者都要有 —— 链接穿越的护栏同时进了 `permission-policy.test.ts`（`describe("链接穿越")`，真建 junction），因为探针是脚本、不进 `npm test`，接线若被改回纯词法判定不会有任何测试报警。
 

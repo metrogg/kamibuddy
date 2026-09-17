@@ -57,7 +57,8 @@ import type { RunLedger } from "./run-ledger.ts";
 // session-rebuild.ts（本文件反向 import）：同一张卡的两条产出路径必须同源，
 // 因而入参摘要字段表只有那一份（见 summarizeArgs 注释）。
 import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
-import type { SystemSegmentStat } from "../shared/observability.ts";
+import { estimateTokens } from "./observability.ts";
+import type { MessageClass, MessageRef, SystemSegmentStat } from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
 import { splitSkillBlocks } from "../shared/skill-block.ts";
@@ -1731,11 +1732,17 @@ export class SessionHost {
 	 * 不落会话文件，不重注入就等于丢失）：
 	 *
 	 *   1. workspace_context（user-context）—— cwd + 场景 + 交互模式 + 专家。
-	 *      系统提示词里 {{cwd}} 槽位是会话建立时的静态值，中途切场景/换专家
-	 *      （setScene/setExpert 不重组系统提示词）只有这里跟得上。
+	 *      **cwd 的唯一来源（用户会话）**：系统提示词里已经没有它了（骨架那行随 spec:
+	 *      stabilize-prompt-prefix 删掉；pi 内置的那行 `cwd` 又被
+	 *      before_agent_start 的整串替换换掉），中途切场景/换专家
+	 *      （setScene/setExpert 不重组系统提示词）也只有这里跟得上。
+	 *      （子代理/成员会话例外：composeSubagentPrompt 会把同一个 cwd 写进自己的
+	 *      提示词，值同源同为 cwd，不产生两份漂移 —— 见 prompt-composer.ts 文件头。）
 	 *   2. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
 	 *   3. current_time（additional-data）—— run 冻结时刻，一次性容器。
+	 *      **时间的唯一来源**：逐轮注入块（prompt-switch 的 `context` 事件）
+	 *      已不带时间，模型看「现在」只靠这一段。
 	 *
 	 * 全部段都空返回 undefined（新用户 + 无记忆 + 不可能：时间永远有 ——
 	 * 实际上本函数恒有值，undefined 分支只是 composeHiddenContext 契约的如实透传）。
@@ -1799,36 +1806,27 @@ export class SessionHost {
 	}
 
 	/**
-	 * 记一条 request_snapshot：system 分段 provenance + 消息分类计数。
+	 * 记一条 request_snapshot：system 分段 provenance + 消息分类计数 + 逐条标识。
 	 *
 	 * **不记正文**（口径钉住）：消息正文在会话 JSONL 已有，台账只记
-	 * 「这轮往模型里送了什么结构」——分段来源与各类条数/字符数，
-	 * 正文双写既膨胀又会与会话 JSONL 漂移。
+	 * 「这轮往模型里送了什么结构」——分段来源、各类条数/字符数、以及每条消息的
+	 * 稳定标识与体量（LOG13）。正文双写既膨胀又会与会话 JSONL 漂移，所以逐条
+	 * 也只落 id / 字符数 / token 估算 / 内容指纹，不落文本。
+	 *
+	 * 类别聚合由逐条清单累加而来（同一次循环、同一份文本）：两处各统计一遍
+	 * 必然漂移，而这两个数字在面板上是并排显示的。
 	 */
 	private recordRequestSnapshot(messages: readonly unknown[]): void {
-		const user = { count: 0, chars: 0 };
-		const assistant = { count: 0, chars: 0 };
-		const toolResult = { count: 0, chars: 0 };
-		const other = { count: 0, chars: 0 };
-		for (const message of messages) {
-			const role = (message as { role?: unknown }).role;
-			if (role === "user") {
-				user.count += 1;
-				user.chars += textOf((message as { content?: unknown }).content).length;
-			} else if (role === "assistant") {
-				assistant.count += 1;
-				const content = (message as { content?: unknown }).content;
-				assistant.chars += textOf(content).length + thinkingOf(content).length;
-			} else if (role === "toolResult") {
-				toolResult.count += 1;
-				toolResult.chars += textOf((message as { content?: unknown }).content).length;
-			} else {
-				// convertToLlm 之前的原始角色（bashExecution / custom /
-				// branchSummary / compactionSummary）：pi 随后会转写或过滤，
-				// 这里 best-effort 计数（summary/output 字符串或 content 文本）。
-				other.count += 1;
-				other.chars += customMessageChars(message);
-			}
+		const messageList = buildMessageRefs(messages);
+		const byClass: Record<MessageClass, { count: number; chars: number }> = {
+			user: { count: 0, chars: 0 },
+			assistant: { count: 0, chars: 0 },
+			toolResult: { count: 0, chars: 0 },
+			other: { count: 0, chars: 0 },
+		};
+		for (const ref of messageList) {
+			byClass[ref.role].count += 1;
+			byClass[ref.role].chars += ref.chars;
 		}
 		const segments = this.options.getSystemPromptSegments?.();
 		this.ledger?.append("request_snapshot", {
@@ -1840,7 +1838,8 @@ export class SessionHost {
 			...(this.pendingHidden === undefined
 				? {}
 				: { hiddenContextChars: this.pendingHidden.length }),
-			messages: { user, assistant, toolResult, other },
+			messages: byClass,
+			messageList,
 		});
 	}
 
@@ -1964,15 +1963,139 @@ function thinkingOf(content: unknown): string {
 
 /**
  * 非标准角色消息（bashExecution / custom / branchSummary / compactionSummary）
- * 的字符数估算：summary / output 字符串字段优先，退到 content 文本。
- * 只服务于 request_snapshot 的 other 类计数（best-effort，口径见其注释）。
+ * 的入模文本：summary / output 字符串字段优先，退到 content 文本。
+ * 只服务于 request_snapshot（best-effort，口径见其注释）。
  */
-function customMessageChars(message: unknown): number {
-	if (typeof message !== "object" || message === null) return 0;
+function customMessageText(message: unknown): string {
+	if (typeof message !== "object" || message === null) return "";
 	const m = message as { summary?: unknown; output?: unknown; content?: unknown };
-	if (typeof m.summary === "string") return m.summary.length;
-	if (typeof m.output === "string") return m.output.length;
-	return textOf(m.content).length;
+	if (typeof m.summary === "string") return m.summary;
+	if (typeof m.output === "string") return m.output;
+	return textOf(m.content);
+}
+
+/**
+ * 助手消息里工具调用参数的文本（工具名 + 参数 JSON）。
+ *
+ * 它是**入模内容**：write 的文件正文、edit 的替换对、show_widget 的代码都在参数里，
+ * 模型上一轮写出来、这一轮回传给它自己。漏掉它，助手侧的字符数/token 估算就系统性
+ * 偏小（写文件的一轮能差几万字符），缓存命中边界反推（CACHE6）跟着把断点判早。
+ */
+function toolCallArgsText(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	let text = "";
+	for (const part of content) {
+		if (typeof part !== "object" || part === null) continue;
+		const p = part as { type?: unknown; name?: unknown; arguments?: unknown };
+		if (p.type !== "toolCall") continue;
+		text += `${typeof p.name === "string" ? p.name : ""}${JSON.stringify(p.arguments ?? null)}`;
+	}
+	return text;
+}
+
+/**
+ * 一条消息真正入模的文本。逐条清单（buildMessageRefs）与类别计数共用这一份 ——
+ * 两处各写一遍必然漂移，而它们在面板上并排显示。
+ */
+function messageText(message: unknown, rawRole: string): string {
+	const content = (message as { content?: unknown }).content;
+	if (rawRole === "assistant") {
+		return textOf(content) + thinkingOf(content) + toolCallArgsText(content);
+	}
+	if (rawRole === "user" || rawRole === "toolResult") return textOf(content);
+	// convertToLlm 之前的原始角色：pi 随后会转写或过滤，这里 best-effort。
+	return customMessageText(message);
+}
+
+/** pi 消息的原始角色字符串（自定义角色的 role 就是自己的名字）。 */
+function rawRoleOf(message: unknown): string {
+	const role = (message as { role?: unknown }).role;
+	return typeof role === "string" ? role : "unknown";
+}
+
+/** 原始角色 → 快照的四个计数桶。 */
+function messageClassOf(rawRole: string): MessageClass {
+	if (rawRole === "user" || rawRole === "assistant" || rawRole === "toolResult") {
+		return rawRole;
+	}
+	return "other";
+}
+
+/**
+ * 内容指纹（32 位 FNV-1a）。
+ *
+ * 只有「这一条的内容有没有变」这一个用途，所以不用 crypto（要 import node:crypto，
+ * 且这里是同步热路径）：2^-32 的碰撞概率对等值比较足够。逐字符迭代是 UTF-16 码元
+ * 而不是码点 —— 同样的文本得到同样的值，这个用途不需要语义正确的哈希。
+ */
+function messageFingerprint(text: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < text.length; i += 1) {
+		hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+	}
+	return hash >>> 0;
+}
+
+/**
+ * 消息的稳定 id 基名：不依赖内容、不依赖位置，只取 pi 消息里稳定的身份字段。
+ *
+ *   - toolResult → `toolResult:<toolCallId>`：toolCallId 由模型发起工具调用时给定，
+ *     跨请求恒定且唯一（比时间戳更可靠：同一毫秒内多个工具结果完全可能）；
+ *   - 其余角色 → `<rawRole>:<timestamp>`：pi 的消息契约里四种基础角色与四种自定义
+ *     角色都带毫秒级 timestamp，它标识「哪一条消息」，同一条消息在后续请求里不变。
+ */
+function messageIdBase(message: unknown, rawRole: string): string {
+	if (rawRole === "toolResult") {
+		const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+		if (typeof toolCallId === "string" && toolCallId !== "") return `toolResult:${toolCallId}`;
+	}
+	const timestamp = (message as { timestamp?: unknown }).timestamp;
+	// timestamp 缺席是「pi 改了契约」而不是「这条消息没有身份」：宁可用 ? 兜底，
+	// 也不编一个假的稳定 id（编了就再也看不出它不可靠）。
+	return `${rawRole}:${typeof timestamp === "number" ? timestamp : "?"}`;
+}
+
+/**
+ * 逐条消息的稳定标识与体量（LOG13）—— request_snapshot 的 messageList。
+ *
+ * **id 的语义**：同一条消息在相邻请求里**必须**得到同一个 id。这是增量 diff
+ * （CTX6：「这一轮比上一轮新增了什么」）与缓存断点归因（CACHE6）的前提。
+ * 所以 id 只取消息的稳定身份（见 messageIdBase），**不取内容**：内容变了的是
+ * 同一条消息（那件事由 fp 表达）。
+ *
+ * 四个边界情形，都是如实处理、不做「看起来更干净」的假设：
+ *
+ *   1. **同角色同毫秒**：pi 的 timestamp 是毫秒级 `Date.now()`，同一毫秒内追加两条
+ *      同角色消息理论上可能（steer + followUp 同时落地）。按**出现序**加后缀消歧：
+ *      第 1 次出现不加、第 2 次起 `#2`、`#3`…… 后缀随出现序分配，而底层消息序列是
+ *      append-only，所以后缀在相邻请求里同样稳定（新增的同基名消息只会排到最后）。
+ *   2. **内容被改写**（工具结果被截断重写、hidden context 注入/撤下导致同一条 user
+ *      消息文本变化）：**id 不变、fp 变** —— 这正是需要的语义：「同一条消息的内容
+ *      变了」而不是「换了一条消息」。缓存断点归因据此说「内容已变」。
+ *   3. **位置变了**（压缩后历史整体前移、中间插入一条）：id 不变、下标变 —— 归因
+ *      「位置变了」。id 不带位置正是为了这一条。
+ *   4. **同一条消息在序列里出现两次**（pi 理论上不做，但流式态下 partial 消息与
+ *      终态消息共用同一 timestamp 时可能出现）：按 1 的后缀规则区分，两者都不与
+ *      别的消息撞名。
+ */
+export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
+	const refs: MessageRef[] = [];
+	const occurrences = new Map<string, number>();
+	for (const message of messages) {
+		const rawRole = rawRoleOf(message);
+		const base = messageIdBase(message, rawRole);
+		const occurrence = (occurrences.get(base) ?? 0) + 1;
+		occurrences.set(base, occurrence);
+		const text = messageText(message, rawRole);
+		refs.push({
+			id: occurrence === 1 ? base : `${base}#${occurrence}`,
+			role: messageClassOf(rawRole),
+			chars: text.length,
+			tokens: estimateTokens(text),
+			fp: messageFingerprint(text),
+		});
+	}
+	return refs;
 }
 
 /** 供 daemon 判断模型标识是否合法，避免把无效值传进会话。 */

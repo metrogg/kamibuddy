@@ -6,6 +6,7 @@ import type {
 } from "@shared/observability.ts";
 import { emptyUsage } from "@shared/observability.ts";
 import {
+	foldCachePrefixBreaks,
 	foldRunLedger,
 	foldRunSteps,
 	indexRequestSnapshots,
@@ -309,5 +310,85 @@ describe("indexRequestSnapshots（快照检索）", () => {
 		expect(map.get(snapshotKey("run-1", 0))?.systemSegments).toEqual([
 			{ source: "skills", chars: 5 },
 		]);
+	});
+});
+
+describe("foldCachePrefixBreaks（相邻两轮的缓存断点，CACHE6）", () => {
+	const NO_MESSAGES = {
+		user: { count: 0, chars: 0 },
+		assistant: { count: 0, chars: 0 },
+		toolResult: { count: 0, chars: 0 },
+		other: { count: 0, chars: 0 },
+	};
+	const ref = (id: string, tokens: number, fp = 1) => ({
+		id,
+		role: "user" as const,
+		chars: tokens * 4,
+		tokens,
+		fp,
+	});
+
+	it("相邻两轮配对：cacheRead 从本轮的 llm_call 取、上一轮 prompt 总量给它定标", () => {
+		const breaks = foldCachePrefixBreaks([
+			entry(1000, "request_snapshot", {
+				runId: "run-1",
+				turnIndex: 0,
+				messages: NO_MESSAGES,
+				messageList: [ref("A", 100), ref("B", 100)],
+			}),
+			// 第一轮真实 prompt 总量 = input 700 + cacheRead 100 = 800 → 前缀 600。
+			entry(1010, "llm_call", {
+				runId: "run-1",
+				turnIndex: 0,
+				startedAt: 900,
+				endedAt: 1010,
+				usage: { ...emptyUsage(), input: 700, cacheRead: 100 },
+			}),
+			entry(2000, "request_snapshot", {
+				runId: "run-1",
+				turnIndex: 1,
+				messages: NO_MESSAGES,
+				messageList: [ref("A", 100), ref("B", 100), ref("C", 100)],
+			}),
+			entry(2010, "llm_call", {
+				runId: "run-1",
+				turnIndex: 1,
+				startedAt: 1900,
+				endedAt: 2010,
+				usage: { ...emptyUsage(), input: 200, cacheRead: 850 },
+			}),
+		]);
+
+		// 第二轮：前缀 600 + A + B = 800 ≤ 850，再加 C(100) 就超了 → 断在 C（新增）。
+		expect(breaks.get(snapshotKey("run-1", 1))).toMatchObject({
+			kind: "message",
+			hitCount: 2,
+			change: "appended",
+		});
+		// 第一轮没有可比对的上一轮：只能给边界，变化原因如实 unknown。
+		expect(breaks.get(snapshotKey("run-1", 0))).toMatchObject({
+			kind: "message",
+			hitCount: 1,
+			change: "unknown",
+		});
+	});
+
+	it("旧台账没有逐条明细（messageList 缺席）→ 如实返回不确定", () => {
+		const breaks = foldCachePrefixBreaks([
+			entry(1000, "request_snapshot", {
+				runId: "run-1",
+				turnIndex: 0,
+				messages: NO_MESSAGES,
+			}),
+			entry(1010, "llm_call", {
+				runId: "run-1",
+				turnIndex: 0,
+				startedAt: 900,
+				endedAt: 1010,
+				usage: { ...emptyUsage(), cacheRead: 100 },
+			}),
+		]);
+
+		expect(breaks.get(snapshotKey("run-1", 0))?.kind).toBe("unknown");
 	});
 });

@@ -453,6 +453,35 @@ export interface MessageClassStat {
 	readonly chars: number;
 }
 
+/** 消息在请求里的类别（与 messages 的四个计数桶同源）。 */
+export type MessageClass = "user" | "assistant" | "toolResult" | "other";
+
+/**
+ * 一条参与请求的消息的稳定标识与体量（LOG13，2026-09-17）。
+ *
+ * 为什么需要它：上面那些类别聚合计数与逐条 diff、缓存边界反推（CACHE6）都不兼容 ——
+ * 「这一轮比上一轮新增/改了哪条」只认得**消息级的身份**。id 的生成规则与边界情形
+ * （同角色同毫秒的消息、工具结果被截断重写、助手工具调用参数）见
+ * core/session-host.ts 的 buildMessageRefs 注释，那里是唯一实现处。
+ */
+export interface MessageRef {
+	/**
+	 * 稳定标识：**同一条消息在相邻请求里得到同一个 id**（这是增量 diff 的前提）。
+	 * 不依赖内容（内容变了的是同一条消息，见 fp），也不依赖位置（压缩后位置会变）。
+	 */
+	readonly id: string;
+	readonly role: MessageClass;
+	/** 该条真正入模的字符数（含思考与助手的工具调用参数，见 buildMessageRefs）。 */
+	readonly chars: number;
+	/** chars 的 token 估算（口径同 core/observability.ts 的 estimateTokens）。 */
+	readonly tokens: number;
+	/**
+	 * 内容指纹（32 位 FNV-1a，仅用于「这一条的内容有没有变」的等值比较）。
+	 * 不落正文、不可逆——台账「不双写正文」的纪律不因此破例。
+	 */
+	readonly fp: number;
+}
+
 /**
  * 每轮实际入模组成的快照（挂 pi transformContext 钩子——官方观察口）。
  *
@@ -479,6 +508,17 @@ export interface RequestSnapshotData {
 	 * 缺席 = 该次调用没有注入（run 已清账后的压缩调用等）。
 	 */
 	readonly hiddenContextChars?: number;
+	/**
+	 * **逐条**消息的稳定标识与体量（LOG13，2026-09-17）。上面的 messages 是
+	 * 按类别聚合（条数/字符数），这里是逐条：有了稳定 id 才做得了「这一轮比
+	 * 上一轮新增/改了哪条」的增量 diff（CTX6），也才把逐条 token 累加与
+	 * cacheRead 对齐反推缓存断点（CACHE6，见 shared/cache-prefix.ts）。
+	 *
+	 * 与 messages 同一次循环产出（聚合由逐条累加而来，两处不会漂移）。
+	 * 旧台账没有本字段：消费方按「无逐条明细」降级显示，不抛错（落盘 schema
+	 * 的向后兼容纪律同 TokenUsage 的可选细分字段）。
+	 */
+	readonly messageList?: readonly MessageRef[];
 }
 
 /** kind → data 的分派表（append 的写入点类型校验靠它）。 */

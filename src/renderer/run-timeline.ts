@@ -23,6 +23,7 @@
 import type {
 	CompactionData,
 	LlmCallData,
+	MessageRef,
 	RequestSnapshotData,
 	RetryData,
 	RunEndReason,
@@ -31,7 +32,8 @@ import type {
 	TokenUsage,
 	ToolCallData,
 } from "@shared/observability.ts";
-import { emptyUsage } from "@shared/observability.ts";
+import { billedInputTokens, emptyUsage } from "@shared/observability.ts";
+import { inferCachePrefixBreak, type CachePrefixBoundary } from "@shared/cache-prefix.ts";
 
 /**
  * 台账条目的可判别联合形态：RunLedgerEntry 的默认泛型形参（K = 全 kind 联合）
@@ -266,4 +268,59 @@ export function latestRequestSnapshot(
 		if (entry.kind === "request_snapshot") return entry.data;
 	}
 	return undefined;
+}
+
+/**
+ * 每轮请求的缓存命中前缀断点（CACHE6）→ 按 snapshotKey 索引。
+ *
+ * 相邻两轮的配对**按台账顺序**取（不是按 run 分）：上一轮的 request_snapshot
+ * 之后、本轮的 request_snapshot 之前，中间可能还夹着上一条 run 的收尾与下一条
+ * run 的开始 —— 而 provider 的前缀缓存比的是**上一次请求**，与 run 边界无关。
+ *
+ * 本轮的 cacheRead 与上一轮的真实 prompt 总量都从 llm_call 取：两者与
+ * request_snapshot 共用同一个键（runId + turnIndex），所以能直接对上，不必
+ * 依赖台账里快照与 llm_call 的先后位置（截尾后的台账可能缺一条）。
+ *
+ * 纯函数在 shared/cache-prefix.ts（可单测、口径唯一），这里只做台账侧配对。
+ */
+export function foldCachePrefixBreaks(
+	entries: readonly RunLedgerEntry[],
+): ReadonlyMap<string, CachePrefixBoundary> {
+	const usageByKey = new Map<string, TokenUsage>();
+	for (const raw of entries) {
+		const entry = raw as LedgerEntryUnion;
+		if (entry.kind !== "llm_call") continue;
+		if (entry.data.usage === undefined) continue;
+		usageByKey.set(snapshotKey(entry.data.runId, entry.data.turnIndex), entry.data.usage);
+	}
+
+	const snapshots: { readonly key: string; readonly refs: readonly MessageRef[] }[] = [];
+	for (const raw of entries) {
+		const entry = raw as LedgerEntryUnion;
+		if (entry.kind !== "request_snapshot") continue;
+		snapshots.push({
+			key: snapshotKey(entry.data.runId, entry.data.turnIndex),
+			refs: entry.data.messageList ?? [],
+		});
+	}
+
+	const breaks = new Map<string, CachePrefixBoundary>();
+	for (let i = 0; i < snapshots.length; i += 1) {
+		const current = snapshots[i];
+		const previous = i === 0 ? undefined : snapshots[i - 1];
+		if (current === undefined) break;
+		const usage = usageByKey.get(current.key);
+		const previousUsage = previous === undefined ? undefined : usageByKey.get(previous.key);
+		breaks.set(
+			current.key,
+			inferCachePrefixBreak({
+				previous: previous?.refs,
+				previousPromptTokens:
+					previousUsage === undefined ? undefined : billedInputTokens(previousUsage),
+				current: current.refs,
+				cacheRead: usage?.cacheRead,
+			}),
+		);
+	}
+	return breaks;
 }

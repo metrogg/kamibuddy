@@ -456,6 +456,14 @@ function PermissionSection({ busy }: { readonly busy: boolean }): React.JSX.Elem
 						否则用户会把它当隔离用（文案由 daemon 给，见 buildPermissionInfo）。
 					*/}
 					<p className="settings-foot">{info.enforcementNote}</p>
+					{/*
+						最近一次沙箱授权的成本（哪个目录、首次还是幂等、多少条目、多久）。
+						单独一行而不是并进上面那句：上面那句还被权限 chip 的 hover 复用，
+						数字塞进 tooltip 是噪音（见 PermissionInfo.sandboxPrepareNote）。
+					*/}
+					{info.sandboxPrepareNote !== undefined && (
+						<p className="settings-foot">{info.sandboxPrepareNote}</p>
+					)}
 				</>
 			)}
 		</section>
