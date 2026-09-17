@@ -700,7 +700,7 @@ export class SessionHost {
 			// 流式期间直接 prompt 会被 pi 拒绝，必须显式选择排队方式。
 			// **缺省是 followUp（排队）而不是 steer**：用户在跑长任务时补一句，
 			// 绝大多数是「等它跑完再接着做」，不是「现在就打断它」（2026-09-16 用户定）。
-			// 想立刻插进当前这轮必须显式带 "steer"（输入区的「立即插入」按钮）。
+			// 想立刻插进当前这轮必须显式带 "steer"（队列条 ↑ 的重排路径走这条）。
 			if (whileStreaming === "steer") await this.session.steer(text, piImages);
 			else await this.session.followUp(text, piImages);
 			return;
@@ -1215,6 +1215,26 @@ export class SessionHost {
 			this.currentRunId = undefined;
 			this.currentAssistantId = undefined;
 			this.streamToolCalls.clear();
+			/*
+			 * 孤儿工具卡收尾：run 在这里结束（中断 / 出错 / 正常），而**没等到
+			 * tool_execution_end 的卡**（参数还在生成、或执行被打断）会永远停在
+			 * 进行时标签上 —— 卡片被 reducer 翻成 aborted 后图标转红，标签却还是
+			 * 「生成中」，自相矛盾（2026-09-17 用户中断实测截图）。
+			 * 词汇取恢复路径同一个出口（restoredToolLabel）：live 与「重启后再看」
+			 * 显示同一句话，不另造映射表（同该函数头注释的单一来源口径）。
+			 */
+			for (const orphan of this.toolCards.values()) {
+				emit({
+					type: "tool_stream_started",
+					card: {
+						...orphan,
+						generating: undefined,
+						outcome: "aborted",
+						label: restoredToolLabel(orphan.toolName, "aborted"),
+					},
+				});
+			}
+			this.toolCards.clear();
 			// 本 run 的 hidden context 账清掉：transformContext 注入的是 run 期
 			// 瞬态，run 已终就不该再出现在（可能的）压缩调用等后续模型请求里。
 			this.pendingHidden = undefined;

@@ -520,6 +520,32 @@ describe("工具卡片生成期上屏", () => {
 		expect(cards.every((c) => c.generating === true)).toBe(true);
 	});
 
+	/*
+	 * 2026-09-17 用户中断实测：参数还在生成时 run 就结束了，这张卡永远等不到
+	 * tool_execution_end —— 卡片被 reducer 翻成 aborted 后图标转红，标签却还是
+	 * 「生成中」，自相矛盾。这里断言 run 收尾时补了终态标签，且与恢复路径
+	 * （restoredToolLabel）同一句话。
+	 */
+	it("run 结束时孤儿生成卡补终态：标签不再是「生成中」，与恢复路径同词", () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		streamToolCall(host, "write", "c-orphan");
+		agentEnd(host, false, []);
+
+		const cards = events
+			.filter((e): e is StreamStartedEvent => e.type === "tool_stream_started")
+			.map((e) => e.card);
+		const last = cards.at(-1);
+		expect(last).toMatchObject({
+			id: "c-orphan",
+			label: restoredToolLabel("write", "aborted"), // 「生成（未完成）」
+			outcome: "aborted",
+		});
+		expect(last?.generating).toBeUndefined();
+	});
+
 	it("read/ls/grep/find 是本地快操作，不在生成期上屏（卡片等执行态再上）", () => {
 		const events: SessionEvent[] = [];
 		const host = createHost(createFakeSession(), (e) => events.push(e));

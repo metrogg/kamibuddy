@@ -64,8 +64,10 @@ interface ComposerProps {
 	 * 附件据此决定去留（失败保留在输入区，见 submit）。
 	 *
 	 * `whileStreaming` 只在流式期间由本组件显式给出：回车排队（缺省，daemon
-	 * 落定为 followUp）、「立即插入」按钮传 "steer"。非流式时不传 —— 那时
-	 * 它没有意义，传了也会被 daemon 当作普通发送。
+	 * 落定为 followUp）。**"steer" 分支保留但已无 UI 入口** —— 输入框旁的
+	 * 「立即插入」按钮 2026-09-17 去掉了，插队改走队列条的 ↑（onQueueRewrite
+	 * 的重排路径，不经这里）。非流式时不传 —— 那时它没有意义，传了也会被
+	 * daemon 当作普通发送。
 	 */
 	readonly onSubmit: (
 		text: string,
@@ -380,25 +382,13 @@ export function Composer({
 					</span>
 				)}
 			{/*
-				流式期间发送键变中断键，旁边多一个「立即插入」：
-				回车（含非流式的发送键）= **排队**，等当前任务做完再跑；
-				「立即插入」= steer，当前这轮的工具一结束就生效。
-				两条路必须在视觉上分开 —— 用户补一句多数是想排队，插入是例外，
-				所以例外才配按钮（2026-09-16 用户定的语义，勿对调）。
+				流式期间发送键变中断键，**不再有输入框旁的「立即插入」按钮**
+				（2026-09-17 用户实测反馈后去掉）：它只在输入框有字时才可用，
+				空框时是个灰着的死按钮、还挨着红色停止键，观感是噪音；
+				而「插进当前这轮」这件事队列条上每条消息的 ↑ 已经能做
+				（把排队中的那条改成插队），能力一条没少。
+				回车（含非流式的发送键）= 排队，等当前任务做完再跑 —— 单一入口。
 			*/}
-			{streaming === true && (
-				<button
-					type="button"
-					className="insert-btn"
-					aria-label="立即插入当前任务"
-					title="不等排队，立刻插进当前这轮"
-					disabled={!ready || (draft.trim() === "" && skill === undefined) || chars.over}
-					onClick={() => submit("steer")}
-				>
-					<IconSend size={13} />
-					立即插入
-				</button>
-			)}
 			{streaming === true ? (
 				// 二次确认：首次点击武装 3s 窗口（按钮内容换 Esc 徽章），
 				// 窗口内再点（或再按 Esc）才真正中断，超时自动复原。

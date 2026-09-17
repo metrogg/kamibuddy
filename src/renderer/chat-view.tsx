@@ -89,7 +89,8 @@ interface ChatViewProps {
 	/**
 	 * 提交（文本 + 可选图片附件）。resolve 表示 daemon 已接收；
 	 * 附件据此决定去留（失败保留在输入区，见 submit）。
-	 * `whileStreaming` 由 Composer 给出：回车排队（缺省）、「立即插入」传 "steer"。
+	 * `whileStreaming` 由 Composer 给出：回车排队（缺省）。插队走队列条的 ↑
+	 *（onQueueRewrite 路径）；"steer" 分支保留但已无输入框旁的按钮入口（2026-09-17）。
 	 */
 	readonly onSubmit: (
 		text: string,
@@ -2683,7 +2684,7 @@ export function ChatView({
 							placeholder={
 								ready
 									? streaming
-										? "回车排队等待，点「立即插入」插进当前这轮"
+										? "回车排队等待；想立刻插进当前这轮，点队列条上的 ↑"
 										: memberView !== undefined
 											? `发送给成员「${memberView.name}」…`
 											: "继续追问…"
