@@ -122,6 +122,7 @@ import {
 	createSandboxedRunner,
 	warmUpSandbox,
 	type SandboxDiagnostics,
+	type SandboxPrepareReport,
 } from "./sandbox-runner.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
 import { teamExtensionFactory } from "../extensions/team-tools.ts";
@@ -209,6 +210,7 @@ import {
 	type WebSearchTestResult,
 } from "../shared/settings.ts";
 import { readApiKey } from "../core/api-keys.ts";
+import { ensureAgentTools } from "../core/agent-tools.ts";
 import { probeModel } from "../core/model-probe.ts";
 import { searchWeb } from "../core/web-search.ts";
 import {
@@ -1269,7 +1271,7 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 	 * 读全局值就是 2026-09-16 修掉的那个 bug 的形状（陈旧的 available:true
 	 * = 在没有写约束的工作区里免审批执行命令）。
 	 */
-	const sandbox = latestSandboxDiagnostics;
+	const sandbox = latestSandboxDiagnostics?.diagnostics;
 	let sandboxNote = "";
 	if (sandbox !== undefined) {
 		sandboxNote = sandbox.available
@@ -1294,7 +1296,47 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 		// 沙箱状态并进这段文案（设置页整段渲染）；机器可读的诊断在事件日志的
 		// sandbox_status 里，不另开没有读取方的结构化字段。
 		enforcementNote: `${base}${sandboxNote}`,
+		// 授权成本单列一段：它只进设置页，**不进 chip 的 hover 提示**
+		//（permission-menu 也读 enforcementNote，那里塞一串数字是噪音）。
+		...(latestSandboxDiagnostics?.diagnostics.prepare === undefined
+			? {}
+			: {
+					sandboxPrepareNote: sandboxPrepareNoteOf(
+						latestSandboxDiagnostics.workspace,
+						latestSandboxDiagnostics.diagnostics.prepare,
+					),
+				}),
 	};
+}
+
+/**
+ * 「首次授权为什么要等」那段文案。
+ *
+ * 用户 2026-09-17 报的现象是「发送后白好一会才动」（实测 19.7 秒），
+ * 而这句话要回答两件事：**这次等了多少**、**为什么**（目录条目数）、
+ * 以及**会不会每次都这样**（不会：ACE 常驻，之后是幂等命中）。
+ * 三件事缺一件，用户就会以为「这个应用很慢」而不是「这个大目录第一次要准备一下」。
+ *
+ * 用秒而不是毫秒：这一段讲的是「几十秒」量级的等待，1,547ms 这种精度没有意义。
+ */
+function sandboxPrepareNoteOf(workspace: string, prepare: SandboxPrepareReport): string {
+	const seconds = Math.max(0, prepare.elapsedMs) / 1000;
+	const cost = seconds >= 10 ? `${Math.round(seconds)} 秒` : `${seconds.toFixed(1)} 秒`;
+	/*
+	 * entries 缺省 = 这次授权没走 worker（进程内直调，测试/冒烟路径），
+	 * 那就只说耗时 —— 编不出条目数，也不该编。
+	 */
+	const scale =
+		prepare.entries === undefined
+			? ""
+			: `（目录内约 ${prepare.entries.toLocaleString("zh-CN")} 个条目${prepare.capped === true ? "，已达扫描上限，实际更多" : ""}）`;
+	const state = prepare.fastPath
+		? "幂等命中，未重新传播"
+		: "首次为该目录传播写入权限";
+	return (
+		`　最近一次沙箱授权：${workspace} —— ${state}，耗时 ${cost}${scale}。` +
+		"同一目录此后每次都是毫秒级（权限标记常驻）。"
+	);
 }
 
 /**
@@ -1315,15 +1357,20 @@ function buildPermissionInfo(settings: PermissionSettings): PermissionInfo {
 const sandboxDiagnosticsByWorkspace = new Map<string, SandboxDiagnostics>();
 
 /**
- * 最近一次的诊断结论，**仅供设置页的全局文案**。
+ * 最近一次的诊断结论**与它对应的工作区**，**仅供设置页的全局文案**。
  *
  * 为什么还留一个全局值：`buildPermissionInfo` 没有「当前是哪个工作区」的上下文
  * （权限设置是全局的，设置页也不属于某个会话）。所以那段文案只能表达
  * 「最近一次探测到的情况」—— 多工作区并存时它可能指的是另一个工作区。
  * 这只是**展示**的近似；执行层的沙箱可用性由 runner 执行时现场探测决定
  * （对齐 dsh 的 confine 同构），不依赖这个全局值。
+ *
+ * 工作区路径与结论**存在同一个对象里**（而不是两个模块级变量）：成本文案
+ * 必须说清「是哪个目录花了 19 秒」，两者一旦分开存，就会出现「A 的耗时配 B 的路径」。
  */
-let latestSandboxDiagnostics: SandboxDiagnostics | undefined;
+let latestSandboxDiagnostics:
+	| { readonly diagnostics: SandboxDiagnostics; readonly workspace: string }
+	| undefined;
 
 /** 原因枚举 → 给用户看的一句话。不把枚举名直接抛给界面。 */
 function describeSandboxReason(reason: SandboxUnavailableReason | undefined): string {
@@ -1342,6 +1389,10 @@ function describeSandboxReason(reason: SandboxUnavailableReason | undefined): st
 			// 说「启动自检未通过」而不是「进程起不来」：后者像是用户的命令有问题，
 			// 而这其实是沙箱环境的问题，且此时命令仍可正常执行（已降级）。
 			return "命令执行环境的启动自检未通过";
+		case "prepare-worker-failed":
+			// 「授权组件」= 跑授权那条 worker（见 sandbox-prepare-client.ts）。
+			// 说清是「组件没起来」而不是「授权被拒」——两者的排查方向完全不同。
+			return "授权组件未能启动";
 		case "disabled-by-setting":
 			return "已被设置关闭";
 		default:
@@ -1362,11 +1413,14 @@ function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string):
 	 */
 	const previous = sandboxDiagnosticsByWorkspace.get(key);
 	sandboxDiagnosticsByWorkspace.set(key, diagnostics);
-	latestSandboxDiagnostics = diagnostics;
+	latestSandboxDiagnostics = { diagnostics, workspace: cwd };
 	if (
 		previous !== undefined &&
 		previous.available === diagnostics.available &&
-		previous.reason === diagnostics.reason
+		previous.reason === diagnostics.reason &&
+		// 授权成本也是「有新东西可看」的一种：首次授权（几十秒）与幂等命中（毫秒）
+		// 的 available/reason 完全一样，只看那两个字段的话这次测量就永远不进日志。
+		previous.prepare === undefined
 	) {
 		return;
 	}
@@ -1375,6 +1429,20 @@ function recordSandboxDiagnostics(diagnostics: SandboxDiagnostics, cwd: string):
 		available: diagnostics.available,
 		...(diagnostics.reason === undefined ? {} : { reason: diagnostics.reason }),
 		...(diagnostics.detail === undefined ? {} : { detail: diagnostics.detail }),
+		...(diagnostics.prepare === undefined
+			? {}
+			: {
+					prepare: {
+						elapsedMs: diagnostics.prepare.elapsedMs,
+						fastPath: diagnostics.prepare.fastPath,
+						...(diagnostics.prepare.entries === undefined
+							? {}
+							: { entries: diagnostics.prepare.entries }),
+						...(diagnostics.prepare.capped === undefined
+							? {}
+							: { capped: diagnostics.prepare.capped }),
+					},
+				}),
 		cwd,
 	});
 }
@@ -2438,6 +2506,25 @@ async function applyWorkspace(dir: string): Promise<string> {
 		// 多根预览池：按 cwd 各起一个实例，不再关旧根。仍 await —— 服务起不来时
 		// 工作区切换应该响亮失败（沿用旧 setRoot 的口径），而不是带病继续。
 		await previewServers.ensure(dir);
+
+		/*
+		 * 沙箱预热：**选定工作空间/目录的这一刻**就开始授权，不等第一条消息。
+		 *
+		 * 为什么提前到这里：授权在大目录上是几十秒的同步 ACE 传播
+		 *（实测 43,723 个条目 19.3 秒）。用户从「选目录」到「按下发送」通常还要
+		 * 写一段话，这段时间刚好够它跑完 —— 而此前预热挂在会话建立（= 首次发送）
+		 * 那一刻，用户就得盯着空屏等（2026-09-17 报的那个现象）。
+		 *
+		 * 为什么可以放心提前：授权本身跑在 worker_thread 里
+		 *（见 sandbox-prepare-client.ts），不堵 daemon 主线程，所以这一步
+		 * 既不会卡住「切空间」这个动作，也不会影响别的会话的 IPC。
+		 * 非 workspace-write 档位在 warmUpSandbox 里秒退（不留 ACE、不起线程）。
+		 */
+		void warmUpSandbox({
+			workspaceDir: dir,
+			mode: activePermissions.sandbox,
+			onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, dir),
+		});
 	}
 	defaultWorkspaceDir = dir;
 
@@ -4814,6 +4901,41 @@ function start(): void {
 		node: process.version,
 		platform: `${process.platform}-${process.arch}`,
 	});
+
+	/*
+	 * pi 的外部二进制（fd / rg）就位检查。
+	 *
+	 * 为什么在启动时做：pi 的 find/grep 工具靠这两个 exe，找不到它就去 GitHub 下 ——
+	 * 国内网络下那条路不通，而且**每次调用白等 10 秒**、失败原因还被 pi 吞掉
+	 * （实测 2026-09-17，详见 core/agent-tools.ts 的文件头）。所以二进制随包带，
+	 * 这里补到 pi 的 bin 目录；命中之后 pi 一次网络都不会发。
+	 *
+	 * 幂等：已就位时零输出（连日志都不写），只有真的补了、或随包资产本身缺失才记一笔。
+	 */
+	{
+		const agentTools = ensureAgentTools();
+		if (agentTools.installed.length > 0 || agentTools.missing.length > 0) {
+			eventLog.append({
+				kind: "agent_tools",
+				target: agentTools.targetDir,
+				installed: [...agentTools.installed],
+				present: [...agentTools.present],
+				missing: [...agentTools.missing],
+			});
+		}
+		if (agentTools.missing.length > 0) {
+			// 响亮：缺了就是 find/grep 不可用（模型会每轮白等 10 秒的联网下载），
+			// 这必须在启动日志里看得见，不能只体现在工具报错上。
+			console.error(
+				`pi 的外部二进制缺失（find/grep 将不可用）：${agentTools.missing.join(", ")} —— 检查 resources/bin/`,
+			);
+		}
+		if (agentTools.installed.length > 0) {
+			console.log(
+				`已就位 pi 外部二进制：${agentTools.installed.join(", ")} → ${agentTools.targetDir}`,
+			);
+		}
+	}
 
 	// 初始默认落点的预览服务（多根池里第一个实例）。默认落点可能是空串（待分配，
 	// 未选工作空间的新任务首次执行时才分配目录）—— 没有目录可服务，跳过；那种 cwd 的

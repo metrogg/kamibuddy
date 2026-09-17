@@ -349,6 +349,17 @@ function decodeWideString(buffer: Buffer): string {
 export interface SandboxPrepareResult {
 	readonly fastPath: boolean;
 	readonly elapsedMs: number;
+	/**
+	 * 目录规模读数（文件 + 子目录），授权前的**有界**扫描（见
+	 * daemon/sandbox-prepare-protocol.ts 的 ENTRY_SCAN_LIMIT）。
+	 *
+	 * 可选是有意的：只有走 worker 的授权路径才量规模（量它本身要几秒，
+	 * 只能在别的线程上做），进程内直调 `prepareSandbox`（集成测试、冒烟）
+	 * 没有这一项。它只服务于「为什么这次授权慢」的展示，不参与任何判定。
+	 */
+	readonly entries?: number;
+	/** `entries` 达到扫描上限 → 它是下界而不是全量。 */
+	readonly capped?: boolean;
 }
 
 /**
@@ -508,8 +519,32 @@ export async function runSandboxed(request: SandboxRunRequest): Promise<SandboxR
 	}
 }
 
+/**
+ * prepare 阶段**原因已知**的失败。
+ *
+ * 存在理由：授权跑在 worker_thread 里（见 daemon/sandbox-prepare-client.ts），
+ * 异常跨不了线程 —— 能回来的只有字符串。worker 侧先用 `classifyFailure`
+ * 把原因定下来，主线程再用本类把它还原成「带原因的失败」，
+ * 于是 `classifyFailure` 不必靠猜 message（那本该由 API 名判定，
+ * 而 worker 崩溃的情形根本没有 API 名）。
+ *
+ * 不还原会怎样：`classifyFailure` 的兜底是 `token-creation-failed`，
+ * 于是「授权组件起不来」会被设置页说成「受限令牌创建失败」——
+ * 一个把排查方向指歪的错误原因，比没有原因更糟。
+ */
+export class SandboxPrepareFailure extends Error {
+	readonly reason: SandboxUnavailableReason;
+
+	constructor(reason: SandboxUnavailableReason, detail: string) {
+		super(detail);
+		this.name = "SandboxPrepareFailure";
+		this.reason = reason;
+	}
+}
+
 /** 供上层构造错误信息：把内部异常翻成原因枚举。 */
 export function classifyFailure(error: unknown): SandboxUnavailableReason {
+	if (error instanceof SandboxPrepareFailure) return error.reason;
 	if (error instanceof FfiUnavailableError) return "ffi-load-failed";
 	if (error instanceof Error) {
 		// Win32Error 的 message 带 API 名，据此区分令牌与 ACL 两类失败 ——

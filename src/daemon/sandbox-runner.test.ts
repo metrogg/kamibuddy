@@ -17,6 +17,7 @@ import type {
 	CommandRunResult,
 } from "../extensions/powershell-tool.ts";
 import type { PermissionSettings, SandboxMode } from "../shared/permissions.ts";
+import { SandboxPrepareFailure } from "../sandbox/index.ts";
 import {
 	createSandboxedRunner,
 	resetSandboxRunnerForTest,
@@ -275,6 +276,35 @@ describe("沙箱不可用 → fail-closed 拒绝（对齐 dsh SANDBOX_UNAVAILABL
 		wasBlocked(await run("echo hi", 120));
 		expect(h.recorded.fallbackCalls).toEqual([]);
 		expect(h.recorded.diagnostics[0]).toMatchObject({ reason: "token-creation-failed" });
+	});
+
+	it("授权在 worker 里失败：原因原样上报，不被兜底值吞掉", async () => {
+		/*
+		 * 授权搬进 worker_thread 之后，失败原因只能在 worker 侧分类
+		 * （异常跨不了线程），主线程用 SandboxPrepareFailure 把它还原回来。
+		 * 这条测试钉住那个还原：reason 必须原样出去，且拒绝文案要说「授权组件」，
+		 * 不能让用户看到「受限令牌创建失败」这种指错方向的兜底文案。
+		 */
+		const h = harness({
+			prepare: async () => {
+				throw new SandboxPrepareFailure(
+					"prepare-worker-failed",
+					"授权 worker 未给出结果就退出（exit 1）",
+				);
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			onDiagnostics: h.onDiagnostics,
+		});
+		const outcome = await run("echo hi", 120);
+		const blocked = wasBlocked(outcome);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(h.recorded.diagnostics[0]).toMatchObject({ reason: "prepare-worker-failed" });
+		expect(blocked.reason).toContain("授权组件未能启动");
 	});
 
 	it("read-only 档下沙箱不可用同样拒绝（不假装只读）", async () => {

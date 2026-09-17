@@ -18,7 +18,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -177,6 +177,34 @@ async function main(): Promise<number> {
 		console.error(`找不到 electron：${electron}（先跑 npm install）`);
 		return 1;
 	}
+
+	/*
+	 * 授权 worker 是**独立构建产物**（out/main/sandbox-prepare-worker.mjs），
+	 * 客户端按 `import.meta.url` 相对找它。子进程 bundle 落在 WORK_DIR，
+	 * 所以要让那条断言在 utilityProcess 里真的能跑，就得把产物放到 bundle 旁边。
+	 *
+	 * **连 chunks 一起拷**：rollup 会把与 daemon 共用的模块拆成
+	 * `out/main/chunks/*.mjs`，worker 靠相对路径 import 它们（本冒烟第一次跑就
+	 * 撞上了 `Cannot find module .../chunks/index-*.mjs`）。真实打包里两者同目录，
+	 * 这里必须复刻同一个布局，否则测的是假环境。
+	 *
+	 * 这也让「koffi 在 worker_thread 里能不能加载」这件事在**进程类型与生产一致**
+	 * 的环境里被测到 —— 那是纯 Node 探针（probe-sandbox-worker.mts）覆盖不到的格子。
+	 * 没构建过就跳过那条断言并**明说**（不是静默通过）。
+	 */
+	const builtWorker = join(ROOT, "out", "main", "sandbox-prepare-worker.mjs");
+	const builtChunks = join(ROOT, "out", "main", "chunks");
+	if (!existsSync(builtWorker)) {
+		console.log("注意：没找到 out/main/sandbox-prepare-worker.mjs（先跑 npm run build），");
+		console.log("      「授权 worker」那条断言会被跳过。\n");
+	} else {
+		copyFileSync(builtWorker, join(WORK_DIR, "sandbox-prepare-worker.mjs"));
+		if (existsSync(builtChunks)) {
+			cpSync(builtChunks, join(WORK_DIR, "chunks"), { recursive: true });
+		}
+		env.KAMI_SMOKE_WORKER = "1";
+	}
+
 	console.log("在真实 Electron utilityProcess 里运行沙箱冒烟……\n");
 	// 用滤过的 CHILD_ARGS：--diagnose 是本脚本的开关，转发下去会被子进程
 	// 当成工作区路径。

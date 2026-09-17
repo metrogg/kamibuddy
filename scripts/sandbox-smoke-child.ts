@@ -19,6 +19,7 @@ import {
 	runSandboxed,
 	sandboxPrivateTempDir,
 } from "../src/sandbox/index.ts";
+import { prepareSandboxInWorker } from "../src/daemon/sandbox-prepare-client.ts";
 
 interface Result {
 	readonly name: string;
@@ -84,6 +85,44 @@ async function main(): Promise<void> {
 			ok: probe.available,
 			detail: probe.available ? "可用" : `不可用：${probe.reason}\n${probe.detail}`,
 		});
+		/*
+		 * 生产上真正走的是 worker 那条路（daemon 的 REAL_SANDBOX.prepare）。
+		 * 这一条覆盖纯 Node 探针测不到的格子：**Electron utilityProcess + worker_thread**
+		 * 里 koffi 能不能加载。它一旦坏，每条命令都会被拒（「授权组件未能启动」），
+		 * 而终端里的探针全绿 —— 正是 2026-09-15 那次回归的形状。
+		 * worker 产物由宿主脚本拷到本 bundle 旁边（见 smoke-sandbox.ts）。
+		 *
+		 * **放在探测那道闸之前**：worker 路径不依赖受限令牌自检（它只要 ACL 授权权），
+		 * 而自检恰恰是本机最容易失败的一环 —— 放在闸后就等于「环境一坏，这条永远不跑」。
+		 */
+		if (process.env.KAMI_SMOKE_WORKER === "1") {
+			try {
+				const prepared = await prepareSandboxInWorker({
+					workspaceDir: workspace,
+					writableDirs: [workspace],
+				});
+				results.push({
+					name: "授权 worker（utilityProcess 里的 worker_thread 路径）",
+					ok: Number.isFinite(prepared.elapsedMs) && prepared.elapsedMs >= 0,
+					detail:
+						`fastPath=${String(prepared.fastPath)}，授权 ${prepared.elapsedMs} ms，` +
+						`扫描到 ${prepared.entries ?? "?"} 个条目`,
+				});
+			} catch (error) {
+				results.push({
+					name: "授权 worker（utilityProcess 里的 worker_thread 路径）",
+					ok: false,
+					detail: error instanceof Error ? error.message : String(error),
+				});
+			}
+		} else {
+			results.push({
+				name: "授权 worker 跳过（宿主脚本没找到 out/main/sandbox-prepare-worker.mjs）",
+				ok: true,
+				detail: "先跑 npm run build 再跑本冒烟",
+			});
+		}
+
 		// 探测不过就没有继续的意义：后面每条都会以同一个原因失败，只是噪音。
 		if (!probe.available) return;
 
