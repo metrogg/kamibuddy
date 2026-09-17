@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import JSZip from "jszip";
+import { execFileSync } from "node:child_process";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { describe, expect, it, vi } from "vitest";
@@ -288,5 +289,26 @@ describe("24k 截断", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+/*
+ * daemon 跑在 Electron utilityProcess 里（process.versions.electron 有值 +
+ * process.type === "utility"），pdfjs 的 isNodeJS 判定恰好把这种进程排除在外
+ * （pdf.mjs:6277），于是它以为在浏览器里：既不填 workerSrc 又走「真 Worker」分支，
+ * PDF 读取整体报 `No "GlobalWorkerOptions.workerSrc" specified.`（2026-09-17
+ * 用户实测，且此前从未在应用里跑通过——单测都是纯 Node，看不出这个差异）。
+ * 修法见 doc-extract.ts 的 ensurePdfWorker；这里开**子进程**钉住它：
+ * isNodeJS 在 pdf.mjs 加载时算一次，同进程里改 process 已经来不及（模块缓存）。
+ */
+describe("Electron 类环境（daemon 的 utilityProcess）下的 pdf 装配", () => {
+	it("伪装 versions.electron / type=utility 后仍能提取正文", () => {
+		const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+		const out = execFileSync(
+			process.execPath,
+			["--import", "tsx", "scripts/probe-pdf-worker.ts", `${FIXTURE_DIR}/cn-text.pdf`],
+			{ cwd: repoRoot, encoding: "utf8" },
+		);
+		expect(out).toContain("OK");
 	});
 });

@@ -108,6 +108,34 @@ export async function extractDocument(path: string, offset?: number, limit?: num
 
 let pdfAssetUrls: { cMapUrl: string; standardFontDataUrl: string } | undefined;
 
+let pdfWorkerReady: Promise<void> | undefined;
+
+/**
+ * 把 pdf.js 的 worker 模块挂到 `globalThis.pdfjsWorker`，让它走「主线程 worker」
+ * 这条装配路径。
+ *
+ * 为什么必须自己挂（2026-09-17 用户实测的 PDF 读取失败根因）：
+ * pdfjs 用 `isNodeJS` 决定是否给 `GlobalWorkerOptions.workerSrc` 填默认值
+ * （pdf.mjs:6277），而那个判定把 Electron 的非 browser 进程排除在外 ——
+ * daemon 跑在 utilityProcess（`process.versions.electron` 有值 + `type === "utility"`），
+ * 于是 isNodeJS=false：既不填 workerSrc，又走「真 Worker」分支，第一句读
+ * `PDFWorker.workerSrc` 就抛 `No "GlobalWorkerOptions.workerSrc" specified.`
+ * （scripts/probe-pdf-worker.ts 等价复现）。
+ * 挂上之后 `PDFWorker.#initialize` 命中 `#mainThreadWorkerMessageHandler` 分支
+ * → `#setupFakeWorker()` 直接用它，既不建 Worker 也不动态 import 工作线程文件
+ * （打包进 asar 后那条 import 更不可靠）——纯 Node 与 utilityProcess 同一路径。
+ */
+async function ensurePdfWorker(): Promise<void> {
+	if (pdfWorkerReady === undefined) {
+		pdfWorkerReady = (async (): Promise<void> => {
+			const globals = globalThis as { pdfjsWorker?: unknown };
+			if (globals.pdfjsWorker !== undefined) return;
+			globals.pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+		})();
+	}
+	await pdfWorkerReady;
+}
+
 /** pdfjs 中文防乱码三件套的路径（见文件头注释）；createRequire 定位包根拼绝对路径。 */
 function getPdfAssetUrls(): { cMapUrl: string; standardFontDataUrl: string } {
 	if (pdfAssetUrls === undefined) {
@@ -123,6 +151,8 @@ function getPdfAssetUrls(): { cMapUrl: string; standardFontDataUrl: string } {
 
 /** 逐页提取全部页文本。打开失败按 加密/损坏 映射；页级异常统一归 corrupt。 */
 async function readPdfPages(path: string): Promise<string[]> {
+	// worker 必须在 getDocument 之前挂好：装配只发生一次（见 ensurePdfWorker）。
+	await ensurePdfWorker();
 	const { cMapUrl, standardFontDataUrl } = getPdfAssetUrls();
 	// data 喂 Uint8Array 而不是裸 Buffer：pdfjs 类型声明如此，字节语义也更明确
 	// （Buffer 的 .buffer 可能带内存池余量，直接传会读出垃圾）。
