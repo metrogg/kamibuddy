@@ -40,7 +40,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { CachePrefixBoundary } from "@shared/cache-prefix.ts";
+import type { CachePrefixBoundary, SystemPrefixChange } from "@shared/cache-prefix.ts";
 import { formatTokenCount, type ContextUsageDetail } from "@shared/context-usage.ts";
 import type { RunLedgerResult } from "@shared/ipc.ts";
 import {
@@ -335,6 +335,33 @@ function ContextSection({
 /* ── ④ 单步详情（内联展开） ──────────────────────────────────────── */
 
 /**
+ * 断点在消息列表之前时的措辞（CACHE6 的 before_messages）。
+ *
+ * 系统提示词分段 diff（相邻两轮的 systemSegments 指纹）能指认到段时直说那一段，
+ * 指认不出时如实退回原来那句并带上原因 —— 不把「判不出来」说成「就是某一段」。
+ */
+function beforeMessagesNote(systemChange: SystemPrefixChange): string {
+	const tail = "，其后的消息全部失效。";
+	// 「前 0 段命中」读着别扭：首段就变时直说。
+	const hit = (count: number): string => (count === 0 ? "第一段就变了" : `前 ${count} 段命中`);
+	if (systemChange.kind === "segment_changed") {
+		return `缓存断点：系统提示词的 ${systemChange.source} 段变了（${hit(systemChange.hitSegments)}，${systemChange.previousChars} → ${systemChange.chars} 字符）${tail}`;
+	}
+	if (systemChange.kind === "segment_appended") {
+		return `缓存断点：系统提示词新增了 ${systemChange.source} 段（${hit(systemChange.hitSegments)}）${tail}`;
+	}
+	if (systemChange.kind === "segment_removed") {
+		return `缓存断点：系统提示词的 ${systemChange.source} 段没了（${hit(systemChange.hitSegments)}）${tail}`;
+	}
+	const base =
+		"缓存断点：本轮前缀在消息列表之前就断了（系统提示词 / 工具定义变了，或缓存整体失效），消息一条都没命中。";
+	if (systemChange.kind === "unchanged") {
+		return "缓存断点：本轮前缀在消息列表之前就断了 —— 相邻两轮的系统提示词逐段一致，所以断点在它之前（工具集 / 模型变了，或缓存整体失效），消息一条都没命中。";
+	}
+	return `${base}${systemChange.note}`;
+}
+
+/**
  * 缓存命中前缀断点（CACHE6）的结论 —— 一行文字，不做卡片。
  *
  * 结论本身由 shared 的 inferCachePrefixBreak 定好（哪种形态对应哪种说法），
@@ -354,9 +381,7 @@ function CachePrefixNote({
 	if (boundary.kind === "before_messages") {
 		return (
 			<>
-				<p className="task-diag-note">
-					缓存断点：本轮前缀在消息列表之前就断了（系统提示词 / 工具定义变了，或缓存整体失效），消息一条都没命中。
-				</p>
+				<p className="task-diag-note">{beforeMessagesNote(boundary.systemChange)}</p>
 				{boundary.uncertain !== undefined && (
 					<p className="task-diag-note">{boundary.uncertain}</p>
 				)}

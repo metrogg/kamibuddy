@@ -62,15 +62,15 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 
-/**
- * 注入消息的自定义类型（pi 的 CustomMessage.customType）。它有实际作用而非装饰：
- * 消息数组里一眼能认出这条不是用户输入、不进面板展示，将来排查「模型为什么在
- * 这一轮看到这份记忆/个性化」时也能按它检索。（时间不走这条消息：它由 hidden
- * context 的 `current_time` 送达。）
+/*
+ * 注入消息的自定义类型（pi 的 CustomMessage.customType）已搬到
+ * shared/observability.ts（`RUNTIME_CONTEXT_CUSTOM_TYPE`）：request_snapshot 的
+ * 逐条清单（core/session-host.ts）也要靠它把这条幽灵条目标成瞬态，而 core 不许
+ * import extensions（AGENTS.md §1）—— 常量放 shared 才是唯一实现处，这里 import 用。
  */
-export const RUNTIME_CONTEXT_CUSTOM_TYPE = "kamibuddy-runtime-context";
 
 export interface PromptSwitchOptions {
 	/**

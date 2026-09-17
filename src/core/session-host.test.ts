@@ -1020,6 +1020,7 @@ import type {
 	RunLedgerDataMap,
 	RunLedgerEntryKind,
 } from "../shared/observability.ts";
+import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
 import type { RunLedger } from "./run-ledger.ts";
 
 interface LedgerCall<K extends RunLedgerEntryKind = RunLedgerEntryKind> {
@@ -1672,6 +1673,36 @@ describe("request_snapshot 的逐条标识（LOG13）", () => {
 		// 不落正文：逐条明细里没有任何消息文本。
 		expect(JSON.stringify(snap)).not.toContain("写个月报");
 		expect(JSON.stringify(snap)).not.toContain("文件内容");
+	});
+
+	it("瞬态注入项标 transient（其余条目不带该字段），且仍不落正文", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		const injected = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+		const { list } = await refsOf(agent, calls, [
+			...CONVERSATION,
+			{
+				role: "custom",
+				customType: RUNTIME_CONTEXT_CUSTOM_TYPE,
+				content: injected,
+				display: false,
+				timestamp: 500,
+			},
+		]);
+
+		// 它是 prompt-switch 的 context 事件每请求现算、不落会话的那条 —— 归因时
+		// 必须认得出（否则「上一轮尾部有、这一轮没了」会被当成缓存断点原因）。
+		expect(list.at(-1)?.id).toBe("custom:500");
+		expect(list.at(-1)?.transient).toBe(true);
+		// 真历史条目**不带**这个字段（缺席 = 不是瞬态；消费方的旧台账降级判据
+		// 见 shared/cache-prefix.ts 的 dropTransient）。
+		expect(list.slice(0, -1).every((m) => m.transient === undefined)).toBe(true);
+		// 不落正文：注入块的文本一个字都不进台账。
+		const snap = calls.find((c) => c.kind === "request_snapshot")?.data;
+		expect(JSON.stringify(snap)).not.toContain(injected);
+		expect(JSON.stringify(snap)).not.toContain("表格呈现");
 	});
 });
 

@@ -29,6 +29,7 @@ import type {
 	RunEndReason,
 	RunLedgerEntry,
 	RunLedgerEntryKind,
+	SystemSegmentStat,
 	TokenUsage,
 	ToolCallData,
 } from "@shared/observability.ts";
@@ -294,13 +295,19 @@ export function foldCachePrefixBreaks(
 		usageByKey.set(snapshotKey(entry.data.runId, entry.data.turnIndex), entry.data.usage);
 	}
 
-	const snapshots: { readonly key: string; readonly refs: readonly MessageRef[] }[] = [];
+	const snapshots: {
+		readonly key: string;
+		readonly refs: readonly MessageRef[];
+		readonly segments: readonly SystemSegmentStat[] | undefined;
+	}[] = [];
 	for (const raw of entries) {
 		const entry = raw as LedgerEntryUnion;
 		if (entry.kind !== "request_snapshot") continue;
 		snapshots.push({
 			key: snapshotKey(entry.data.runId, entry.data.turnIndex),
 			refs: entry.data.messageList ?? [],
+			// 断点在消息列表之前时，段级归因靠相邻两轮的分段指纹 diff（CACHE6）。
+			segments: entry.data.systemSegments,
 		});
 	}
 
@@ -319,6 +326,8 @@ export function foldCachePrefixBreaks(
 					previousUsage === undefined ? undefined : billedInputTokens(previousUsage),
 				current: current.refs,
 				cacheRead: usage?.cacheRead,
+				previousSegments: previous?.segments,
+				currentSegments: current.segments,
 			}),
 		);
 	}

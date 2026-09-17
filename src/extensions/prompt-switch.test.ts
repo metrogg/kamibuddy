@@ -24,7 +24,8 @@ import {
 	createSystemPromptComposerFromDefaults,
 	type SystemPromptComposer,
 } from "../core/system-prompt-composer.ts";
-import { createPromptSwitch, RUNTIME_CONTEXT_CUSTOM_TYPE } from "./prompt-switch.ts";
+import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
+import { createPromptSwitch } from "./prompt-switch.ts";
 
 type Handler = (event: {
 	readonly systemPromptOptions: {
@@ -397,5 +398,30 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		for (const segment of composed.segments) {
 			expect(segment.source).not.toBe("time");
 		}
+	});
+
+	it("分段带内容指纹（CACHE6 段级归因的前提）：同输入同指纹、换模式指纹变", () => {
+		/*
+		 * 缓存断点落在消息列表之前时，「哪一段变了」只能靠相邻两轮的分段指纹 diff
+		 * 指认（shared/cache-prefix.ts）。指纹必须**与消息指纹同一算法**（生产组装
+		 * 出口调 shared 的 contentFingerprint），且同一份资源逐轮可复现 —— 否则
+		 * 归因会把「没变」说成「变了」。
+		 */
+		vi.setSystemTime(FIRST_TURN_AT);
+		const first = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		const second = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		expect(first.segments.length).toBeGreaterThan(0);
+		expect(first.segments.every((s) => typeof s.fp === "number")).toBe(true);
+		expect(first.segments.map((s) => [s.source, s.fp])).toEqual(
+			second.segments.map((s) => [s.source, s.fp]),
+		);
+
+		// 换模式 → 模式段与骨架之后的内容变了 → 该段指纹必须不同（同长度不同内容也认得出）。
+		const ask = compose({ sceneId: "work", interactionId: "ask", expertId: undefined });
+		const craftMode = first.segments.find((s) => s.source === "mode:craft")?.fp;
+		const askMode = ask.segments.find((s) => s.source === "mode:ask")?.fp;
+		expect(craftMode).toBeDefined();
+		expect(askMode).toBeDefined();
+		expect(craftMode).not.toBe(askMode);
 	});
 });
