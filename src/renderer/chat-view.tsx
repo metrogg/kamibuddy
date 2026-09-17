@@ -2271,7 +2271,7 @@ export function ChatView({
 												title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
 												onClick={() => onPreviewArtifact(a.path)}
 											>
-												<FileTypeIcon name={a.path} size={22} />
+												<FileTypeIcon name={a.path} size={28} />
 												<span className="artifact-meta">
 													<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
 													{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}

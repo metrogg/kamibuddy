@@ -3433,11 +3433,12 @@ textarea:focus-visible {
 	margin-top: var(--space-3);
 }
 
-/* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。 */
+/* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。
+   间距取 --space-4(12px) 对齐 WB 的 grid gap —— 64px 高的卡配 6px 间距会挤成一坨。 */
 .artifacts-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
-	gap: var(--space-2);
+	gap: var(--space-4);
 }
 
 .artifacts-grid:has(> :only-child) {
@@ -3457,37 +3458,58 @@ textarea:focus-visible {
 	padding-right: 40px;
 }
 
-/* 卡片形态对齐 WorkBuddy 的产物卡：白底 + 1px 边界 + 圆角，
-   左图标 / 中文件名+大小两行 / 右动作钮。此前是无边界的「列表行」，
-   扫读时与正文糊在一起（用户实测反馈）。 */
+/* 卡片形态对齐 WorkBuddy 的 .artifact-slot-panel__card：灰底 + 16 圆角 + 64 高、
+   **无边框**。此前是白底 + 1px 描边，两个毛病（2026-09-17 用户实测反馈）：
+   ① 白卡贴在白页面上只靠描边成形，hover 再把描边加深到 --text-secondary，
+   读起来就是「一圈黑线」；② 比 WB 的灰底卡发白、发扁。
+   hover 只换底色、不动描边（WB 同款：底色深一档，描边全程没有）。 */
 .artifact-card {
 	position: relative;
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	width: 100%;
-	padding: var(--space-3);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--bg);
+	height: 64px;
+	padding: var(--space-3) var(--space-4);
+	border: none;
+	border-radius: var(--radius-lg);
+	background: var(--bg-raised);
 	text-align: left;
-	font-size: var(--text-list);
+	transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .artifact-card:hover {
-	border-color: var(--text-secondary);
+	background: var(--bg-hover);
 }
 
-/* 文件名 + 大小两行（WB 同款）：文件名在上、大小小一号灰字在下。 */
+/*
+ * 焦点环画在卡片**之内**（offset 取负）：全局那条 button:focus-visible 是
+ * `offset: +2px` 的中性灰环，落在卡片上正是「外面一圈黑线」——与输入框那次的
+ * 病根同源（拿 --text-secondary 当环色，见 tokens.css 的 --shadow-input-focus 注）。
+ * WorkBuddy 的做法可证：整卡的主操作按钮用 `outline-offset: -2px` 把环收进卡片里
+ *（.artifact-slot-panel__card-main:focus-visible），色取品牌焦点色。
+ * 我们取 --accent（「可点标识」色）——整张卡就是那个可点目标，它比中性灰更像
+ * 「选中」，也不像报错。
+ */
+.artifact-card:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* 文件名 + 大小两行（WB 同款）：15/600 的标题在上、13 号灰字在下。
+   行高用两行自己的（WB 是 25/21px），不再另加 gap —— 两行行高已给足间距，
+   再加 gap 会把两行文字在 64px 卡里顶得过高。 */
 .artifact-meta {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
 	min-width: 0;
 	flex: 1;
 }
 
 .artifact-name {
+	font-size: var(--text-emphasis);
+	font-weight: 600;
+	line-height: 1.5;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -3496,7 +3518,8 @@ textarea:focus-visible {
 
 .artifact-size {
 	color: var(--text-secondary);
-	font-size: var(--text-meta);
+	font-size: var(--text-list);
+	line-height: 1.5;
 }
 
 /* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。
