@@ -1754,15 +1754,6 @@ textarea:focus-visible {
 	}
 }
 
-/* 减少动态偏好下退化为静态文字：扫光是纯装饰，不该造成前庭不适。 */
-@media (prefers-reduced-motion: reduce) {
-	.text-shimmer {
-		animation: none;
-		background-image: none;
-		color: var(--shimmer-color);
-	}
-}
-
 /* ── 对话页 ───────────────────────────────────────────────────── */
 
 .chat {
@@ -1860,14 +1851,6 @@ textarea:focus-visible {
 	to {
 		opacity: 1;
 		transform: translateY(0);
-	}
-}
-
-/* 与全局其他动效同一约定：减少动态偏好下直接呈现。
-   特异度要对齐上面那条（[data-reveal="true"] 多一个属性选择器，写 .stream 压不住）。 */
-@media (prefers-reduced-motion: reduce) {
-	.stream[data-reveal="true"] {
-		animation: none;
 	}
 }
 
@@ -3204,23 +3187,6 @@ textarea:focus-visible {
 	overflow: auto;
 }
 
-/* 减少动态偏好：呼吸点停摆（静态点仍表达状态），折叠展开过渡退化为瞬时切换。
-   扫光、preview-panel、file-tree-chevron 的覆盖在各自区块。
-   转圈（.spinner）不在这里列 —— Task 3 的全局 reduced-motion 兜底已经把
-   animation 的时长与迭代数压掉，再逐个点名是重复维护。 */
-@media (prefers-reduced-motion: reduce) {
-
-	.tool-dot.running {
-		animation: none;
-	}
-
-	.tool-detail-box,
-	.tool-source-list,
-	.metafold-body {
-		transition: none;
-	}
-}
-
 /* write/edit 成功后的增删行徽章（+n / -n）。 */
 .tool-change {
 	display: flex;
@@ -3707,12 +3673,6 @@ textarea:focus-visible {
 	transition: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-	.preview-panel {
-		transition: none;
-	}
-}
-
 /* sash 拖拽手柄：左缘 4px 热区，视觉上是 border 的一部分，hover 才显色。 */
 .preview-sash {
 	position: absolute;
@@ -4157,12 +4117,6 @@ textarea:focus-visible {
 
 .file-tree-chevron.expanded {
 	transform: rotate(0deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.file-tree-chevron {
-		transition: none;
-	}
 }
 
 .file-tree-name {
@@ -7755,12 +7709,6 @@ textarea:focus-visible {
 	}
 }
 
-@media (prefers-reduced-motion: reduce) {
-	.questionnaire-card {
-		animation: none;
-	}
-}
-
 /* header：左侧当前题文本（14/500/24），右侧分页器 + X 整卡跳过。 */
 .questionnaire-header {
 	flex: none;
@@ -8660,25 +8608,15 @@ textarea:focus-visible {
 	overscroll-behavior: contain;
 }
 
-/* ── reduced-motion 全局兜底 ───────────────────────────────────────────────
- * 原先只有 7 处局部 @media 覆盖，没覆盖到的 transition/animation 在系统开启
- * 「减少动态效果」时照跑（spec 要求全局生效）。
- * 用 0.01ms 而不是 0：0 会让依赖 transitionend 的逻辑收不到事件；0.01ms 视觉上等价于立即。
- * 局部块保留（它们还做了别的事，如把某个动画整个 animation: none），与本块不冲突：
- * 这里只兜底时长与迭代次数。
- * 注意动画迭代数归 1 会让无限 spinner 停住 —— 这是 reduced-motion 的既有代价
- * （DESIGN.md §7.5 明确要求这一条），不额外豁免。
+/* ── reduced-motion：只做局部适配，不做全局兜底 ───────────────────────────
+ * 【2026-09-16 翻转】此前这里有一条 `*` 全局兜底（时长压到 0.01ms、迭代归 1），
+ * 在系统开启「减少动态效果」的机器上把**功能性**动画也杀掉了 —— 云主机/远程
+ * 办公机的 Windows 客户区动画常是关闭的，实测表现为任务转圈停住、全站过渡
+ * 瞬间完成，用户误判应用卡死。对齐主流（VS Code / Claude Code 等）：无障碍
+ * 适配只作用于**装饰性**运动（扫光、渐显、入场——由上方各局部块覆盖），
+ * 功能性指示（spinner、进行中状态）不受系统偏好影响 —— 转圈是「正在工作」
+ * 的功能性反馈，静止反而传达错误状态。
  */
-@media (prefers-reduced-motion: reduce) {
-
-	*,
-	*::before,
-	*::after {
-		animation-duration: 0.01ms !important;
-		animation-iteration-count: 1 !important;
-		transition-duration: 0.01ms !important;
-	}
-}
 
 /* ── 滚动条基线 ────────────────────────────────────────────────────────────
  * 此前全站只有 .sidebar-scroll 有自定义滚动条，消息流（最常用）/ 预览 / 设置 / 菜单
