@@ -143,6 +143,11 @@
 		   语义归 --shadow-md 档（大而淡铺底 + 小而实贴边，是「内容承载层」不是「浮层」），
 		   但值独立——比 --shadow-md 轻得多。只有 .composer-card 用，弹层仍走 --shadow-md；
 		   拆成独立变量是为了让引用点保留原值，不必在接线时改数值。 */
+	--shadow-input-focus: 0 16px 32px -8px rgba(0, 0, 0, 0.06), 0 2px 4px -4px rgba(0, 0, 0, 0.1);
+		/* 输入卡聚焦态：WorkBuddy 的 cr-input-container--focused 原值。
+		   聚焦**只加深阴影、不动边框**——曾经写成 :focus-within 把边框换成
+		   --text-secondary（50% 黑），点进输入框就是一圈黑线，观感很差且与 WB 不符
+		   （2026-09-17 用户实测反馈后对齐）。 */
 	--shadow-lg: 0 12px 40px rgb(0 0 0 / 18%);
 		/* 模态与阻断弹层：审批、确认框（收编现状 4 处相同裸写：index.css 5478/5581/6358/6656） */
 
@@ -218,6 +223,11 @@
 	--shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
 	--shadow-md: 0 6px 24px rgba(0, 0, 0, 0.45);
 	--shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+	/* 输入卡两档补暗色版（WB cr-internal-shadow-input-container 暗色原值）：
+	   亮色值（0.03/0.06）在暗底上几乎不可见——此前暗色主题没覆写 --shadow-input，
+	   卡片在暗色下等于没有阴影，聚焦加深也就无从谈起。 */
+	--shadow-input: 0 16px 32px -8px rgba(0, 0, 0, 0.28), 0 2px 4px -4px rgba(0, 0, 0, 0.4);
+	--shadow-input-focus: 0 16px 32px -8px rgba(0, 0, 0, 0.4), 0 2px 4px -4px rgba(0, 0, 0, 0.5);
 
 	/* 间距/字号/圆角/时长/缓动/层级/字体 不随主题变化，继承 :root。 */
 }
