@@ -39,9 +39,9 @@ import { generatingLabel } from "../shared/session-events.ts";
 import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
 import {
+	appendHiddenContext,
 	composeHiddenContext,
 	formatRunTime,
-	prependHiddenContext,
 	type HiddenSection,
 } from "../shared/hidden-context.ts";
 import { memoryReminder } from "./memory.ts";
@@ -60,7 +60,7 @@ import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import { estimateTokens } from "./observability.ts";
 import {
 	contentFingerprint,
-	RUNTIME_CONTEXT_CUSTOM_TYPE,
+	TRANSIENT_INJECTION_CUSTOM_TYPES,
 	type MessageClass,
 	type MessageRef,
 	type SystemSegmentStat,
@@ -1749,6 +1749,12 @@ export class SessionHost {
 	 * 后自然消失，不需要任何卸载逻辑。工作目录/场景/专家这类常态内容也必须
 	 * 每轮重注入：不落盘的东西不注入就等于模型看不见。
 	 *
+	 * **注入形态是「尾部追加一条独立消息」而不是「贴进最后一条 user 消息」**
+	 * （与 installRequestSnapshot 之下的 prompt-switch `context` 事件同构）
+	 * —— 理由与实测代价见 shared/hidden-context.ts 文件头：贴进 user 消息时
+	 * 注入落在**已落盘历史内部**，下一轮该条恢复原文、差异就在上一轮的 user
+	 * 消息上，缓存最长公共前缀在那里断掉、上一轮整段全价重付。
+	 *
 	 * 包一层而不是替换（同 installRequestSnapshot）：先调原钩子（含全部扩展
 	 * 的改写），对改写结果注入。钩子契约 must-not-throw：注入失败经台账上报
 	 * 通道进 event-log，消息原样入模 —— hidden context 是增强不是门槛。
@@ -1765,7 +1771,9 @@ export class SessionHost {
 			if (block !== undefined) {
 				try {
 					// spread 一次：pi 的钩子签名要可变数组，注入函数按纪律返回只读。
-					transformed = [...prependHiddenContext(transformed, block)];
+					// timestamp 取注入时刻：这条消息按设计每请求现算、标了瞬态
+					// （见 buildMessageRefs），它的 id 不参与跨轮比对。
+					transformed = [...appendHiddenContext(transformed, block, Date.now())];
 				} catch (error) {
 					this.ledger?.reportFailure(
 						`hidden context 注入失败：${error instanceof Error ? error.message : String(error)}`,
@@ -1883,8 +1891,9 @@ export class SessionHost {
 			...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
 			turnIndex: this.ledgerTurnIndex - 1,
 			...(segments === undefined ? {} : { systemSegments: segments }),
-			// 快照在注入之后记录（钩子包装顺序见构造器），user 计数里已含
-			// hidden context —— 这里把它的字符数单独亮出，成分视图好单列一行。
+			// 快照在注入之后记录（钩子包装顺序见构造器）。hidden context 现在是
+			// 尾部那条独立消息（role: custom），它的字符数计入 messages.other ——
+			// 这里把它单独亮出，成分视图好单列一行（口径见 RequestSnapshotData）。
 			...(this.pendingHidden === undefined
 				? {}
 				: { hiddenContextChars: this.pendingHidden.length }),
@@ -2112,11 +2121,14 @@ function messageIdBase(message: unknown, rawRole: string): string {
  *   4. **同一条消息在序列里出现两次**（pi 理论上不做，但流式态下 partial 消息与
  *      终态消息共用同一 timestamp 时可能出现）：按 1 的后缀规则区分，两者都不与
  *      别的消息撞名。
- *   5. **瞬态注入项**（`RUNTIME_CONTEXT_CUSTOM_TYPE`：prompt-switch 的 `context`
- *      事件每请求现算、不落会话的那条）：标记 `transient: true`。它每轮都是新的
- *      一条（id 由 `custom:<timestamp>` 生成，轮轮不同），不标记的话缓存断点归因
- *      **每一轮都会**把它当成「上一轮尾部那条没了 / 换了」的假差异 —— 那是设计
+ *   5. **瞬态注入项**（`TRANSIENT_INJECTION_CUSTOM_TYPES`：prompt-switch 的
+ *      `context` 事件与 session-host 的 hidden context，两条都每请求现算、
+ *      不落会话）：标记 `transient: true`。它们每轮都是新的一条（id 由
+ *      `custom:<timestamp>` 生成，轮轮不同），不标记的话缓存断点归因
+ *      **每一轮都会**把它们当成「上一轮尾部那条没了 / 换了」的假差异 —— 那是设计
  *      如此（见 shared/cache-prefix.ts 的 dropTransient），不是故障。
+ *      判据认**一组** customType（常量集在 shared/observability.ts，唯一实现处）：
+ *      将来加第三个注入通道时只需往那个集合里加一项。
  */
 export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 	const refs: MessageRef[] = [];
@@ -2137,7 +2149,9 @@ export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 			chars: text.length,
 			tokens: estimateTokens(text),
 			fp: contentFingerprint(text),
-			...(customType === RUNTIME_CONTEXT_CUSTOM_TYPE ? { transient: true } : {}),
+			...(typeof customType === "string" && TRANSIENT_INJECTION_CUSTOM_TYPES.includes(customType)
+				? { transient: true }
+				: {}),
 		});
 	}
 	return refs;

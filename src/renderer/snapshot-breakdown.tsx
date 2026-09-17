@@ -99,11 +99,13 @@ export function SnapshotBreakdown({
 				</tbody>
 			</table>
 			{snapshot.hiddenContextChars !== undefined && (
-				// 单列一行而不是并进 user 计数：hidden context 注入在最后一条
-				// user 消息里（上面 user 的字符数已含它），不拆出来看不出来。
+				// 单列一行而不是并进计数：hidden context 是**尾部一条独立注入消息**
+				// （2026-09-17 从「贴进最后一条 user 消息」改过来 —— 贴在 user 里会让
+				// 上一轮的 user 在下一轮变成差异点，把上一轮整段作废，实测轮边界
+				// 命中率掉到 21.5% / 65.6%），所以它计入下面的 other 计数，不拆出来看不出来。
 				<p className="stat-hint">
 					其中 hidden context 注入 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
-					（已含在最后一条用户消息里）
+					（计入下面的 other 计数）
 				</p>
 			)}
 		</div>

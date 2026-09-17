@@ -180,3 +180,39 @@ hidden 改贴到新的最后一条 user。
 2. 接受现状，只在 UI 上把口径说清（明示「缓存命中 = 本轮 prompt 的三桶之比，跨轮会有一次尾部重计费」）。
 
 先补一次测量再决定：跑一个 **10+ 轮、带工具调用**的长会话，用同一套 fold 看命中率随轮次的走势。
+
+# 第四轮：三个已知问题逐一修复（2026-09-17）
+
+**核查结论（改法的前提）**
+- `data-role="user-context" / "additional-data"` 这份「压缩协议」**在我们仓库里没有任何消费方**（全库只有
+  `hidden-context.ts`、`session-host`、诊断面板 IPC 读它；subagent-sanitize 的 `system-reminder` 是入站防伪造转义，与位置无关），
+  且 hidden 不落会话文件 → pi 自己的压缩也看不到它 ⇒ **改注入位置不破坏任何已实现的压缩逻辑**。
+- 进一步推导：只把「消息内前置」改成「消息内后置」**不够**（差异仍在同一条消息内，上一轮照样全废）；
+  必须改成**尾部独立消息**，差异点才会落到「上一轮最后一条已落盘消息之后」。
+
+- [x] 修复 1（最重要）：hidden context 改为**尾部独立消息**
+  - `prependHiddenContext` → `appendHiddenContext`（`shared/hidden-context.ts`），调用点 `core/session-host.ts`
+  - 形态与 `prompt-switch` 的 `context` 注入同构：`role:"custom"` + `customType:"kamibuddy-hidden-context"` + `display:false`
+  - **注入正文渲染字节一行未改**（仍是 `<system-reminder data-role="…">…</system-reminder>` 两块）
+  - 瞬态常量集中到 `shared/observability.ts`（`TRANSIENT_INJECTION_CUSTOM_TYPES`），归因侧认整组，不再每轮误报
+  - 台账计数随之自然变化：hidden 从 `user` 迁到 `other`（诊断面板 `snapshot-breakdown.tsx` 的括注已同步订正）
+  - 新增**跨轮缓存不变量**钉子（形态级 + 走真实 `transformContext` 的端到端），断言的是「上一轮已落盘消息在下一轮逐字节不变」；
+    改坏回旧形态实测 **9 例红**、还原后 127 例全绿
+  - 文档同步：`docs/提示词前缀缓存契约.md`（两通道现在同侧）、`docs/workbuddy对齐清单.md` F5（标注**有意偏离 WB** + 实测数字）
+- [x] 修复 2：页脚 `↑` 统一为 billedInput（`renderer/turn-metrics.ts`），与底栏「输入」、诊断面板 `↑` 同口径
+  - 真实台账复算：第 3 轮 `↑1.3M × 命中 94% = cacheRead 1,202,560` **分毫不差**；`↑×(1−命中) = 75,493 = Σinput`
+  - 消费方核实：只有 `chat-view.tsx` 一处；改坏实测 8 例红
+- [x] 修复 3：面板收束行加范围限定（`成功 本轮 共 1m48s 734.4K tok 缓存 92%`），不再与底栏会话级读数读成矛盾
+  - 顺带核实并修掉同屏一处**真不一致**：面板「会话总览 · 缓存命中」原本取整（会显示 95%），而底栏同屏显示 94.6% → 统一为一位小数；
+    轮/步级仍取整（另一范围的量）
+  - 「模型 #N」= **run 内**步号（已核实；本会话未触发台账截尾）
+- [x] 修复 4（顺手）：`src/renderer/snapshot-breakdown.tsx` 的过时括注改为「计入下面的 other 计数」
+
+**合并态验收**：`npm run typecheck` / `check:deps`（331 文件）/ `check:tokens`（真违例 0）**全绿**；`npm test` **126 文件全绿**。
+（过程中 Agent 报告过 `widget-view.test.ts` 的依赖违例与 `widget-view.tsx` 的视觉值违例 —— 经查是**另一条并行工作流改到一半的瞬时状态**，
+未回滚任何人的改动，复查时已自愈。）
+
+**仍未验证（如实）**：
+1. **真实多轮会话的命中率是否升到 ~97%** —— 本次只有形态级与端到端单测证据；复跑入口：`npm run probe:prompt-cache`，
+   或跑一个带工具调用的 3+ 轮会话，再用同一 fold 看轮边界首步是否从 21.5% / 65.6% 升到 90%+。
+2. **模型侧读序变化**：环境说明现在排在用户正文**之后**（有意偏离 WorkBuddy），模型对工作目录/时间/场景的引用是否变差，单测看不出来。

@@ -150,7 +150,12 @@ function SessionOverview({
 				{hit !== undefined && (
 					<div>
 						<dt>缓存命中</dt>
-						<dd>{Math.round(hit * 100)}%</dd>
+						{/*
+						 * 一位小数（与底栏会话指标条同精度，2026-09-17）：这是**会话级**读数
+						 * （stats.cacheHitRate，与底栏同一个 daemon 卡），取整会让同屏两处
+						 * 显示成 95% / 94.6% 两个数。轮 / 步级仍是整数 —— 那是另一个范围的量。
+						 */}
+						<dd>{(hit * 100).toFixed(1)}%</dd>
 					</div>
 				)}
 				<div>
@@ -756,7 +761,12 @@ function RunBlock({
 						>
 							{END_REASON_LABELS[run.endReason ?? "interrupted"]}
 						</span>
-						<span>共 {formatSpan(run.endedAt - run.startedAt)}</span>
+						{/*
+						 * 「本轮」不可省（2026-09-17）：这一行是 **run 级** 读数，而输入卡
+						 * 下方的会话指标条是**会话级**；两者同屏且量级相近（实拍：本轮 92% vs
+						 * 会话 94.6%；本轮 734.4k tok vs 会话 4.0M），不标范围就会被当成矛盾。
+						 */}
+						<span>本轮 共 {formatSpan(run.endedAt - run.startedAt)}</span>
 					</>
 				)}
 				{run.usage !== undefined && (

@@ -13,12 +13,31 @@
  * 没有 user 消息时整体视作前缀轮（同 buildTurnViews 的最后一段）。
  */
 
-import { cacheHitRate, emptyUsage, reportsCacheActivity } from "@shared/observability.ts";
+import {
+	billedInputTokens,
+	cacheHitRate,
+	emptyUsage,
+	reportsCacheActivity,
+} from "@shared/observability.ts";
 import type { ConversationEntry, TurnTiming } from "@shared/session-events.ts";
 
 export interface TurnMetrics {
 	readonly elapsedMs: number;
-	readonly inputTokens?: number;
+	/**
+	 * 页脚 `↑` 的取数：**prompt 侧三桶之和**（`billedInputTokens`），不是
+	 * 「未缓存输入」（`usage.input`）。2026-09-17 统一口径的两条理由：
+	 *
+	 *   1. **与同屏其它读数同口径**：任务诊断面板的单步行（task-diagnostics-panel
+	 *      的 StepRow）与输入卡下方的会话指标条（session-stats-line）都在读 billed。
+	 *      同一个 `↑` 在页脚指「未缓存输入」、在面板指「三桶之和」，读的人会以为
+	 *      两处对不上账（同一个箭头就不该指两个量）。
+	 *   2. **与命中率同分母**：hitRate 的分母也是 billed（见 foldTurnMetrics），
+	 *      统一后页脚自洽：`↑ × 命中 ≈ cacheRead`、`↑ × (1 − 命中) ≈ 未缓存输入`。
+	 *
+	 * 改回 inputSum 会同时破坏上面两条；要单独展示「未缓存输入」请另开字段并在
+	 * 注释里写明它的范围。
+	 */
+	readonly billedInputTokens?: number;
 	readonly outputTokens?: number;
 	readonly cacheReadTokens?: number;
 	/** 缓存命中率（0-1）。无缓存字段时 undefined。 */
@@ -60,6 +79,7 @@ export function foldTurnMetrics(
 	let hasInput = false;
 	let hasOutput = false;
 	let hasCacheRead = false;
+	let hasCacheWrite = false;
 	/**
 	 * provider 能力判定：**整段对话**（不只是本轮）里出现过非零缓存活动才算它在报缓存
 	 * —— 口径与 daemon 的会话卡（SessionStatCard.cacheReported）一致。只看本轮会把
@@ -86,29 +106,33 @@ export function foldTurnMetrics(
 			cacheReadSum += usage.cacheRead;
 			hasCacheRead = true;
 		}
-		if (usage.cacheWrite !== undefined) cacheWriteSum += usage.cacheWrite;
+		if (usage.cacheWrite !== undefined) {
+			cacheWriteSum += usage.cacheWrite;
+			hasCacheWrite = true;
+		}
 	}
 
 	// 命中率复用 shared 的算法（不重写）：需 input 与 cacheRead 都在场才能算，
 	// 否则缺的字段会被当成 0 而误显示成「命中 0%」（spec 明确要求无数据时留空）。
 	// **cacheWrite 必须进分母**（2026-09-17 修正）—— 此前只传了 input + cacheRead，
 	// 与 daemon 的会话卡（三桶之和）口径不一致，写缓存多的轮次命中率偏高。
+	// 这个三桶快照同时是页脚 `↑` 的取数（见 TurnMetrics.billedInputTokens 的两条理由）：
+	// 两者共用一个分母对象，才保证 ↑ 与命中率是同一次求和。
+	const billedUsage = {
+		...emptyUsage(),
+		input: inputSum,
+		cacheRead: cacheReadSum,
+		cacheWrite: cacheWriteSum,
+	};
 	const hitRate =
-		hasInput && hasCacheRead
-			? cacheHitRate(
-					{
-						...emptyUsage(),
-						input: inputSum,
-						cacheRead: cacheReadSum,
-						cacheWrite: cacheWriteSum,
-					},
-					cacheReported,
-				)
-			: undefined;
+		hasInput && hasCacheRead ? cacheHitRate(billedUsage, cacheReported) : undefined;
 
 	return {
 		elapsedMs,
-		inputTokens: hasInput ? inputSum : undefined,
+		// 三桶任一上报过才显示（缺字段与 0 是两回事，同本文件其余读数）；
+		// 求和公式在 shared 的 billedInputTokens，此处不重写。
+		billedInputTokens:
+			hasInput || hasCacheRead || hasCacheWrite ? billedInputTokens(billedUsage) : undefined,
 		outputTokens: hasOutput ? outputSum : undefined,
 		cacheReadTokens: hasCacheRead ? cacheReadSum : undefined,
 		hitRate,

@@ -1313,11 +1313,16 @@ function TurnHeader({
  * 操作条的空态守卫也要问同一个问题 —— 只按 metrics 这个 prop 在不在判，会漏掉
  * 「挂了 metrics 但本轮一个 usage 字段都没上报」那条路径，那一下就空出一条白盒。
  * foldTurnMetrics 的签名仍要 now（它同时算 elapsedMs），传渲染时刻即可：剩下的读数与 now 无关。
+ *
+ * `↑` 取的是 **prompt 侧三桶之和**（billedInputTokens，含缓存读/写），不是「未缓存输入」
+ * —— 与命中率同分母、与诊断面板单步行/底栏会话条同口径（理由钉在 turn-metrics.ts
+ * 的 TurnMetrics.billedInputTokens 注释里，别改回去）。
  */
 function metricItems(entries: readonly ConversationEntry[], turn: TurnTiming): readonly string[] {
 	const metrics = foldTurnMetrics(entries, turn, Date.now());
 	const items: string[] = [];
-	if (metrics.inputTokens !== undefined) items.push(`↑${formatTokenCount(metrics.inputTokens)}`);
+	if (metrics.billedInputTokens !== undefined)
+		items.push(`↑${formatTokenCount(metrics.billedInputTokens)}`);
 	if (metrics.outputTokens !== undefined) items.push(`↓${formatTokenCount(metrics.outputTokens)}`);
 	if (metrics.hitRate !== undefined) items.push(`命中 ${Math.round(metrics.hitRate * 100)}%`);
 	return items;

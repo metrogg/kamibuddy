@@ -3,7 +3,12 @@
     {
       "file": "src/renderer/widget-view.tsx",
       "rule": "color",
-      "reason": "iframe 内平行 token（--kw-* 及 ECharts --kw-c1..c9，共 32 处）：srcDoc 注入的是独立文档，var() 解析不到宿主 :root，只能复制字面值（spec §A「iframe 内用户内容」豁免，跨上下文注入机制另议）。值已与宿主 token 对齐；--kw-c1..c9 是图表九色系，宿主无对应 token。改宿主 token 时需同步本文件。file 级豁免：该文件通篇是注入字符串，无自有样式。"
+      "reason": "iframe 内平行 token：宿主 token 名（--bg/--text/--border/--bg-raised/--accent，名字与 tokens.css 一致，指南承诺给模型直接用）、--kw-* 内部别名、ECharts --kw-c1..c9，以及预置 class 的九色板（.c-blue 等，亮色取 colors.md 速查表、暗色取 WorkBuddy 调过的暗色板，见该文件 WIDGET_PRESET_CSS 的说明）。srcDoc 注入的是独立文档，var() 解析不到宿主 :root，只能复制字面值（spec §A「iframe 内用户内容」豁免）。值已与宿主 token / 指南色板对齐。file 级豁免：该文件通篇是注入字符串，无自有样式。改宿主 token 或指南色板时需同步本文件。"
+    },
+    {
+      "file": "src/renderer/widget-view.tsx",
+      "rule": "font-size",
+      "reason": "预置 class 的字号（t 13px / ts 12px / th 14px）是**指南与模型之间的度量契约**：resources/visualizer/svg-setup.md 的 class 表白纸黑字写着这三档，模型据此做文字基线补偿（“y ≈ 盒中心 + 4.5，13px 字号的视觉中线”）。它们必须与指南字面一致，且同样无法在 iframe 里引用宿主 token（见上条）。改指南字号时同步本文件，反之亦然。"
     },
     {
       "file": "src/renderer/expert-avatar.tsx",
