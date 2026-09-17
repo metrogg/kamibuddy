@@ -10,12 +10,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	composePrompt,
 	composePromptWithMeta,
 	composeSubagentPrompt,
-	formatRuntimeTime,
+	formatRuntimeContext,
 	formatSkillsSection,
 	requireExpertPersona,
 	resolveSessionExpert,
@@ -27,25 +27,22 @@ import {
 import type { ExpertDefinition } from "./experts.ts";
 
 const BASE = {
-	sceneBody: "你是 KamiBuddy。\n\n# 模式\n{{interaction}}\n{{skills}}\n目录：{{cwd}}",
+	sceneBody: "你是 KamiBuddy。\n\n# 模式\n{{interaction}}\n{{skills}}",
 	modeBody: "创作模式行为段。",
 	skillsSection: "",
-	cwd: "C:\\ws",
 };
 
 describe("槽位替换", () => {
-	it("四个槽位全部替换", () => {
-		const out = composePrompt({ ...BASE, skillsSection: "可用技能：\n- a：测试", model: "GLM" });
+	it("两个槽位全部替换", () => {
+		const out = composePrompt({ ...BASE, skillsSection: "可用技能：\n- a：测试" });
 		expect(out).toContain("创作模式行为段。");
 		expect(out).toContain("可用技能：\n- a：测试");
-		expect(out).toContain("目录：C:\\ws");
 		expect(out).not.toContain("{{");
 	});
 
-	it("骨架未使用某槽位（如 {{model}}）不报错", () => {
+	it("骨架未使用某槽位（如 {{skills}}）不报错", () => {
 		// 骨架用多少槽位是场景作者的自由；composer 只要求「出现的都能填」。
-		expect(() => composePrompt(BASE)).not.toThrow();
-		expect(composePrompt(BASE)).not.toContain("GLM");
+		expect(() => composePrompt({ ...BASE, sceneBody: "只有骨架 {{interaction}}" })).not.toThrow();
 	});
 
 	it("空技能段压平多余空行，不留 {{skills}} 痕迹", () => {
@@ -61,6 +58,17 @@ describe("报错路径", () => {
 		expect(() =>
 			composePrompt({ ...BASE, sceneBody: "你好 {{user_name}}" }),
 		).toThrow(/未支持的槽位/);
+	});
+
+	it("已删的槽位 {{cwd}} / {{model}} 同样响亮抛错（护栏不放松）", () => {
+		// 两个槽位都是有意删掉的：工作目录归 pi 内置 cwd section，{{model}} 无使用者。
+		// 骨架里再写出来就是拼错的模板 —— 不能静默留成空洞给模型看。
+		expect(() => composePrompt({ ...BASE, sceneBody: "当前工作目录：{{cwd}}" })).toThrow(
+			/未支持的槽位/,
+		);
+		expect(() => composePrompt({ ...BASE, sceneBody: "模型：{{model}}" })).toThrow(
+			/未支持的槽位/,
+		);
 	});
 
 	it("非 ASCII 的花括号写法（{{中文}}）也必须被拦下", () => {
@@ -112,41 +120,108 @@ describe("补回 pi 上下文与工具提示", () => {
 	});
 });
 
-describe("运行时环境块", () => {
-	// 时区名随测试机走（开发机 Asia/Shanghai、CI 可能 Asia/Hong_Kong），
-	// 但同一天 GMT+8 内日期/星期/时刻/偏移的断言是确定的。
-	const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-	it("固定 now：环境块含日期、分钟级时刻、星期、GMT 偏移与 IANA 时区名", () => {
-		const out = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:30+08:00") });
-		expect(out).toContain(
-			`Current time: 2026-09-09 23:18 (Wednesday, GMT+8, ${localTz})`,
-		);
-	});
+describe("运行时上下文注入块（formatRuntimeContext）", () => {
+	/*
+	 * 这两段（记忆内容 / 个性化）是逐轮会变的事实，**不进系统提示词**：
+	 * 系统提示词在整段对话历史之前，它变一个字节就让其后的一切（含历史）在
+	 * provider 前缀缓存里失配。它们由 formatRuntimeContext 组装成注入消息，
+	 * 经 prompt-switch 的 `context` 事件落在对话历史之后
+	 * （spec: stabilize-prompt-prefix）。
+	 *
+	 * 时间**不在这里**：会话内的时间只有 session-host 的 hidden context
+	 * `current_time` 一个来源（run 开始冻结，用例见 session-host.test.ts 的
+	 * hidden context 一组）—— 两份时间来源并存时值会漂移。
+	 */
+	const MEMORY = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
 
-	it("环境块在整个提示词的末尾（前缀稳定利于 provider 缓存）", () => {
-		const out = composePrompt({
-			...BASE,
-			now: new Date("2026-09-09T23:18:30+08:00"),
-			piContext: { promptGuidelines: ["一条指引"] },
+	it("记忆内容与个性化有值时按「记忆 → 个性化」追加", () => {
+		const out = formatRuntimeContext({
+			memoryContent: MEMORY,
+			personalization: { userNickname: "老王" },
 		});
-		expect(out.trimEnd().endsWith(`(Wednesday, GMT+8, ${localTz})`)).toBe(true);
+		expect(out).toContain(MEMORY);
+		expect(out).toContain("用户希望被称为「老王」。");
+		expect(out.indexOf("## 长期记忆")).toBeLessThan(out.indexOf("用户希望被称为"));
 	});
 
-	it("now 缺省时取当前时间（只断言形态，不钉值）", () => {
-		expect(composePrompt(BASE)).toMatch(
-			/Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(\w+day, GMT[+-]\d+(:\d{2})?, .+\)/,
-		);
+	it("记忆为空 / 全空白不注入（零 token 口径不变）；个性化四项全空同理", () => {
+		const bare = formatRuntimeContext({});
+		expect(formatRuntimeContext({ memoryContent: undefined })).toBe(bare);
+		expect(formatRuntimeContext({ memoryContent: "   \n " })).toBe(bare);
+		expect(formatRuntimeContext({ personalization: {} })).toBe(bare);
 	});
 
-	it("分钟级精度：同一分钟内不同秒的两次组装字节相等（不炸缓存）", () => {
-		const a = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:01+08:00") });
-		const b = composePrompt({ ...BASE, now: new Date("2026-09-09T23:18:59+08:00") });
-		expect(a).toBe(b);
+	it("注入块与时间无关：两次不同时刻现算的结果字节相等", () => {
+		/*
+		 * 「每个模型调用前现读」是这条路径的设计（run 内记忆会被模型自己写、
+		 * 个性化会被用户改），所以用两次相隔一整天、且跨过分钟边界的调用表达
+		 * 「两个不同的时刻」。
+		 *
+		 * 若有人把时间塞回注入块（它曾经带过分钟精度的 `Current time: …` 行），
+		 * 这条立刻红 —— 时间在会话内只有一个出口：session-host 的 hidden context
+		 * `current_time`（run 开始时冻结，正侧断言见 session-host.test.ts 的
+		 * hidden context 一组）。两条时间来源并存时值还会漂移。
+		 */
+		const input = {
+			memoryContent: MEMORY,
+			personalization: { userNickname: "老王", customInstructions: "回复开头先给结论。" },
+		};
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-09-17T09:59:59"));
+			const first = formatRuntimeContext(input);
+			vi.setSystemTime(new Date("2026-09-18T11:01:00"));
+			const second = formatRuntimeContext(input);
+			expect(second).toBe(first);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
-	it("formatRuntimeTime 直出与 composePrompt 内嵌文本一致", () => {
-		const now = new Date("2026-09-09T23:18:30+08:00");
-		expect(composePrompt({ ...BASE, now })).toContain(formatRuntimeTime(now));
+	it("注入块不含任何时间格式（时间只有 hidden context 的 current_time 一个出口）", () => {
+		const out = formatRuntimeContext({
+			memoryContent: MEMORY,
+			personalization: { customInstructions: "回复开头先给结论。" },
+		});
+		// 旧英文时间行。
+		expect(out).not.toMatch(/Current time:/);
+		// 冒号分隔的时刻形态（HH:mm）—— 时间行回来时必然撞上。
+		expect(out).not.toMatch(/\d{2}:\d{2}/);
+		// 中文形态的时间行同样不许回来。
+		expect(out).not.toContain("现在时间");
+		expect(out).not.toContain("当前时间");
+	});
+
+	it("无内容时（缺省入参 = 子代理路径的调用形态）产出空串，调用方零 token 跳过注入", () => {
+		expect(formatRuntimeContext()).toBe("");
+	});
+
+	it("用户数据里的 {{...}} 原样保留（不经 composer 的残留检查）", () => {
+		// 残留检查管的是骨架/片段/模式的笔误，不管用户数据 —— 注入块不经过 composer，
+		// 天然保持这个性质：用户往 MEMORY.md 写「{{示例}}」不该让会话组装抛错。
+		const out = formatRuntimeContext({
+			memoryContent: "笔记：模板写作 {{示例}} 的用法",
+			personalization: { customInstructions: "引用 {{占位}} 时先说清用途" },
+		});
+		expect(out).toContain("{{示例}}");
+		expect(out).toContain("{{占位}}");
+	});
+
+	it("逐轮可变事实都不在系统提示词里（改了位置不能改回：留在提示词里等于每轮断前缀）", () => {
+		const prompt = composePrompt({
+			...BASE,
+			memorySystemBody: "三层记忆的结构与写入纪律。",
+		});
+		expect(prompt).not.toContain("## 长期记忆");
+		expect(prompt).not.toContain("用户希望被称为");
+		// 时间行（曾以 `Current time: …` 形态进过提示词）不许以任何形态回来；
+		// 现在的落地形态是 hidden context 的 current_time。
+		expect(prompt).not.toMatch(/Current time:/);
+		// provenance 里也不该再有这三类来源。
+		const sources = composePromptWithMeta(BASE).segments.map((s) => s.source);
+		for (const banned of ["time", "memory", "personalization"]) {
+			expect(sources).not.toContain(banned);
+		}
 	});
 });
 
@@ -179,8 +254,8 @@ describe("expert 人格注入", () => {
 		);
 	});
 
-	it("钉子段 <current-expert> 只钉名字：在提示词最末（环境块之后），不含人格正文", () => {
-		const out = composePrompt({ ...BASE, expert: EXPERT, now: new Date("2026-09-09T23:18:30+08:00") });
+	it("钉子段 <current-expert> 只钉名字：在提示词最末，不含人格正文", () => {
+		const out = composePrompt({ ...BASE, expert: EXPERT });
 		expect(out).toContain("<current-expert>工作周报</current-expert>");
 		expect(out.trimEnd().endsWith("请始终以该专家的角色与工作流推进本会话。")).toBe(true);
 		// 钉子段只出现一次（人格段不含该标签）。
@@ -192,12 +267,13 @@ describe("expert 人格注入", () => {
 	it("骨架没有 {{interaction}} 槽位时，人格段落在核心段末尾", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
-			sceneBody: "只有骨架 {{cwd}}",
+			sceneBody: "只有骨架",
 			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
-			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
 		expect(segments.map((s) => s.text).join("")).toBe(text);
-		expect(segments.map((s) => s.source)).toEqual(["skeleton", "expert", "time", "expert"]);
+		// 前一个是人格本体（核心段末尾），后一个是末尾的钉子段 —— 两者同源但不同段
+		//（钉子段在 finalizeCore 之后追加，不参与合并）。
+		expect(segments.map((s) => s.source)).toEqual(["skeleton", "expert", "expert"]);
 		expect(text).toContain("## 当前专家");
 	});
 
@@ -232,7 +308,6 @@ describe("正交组合：交互模式 × 专家绑定（spec: rework-expert-orth
 					modeBody: mode.body,
 					modeId: mode.id,
 					...(bound ? { expert: EXPERT } : {}),
-					now: new Date("2026-09-09T23:18:30+08:00"),
 				});
 
 				// 模式轴独立生效：本模式行为段在位、其它模式段不混入，provenance 标注本模式。
@@ -288,15 +363,14 @@ describe("回复风格注入（F8）", () => {
 		).toThrow(/残留槽位/);
 	});
 
-	it("骨架没有 {{interaction}} 槽位时，风格段落在核心段末尾（time 之前）", () => {
+	it("骨架没有 {{interaction}} 槽位时，风格段落在核心段末尾", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
-			sceneBody: "只有骨架 {{cwd}}",
+			sceneBody: "只有骨架",
 			style: STYLE,
-			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
 		expect(segments.map((s) => s.text).join("")).toBe(text);
-		expect(segments.map((s) => s.source)).toEqual(["skeleton", "style:socratic", "time"]);
+		expect(segments.map((s) => s.source)).toEqual(["skeleton", "style:socratic"]);
 	});
 
 	it("provenance：style:<id> 段紧跟 mode:<id> 段，拼接与 text 字节一致", () => {
@@ -305,11 +379,10 @@ describe("回复风格注入（F8）", () => {
 			modeId: "craft",
 			skillsSection: "技能清单X",
 			style: STYLE,
-			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
 		expect(segments.map((s) => s.text).join("")).toBe(text);
 		const sources = segments.map((s) => s.source);
-		expect(sources).toEqual(["skeleton", "mode:craft", "style:socratic", "skeleton", "skills", "skeleton", "time"]);
+		expect(sources).toEqual(["skeleton", "mode:craft", "style:socratic", "skeleton", "skills"]);
 		expect(segments[2]?.text).toBe(
 			"\n\n## 回复风格\n\n苏格拉底式提问，逐步引导。\n\n风格只影响表达方式（HOW），不改变事实与内容（WHAT）。",
 		);
@@ -332,65 +405,64 @@ describe("回复风格注入（F8）", () => {
 
 describe("记忆段注入（spec: add-memory-system）", () => {
 	const MEMORY_SYSTEM = "\n三层记忆的结构与写入纪律。\n";
-	const MEMORY_CONTENT = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
 
 	it("memorySystemBody 固定注入为「## 记忆系统」段，正文剥首尾换行", () => {
 		const out = composePrompt({ ...BASE, memorySystemBody: MEMORY_SYSTEM });
 		expect(out).toContain("## 记忆系统\n\n三层记忆的结构与写入纪律。");
 	});
 
-	it("memoryContent 有内容时注入内容段；两者都在核心段（含人格）之后", () => {
+	it("记忆行为纪律段在核心段（含人格）之后 —— 它是「怎么写」不是「写了什么」", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			memorySystemBody: MEMORY_SYSTEM,
-			memoryContent: MEMORY_CONTENT,
 			expert: { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" },
-			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
-		expect(text).toContain(MEMORY_CONTENT);
 		expect(segments.map((s) => s.text).join("")).toBe(text);
 		const sources = segments.map((s) => s.source);
-		expect(sources.indexOf("memory-system")).toBeLessThan(sources.indexOf("memory"));
-		// 人格上了前部槽位（spec: align-expert-system-workbuddy），记忆段排在人格之后。
+		// 人格上了前部槽位（spec: align-expert-system-workbuddy），纪律段排在人格之后。
 		expect(sources.indexOf("expert")).toBeLessThan(sources.indexOf("memory-system"));
 		expect(text.indexOf("创作模式行为段。")).toBeLessThan(text.indexOf("## 记忆系统"));
 	});
 
-	it("memoryContent 缺省（三层全空）→ 无内容段、零 token", () => {
-		const out = composePrompt({ ...BASE, memorySystemBody: MEMORY_SYSTEM });
-		expect(out).toContain("## 记忆系统");
-		expect(out).not.toContain("## 长期记忆");
-		const sources = composePromptWithMeta({ ...BASE, memorySystemBody: MEMORY_SYSTEM }).segments.map(
-			(s) => s.source,
-		);
+	it("记忆**内容**不进系统提示词（改走 formatRuntimeContext 的注入路径）", () => {
+		// 内容三段逐轮都可能变（模型自己会写记忆），留在提示词里等于每轮自伤
+		// （spec: stabilize-prompt-prefix）。类型上已无对应入参，这里钉运行期输出。
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			memorySystemBody: MEMORY_SYSTEM,
+		});
+		expect(text).toContain("## 记忆系统");
+		expect(text).not.toContain("## 长期记忆");
+		expect(text).not.toContain("## 用户画像");
+		expect(text).not.toContain("## 本项目记忆");
+		const sources = segments.map((s) => s.source);
 		expect(sources).not.toContain("memory");
 	});
 
-	it("两者都缺省 → 无任何记忆段（向后兼容：既有调用点零改动）", () => {
+	it("缺省 → 无任何记忆段（向后兼容：既有调用点零改动）", () => {
 		const out = composePrompt(BASE);
 		expect(out).not.toContain("## 记忆系统");
 		expect(out).not.toContain("## 长期记忆");
 	});
-
-	it("记忆内容里的 {{...}} 不触发残留检查（用户数据不是模板笔误）", () => {
-		// 用户往 MEMORY.md 里写了「{{示例}}」不该让会话组装抛错 ——
-		// 记忆段推在残留检查之后，管笔误的检查不管用户数据。
-		const out = composePrompt({ ...BASE, memoryContent: "笔记：模板写作 {{示例}} 的用法" });
-		expect(out).toContain("{{示例}}");
-	});
 });
 
-describe("子代理提示词不注入风格", () => {
+describe("子代理提示词不注入风格与时间块", () => {
 	// 子代理身份由 agent 定义自声明，不套产品风格（spec: systematize-prompt-architecture）。
-	// ComposeSubagentPromptInput 类型上没有 style 字段（编译期钉死），这里钉运行期输出。
+	// ComposeSubagentPromptInput 类型上没有 style / now 字段（编译期钉死），这里钉运行期输出。
 	it("composeSubagentPrompt 输出不含风格段与元规则", () => {
 		const out = composeSubagentPrompt({
 			agentBody: "你是侦察员。",
 			cwd: "C:\\ws",
-			now: new Date("2026-09-09T23:18:30+08:00"),
 		});
 		expect(out).not.toContain("## 回复风格");
 		expect(out).not.toContain("风格只影响表达方式");
+	});
+
+	it("composeSubagentPrompt 输出不含时间块（时间由 hidden context 送达，留在提示词里会逐轮断前缀）", () => {
+		const out = composeSubagentPrompt({ agentBody: "你是侦察员。", cwd: "C:\\ws" });
+		expect(out).not.toMatch(/Current time:/);
+		// 工作目录仍在（子代理不接 pi 内置 section，它是自包含身份）。
+		expect(out).toContain("当前工作目录：C:\\ws");
 	});
 });
 
@@ -595,19 +667,19 @@ describe("片段 include 展开", () => {
 	it("基本展开：片段内容出现在指令位置", () => {
 		const out = composePrompt({
 			...BASE,
-			sceneBody: "头部\n{{> rules}}\n尾部 {{cwd}}",
+			sceneBody: "头部\n{{> rules}}\n尾部 {{interaction}}",
 			resolveFragment: frags({ rules: "交付纪律三条" }),
 		});
-		expect(out).toContain("头部\n交付纪律三条\n尾部 C:\\ws");
+		expect(out).toContain("头部\n交付纪律三条\n尾部 创作模式行为段。");
 	});
 
 	it("嵌套展开：片段里再 include，且片段内可用槽位", () => {
 		const out = composePrompt({
 			...BASE,
 			sceneBody: "{{> a}}",
-			resolveFragment: frags({ a: "A-{{> b}}", b: "B 目录={{cwd}}" }),
+			resolveFragment: frags({ a: "A-{{> b}}", b: "B 模式={{interaction}}" }),
 		});
-		expect(out).toContain("A-B 目录=C:\\ws");
+		expect(out).toContain("A-B 模式=创作模式行为段。");
 	});
 
 	it("片段缺失 → 抛错（不静默留洞上线）", () => {
@@ -668,48 +740,42 @@ describe("片段 include 展开", () => {
 });
 
 describe("provenance 分段（composePromptWithMeta）", () => {
-	const NOW = new Date("2026-09-09T23:18:30+08:00");
 	const join = (segments: readonly { text: string }[]): string =>
 		segments.map((s) => s.text).join("");
 
 	it("composePrompt 是薄封装：与 meta 版 text 相同", () => {
-		const input = { ...BASE, skillsSection: "技能段", model: "GLM", now: NOW };
+		const input = { ...BASE, skillsSection: "技能段" };
 		expect(composePrompt(input)).toBe(composePromptWithMeta(input).text);
 	});
 
 	it("segments 顺序拼接与 text 字节一致（含空 skills 压平场景）", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
-			sceneBody: "头\n\n{{skills}}\n\n尾 {{cwd}}",
+			sceneBody: "头\n\n{{skills}}\n\n尾 {{interaction}}",
 			skillsSection: "",
-			now: NOW,
 		});
 		expect(join(segments)).toBe(text);
-		expect(text).toContain("头\n\n尾 C:\\ws");
+		expect(text).toContain("头\n\n尾 创作模式行为段。");
 		expect(text).not.toMatch(/\n{3,}/);
 		// 空技能段被丢弃：不存在 skills 来源的分段。
 		expect(segments.some((s) => s.source === "skills")).toBe(false);
 	});
 
-	it("来源标注：skeleton / mode:<id> / skills / time；cwd 行内并入 skeleton", () => {
+	it("来源标注：skeleton / mode:<id> / skills", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			modeId: "craft",
 			skillsSection: "技能清单X",
-			now: NOW,
 		});
 		expect(join(segments)).toBe(text);
 		expect(segments[0]).toEqual({ source: "skeleton", text: "你是 KamiBuddy。\n\n# 模式\n" });
 		expect(segments[1]).toEqual({ source: "mode:craft", text: "创作模式行为段。" });
 		expect(segments.find((s) => s.source === "skills")?.text).toBe("技能清单X");
-		// cwd 是行内标量：与「目录：」同在 skeleton 段里，不独立成段。
-		const tail = segments.find((s) => s.source === "skeleton" && s.text.includes("目录："));
-		expect(tail?.text).toBe("\n目录：C:\\ws");
-		expect(segments.at(-1)?.source).toBe("time");
+		expect(segments.at(-1)?.source).toBe("skills");
 	});
 
 	it("modeId 缺省时标 mode:unknown（daemon 接线是后续任务）", () => {
-		const { segments } = composePromptWithMeta({ ...BASE, now: NOW });
+		const { segments } = composePromptWithMeta({ ...BASE });
 		expect(segments.some((s) => s.source === "mode:unknown")).toBe(true);
 	});
 
@@ -719,7 +785,6 @@ describe("provenance 分段（composePromptWithMeta）", () => {
 			modeId: "craft",
 			sceneBody: "开头\n{{> rules}}\n# 模式\n{{interaction}}",
 			resolveFragment: () => "纪律A\n纪律B",
-			now: NOW,
 		});
 		expect(join(segments)).toBe(text);
 		expect(segments.map((s) => s.source)).toEqual([
@@ -727,12 +792,11 @@ describe("provenance 分段（composePromptWithMeta）", () => {
 			"fragment:rules",
 			"skeleton",
 			"mode:craft",
-			"time",
 		]);
 		expect(segments[1]?.text).toBe("纪律A\n纪律B");
 	});
 
-	it("expert / pi-context / time 段齐全且顺序正确；钉子段在最末", () => {
+	it("expert / pi-context 段齐全且顺序正确；钉子段在最末", () => {
 		const { text, segments } = composePromptWithMeta({
 			...BASE,
 			expert: {
@@ -741,13 +805,12 @@ describe("provenance 分段（composePromptWithMeta）", () => {
 				body: "人格正文",
 			},
 			piContext: { promptGuidelines: ["一条指引"] },
-			now: NOW,
 		});
 		expect(join(segments)).toBe(text);
 		const sources = segments.map((s) => s.source);
-		// 人格前部槽位在骨架与模式段之间；核心段之后：pi-context → time → 钉子段。
+		// 人格前部槽位在骨架与模式段之间；核心段之后：pi-context → 钉子段。
 		expect(sources.slice(0, 3)).toEqual(["skeleton", "expert", "mode:unknown"]);
-		expect(sources.slice(3)).toEqual(["skeleton", "pi-context", "time", "expert"]);
+		expect(sources.slice(3)).toEqual(["pi-context", "expert"]);
 		expect(segments.at(-1)?.text).toBe(
 			"\n\n<current-expert>工作周报</current-expert>\n请始终以该专家的角色与工作流推进本会话。",
 		);

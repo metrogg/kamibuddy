@@ -6,11 +6,19 @@
  * 与真实组装（composeSystemPrompt）的差异点全部集中在这一处，有注释钉住：
  *
  *   1. **无活会话**：piContext 置空（没有 pi 加载好的上下文文件 / 工具提示
- *      可拼），预览里 pi-context 段恒不出现；cwd 由调用方给（当前会话工作区）。
+ *      可拼），预览里 pi-context 段恒不出现。
  *   2. **styleId 三态由请求显式表达**：空串 = 关闭；缺省 = 跟随当前偏好
  *      （走 resolveStyle 全链路，含配置漂移降级，与真实会话同一行为）；
  *      指定 id 时不做漂移容忍 —— 预览是调试工具，用户点名要看的风格不存在
  *      必须响亮报错，而不是静默换成默认风格让他对着错的段排查。
+ *
+ * **预览只覆盖系统提示词**：骨架、片段、模式、风格、人格、技能清单、记忆行为
+ * 纪律段。逐轮会变的事实（运行时间 / 三层记忆内容 / 个性化）与工作目录都不在
+ * 这里：记忆内容与个性化由 prompt-switch 的 `context` 事件按请求注入，时间
+ * （`current_time`）与工作目录（`workspace_context`）由会话侧 hidden context
+ * 每轮注入 —— 四者都不进系统提示词（spec: stabilize-prompt-prefix）。
+ * 于是预览不再需要 cwd / 记忆内容 / 个性化三个环境输入：留着它们会让预览假装
+ * 这些内容还在系统提示词里，与真实组装静默漂移。
  *
  * 专家人格与真实组装同一条路径：request.expertId 有值时按 env.experts 走
  * requireExpertPersona 解析并注入（前部人格段 + 末尾 <current-expert> 钉子段、
@@ -25,16 +33,14 @@ import {
 	composePromptWithMeta,
 	formatSkillsSection,
 	requireExpertPersona,
-	type PersonalizationSection,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
 import type { ExpertDefinition } from "../core/experts.ts";
 import { resolveStyle, type LoadedResources, type StyleResource } from "../core/resources.ts";
 import type { PromptPreviewRequest, PromptPreviewResult } from "../shared/ipc.ts";
 
-/** 预览组装的环境输入（daemon 侧现取：cwd / 真实技能清单 / 专家库 / 当前风格偏好）。 */
+/** 预览组装的环境输入（daemon 侧现取：真实技能清单 / 专家库 / 当前风格偏好）。 */
 export interface PromptPreviewEnvironment {
-	readonly cwd: string;
 	/** 真实已安装技能（daemon 的 listSkills 现读结果）。 */
 	readonly skills: readonly SkillDescriptor[];
 	/** 真实专家库（daemon 的 loadExpertsNow 现读结果）；request.expertId 有值时按它解析人格。 */
@@ -42,18 +48,11 @@ export interface PromptPreviewEnvironment {
 	/** 偏好里的 styleId（undefined = 未配置）；request.styleId 缺省时跟随它。 */
 	readonly preferredStyleId: string | undefined;
 	/**
-	 * 记忆段（daemon 现读的 loadMemorySystemPrompt / buildMemorySection 结果）。
-	 * 与真实组装同源：预览少这两段就会与「此刻发消息看到的提示词」静默漂移。
-	 * undefined = 读取降级 / 三层全空，对应段不出现（与真实组装同一行为）。
+	 * 记忆**行为纪律**段（daemon 现读的 loadMemorySystemPrompt 结果）。它是系统
+	 * 提示词的一个段，所以必须在预览里 —— 少了这段，用户看到的预览就与「此刻
+	 * 发消息看到的提示词」静默漂移。undefined = 读取降级，对应段不出现。
 	 */
 	readonly memorySystemBody?: string;
-	readonly memoryContent?: string;
-	/**
-	 * 个性化字段（daemon 现读偏好的结果）。与真实组装同源：缺了这段，
-	 * 设过自定义指令的用户看到的预览会与实际提示词静默漂移。
-	 * undefined = 四项全空，对应段不出现（与真实组装同一行为）。
-	 */
-	readonly personalization?: PersonalizationSection;
 }
 
 export function buildPromptPreview(
@@ -98,13 +97,10 @@ export function buildPromptPreview(
 		sceneBody: scene.body,
 		modeBody: mode.body,
 		skillsSection,
-		cwd: env.cwd,
 		modeId: mode.id,
 		resolveFragment: (name) => resources.fragments.get(name),
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
-		...(env.memoryContent === undefined ? {} : { memoryContent: env.memoryContent }),
-		...(env.personalization === undefined ? {} : { personalization: env.personalization }),
 		...(expert === undefined ? {} : { expert }),
 		// piContext 的差异点见文件头注释（差异 1）。
 	});

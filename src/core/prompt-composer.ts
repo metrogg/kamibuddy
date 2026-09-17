@@ -10,13 +10,46 @@
  *   1. 片段展开：`{{> name}}` 由 input.resolveFragment 注入内容（composer 不读盘，
  *      loader 层负责把 resources/prompts/fragments/ 映射成这个回调）。递归展开；
  *      片段缺失 / 成环 / 超过 8 层 / 骨架含 {{> }} 却没给 resolveFragment → 一律抛错。
- *   2. 槽位替换：{{interaction}} / {{skills}} / {{cwd}} / {{model}}。
+ *   2. 槽位替换：{{interaction}} / {{skills}}。
  *
  * 三条安全护栏（同一哲学：不静默上线带空洞的提示词——带着 {{xxx}} 空洞上线的
  * 提示词是最难排查的故障，模型会原样看到花括号）：
  *   1. 骨架里出现**未支持的槽位** → 抛错；
  *   2. 组装完成后仍有残留 {{...}}（模式/片段正文里的笔误、{{> 的残次写法）→ 抛错；
  *   3. 片段缺失 / 成环 / 超深 / 无 resolveFragment → 抛错。
+ *
+ * **哪些内容禁止进系统提示词**（本文件最重要的一条纪律，spec: stabilize-prompt-prefix）：
+ * provider 的前缀缓存比的是最长公共前缀，而系统提示词每轮重组、又位于整段对话历史
+ * 之前 —— 里面任何一处逐轮会变的字节都会让它**之后的一切（含整段历史）**失配。
+ * 于是「会话内字节稳定」是系统提示词的硬要求：逐轮/逐 run 可能变化的事实一律走
+ * append-only 的消息注入（落在对话历史之后），一律不进这里。
+ *
+ * 为什么路线是「字节稳定」而不是 pi 的分段 patch：发布依赖
+ * @earendil-works/pi-coding-agent@0.85.1 的 BuildSystemPromptOptions **没有**
+ * sections / forceSystemPrompt，emitBeforeAgentStart 只认 handler 返回的
+ * systemPrompt 字符串（整串替换）—— 没有 diff 可走（spec.md 末尾
+ * 「探针结论（实测）」①）。将来升级到带 sections 的版本再评估声明式分段。
+ *
+ * 注入的两条路径按机制分工，同一类事实只有一个来源：
+ *   - 三层记忆内容（core/memory.ts buildMemorySection，模型自己会写，留在提示词里
+ *     等于每轮自伤）+ 个性化（用户改一次设置就变）→ 本文件的 formatRuntimeContext，
+ *     经 extensions/prompt-switch.ts 的 `context` 事件每请求注入（不落盘）；
+ *   - 运行时间 → session-host.ts 的 hidden context `current_time`（formatRunTime，
+ *     run 开始时冻结、data-role=additional-data 可整体剥离，见
+ *     shared/hidden-context.ts）。**时间只有这一处**：注入块里不再带时间，
+ *     两个来源并存时值会不一致（一个 run 冻结、一个每请求刷新）。
+ *
+ * 同理工作目录不进骨架：pi 内置的 `cwd` 行由 before_agent_start 的整串替换换掉，
+ * 用户会话里工作目录的唯一来源是 hidden context 的 workspace_context（session-host.ts
+ * 的 composeRunHiddenContext），骨架里手写一行既是重复又在对话历史之前
+ * （spec: stabilize-prompt-prefix 的 REMOVED Requirements）。
+ * 子代理路径是例外：子代理不接场景骨架，cwd 由 composeSubagentPrompt 写进它自己的
+ * 提示词（与 hidden context 的 workspace_context 同源同值，会话内定值，不破坏字节稳定）。
+ *
+ * **唯一仍留在系统提示词里的「工作区文件内容」**是 pi 的 contextFiles（AGENTS.md 类项目
+ * 指令文件，formatPiContextBlock 拼回 pi-context 段）：forced 整串替换让 pi 不再自动附加
+ * 它，只能自己拼。它在 pi 侧于会话建立时装载（_baseSystemPromptOptions）、会话内不随文件
+ * 改动重读，属准静态内容 —— 是上面那条禁令的受限例外，不是遗漏。
  *
  * composePromptWithMeta 额外产出 segments（provenance，设置页「提示词预览」的
  * 数据源）。硬约束：**segments 顺序拼接与 text 字节一致**。为让这条可证，空行
@@ -70,9 +103,6 @@ export interface ComposePromptInput {
 	readonly modeBody: string;
 	/** 技能清单段，填入 {{skills}}。空串表示无技能，对应行会被压平。 */
 	readonly skillsSection: string;
-	readonly cwd: string;
-	/** 模型显示名。骨架未使用 {{model}} 时可省。 */
-	readonly model?: string;
 	/**
 	 * 会话绑定专家的人格。专家与交互模式正交：只按 expertId 是否绑定决定有没有值，
 	 * 与模式无关（见 daemon 的 composeSystemPrompt / resolveSessionExpert）。
@@ -103,31 +133,15 @@ export interface ComposePromptInput {
 	 */
 	readonly memorySystemBody?: string;
 	/**
-	 * 三层记忆内容段（core/memory.ts buildMemorySection(cwd) 的产物）。
-	 * undefined = 三层全空，零 token 不注入。
-	 */
-	readonly memoryContent?: string;
-	/**
 	 * 片段解析回调：name → 片段内容；返回 undefined 表示片段缺失（组装抛错）。
 	 * composer 保持纯函数不读盘，resources/prompts/fragments/ → 本回调的映射
 	 * 是 loader 层的事。骨架含 {{> }} 而未提供本回调 → 抛错（不静默留洞）。
 	 */
 	readonly resolveFragment?: (name: string) => string | undefined;
-	/**
-	 * 环境块取数的时刻，缺省 `new Date()`。可注入是为了纯函数可测：
-	 * 固定 now 才能断言环境块的完整文本。
-	 */
-	readonly now?: Date;
-	/**
-	 * 个性化注入（spec: rework-settings-layout）：只含 4 个注入字段——
-	 * welcomeGreeting / showChangeDetails 两个 boolean 是 UI 开关不进提示词，
-	 * 钉在这里免得后人把开关塞进 prompt。位序在记忆段之后、pi 上下文之前。
-	 */
-	readonly personalization?: PersonalizationSection;
 }
 
 /**
- * 个性化注入段（preferences 四键的 compose 投影）。
+ * 个性化注入段（preferences 四键的注入块投影，见 formatRuntimeContext）。
  * 全空 = 零 token 不注入；customInstructions 超 1500 字硬截断
  * （防用户粘贴长文挤爆上下文，输入侧 textarea 同上限）。
  */
@@ -170,6 +184,64 @@ function formatPersonalizationSection(p: PersonalizationSection): string {
 	return blocks.join("\n\n");
 }
 
+/**
+ * 逐轮可变事实的注入块输入。两段都是「会话内会变」的，所以一律不进系统提示词
+ * （文件头纪律），改由 prompt-switch 的 `context` 事件每请求注入。
+ *
+ * 时间**不在**这里：它唯一的来源是 session-host 的 hidden context `current_time`
+ * （run 冻结，见 formatRuntimeContext 的注释）。
+ */
+export interface RuntimeContextInput {
+	/**
+	 * 三层记忆内容（core/memory.ts buildMemorySection(cwd) 的产物）。
+	 * undefined / 全空白 = 零 token 不注入（既有口径不变）。
+	 */
+	readonly memoryContent?: string;
+	/**
+	 * 个性化（spec: rework-settings-layout）：只含 4 个注入字段——
+	 * welcomeGreeting / showChangeDetails 两个 boolean 是 UI 开关不进提示词，
+	 * 钉在这里免得后人把开关塞进模型可见文本。
+	 */
+	readonly personalization?: PersonalizationSection;
+}
+
+/**
+ * 运行时上下文注入块：三层记忆内容 + 个性化，按此序用空行拼接。
+ *
+ * 为什么这两段在这里而不是系统提示词里（spec: stabilize-prompt-prefix）：
+ * 系统提示词每轮重组且位于整段对话历史之前，里面任何逐轮会变的字节都会让
+ * 它之后的一切（含整段历史）在 provider 前缀缓存里失配。注入块作为一条
+ * **append-only 的消息落在对话历史之后**（extensions/prompt-switch.ts 的
+ * `context` 事件），因此它的任何变化都不可能让前缀失配。
+ *
+ * 时间为什么**不**在这里（曾经在这里）：会话内的时间只留一个来源 ——
+ * session-host.ts 的 hidden context `current_time`（formatRunTime，run 开始时
+ * 冻结）。两个来源并存时值可能不一致（一个 run 冻结、一个每请求刷新），
+ * 且 hidden context 是既有机制、注入位同样在对话历史之后，其
+ * data-role=additional-data 还被压缩链路按「一次性可剥离」语义处理
+ * （shared/hidden-context.ts 与 docs/workbuddy分析/11-hidden-context.md）——
+ * 动那套语义的风险高于删掉这里新加的一份；而 run 级冻结的精度对「本轮现在是
+ * 几点」够用（这是本改动前的既有行为，不降低水位）。
+ *
+ * 与 composer 的残留检查无关：本函数不经过 composePromptWithMeta，记忆正文与
+ * 自定义指令里的 `{{...}}` 是用户数据不是模板笔误，不该让会话组装抛错
+ * （残留检查的口径见文件头护栏 2）。
+ *
+ * 另：注入不改系统提示词、也不落会话文件（`context` 事件的返回值只在本次
+ * provider 请求生效），因此不存在会话日志无界增长。
+ */
+export function formatRuntimeContext(input: RuntimeContextInput = {}): string {
+	const blocks: string[] = [];
+	if (input.memoryContent !== undefined && input.memoryContent.trim() !== "") {
+		blocks.push(input.memoryContent.trim());
+	}
+	if (input.personalization !== undefined) {
+		const personalization = formatPersonalizationSection(input.personalization);
+		if (personalization !== "") blocks.push(personalization);
+	}
+	return blocks.join("\n\n");
+}
+
 const SLOT = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;
 /**
  * 残留检查用更宽的模式：任何 `{{...}}` 都不许活过组装。
@@ -189,20 +261,20 @@ const MAX_FRAGMENT_DEPTH = 8;
 
 /**
  * 分段来源（provenance）。skeleton = 骨架的非片段部分；fragment:<名> = 片段内容；
- * mode:<id> = 交互模式行为段；skills / pi-context / time / expert 同名段落；
+ * mode:<id> = 交互模式行为段；skills / pi-context / expert 同名段落；
  * style:<id> = 回复风格段（注入点在交互段之后，见 composePromptWithMeta）；
- * memory-system = 记忆行为纪律段，memory = 三层记忆内容段（注入点见
- * composePromptWithMeta 内注释）。
+ * memory-system = 记忆行为纪律段。
+ *
+ * **time / memory / personalization 不在这里**：它们是逐轮会变的事实，不进系统
+ * 提示词 —— memory / personalization 由 formatRuntimeContext 组装成注入消息，
+ * time 由 hidden context 的 current_time 送达（文件头纪律）。
  */
 export type PromptSegmentSource =
 	| "skeleton"
 	| "skills"
 	| "pi-context"
-	| "time"
 	| "expert"
 	| "memory-system"
-	| "memory"
-	| "personalization"
 	| `fragment:${string}`
 	| `mode:${string}`
 	| `style:${string}`;
@@ -274,7 +346,7 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 	 * 插在 finalizeCore 之前：风格段与骨架/模式段走同一套按段压平与空段丢弃，
 	 * 「segments 拼接 == text」的等价性论证不需要为风格段单开分支。
 	 * 骨架没有 {{interaction}} 槽位时（用多少槽位是场景作者的自由）没有交互段可锚，
-	 * 落在核心段末尾 —— 此时它仍在 pi-context / time 之前，位序语义不变。
+	 * 落在核心段末尾 —— 此时它仍在 pi-context 之前，位序语义不变。
 	 * 绑定专家时不注入：选定专家后用户自定义风格让位于人格（WorkBuddy
 	 * user-context-expert-identity 的精简语义 —— 表达层的唯一权威是人格，
 	 * 风格与人格并存只会冲突）；未绑定专家的会话没有 expert 字段，不受影响。
@@ -303,14 +375,13 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 
 	const all: DraftSegment[] = [...core];
 	/*
-	 * 记忆段：核心段（骨架 + 人格 + 模式）之后、pi 上下文之前。人格上前部
-	 * 槽位后（spec: align-expert-system-workbuddy）记忆排在人格之后 —— 与
-	 * WorkBuddy 选专家后精简用户自定义身份的让位方向一致（人格优先于用户侧
-	 * 设定）。两段都推在残留检查**之后**：记忆内容是用户数据，用户往
-	 * MEMORY.md 里写了「{{示例}}」不该让会话组装抛错（残留检查管的是
-	 * 骨架/模式/片段的笔误，不管用户数据）。段文本只经 trim 不再压平：按段
-	 * 压平服务于 finalizeCore 的等价性论证，这里的段自带 \n\n 前缀、join
-	 * 后接缝天然是两个换行。
+	 * 记忆行为纪律段：核心段（骨架 + 人格 + 模式）之后、pi 上下文之前。人格上前部
+	 * 槽位后（spec: align-expert-system-workbuddy）记忆段排在人格之后 —— 与
+	 * WorkBuddy 选专家后精简用户自定义身份的让位方向一致（人格优先于用户侧设定）。
+	 * 注意这里是**行为约定**（怎么写记忆），不是记忆内容 —— 记忆内容逐轮会变，
+	 * 走 formatRuntimeContext 的注入路径，不进提示词。
+	 * 段文本只经 trim 不再压平：按段压平服务于 finalizeCore 的等价性论证，
+	 * 这里的段自带 \n\n 前缀、join 后接缝天然是两个换行。
 	 */
 	if (input.memorySystemBody !== undefined && input.memorySystemBody.trim() !== "") {
 		all.push({
@@ -318,33 +389,16 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 			text: `\n\n## 记忆系统\n\n${input.memorySystemBody.trim()}`,
 		});
 	}
-	if (input.memoryContent !== undefined && input.memoryContent.trim() !== "") {
-		all.push({ source: "memory", text: `\n\n${input.memoryContent.trim()}` });
-	}
-	/*
-	 * 个性化段：记忆段之后、pi 上下文之前。与记忆段同批在残留检查**之后**推入
-	 * —— 自定义指令/人设是用户数据，里面写了「{{...}}」不该让组装抛错
-	 * （残留检查管骨架/模式/片段的笔误，不管用户数据）。
-	 */
-	if (input.personalization !== undefined) {
-		const block = formatPersonalizationSection(input.personalization);
-		if (block !== "") all.push({ source: "personalization", text: `\n\n${block}` });
-	}
 	const piBlock = formatPiContextBlock(input);
 	if (piBlock !== "") {
 		all.push({ source: "pi-context", text: `\n\n${piBlock}` });
 	}
-	// 环境块放整个提示词的**末尾**：系统提示词前缀稳定利于 provider 前缀缓存
-	// （前面各段同分钟内字节一致，变化的只有最后一小段）。
-	all.push({ source: "time", text: `\n\n${formatRuntimeTime(input.now ?? new Date())}` });
 	/*
 	 * <current-expert> 钉子段放最末（WorkBuddy CurrentExpertReminderSection 的
 	 * 同款防漂移：多轮对话后模型会忘记自己的专家身份，它每轮 user-context 钉一次）。
 	 * 只是钉子：专家名 + 一句「遵循其角色与工作流」，人格本体只在前部槽位
 	 * 出现一次 —— 重复人格既浪费 token，两处文本还有漂移风险。
-	 * v1 没有用户消息级注入机制（WorkBuddy 的 composeUserPrompt），钉子段随每轮
-	 * 重组的系统提示词落在离对话历史最近的位置 —— 同一会话内它是稳定文本，
-	 * 不破坏上面的前缀缓存口径。
+	 * 同一会话内它是稳定文本（专家绑定不改就不变），不破坏系统提示词的前缀缓存口径。
 	 */
 	if (input.expert !== undefined) {
 		all.push({
@@ -410,15 +464,17 @@ function expandIncludes(
 
 /**
  * 单段内的槽位替换：段被槽位切开，interaction / skills 的值独立成段
- * （provenance 标注 mode:<id> / skills）；cwd / model 是行内标量，
- * 并入所在段——预览分段是段落级的，路径与模型名不成段。
+ * （provenance 标注 mode:<id> / skills）。
+ *
+ * 槽位集合就是这两个：`{{cwd}}` 已删（工作目录由 pi 内置 `cwd` section 提供，
+ * 手写一行既重复又落在对话历史之前 —— spec: stabilize-prompt-prefix 的
+ * REMOVED Requirements），`{{model}}` 已删（全库无使用者）。分支不放松：骨架/
+ * 片段里出现这两个以外的任何 `{{xxx}}` 都在这里响亮抛错。
  */
 function fillSlots(piece: DraftSegment, input: ComposePromptInput, out: DraftSegment[]): void {
 	const slots: Record<string, string> = {
 		interaction: input.modeBody,
 		skills: input.skillsSection,
-		cwd: input.cwd,
-		model: input.model ?? "",
 	};
 
 	let last = 0;
@@ -434,16 +490,12 @@ function fillSlots(piece: DraftSegment, input: ComposePromptInput, out: DraftSeg
 			);
 		}
 		if (idx > last) out.push({ source: piece.source, text: piece.text.slice(last, idx) });
-		if (name === "interaction" || name === "skills") {
-			// 值段剥首尾换行（同片段内容的处理）：段落的边界空行归骨架作者控制，
-			// 值自身不带 —— 按段压平与旧的整体压平等价就靠这条（finalizeCore）。
-			out.push({
-				source: name === "interaction" ? `mode:${input.modeId ?? "unknown"}` : "skills",
-				text: value.replace(/^\n+/, "").replace(/\n+$/, ""),
-			});
-		} else {
-			out.push({ source: piece.source, text: value });
-		}
+		// 值段剥首尾换行（同片段内容的处理）：段落的边界空行归骨架作者控制，
+		// 值自身不带 —— 按段压平与旧的整体压平等价就靠这条（finalizeCore）。
+		out.push({
+			source: name === "interaction" ? `mode:${input.modeId ?? "unknown"}` : "skills",
+			text: value.replace(/^\n+/, "").replace(/\n+$/, ""),
+		});
 		last = idx + raw.length;
 	}
 	if (last < piece.text.length) out.push({ source: piece.source, text: piece.text.slice(last) });
@@ -566,50 +618,6 @@ export function requireExpertPersona(
 }
 
 /**
- * 运行时环境块：本地日期 + 分钟级时刻 + 星期 + IANA 时区名 + GMT 偏移。
- *
- * pi 不注入任何日期时间，模型对「现在」零感知 —— 这一行是它唯一的时间来源。
- *
- * 为什么只到分钟级：秒级会让每轮重组的 systemPrompt 都不同，炸 provider 的
- * 提示词缓存；分钟级下同一 run 内连续模型调用通常落在同一分钟、字节一致，
- * 缓存照常命中，而时间显示对「现在几点」这类问题分钟精度已够用。
- *
- * 格式自创（合规红线：不抄 WorkBuddy 的 <env> 措辞）。
- */
-export function formatRuntimeTime(now: Date): string {
-	// en-US 只为拿到英文星期名与数字；日期顺序自己从 parts 重组为 YYYY-MM-DD。
-	// hourCycle h23：避免某些引擎 hour12:false 下午夜给出 "24"。
-	const parts = new Intl.DateTimeFormat("en-US", {
-		year: "numeric",
-		month: "2-digit",
-		day: "2-digit",
-		hour: "2-digit",
-		minute: "2-digit",
-		hourCycle: "h23",
-		weekday: "long",
-	}).formatToParts(now);
-	const get = (type: Intl.DateTimeFormatPartTypes): string =>
-		parts.find((p) => p.type === type)?.value ?? "";
-	const date = `${get("year")}-${get("month")}-${get("day")}`;
-	const time = `${get("hour")}:${get("minute")}`;
-
-	const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-	// getTimezoneOffset 与直觉相反：东八区返回 -480，取负即「相对 UTC 快多少分钟」。
-	const offsetMin = -now.getTimezoneOffset();
-	const sign = offsetMin >= 0 ? "+" : "-";
-	const absMin = Math.abs(offsetMin);
-	const offsetHours = Math.floor(absMin / 60);
-	const offsetRestMin = absMin % 60;
-	// 半小时时区（如印度 GMT+5:30）分钟部分必须保留，整时区则不赘述 :00。
-	const gmt =
-		offsetRestMin === 0
-			? `GMT${sign}${offsetHours}`
-			: `GMT${sign}${offsetHours}:${String(offsetRestMin).padStart(2, "0")}`;
-
-	return `Current time: ${date} ${time} (${get("weekday")}, ${gmt}, ${timeZone})`;
-}
-
-/**
  * 把 pi 已经算好的上下文文件与工具提示段拼成一块文本（无内容返回空串）。
  *
  * before_agent_start 的整体替换会让 pi 不再自动附加这些（system-prompt.ts
@@ -666,24 +674,27 @@ export interface ComposeSubagentPromptInput {
 	readonly cwd: string;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
 	readonly piContext?: PromptContextOptions;
-	/** 环境块取数时刻，可注入是为了纯函数可测（同 composePrompt）。 */
-	readonly now?: Date;
 }
 
 /**
- * 子代理会话的提示词组装：agent.body 为主体 + 工作目录 + pi 上下文 + 时间块。
+ * 子代理会话的提示词组装：agent.body 为主体 + 工作目录 + pi 上下文。
  *
  * 为什么不走 composePrompt 的场景×模式双轴：双轴回答的是「KamiBuddy 这个产品
  * 在什么场景下以什么交互方式工作」，而子代理的身份由 agent 定义自己完整声明
  * （scout 是侦察员、reviewer 是评审员，都不是「办公助手」）——套场景骨架会把
  * 产品身份灌进子代理，身份冲突且浪费 token。技能段同理不注入：子代理的
  * 能力面由自己的 tools 白名单界定，与主会话安装的技能无关。
- * 但工作目录、pi 的上下文（工具 snippet / guidelines / 项目指令文件）与
- * 时间块仍是必需品——没有它们模型不知道自己在哪个目录工作、工具该怎么用。
+ * 但工作目录与 pi 的上下文（工具 snippet / guidelines / 项目指令文件）仍是必需品
+ * ——没有它们模型不知道自己在哪个目录工作、工具该怎么用。工作目录因此由**本函数**
+ * 写在提示词里（子代理不接场景骨架，也不接 pi 内置的那行 `cwd`——它被
+ * before_agent_start 的整串替换换掉了）；会话内它是定值，不破坏字节稳定。
+ *
+ * 时间块不在这里：成员/子代理会话同样是「多轮同一会话」，时间进提示词就是
+ * 逐轮断前缀（文件头纪律）—— 时间由子代理/成员会话自己那个 SessionHost 的
+ * hidden context `current_time` 送达（与用户会话同一条路径）。
  */
 export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string {
-	const composed = `${input.agentBody.trim()}\n\n当前工作目录：${input.cwd}`;
-	return `${appendPiContext(composed, input)}\n\n${formatRuntimeTime(input.now ?? new Date())}`;
+	return appendPiContext(`${input.agentBody.trim()}\n\n当前工作目录：${input.cwd}`, input);
 }
 
 /**

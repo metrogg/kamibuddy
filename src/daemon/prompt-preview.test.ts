@@ -25,7 +25,7 @@ function makeResources(): LoadedResources {
 				label: "日常办公",
 				description: "办公",
 				ready: true,
-				body: "办公骨架\n\n{{interaction}}\n\n{{skills}}\n\n目录：{{cwd}}",
+				body: "办公骨架\n\n{{interaction}}\n\n{{skills}}",
 			},
 			{
 				id: "code",
@@ -73,7 +73,7 @@ const EXPERTS: readonly ExpertDefinition[] = [
 ];
 
 function makeEnv(overrides: Partial<PromptPreviewEnvironment> = {}): PromptPreviewEnvironment {
-	return { cwd: "/tmp/work", skills: SKILLS, experts: EXPERTS, preferredStyleId: undefined, ...overrides };
+	return { skills: SKILLS, experts: EXPERTS, preferredStyleId: undefined, ...overrides };
 }
 
 describe("分段映射", () => {
@@ -86,9 +86,27 @@ describe("分段映射", () => {
 		const joined = result.segments.map((s) => s.text).join("");
 		for (const seg of result.segments) expect(seg.chars).toBe(seg.text.length);
 		expect(result.totalChars).toBe(joined.length);
-		// 结构骨架：skeleton 开头、time 收尾（prompt-composer 的位序语义）。
+		// 结构骨架：skeleton 开头、skills 收尾（craft 白名单含 read，技能段注入）。
 		expect(result.segments[0]?.source).toBe("skeleton");
-		expect(result.segments[result.segments.length - 1]?.source).toBe("time");
+		expect(result.segments[result.segments.length - 1]?.source).toBe("skills");
+	});
+
+	it("预览只产出系统提示词分段：逐轮可变事实与 cwd 都不在里面", () => {
+		// 记忆内容 / 个性化走 prompt-switch 的 `context` 事件注入，时间与时区行、
+		// 工作目录走会话侧 hidden context（current_time / workspace_context）——
+		// 预览（= 系统提示词）里都不该出现（spec: stabilize-prompt-prefix）。
+		// 末尾那条是旧格式（曾有过的英文时间行）的回归钉子：时间不许以任何形态回来。
+		const result = buildPromptPreview(
+			makeResources(),
+			{ sceneId: "work", modeId: "craft", styleId: "" },
+			makeEnv(),
+		);
+		for (const seg of result.segments) {
+			expect(seg.source).not.toBe("time");
+			expect(seg.source).not.toBe("memory");
+			expect(seg.source).not.toBe("personalization");
+		}
+		expect(result.segments.map((s) => s.text).join("")).not.toMatch(/Current time:/);
 	});
 
 	it("片段引用产出 fragment:<名> 段", () => {

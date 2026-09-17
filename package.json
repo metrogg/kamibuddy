@@ -19,6 +19,7 @@
     "smoke:mcp": "tsx scripts/smoke-mcp-connector.ts",
     "smoke:docx": "tsx scripts/smoke-docx.ts",
     "smoke:docx-roundtrip": "tsx scripts/smoke-docx-roundtrip.ts",
+    "probe:prompt-cache": "tsx scripts/probe-prompt-cache.ts",
     "check:deps": "tsx scripts/check-dependency-rules.ts",
     "check:tokens": "tsx scripts/check-design-tokens.ts",
     "typecheck": "tsc --noEmit",

@@ -56,7 +56,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [fullView, setFullView] = useState(false);
 	const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-	/** 重新生成按钮的触发器：自增即让组装 effect 重跑（时间环境块随之刷新）。 */
+	/** 重新生成按钮的触发器：自增即让组装 effect 重跑。 */
 	const [nonce, setNonce] = useState(0);
 	const requestSeq = useRef(0);
 
@@ -148,7 +148,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 					type="button"
 					className="mini-btn"
 					disabled={sceneId === "" || modeId === ""}
-					title="按当前选择重新组装（时间环境块随生成时刻刷新）"
+					title="按当前选择重新组装"
 					onClick={() => setNonce((n) => n + 1)}
 				>
 					<IconRefresh size={13} />
@@ -256,6 +256,7 @@ export function PromptPreviewSection(): React.JSX.Element {
 					<p className="settings-foot">
 						预览按所选四轴（场景 / 模式 / 风格 / 专家）现场组装，与真实会话同一条组装路径；
 						pi 上下文段（项目指令、工具提示）不在预览中出现，真实会话会额外携带。
+						逐轮会变的事实（当前时间、记忆内容、个性化设置）由会话每轮单独注入，也不在这里。
 						每一轮的完整上下文组成（含历史消息与注入块）在任务诊断面板按任务查看。
 					</p>
 				</>

@@ -1705,11 +1705,17 @@ export class SessionHost {
 	 * 不落会话文件，不重注入就等于丢失）：
 	 *
 	 *   1. workspace_context（user-context）—— cwd + 场景 + 交互模式 + 专家。
-	 *      系统提示词里 {{cwd}} 槽位是会话建立时的静态值，中途切场景/换专家
-	 *      （setScene/setExpert 不重组系统提示词）只有这里跟得上。
+	 *      **cwd 的唯一来源（用户会话）**：系统提示词里已经没有它了（骨架那行随 spec:
+	 *      stabilize-prompt-prefix 删掉；pi 内置的那行 `cwd` 又被
+	 *      before_agent_start 的整串替换换掉），中途切场景/换专家
+	 *      （setScene/setExpert 不重组系统提示词）也只有这里跟得上。
+	 *      （子代理/成员会话例外：composeSubagentPrompt 会把同一个 cwd 写进自己的
+	 *      提示词，值同源同为 cwd，不产生两份漂移 —— 见 prompt-composer.ts 文件头。）
 	 *   2. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
 	 *   3. current_time（additional-data）—— run 冻结时刻，一次性容器。
+	 *      **时间的唯一来源**：逐轮注入块（prompt-switch 的 `context` 事件）
+	 *      已不带时间，模型看「现在」只靠这一段。
 	 *
 	 * 全部段都空返回 undefined（新用户 + 无记忆 + 不可能：时间永远有 ——
 	 * 实际上本函数恒有值，undefined 分支只是 composeHiddenContext 契约的如实透传）。

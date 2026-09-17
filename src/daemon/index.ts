@@ -70,6 +70,7 @@ import {
 } from "./session-cwd-reads.ts";
 import {
 	composePromptWithMeta,
+	formatRuntimeContext,
 	requireExpertPersona,
 	resolveSessionExpert,
 	sessionSkillPaths,
@@ -638,16 +639,10 @@ function getWebSearchConfig(): WebSearchConfig | undefined {
 }
 
 /**
- * 组装指定 cwd 与两轴下的系统提示词。用户会话与定时任务 run 会话共用 ——
- * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
- * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
- * run 会话没有诊断视图、直接丢弃）。
- */
-/**
- * 个性化注入段单点现读（composeSystemPrompt 与 prompt:preview 共用，
- * 预览不静默漂移）。只投 4 个注入字段：两个 boolean 是 UI 开关不进提示词
+ * 个性化注入段单点现读（buildRuntimeContext 的唯一读点）。
+ * 只投 4 个注入字段：两个 boolean 是 UI 开关不进模型可见文本
  * （core/prompt-composer.ts PersonalizationSection 的注释钉住了这条）。
- * 每轮现读偏好：设置页改完下一轮对话即生效（同技能清单/风格口径）。
+ * 每轮现读偏好：设置页改完下一次模型调用即生效（同技能清单/风格口径）。
  */
 function readPersonalizationSection(): PersonalizationSection {
 	const prefs = readPreferences();
@@ -659,8 +654,41 @@ function readPersonalizationSection(): PersonalizationSection {
 	};
 }
 
+/**
+ * 逐轮可变事实注入块单点现读（prompt-switch 的 `context` 事件每请求取一次，
+ * 见 extensions/prompt-switch.ts 的 composeRuntimeContext）：三层记忆内容 + 个性化。
+ * 两段都走读侧既有的降级口径（记忆读不出当没有、偏好读不出当未配置），
+ * 因为 `context` handler 抛错会被 pi 吞掉 —— 这里不制造会被吞的异常。
+ *
+ * 时间**不在这里**：会话内时间只有 hidden context 的 `current_time` 一个来源
+ * （session-host.ts，run 开始冻结；spec: stabilize-prompt-prefix 的时间收敛）。
+ *
+ * 与 composeSystemPrompt 同源现读：设置页改完个性化、模型自己写完记忆，
+ * 下一次模型调用就带上新值（run 内的后续回合同样如此，这正是「逐请求注入」
+ * 比「每 run 冻结一份」更准的地方）。
+ */
+function buildRuntimeContext(cwd: string): string {
+	return formatRuntimeContext({
+		memoryContent: buildSessionMemorySection(cwd),
+		personalization: readPersonalizationSection(),
+	});
+}
+
+/**
+ * 组装指定两轴下的系统提示词。用户会话与定时任务 run 会话共用 ——
+ * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
+ * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
+ * run 会话没有诊断视图、直接丢弃）。
+ *
+ * **不含逐轮会变的事实**：运行时间、三层记忆内容、个性化都不进系统提示词
+ * （它们每轮都可能变，进提示词就等于每轮断掉 provider 的前缀缓存，spec:
+ * stabilize-prompt-prefix）—— 记忆内容与个性化由 buildRuntimeContext 组装、
+ * 经 prompt-switch 的 `context` 事件作为消息注入，时间由会话侧 hidden context
+ * 的 `current_time` 每轮注入（session-host.ts）。工作目录同样不进提示词：
+ * pi 内置的那行 `cwd` 会被 before_agent_start 的整串替换换掉，工作目录的唯一
+ * 来源是 hidden context 的 workspace_context。
+ */
 async function composeSystemPrompt(
-	cwd: string,
 	sceneId: string,
 	interactionId: string,
 	expertId: string | undefined,
@@ -707,22 +735,19 @@ async function composeSystemPrompt(
 			fallback: style?.id ?? DEFAULT_STYLE_ID,
 		});
 	}
-	// 记忆段每轮现读（同技能清单口径：模型用 edit 改了 MEMORY.md，下一轮即生效）。
+	// 记忆行为纪律段每轮现读（同技能清单口径）。它定义「怎么写记忆」，会话内稳定；
+	// 记忆**内容**逐轮会变，不进这里（见 buildRuntimeContext）。
 	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
 	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
-	const memoryContent = buildSessionMemorySection(cwd);
 	const composed = composePromptWithMeta({
 		sceneBody: scene.body,
 		modeBody: mode.body,
 		skillsSection,
-		cwd,
 		modeId: interactionId,
 		// 片段库查表：找不到返回 undefined → composer 抛错（不静默留洞上线）。
 		resolveFragment: (name) => RESOURCES.fragments.get(name),
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
-		...(memoryContent === undefined ? {} : { memoryContent }),
-		personalization: readPersonalizationSection(),
 		...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
 		piContext,
 	});
@@ -988,8 +1013,11 @@ const automationScheduler = new AutomationScheduler({
 		resources: RESOURCES,
 		// 定时任务 run 会话保持 work+craft 不起专家（spec: rework-expert-orthogonal-and-skills
 		// —— 专家绑定是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
-		compose: async (cwd, sceneId, interactionId, piContext) =>
-			(await composeSystemPrompt(cwd, sceneId, interactionId, undefined, piContext)).prompt,
+		compose: async (_cwd, sceneId, interactionId, piContext) =>
+			(await composeSystemPrompt(sceneId, interactionId, undefined, piContext)).prompt,
+		// run 会话同样是多轮会话，逐轮可变事实走注入（提示词里不再有它们）——
+		// 注入块按 run 的 cwd 现读记忆与个性化，与用户会话同一个组装函数。
+		composeRuntimeContext: buildRuntimeContext,
 		getPermissions: () => activePermissions,
 		// 全局默认推理强度现读偏好不缓存：run 会话建宿主才走这条读路径，
 		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
@@ -1927,7 +1955,7 @@ async function createHost(
 	 *（见 SessionBucket.pendingWorktreeBranch 的注释）。
 	 *
 	 * 位置必须在 cwd 分配之后、建宿主之前 —— 副本路径就是本轮会话的 cwd，
-	 * 工具集、权限门、预览服务、系统提示词里的「当前工作目录」全都按它注入，
+	 * 工具集、权限门、预览服务、注入块里的工作目录全都按它注入，
 	 * 晚一步就白建了。
 	 *
 	 * 失败**降级回原目录继续**（对齐 WorkBuddy 的 createFailedFallback）：
@@ -2167,7 +2195,7 @@ async function createHost(
 					expertId: bucket.conversation.state.expertId,
 				}),
 				compose: async (sceneId, interactionId, expertId, piContext) => {
-					const composed = await composeSystemPrompt(cwd, sceneId, interactionId, expertId, piContext);
+					const composed = await composeSystemPrompt(sceneId, interactionId, expertId, piContext);
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
@@ -2178,6 +2206,10 @@ async function createHost(
 					bucket.systemPromptSegments = composed.segments;
 					return composed.prompt;
 				},
+				// 逐轮可变事实（记忆内容/个性化）的注入块：每请求现读本会话 cwd。
+				// 提示词里已不含它们（见 composeSystemPrompt 注释）；时间不走这里，
+				// 由本会话 SessionHost 的 hidden context `current_time` 送达。
+				composeRuntimeContext: () => buildRuntimeContext(cwd),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -2935,7 +2967,6 @@ async function buildConversationForBucket(
 	try {
 		const state = bucket.conversation.state;
 		const composed = await composeSystemPrompt(
-			bucket.cwd,
 			state.sceneId,
 			state.interactionId,
 			state.expertId,
@@ -4480,8 +4511,9 @@ const handlers: Record<string, Handler> = {
 	/* ── 提示词预览（设置页，spec: systematize-prompt-architecture Task 5） ── */
 
 	// 纯逻辑在 ./prompt-preview.ts（可测）；这里只负责现取环境：
-	// cwd = 当前会话工作区（预览反映「此刻发消息会看到的提示词」），
 	// 技能清单 / 专家库 / 风格偏好现读（与 composeSystemPrompt 同一口径）。
+	// 预览只组装系统提示词，不产出逐轮可变事实（时间/记忆内容/个性化 —— 它们走
+	// prompt-switch 的注入，不在提示词里）与工作目录（pi 内置 cwd section）。
 	[INVOKE.promptPreview]: async ([request]) => {
 		const preview = request as PromptPreviewRequest;
 		/*
@@ -4493,7 +4525,6 @@ const handlers: Record<string, Handler> = {
 		const experts = loadExpertsNow();
 		const expert = resolveSessionExpert(experts, preview.expertId);
 		return buildPromptPreview(RESOURCES, preview, {
-			cwd: currentBucket.cwd,
 			/*
 			 * 技能清单要过**同一份**启用过滤（enabledSkills 用的也是这个纯函数）：
 			 * 预览里出现一个「此刻发消息根本看不到」的技能，就是与真实组装的静默漂移。
@@ -4509,8 +4540,6 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
-			memoryContent: buildSessionMemorySection(currentBucket.cwd),
-			personalization: readPersonalizationSection(),
 		});
 	},
 

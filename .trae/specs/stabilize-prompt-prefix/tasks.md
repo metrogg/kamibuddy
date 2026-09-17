@@ -1,0 +1,93 @@
+# Tasks
+
+> 参考实现：`开源项目/deepseek-harness`（`packages/core/system-prompt`、`packages/core/agent-loop/src/runtime-context.ts`、
+> `.agents/notes/implemented/feature/2026-09-02-in-history-system-prompt-replacement.md`）。
+> 验证统一用 `npm run typecheck && npm run check:deps && npm test`（本改动不涉及 `documents/`）。
+
+- [x] Task 1: 写真实 API 探针，回答「sections patch 在 DeepSeek 上语义是否成立」
+  - [x] SubTask 1.1: 新增 `scripts/probe-prompt-cache.ts`（`npm run probe:prompt-cache`），同一会话连发多轮，
+        每轮打印 `轮 N 步 M: prompt=<billedInput> cacheRead=<n> hit=<p>%`（口径复用 `billedInputTokens` / `cacheHitRate`）
+  - [x] SubTask 1.2: dump 每次请求的实际消息结构与 payload（role 序列、system 消息条数、`replace` / `sections` 键）
+  - [x] SubTask 1.3: 语义正确性断言（只改一个 section，验证模型不丢未变化的段）
+  - [x] SubTask 1.4: 读数与结论写进 `spec.md` 的「探针结论（实测）」段
+  - **实测结论（改变了原路线）**：**发布版 `@earendil-works/pi-coding-agent@0.85.1` 根本没有 sections / forceSystemPrompt / diffSystemPromptSections**
+    （那套只在 `开源项目/pi` 克隆里，它比 v0.85.1 新 85 个提交），`emitBeforeAgentStart` 只认返回的 `systemPrompt` 字符串。
+    因此「改 `systemPromptOptions` 走分段 patch」**在当前依赖上不存在**。
+    可用的路线是「保持 forced 替换 + 保证系统提示词在同一会话内逐轮字节稳定」：实测提示词**字节未变**时 pi 不发新 system 消息、
+    缓存命中 **93.2%**（同日对照：变更一行 → **62.0%**；A 组三轮 system 消息条数恒为 1，无 patch、无重放数组）。
+
+- [x] Task 2: 把逐轮会变的事实移出系统提示词（两条路线的共同必需项）
+  - [x] SubTask 2.1–2.3: 运行时间块 / 记忆内容段 / 个性化段移出系统提示词
+  - [x] SubTask 2.4: 空内容不注入（零 token 口径不变）；注入内容不经残留槽位检查（用户数据性质保持）
+  - [x] SubTask 2.5: `PromptSegmentSource` 删除 `time` / `memory` / `personalization`，`composePromptWithMeta` 不再推入这三段
+  - **实现方式**（比 spec 原设想更优，理由已写进 `prompt-switch.ts` 文件头）：走 pi 的 **`context` 事件**（`transformContext`，
+    每次模型调用前触发）注入，消息追加在**消息数组末尾**（= 历史之后），`role:"custom"` + `customType:"kamibuddy-runtime-context"`，
+    **每请求现算、不落会话文件** —— 同时满足「绝不改系统提示词 / 落在历史之后 / 不无界增长日志」三条判据，
+    优于 `before_agent_start` 的 `message`（后者会持久化进会话、需自行维护变化检测）。
+
+- [x] Task 3: 工作目录收敛到单一来源
+  - [x] SubTask 3.1: 删 `resources/scenes/work/prompt.md` 与 `code/prompt.md` 的 `当前工作目录：{{cwd}}` 行
+  - [x] SubTask 3.2: `prompt-composer` 去掉 `cwd` 槽位（`{{cwd}}` 现在响亮抛错，护栏未放松）；`{{model}}` 全库无使用者，一并移除
+  - [x] SubTask 3.3: `prompt-preview.ts` 与 `request_snapshot.systemSegments` 口径同步（不再产出该 skeleton 残段）
+  - [x] SubTask 3.4: `resources.test.ts` / `prompt-composer.test.ts` / `prompt-preview.test.ts` 的骨架断言更新
+  - **实测结论（与 spec 原假设不同，节录如实记录）**：pi 内置的 cwd 行**不会**替我们保住 ——
+    发布版 `dist/core/agent-session` 在 handler 返回 `systemPrompt` 时整串覆盖，pi 版本的 cwd 行一起没了。
+    cwd 的实际唯一来源是 `session-host.composeRunHiddenContext` 的 `workspace_context`（注入在 user 轮 = 历史之后），
+    **比原方案更好**（cwd 不再位于缓存前缀里）。子代理路径例外：`composeSubagentPrompt` 仍在代码里写 `当前工作目录：<cwd>`
+    （非场景骨架、会话内定值，不破坏字节稳定），已在两处注释中如实标注。
+
+- [x] Task 4: 按 Task 1 判据走「字节稳定」路线（**原 4.2/4.3「换成声明式分段」按 4.1 的判据跳过**）
+  - [x] SubTask 4.1: 判据 = Task 1 实测（patch 路径在发布版依赖上不存在）→ **走字节稳定路线**，本处即记录
+  - [x] SubTask 4.2（替换内容）: **收敛「时间」到单一来源** —— 删掉新注入块里的时间，
+        保留既有 hidden context 的 `current_time`（既有机制、位于历史之后、其 `additional-data` 被压缩链路按一次性语义处理）；
+        删掉零引用的 `formatRuntimeTime` 及其专属用例
+  - [x] SubTask 4.3（替换内容）: 复核「cwd 单一来源」成立（用户会话：hidden context 的 `workspace_context`）
+  - [x] SubTask 4.4: 组装失败响亮抛错的既有护栏全部保留（片段缺失/成环/超深/残留槽位/未支持槽位）
+  - [x] SubTask 4.5: 把「字节稳定 = 缓存不变量」与「0.85.1 无 sections 路径」的路线判据写进
+        `prompt-composer.ts` 与 `prompt-switch.ts` 文件头（并删除旧注释里「环境块放末尾有利缓存」那类**错误推理**：
+        末尾仍在整段历史之前，放末尾并不保护历史）
+
+- [x] Task 5: 回归门禁
+  - [x] SubTask 5.1: 反向钉子 —— 断言 handler **必须返回** `systemPrompt`（被关掉会漏出 pi 默认 coding 提示词），
+        注释写明路线判据（原文「断言不返回 systemPrompt」随路线作废，理由见 Task 4.1）
+  - [x] SubTask 5.2: 同会话提示词**字节稳定**单测（真实 `loadResources`，work×code × craft/ask/plan 共 6 例，
+        时钟从 09:59:59 推到次日 11:01，断言两轮 `systemPrompt` 严格相等）+ 时钟确实推进/内容非空/piContext 已拼回的防假绿守卫
+  - [x] 附加钉子: 注入块不含任何时间格式且对不同时刻字节相等；注入只追加在消息末尾且历史逐条引用不变；系统提示词不含会话 cwd
+  - **门禁自证**（人为改坏三次，均精确变红后改回）：① 往提示词塞时间 → 6 例红；② handler 改为 `return {}` → 1 例红；
+    ③ 往注入块塞时间 → 3 例红
+
+- [x] Task 6: 文档同步
+  - [x] SubTask 6.1: `docs/可观测性清单.md` 新增 `CACHE8 | 提示词前缀稳定性` 表行（结构性前提 + 复跑入口 `npm run probe:prompt-cache`）
+  - [x] SubTask 6.2: 复核并补齐 `prompt-composer.ts` / `prompt-switch.ts` 文件头纪律；发现并修正两处不准确表述 ——
+        ① 「cwd 唯一来源」对子代理不成立 → 限定为「用户会话」并注明例外；② 「工作区文件内容禁入提示词」与
+        `formatPiContextBlock` 仍拼 `contextFiles` 冲突 → 精确表述为「唯一留在提示词里的工作区文件内容、
+        会话建立时装载、会话内不重读，属受限例外」
+  - [x] SubTask 6.3: 基线数据与复跑口径追加进 `docs/可观测性清单.md`（**未新建文档文件**）：
+        6 会话首调 1,408–2,816 tokens / prompt 12K–22K、断点在原 cwd 行、单轮 92.4% = 该情形上限、
+        探针 93.2% vs 62.0%、最终纪律清单（时间 / 记忆内容 / 个性化 / 工作区文件内容 / cwd）
+
+# Task Dependencies
+
+- Task 4 依赖 Task 1 的判据（已按「patch 路径不存在」走到字节稳定路线）
+- Task 2、Task 3 与 Task 1 无依赖（已并行完成）
+- Task 5、Task 6 依赖 Task 2/3/4（已完成）
+
+# 遗留（不在本次范围，如实登记）
+
+- `docs/可观测性清单.md` 的 `LOG13`（缺消息逐条稳定标识）仍未解决 → `CACHE6`（反推命中前缀边界）仍算不出来，
+  本次只能靠探针与 `request_snapshot.systemSegments` 间接判定，**指不出具体断点**。
+- `daemon/index.ts` 的 `composeSystemPrompt` 未导出，门禁用的是「同款输入的镜像」；若有人只在 daemon 那份里
+  拼入逐轮可变事实，现有测试不会红（Task 5 报告的第 1 条风险）。
+- 子代理提示词（`composeSubagentPrompt`）仍带 `当前工作目录：<cwd>` 与 pi-context，未纳入本次纪律（非场景骨架、会话内定值）。
+- **探针的提示词形态与生产形态已脱节**（独立验证者发现）：`scripts/probe-prompt-cache.ts` 里的 `buildShapedPrompt`
+  仍做 `replace("{{cwd}}", cwd)` 并自行拼 `Current time: …`，即它模拟的是**改造前**的提示词形态。
+  因此它的读数证明的是「字节稳定性这一机制成立」，**不是**出货提示词的真实形态。结论不受影响；
+  若将来要把探针当严格回归证据，应先让它改用 `composePromptWithMeta` 的真实产物。
+- 独立验证者另发现并已修正的一处过时注释：`src/core/resources.ts` 的场景接口注释仍写着骨架含 `{{cwd}}` 槽位（已同步）。
+
+# 独立验证结论（2026-09-17）
+
+16 项检查点**全部 PASS**，无 FAIL。验证者实跑 `typecheck` / `check:deps` / `npm test`（唯一失败为环境性基线
+`confinement.win.test.ts`）、实跑探针复现读数（62.0% / 94.1%）、并对两条核心钉子做了「改坏 → 变红 → 还原」实测。
+验证者提出的两处非功能性问题（spec 的 Requirements 段未随实测回写、探针形态漂移）已在本轮处理：前者已回写订正，
+后者登记在上方遗留。
