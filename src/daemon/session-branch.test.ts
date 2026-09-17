@@ -13,6 +13,7 @@ import {
 	branchOk,
 	buildBranchTitle,
 	decideExtract,
+	endOfTurn,
 	resolveAnchorForIndex,
 	type BranchEntry,
 	type ForkAnchor,
@@ -147,5 +148,44 @@ describe("branchOk / branchFail", () => {
 
 	it("需要补充细节时可覆盖文案", () => {
 		expect(failureOf(branchFail("write-failed", "磁盘已满")).message).toBe("磁盘已满");
+	});
+});
+
+
+describe("endOfTurn（「复制到这条回答为止」的叶子定位）", () => {
+	/** 线性会话：u1 → a1 → u2 → a2 → 工具结果 → 续答。 */
+	const linear: BranchEntry[] = [
+		{ id: "u1", parentId: null, role: "user" },
+		{ id: "a1", parentId: "u1", role: "assistant" },
+		{ id: "u2", parentId: "a1", role: "user" },
+		{ id: "a2", parentId: "u2", role: "assistant" },
+		{ id: "t2", parentId: "a2", role: "toolResult" },
+		{ id: "a3", parentId: "t2", role: "assistant" },
+	];
+
+	it("走完本轮：跨过回答之后的工具与续答，停在下一个用户消息之前", () => {
+		expect(endOfTurn(linear, "u2")).toBe("a3");
+	});
+
+	it("本轮还没答完（锚点就是叶子）→ 返回锚点自己", () => {
+		expect(endOfTurn([{ id: "u1", parentId: null, role: "user" }], "u1")).toBe("u1");
+	});
+
+	it("非消息条目不算轮末（model_change 也会被跨过）", () => {
+		const withMeta: BranchEntry[] = [
+			{ id: "u1", parentId: null, role: "user" },
+			{ id: "m1", parentId: "u1" },
+			{ id: "a1", parentId: "m1", role: "assistant" },
+		];
+		expect(endOfTurn(withMeta, "u1")).toBe("a1");
+	});
+
+	it("分叉树：取第一个孩子那条链（不抛错、不迷路）", () => {
+		const forked: BranchEntry[] = [
+			{ id: "u1", parentId: null, role: "user" },
+			{ id: "a1", parentId: "u1", role: "assistant" },
+			{ id: "a1b", parentId: "u1", role: "assistant" },
+		];
+		expect(endOfTurn(forked, "u1")).toBe("a1");
 	});
 });

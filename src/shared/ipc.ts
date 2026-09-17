@@ -914,9 +914,14 @@ export interface InvokeMap {
 		args: [path: string, userIndex: number, options?: { saveBranch?: boolean }];
 		result: SessionBranchResult;
 	};
-	/** 「分支出新会话」：从该锚点消息（用户消息序号）之前派生新会话（母会话不动），返回同上。 */
+	/**
+	 * 「分支出新会话」：派生新会话并切过去（母会话不动），返回同上。
+	 * options.includeTurn = true 时**带上锚点那一轮**（复制到该轮末尾的回答为止，
+	 * TRAE 式的「从这里接着聊」，输入框不填）；缺省 false = 只带该消息之前的前缀
+	 *（原文由渲染层回填输入框，供改问法重发）。
+	 */
 	[INVOKE.sessionBranch]: {
-		args: [path: string, userIndex: number];
+		args: [path: string, userIndex: number, options?: { includeTurn?: boolean }];
 		result: SessionBranchResult;
 	};
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };

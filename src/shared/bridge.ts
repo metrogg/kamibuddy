@@ -132,10 +132,14 @@ export interface KamiBridge {
 		userIndex: number,
 		options?: { saveBranch?: boolean },
 	) => Promise<SessionBranchResult>;
-	/** 「分支出新会话」：从 userIndex（用户消息序号）之前派生一条新会话并切过去，母会话原样不动。 */
+	/**
+	 * 「分支出新会话」：派生一条新会话并切过去，母会话原样不动。
+	 * options.includeTurn = true 时带上锚点那一轮（复制到该轮回答为止，输入框不填）。
+	 */
 	readonly branchSessionFrom: (
 		path: string,
 		userIndex: number,
+		options?: { includeTurn?: boolean },
 	) => Promise<SessionBranchResult>;
 	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
 	readonly deleteSession: (path: string) => Promise<void>;

@@ -959,13 +959,16 @@ export class SessionHost {
 	}
 
 	/**
-	 * 条目树指针（id / parentId）。会话分支的「分叉点之后是否还有内容」判定
-	 * 与「分叉点的父条目」定位只用这两个字段，故不返回整条目。
+	 * 条目树指针（id / parentId + 消息条目的 role）。
+	 * 会话分支用：抽枝判定与分叉点定位只需要树指针，role 供「下一轮从哪开始」
+	 * 的轮末定位（session-branch.ts 的 endOfTurn）—— 非消息条目（model_change
+	 * 等）没有 role，属性缺席。
 	 */
-	listEntryRefs(): readonly { id: string; parentId: string | null }[] {
+	listEntryRefs(): readonly { id: string; parentId: string | null; role?: string }[] {
 		return this.session.sessionManager.getEntries().map((entry) => ({
 			id: entry.id,
 			parentId: entry.parentId ?? null,
+			...(entry.type === "message" ? { role: entry.message.role } : {}),
 		}));
 	}
 
