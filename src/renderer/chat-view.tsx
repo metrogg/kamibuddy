@@ -20,7 +20,7 @@ import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
-import type { CompactionReason, ConversationEntry, ModeDescriptor, QueuedMessages, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import type { CompactionReason, ConversationEntry, QueuedMessages, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
 import { skillInvocationText } from "@shared/skill-block.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
@@ -56,14 +56,14 @@ import { docBadgeOf } from "@shared/doc-formats.ts";
 import { groupToolBatches } from "./fold-view.ts";
 import type { FoldPlanItem } from "./fold-view.ts";
 import { imageDataUrl } from "./image-attachments.tsx";
-import { useImeGuard } from "./ime-guard.ts";
 import { useModalFocus } from "./use-modal-focus.ts";
+import { ModeChip } from "./mode-chip.tsx";
 import { ModelMenu, shortModelName } from "./model-menu.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { QuestionnaireDialog } from "./questionnaire-dialog.tsx";
 import { Markdown } from "./markdown.tsx";
-import { EmptyState, ErrorState, LoadingState, Spinner } from "./state-views.tsx";
+import { EmptyState, LoadingState, Spinner } from "./state-views.tsx";
 import { activePendingAlign, decideScrollAction } from "./send-anchor.ts";
 import { computeChatContentWidth } from "./chat-content-width.ts";
 import type { PendingSentAlign } from "./send-anchor.ts";
@@ -144,11 +144,6 @@ interface ChatViewProps {
 	readonly onOpenSettings: () => void;
 	/** 就地轻提示（附件格式/大小被拒等），与 home-view 的 onError 同语义。 */
 	readonly onError: (message: string) => void;
-	/**
-	 * 临时任务转正（保存到工作空间）。resolve = 转正完成（成功 toast 由 App 给）；
-	 * reject 的 message 是 daemon 的校验原因，命名弹层原位透出。
-	 */
-	readonly onSaveToWorkspace: (name: string) => Promise<void>;
 	/**
 	 * 当前会话是否具备分支条件：daemon 已注册宿主、会话文件已在盘
 	 * （App 从任务列表的 current 行判定；「会话尚未落盘」时 daemon 连锚点都解析不了）。
@@ -1437,194 +1432,6 @@ function QuickPromptChips({
 	);
 }
 
-/* ── 交互模式切换 ────────────────────────────────────────────────── */
-
-interface ModeSwitchProps {
-	readonly interactions: readonly ModeDescriptor[];
-	readonly currentId: string;
-	readonly onChange: (id: string) => void;
-	readonly onTodo: (feature: string) => void;
-}
-
-/** 交互轴切换（ask / craft / plan），对标 WorkBuddy 的 interactionmode。 */
-function ModeSwitch({
-	interactions,
-	currentId,
-	onChange,
-	onTodo,
-}: ModeSwitchProps): React.JSX.Element {
-	const [open, setOpen] = useState(false);
-	const current = interactions.find((m) => m.id === currentId);
-
-	// Esc 关闭弹层：菜单以 mousedown 外无键盘焦点管理，Esc 是键盘用户唯一的关闭路径
-	//（与 PlusMenu 的 backdrop 互补：一个管指针，一个管键盘）。
-	useEffect(() => {
-		if (!open) return;
-		const onKey = (event: KeyboardEvent): void => {
-			if (event.key === "Escape") setOpen(false);
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [open]);
-
-	// 交互模式切换器只有 ask / craft / plan 三档（专家已不是交互模式，而是与
-	// 模式正交的会话绑定，spec: rework-expert-orthogonal-and-skills）——
-	// 直接平铺 availableModes；专家选择入口统一为「+」菜单专家子菜单与专家页
-	//（spec: rework-expert-center-and-chip，头部不再有专家入口）。
-	return (
-		<div className="menu-zone">
-			<button
-				type="button"
-				className="bar-btn bar-btn-text"
-				aria-haspopup="menu"
-				aria-expanded={open}
-				onClick={() => setOpen((v) => !v)}
-			>
-				{/* 模式清单未到位（availableModes 仍是快照前存的空数组）时不给裸 id：
-				    `craft` 是内部标识，用户既看不懂，它也不是「当前模式」的名字。
-				    行内转圈与其它行内加载位同款，等清单到位后自然换成 label。 */}
-				{current === undefined ? <Spinner size={11} /> : current.label}
-				<IconChevronDown size={13} />
-			</button>
-			{open && (
-				<>
-					{/* 透明 backdrop：点菜单外任意处关闭，与 PlusMenu/PermissionMenu 一致。 */}
-					<button type="button" className="ws-backdrop" aria-label="关闭" onClick={() => setOpen(false)} />
-					<div className="pop-menu mode-menu" role="menu">
-						{interactions.map((mode) => (
-							<button
-								key={mode.id}
-								type="button"
-								className={`mode-menu-item${mode.id === currentId ? " active" : ""}`}
-								role="menuitem"
-								onClick={() => {
-									setOpen(false);
-									// 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），
-									// 但点击给 toast 反馈，而不是发出去让 daemon 报错。
-									if (mode.ready) onChange(mode.id);
-									else onTodo(`「${mode.label}」模式`);
-								}}
-							>
-								<span className="mode-menu-label">
-									{mode.label}
-									{!mode.ready && <span className="mode-menu-tag">待做</span>}
-								</span>
-								<span className="mode-menu-desc">{mode.description}</span>
-							</button>
-						))}
-					</div>
-				</>
-			)}
-		</div>
-	);
-}
-
-/* ── 保存到工作空间（命名弹层） ──────────────────────────────────── */
-
-/**
- * 临时任务转正的命名弹层。
- *
- * 命名即把该任务的自动目录**重命名**为空间名（daemon 在同根下 rename，产物与
- * `.kamibuddy/` 记忆随目录一起过去），所以名称校验的权威在 daemon（兄弟目录/空间组
- * 的知识只在那边）——renderer 不另写一份规则，两份必漂移（AGENTS.md §4）。
- * 错误串原位透出（含 rename 被占用等失败原因，daemon 给什么显示什么，不另建提示链路）。
- * 中文名选词确认的 Enter 不能误提交，IME 守卫与输入框同一份接线（ime-guard.ts）。
- */
-function SaveToWorkspaceDialog({
-	onSave,
-	onClose,
-}: {
-	/** resolve = 转正完成（弹层随之关闭）；reject 的 message 原位透出。 */
-	readonly onSave: (name: string) => Promise<void>;
-	/** 取消与成功共用同一个关法：成功后弹层没有留着的意义。 */
-	readonly onClose: () => void;
-}): React.JSX.Element {
-	const [name, setName] = useState("");
-	const [error, setError] = useState<string | undefined>(undefined);
-	const [submitting, setSubmitting] = useState(false);
-	const ime = useImeGuard();
-
-	/*
-	 * 焦点陷阱 / 归还 / 背景 inert 由共享 hook 负责。
-	 * 输入框的「自动聚焦」不再用 autoFocus：React 的 ref 与 autoFocus 都在 layout 阶段按
-	 * **子先父后**的次序提交，autoFocus 会赶在卡片的 callback ref 之前把焦点拿走，于是 hook
-	 * 记下的「打开它的元素」变成了这个输入框本身 —— 关弹层时它已被摘掉，焦点归还就失效。
-	 * hook 的默认落点（容器内首个可聚焦元素）正是这个输入框，用户看到的效果不变。
-	 */
-	const cardRef = useModalFocus();
-
-	const submit = (): void => {
-		const trimmed = name.trim();
-		if (trimmed === "" || submitting) return;
-		setSubmitting(true);
-		setError(undefined);
-		onSave(trimmed).then(
-			() => onClose(),
-			(saveError: unknown) => {
-				setError(saveError instanceof Error ? saveError.message : String(saveError));
-				setSubmitting(false);
-			},
-		);
-	};
-
-	// Esc 关闭（提交中不关：daemon 正在切换会话，弹层关了用户无从知道结果）。
-	useEffect(() => {
-		const onKey = (event: KeyboardEvent): void => {
-			if (event.key === "Escape" && !submitting) onClose();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [onClose, submitting]);
-
-	return (
-		<div className="modal-backdrop">
-			<div className="save-space-card" role="dialog" aria-modal="true" aria-label="保存到工作空间" ref={cardRef}>
-				<p className="save-space-title">保存到工作空间</p>
-				<p className="save-space-desc">
-					会把当前任务的目录重命名为这个空间名，目录里的产物与记忆一起跟过去；
-					之后的对话也归到这个空间，随时可以从侧栏回来。
-				</p>
-				<input
-					className="save-space-input"
-					value={name}
-					// 弹层里唯一的输入框，自动聚焦即预期（同侧栏重命名行）；
-					// 由 useModalFocus 的默认落点承接，故这里不再写 autoFocus（理由见上方注释）。
-					placeholder="空间名称"
-					aria-label="空间名称"
-					disabled={submitting}
-					onChange={(e) => {
-						setName(e.target.value);
-						// 输入变了旧的错误就失效：留着会让用户以为新名字也有同样问题。
-						setError(undefined);
-					}}
-					onCompositionStart={ime.bind.onCompositionStart}
-					onCompositionEnd={ime.bind.onCompositionEnd}
-					onKeyDown={(e) => {
-						if (e.key !== "Enter" || e.defaultPrevented) return;
-						e.preventDefault();
-						if (ime.shouldSwallowNow()) return;
-						submit();
-					}}
-				/>
-				{error !== undefined && <ErrorState message={error} />}
-				<div className="save-space-actions">
-					<button type="button" className="mini-btn" disabled={submitting} onClick={onClose}>
-						取消
-					</button>
-					<button
-						type="button"
-						className="primary-btn"
-						disabled={submitting || name.trim() === ""}
-						onClick={submit}
-					>
-						保存
-					</button>
-				</div>
-			</div>
-		</div>
-	);
-}
-
 /* ── 主体 ────────────────────────────────────────────────────────── */
 
 /** 距底多少像素内算「在底部」：覆盖子像素与平滑滚动的末段抖动。 */
@@ -1653,7 +1460,6 @@ export function ChatView({
 	onOpenSources,
 	onOpenSettings,
 	onError,
-	onSaveToWorkspace,
 	branchAvailable,
 	onRestartFrom,
 	onBranchFrom,
@@ -1669,8 +1475,6 @@ export function ChatView({
 }: ChatViewProps): React.JSX.Element {
 	// 等待 tips 的「× 关闭」：会话级（本组件存活期内）承诺，跨回合不复活。
 	const [tipsDismissed, setTipsDismissed] = useState(false);
-	// 「保存到工作空间」命名弹层的开合；输入态由弹层组件自持（关掉即重置）。
-	const [saveOpen, setSaveOpen] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）。
 	const composerRef = useRef<ComposerHandle>(null);
@@ -2536,27 +2340,11 @@ export function ChatView({
 					{title}
 				</span>
 				{/*
-				临时任务的转正入口（对标 WorkBuddy 头部「保存到工作空间」）。
-				只有临时任务显示：命名空间的会话不需要再转一次。
-				流式中禁用 —— daemon 也会拒，但按钮置灰比弹层里报错直观。
+				头部只留返回 + 标题（2026-09-17 试用反馈）：模式开关与「保存到
+				工作空间」都从这里去掉 —— 模式切换的唯一入口是输入框「＋」菜单
+				（对齐 WorkBuddy：它的三档模式只在 wb-input-add 里，头部没有开关），
+				当前处于非默认模式时由底栏的模式 chip 标出。
 			*/}
-				{conversation.state.isTempTask === true && (
-					<button
-						type="button"
-						className="bar-btn bar-btn-text"
-						disabled={!ready || streaming}
-						title={streaming ? "任务进行中，停止后可保存" : "保存到工作空间"}
-						onClick={() => setSaveOpen(true)}
-					>
-						保存到工作空间
-					</button>
-				)}
-				<ModeSwitch
-					interactions={conversation.availableModes}
-					currentId={conversation.state.interactionId}
-					onChange={onInteractionChange}
-					onTodo={onTodo}
-				/>
 			</header>
 
 			{/* 成员聚焦横幅（spec 批 8）：可见会话是团队成员时标注，提供返回主会话。
@@ -2801,6 +2589,16 @@ export function ChatView({
 			*/}
 							<PermissionMenu onOpenSettings={onOpenSettings} onError={onError} />
 							{/*
+				当前模式 chip：非默认档（plan / ask）时出现，切换入口在左边「＋ → 模式」
+				（头部那个三档开关已按 2026-09-17 试用反馈去掉）。排在权限之后、
+				专家之前 —— 三者都是「本会话此刻的开关态」，同属底栏左区。
+			*/}
+							<ModeChip
+								interactions={conversation.availableModes}
+								currentId={conversation.state.interactionId}
+								onChange={onInteractionChange}
+							/>
+							{/*
 				当前专家 chip（WorkBuddy 底栏左区、默认权限旁的同款位置）：静态展示，
 				hover/focus-within 头像原位变 ×，点击取消选中（setExpert(undefined)
 				只清专家、不动交互模式）。列表里找不到（未拉回/已删除）时不渲染 —— chip
@@ -2841,12 +2639,6 @@ export function ChatView({
 					</>
 				)}
 			</footer>
-			{saveOpen && (
-				<SaveToWorkspaceDialog
-					onSave={onSaveToWorkspace}
-					onClose={() => setSaveOpen(false)}
-				/>
-			)}
 		</main>
 	);
 }

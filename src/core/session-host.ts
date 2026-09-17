@@ -445,7 +445,7 @@ export interface SessionHostOptions {
  * 宿主代际号（模块级自增，进程内唯一）。
  *
  * 为什么 id 必须带代际前缀：`idSeq` 是**宿主实例内**的计数器，而宿主会被重建
- * （daemon 重启、resume 的 remountHostInBucket、转正失败后的 reopenHost），
+ * （daemon 重启、resume 的 remountHostInBucket、restartSession 的回退重建），
  * 计数器随之从 1 重来 —— 同一串 `assistant-3` / `user-2` 于是对应多条真实不同的
  * 消息。实测（会话 01a0ae75 的事件日志，宿主代际切换 4 次；多个 id 跨代复用：`run-1` / `user-2` / `assistant-3` 各出现 3 次，另有数个 assistant id 各 2 次）：
  * `entry.id` 同时是 React key、`turnTimings` 的键、`cancelledTurns` 的元素、

@@ -54,7 +54,6 @@ const bridge: KamiBridge = {
 	archiveSession: (path, archived) =>
 		ipcRenderer.invoke(INVOKE.sessionArchive, path, archived),
 	exportSession: (path) => ipcRenderer.invoke(INVOKE.sessionExport, path),
-	saveToWorkspace: (name) => ipcRenderer.invoke(INVOKE.saveToWorkspace, name),
 
 	workspaceSnapshot: () => ipcRenderer.invoke(INVOKE.workspaceSnapshot),
 	createWorkspace: (name) => ipcRenderer.invoke(INVOKE.createWorkspace, name),

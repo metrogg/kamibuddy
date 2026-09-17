@@ -15,6 +15,7 @@ import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ExpertChip } from "./expert-chip.tsx";
 import { ModelMenu } from "./model-menu.tsx";
+import { ModeChip } from "./mode-chip.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
 import { EmptyState, LoadingState } from "./state-views.tsx";
@@ -56,7 +57,7 @@ interface HomeViewProps {
 	readonly availableThinkingLevels?: readonly ThinkingLevel[];
 	/** 当前工作空间目录（session_state.cwd）。undefined 仅是会话尚未建立的初始瞬态。 */
 	readonly cwd: string | undefined;
-	/** 交互轴选项（「+」菜单的模式子菜单数据源），与对话页头部 ModeSwitch 同源。 */
+	/** 交互轴选项（「+」菜单的模式子菜单与模式 chip 的数据源），与对话页同源。 */
 	readonly interactions: readonly ModeDescriptor[];
 	readonly interactionId: string;
 	readonly onInteractionChange: (interactionId: string) => void;
@@ -287,6 +288,16 @@ export function HomeView({
 									onOpenSkills={onOpenSkills}
 									onOpenConnectors={onOpenConnectors}
 									onTodo={onTodo}
+								/>
+								{/*
+							当前模式 chip：与对话页同款同位置（「+」按钮之后、专家 chip 之前）。
+							首页也能经「+ → 模式」换档，换了就得看得见 —— 否则用户带着
+							只在问答模式发出去的第一条消息进对话页，才发现工具被限制了。
+						*/}
+								<ModeChip
+									interactions={interactions}
+									currentId={interactionId}
+									onChange={onInteractionChange}
 								/>
 								{/*
 							当前专家 chip：与「+」按钮同一行、紧随其后（WorkBuddy 底栏

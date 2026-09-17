@@ -171,13 +171,6 @@ export const INVOKE = {
 	 * 返回导出文件的绝对路径。
 	 */
 	sessionExport: "session:export",
-	/**
-	 * 把当前临时任务会话「保存到工作空间」转正：把该任务目录在生效根下重命名为
-	 * name（自动目录整体 rename，产物与记忆随目录迁移；历史共享临时目录等非自动
-	 * 目录回退为新建目录），会话以新 cwd 重建并归入新空间组。
-	 * name 经 daemon 校验（工作空间命名规则）；当前会话非临时任务时由 daemon 拒绝。
-	 */
-	saveToWorkspace: "session:save-to-workspace",
 	/** 拉取当前工作空间与可选列表（默认根 + 已有子目录）。 */
 	workspaceSnapshot: "workspace:snapshot",
 	/** 在默认根下新建工作空间并切换过去。返回生效的目录路径。 */
@@ -926,7 +919,6 @@ export interface InvokeMap {
 	};
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
 	[INVOKE.sessionExport]: { args: [path: string]; result: { outputPath: string } };
-	[INVOKE.saveToWorkspace]: { args: [name: string]; result: void };
 	[INVOKE.workspaceSnapshot]: { args: []; result: WorkspaceSnapshot };
 	[INVOKE.createWorkspace]: { args: [name: string]; result: string };
 	[INVOKE.setWorkspace]: { args: [path: string]; result: string | undefined };

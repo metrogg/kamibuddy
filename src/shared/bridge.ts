@@ -150,9 +150,6 @@ export interface KamiBridge {
 	readonly archiveSession: (path: string, archived: boolean) => Promise<void>;
 	/** 导出会话为单文件 HTML。空会话会 reject 原因；成功返回导出文件绝对路径。 */
 	readonly exportSession: (path: string) => Promise<{ outputPath: string }>;
-	/** 把当前临时任务「保存到工作空间」转正。名称非法/重名、或当前会话非临时任务时 reject 原因。 */
-	readonly saveToWorkspace: (name: string) => Promise<void>;
-
 	/** 拉取当前工作空间与可选列表。 */
 	readonly workspaceSnapshot: () => Promise<WorkspaceSnapshot>;
 	/** 在默认根下新建工作空间并切换。名称非法或重名时 reject 原因。 */

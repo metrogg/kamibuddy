@@ -141,6 +141,31 @@ describe("提取与截断", () => {
 		expect(page.markdown).toContain("已截断");
 	});
 
+	/*
+	 * 空体 / 无标签 HTML：linkedom 对这种输入给的 documentElement 是 **null**，
+	 * 它的 `document.head` getter 会直接解构 null 并抛出
+	 * `Cannot destructure property 'firstElementChild' of 'documentElement' as it is null.`
+	 * —— 那句话曾原样冒到模型和用户面前（2026-09-17 实踩：公司网络里被代理拦下的
+	 * 站点回 200 + 空体，Content-Type 仍是 text/html，前面四道校验全放行）。
+	 *
+	 * 两条断言缺一不可：`toContain("提取到内容")` 钉我们的文案，
+	 * `not.toContain("firstElementChild")` 钉「库的内部错误不许漏出去」——
+	 * 光有前者的话，没有守卫时抛的是库错误，文案天然不匹配，测试照样红，
+	 * 但那说明不了漏出的内容；有了后者，这条回归才指向真正要守的东西。
+	 */
+	it("空响应体 / 无标签 HTML 报无内容，且不泄漏库的内部错误", async () => {
+		const bodies = ["", "   \n\t ", "<!-- 被代理拦下 -->", "Blocked by corporate proxy"];
+		for (const body of bodies) {
+			const error = await fetchPage("https://example.com/empty", { fetchImpl: htmlFetch(body) }).then(
+				() => undefined,
+				(caught: unknown) => caught as Error,
+			);
+			expect(error, JSON.stringify(body)).toBeInstanceOf(Error);
+			expect(error?.message, JSON.stringify(body)).toContain("提取到内容");
+			expect(error?.message, JSON.stringify(body)).not.toContain("firstElementChild");
+		}
+	});
+
 	it("纯噪声页面报无正文", async () => {
 		const noise = `<!DOCTYPE html><html><head><title>x</title></head><body><script>var a=1</script><a href="#" onclick="alert(1)">y</a></body></html>`;
 		await expect(fetchPage("https://example.com/noise", { fetchImpl: htmlFetch(noise) })).rejects.toThrow(

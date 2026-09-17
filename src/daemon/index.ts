@@ -15,7 +15,6 @@ import {
 	existsSync,
 	mkdirSync,
 	openSync,
-	readdirSync,
 	readFileSync,
 	readSync,
 	renameSync,
@@ -159,12 +158,10 @@ import {
 } from "./session-registry.ts";
 import {
 	allocatePendingCwd,
-	isOwnedSessionDir,
 	isRevealableCwd,
 	isSelectableWorkspaceDir,
 	isTaskCwd,
 	isTaskPrivateCwd,
-	promoteSessionDir,
 } from "./workspace-model.ts";
 import type {
 	DaemonOutbound,
@@ -1824,8 +1821,8 @@ async function disbandTeamOf(leaderSessionId: string): Promise<void> {
  * 并发取宿主拿到同一个 promise；失败的 promise 不缓存（清回 undefined），
  * 用户配好模型后重试才有效。
  *
- * 建成即 adoptHost 注册（pristine 桶唯一的注册点，resume/saveToWorkspace
- * 有自己的注册路径）：不入表则信封 sessionId 全程空串、listSessions 的
+ * 建成即 adoptHost 注册（pristine 桶唯一的注册点，resume 有自己的注册
+ * 路径）：不入表则信封 sessionId 全程空串、listSessions 的
  * current/running 标不上、resume 同一文件还会开出第二个宿主
  * （同文件双写禁区）（2026-09-10 实踩：并发版首日这个注册点就缺失）。
  */
@@ -1991,7 +1988,7 @@ async function createHost(
 	 * 会话内已选档（pristine 桶经 setThinkingLevel 记档）优先于全局默认
 	 *（preferences.thinkingLevel）；都未配置时不带该键，pi 走自己的
 	 * medium 默认链。
-	 * resume / saveToWorkspace 重建路径（带 sessionManager）绝不传 ——
+	 * resume 重建路径（带 sessionManager）绝不传 ——
 	 * pi 的 options.thinkingLevel 优先级高于会话文件里的
 	 * thinking_level_change 条目，传了会毁掉逐会话还原
 	 *（core/session-host.ts 该选项的同源注释）。
@@ -2338,7 +2335,7 @@ async function createHost(
 			 * （automation-runner）不注册 task（无人值守下的递归委派明确不做）。
 				 * cwd 在此注入：子代理与主会话同一工作空间，产物落在用户看得见的地方。
 				 * spawn 预算按桶计（session-registry 的 SPAWN_BUDGET_PER_SESSION）：
-				 * 换桶即新预算，saveToWorkspace 原地换 cwd 不换桶、不复位。
+				 * 换桶即新预算，同一只桶内不复位（会话切 cwd 不换桶）。
 				 */
 		taskExtensionFactory({
 			runSubagent: (request) => subagentRunner.run({ ...request, cwd }),
@@ -2734,38 +2731,6 @@ function moveToTrash(filePath: string): void {
 }
 
 /**
- * 改写会话文件头部（首行 JSON）的 cwd —— 转正后归组的前提。
- *
- * 空间分组派生自会话文件 header.cwd（listSessions → listWorkspaceGroups），
- * 而 pi 的 SessionManager.open(cwdOverride) 只改内存值、不落盘：不改首行，
- * 侧栏刷新后该会话仍挂任务区，「归入空间区」不成立。首行即 SessionHeader
- * （pi docs/session-format.md），整文件重写只动这一个键，其余条目原样保留。
- *
- * 调用时持有该文件的宿主必须已 dispose：pi 的 SessionManager 各自缓存
- * entries，同一文件两个活写者会互相覆盖（sessionRename 注释的同一结论）。
- */
-function rewriteSessionHeaderCwd(filePath: string, cwd: string): void {
-	const content = readFileSync(filePath, "utf8");
-	const newline = content.indexOf("\n");
-	const firstLine = newline === -1 ? content : content.slice(0, newline);
-	const header: unknown = JSON.parse(firstLine);
-	if (
-		typeof header !== "object" ||
-		header === null ||
-		(header as { type?: unknown }).type !== "session"
-	) {
-		throw new Error("会话文件缺少头部，无法保存到工作空间");
-	}
-	// newline === -1（文件只有一行头）时补一个换行，保持 JSONL 行尾约定。
-	const rest = newline === -1 ? "\n" : content.slice(newline);
-	writeFileSync(
-		filePath,
-		JSON.stringify({ ...(header as Record<string, unknown>), cwd }) + rest,
-		"utf8",
-	);
-}
-
-/**
  * 空间组集合：非临时任务会话的 cwd 去重，合并显示名覆盖。
  *
  * 临时任务（自动分配目录、历史共享临时目录、旧 playground 占位）归任务区、不成组 ——
@@ -3072,168 +3037,6 @@ async function mountSessionFile(options: {
 	return { bucket, contextUsage: rebuilt.contextUsage };
 }
 
-/**
- * 用原 cwd 同文件重开宿主（saveToWorkspace 的失败恢复路径）。
- *
- * 转正流程中途失败时宿主已 dispose，但会话必须仍可用，所以按正常「open → createHost →
- * adoptHost」把它重新打开。调用方负责先把 bucket.cwd 复位到原 cwd。
- */
-async function reopenHost(bucket: SessionBucket<SessionHost>, sessionFile: string): Promise<void> {
-	const manager = SessionManager.open(sessionFile, getSessionsDir());
-	const attempt = createHost(bucket, manager);
-	bucket.hostPromise = attempt;
-	adoptHost(bucket, await attempt);
-}
-
-/**
- * 「保存到工作空间」：临时任务转正为命名空间。
- *
- * 这是**原地转正**：会话文件不动位置、消息历史不动、sessionId 不变，只把该任务的
- * 独立目录改名成空间名、重写 header.cwd（归组键），并以新 cwd 重建宿主（cwd 在建
- * 会话时一次性注入工具集，见 createHost）。桶与桶内 conversation 原样保留，
- * 不需要 resume 那套 entries 重建。
- *
- * 为什么是「重命名目录」而不是旧的「另建命名目录 + 切 cwd」（spec: align-per-task-dirs）：
- * 每任务已有独立目录，产物与 `<cwd>/.kamibuddy/` 记忆都在里面，整体 rename 即随目录
- * 迁移；另建目录会把产物留在旧目录、记忆断档。这是对 WorkBuddy 的改良（它只加显示名、
- * 目录仍叫时间戳，时间戳目录会永久堆积）。
- *
- * 同会话写操作：整个流程排进当前桶的互斥链（session-registry.ts），与该会话的
- * prompt / compact 串行 —— dispose/重建宿主绝不能与 run 并发。链上执行时上一 run 必已
- * 收尾；流式守卫保留为不变式断言 —— 若它触发说明存在绕过互斥链的起 run 路径，
- * 响亮失败好过带着流式态拆宿主（pi 的 compact/重建对流式会话语义不明）。
- *
- * dispose 与 rename 的先后（**先 dispose，再 rename**，理由写在这里备查）：
- * 宿主持有可能占用 cwd 的资源（MCP 子进程的 cwd、扩展打开的文件句柄），Windows 上
- * 被占用的目录 rename 会 EPERM/EBUSY —— 先 dispose 让这些占用随之释放，改名才尽
- * 可能成功。代价是改名失败时宿主已销毁，必须用**原 cwd 同文件重开宿主**恢复
- *（见 catch），保证失败后会话仍可用、不留不可用状态。
- *
- * 失败原子性：
- *   - 守卫 / 名称校验 / 目标存在性检查全在 dispose 之前完成；
- *   - 改名失败 → 恢复宿主 + 响亮报错（可读提示：关闭占用程序后重试），目录与 cwd 原样；
- *   - header 改写失败 → 把目录改回原名并复位 cwd、恢复宿主（否则 header 指向已被改走的
- *     旧路径，resume 会凭空补出一个空目录）；
- *   - 重建宿主失败 → 出表让会话回到「未打开」态（文件与历史在盘，resume 可重开）。
- */
-async function saveToWorkspace(name: string): Promise<void> {
-	const bucket = currentBucket;
-	await enqueue(bucket, async () => {
-		if (bucket.running)
-			throw new Error("任务进行中，请先停止当前任务");
-		const hostPromise = bucket.hostPromise;
-		if (hostPromise === undefined)
-			throw new Error("还没有会话，请先开始任务");
-		// 会话与 cwd 终身绑定，当前 cwd 即会话身份；临时判定读桶的权威 cwd。
-		if (!isTempCwd(bucket.cwd))
-			throw new Error("只有临时任务可以保存到工作空间");
-
-		const root = getEffectiveWorkspaceRoot();
-
-		/*
-		 * siblings = 生效根下现有子目录名 + 现有外部空间组名（显示名覆盖优先）。
-		 * 复用显示名校验是因为命名规则同族（非空/非法字符/255/重名/保留名），
-		 * 但这里创建的是**真实目录**不是显示名覆盖 —— 所以根下子目录必须在
-		 * siblings 里（显示名校验只看组名的话，根下已有的非组目录会漏网）。
-		 * 根不存在按空数组：走到这里任务目录已建过（createHost 的分配 / mkdir），根
-		 * 理应存在，ENOENT 只可能是用户刚手删 —— 按「还没有任何兄弟」继续；下面的落盘
-		 * 会把根补建（回退分支的 mkdir 递归补建；rename 分支的源目录本就在根下，根必在）。
-		 */
-		let dirNames: string[] = [];
-		try {
-			dirNames = readdirSync(root, { withFileTypes: true })
-				.filter((entry) => entry.isDirectory())
-				.map((entry) => entry.name);
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-		}
-		const groupNames = (await listWorkspaceGroups()).map(
-			(g) => g.displayName ?? basename(g.cwd),
-		);
-		const trimmed = name.trim();
-		const nameError = validateDisplayName(trimmed, [...dirNames, ...groupNames]);
-		if (nameError !== undefined) throw new Error(nameError);
-
-		/*
-		 * 「存在即拒」而非静默复用：validateDisplayName 的重名只查 sibling 名，
-		 * 根下存在同名**文件**（不是目录，readdir 过滤掉了）或校验后竞态冒出的
-		 * 占用都会漏过去。静默复用别人/别的任务的目录比报错更糟 —— 产物会
-		 * 混进一堆陌生文件里，用户以为是自己任务的成果。
-		 */
-		const target = join(root, trimmed);
-		if (existsSync(target)) throw new Error("该名称的目录已存在");
-
-		/* ── 切换前：做完所有可能失败的验证，此刻会话毫发无损 ── */
-
-		const host = await hostPromise;
-		const sessionFile = host.sessionFilePath;
-		// 本应用的会话都是持久化的（SessionManager.create 走 sessions 目录），
-		// undefined 只出现在 pi 的 in-memory 形态 —— 真遇到就是上游语义变了，响亮失败。
-		if (sessionFile === undefined)
-			throw new Error("会话尚未落盘，无法保存到工作空间");
-
-		const originalCwd = bucket.cwd;
-		// 独占自动目录才可整体 rename；历史共享临时目录等走 promoteSessionDir 的回退分支
-		//（见其注释），回退分支没有「改回原名」这一说。
-		const renamed = isOwnedSessionDir(originalCwd);
-
-		/* ── 切换点：dispose → 目录改名 → 重写归组键 → 同文件同 id 重建宿主 ── */
-
-		host.dispose();
-
-		try {
-			// rename 分支整体改名（产物与记忆随目录走）；共享临时目录走 mkdir 回退。
-			promoteSessionDir(originalCwd, target);
-		} catch (error) {
-			// 改名失败（目录被占用 / 无权限 / 跨卷）：宿主已 dispose，用原 cwd 重开恢复可用。
-			await reopenHost(bucket, sessionFile);
-			const detail = error instanceof Error ? error.message : String(error);
-			throw new Error(`目录重命名失败（${detail}）。请关闭占用该目录的程序后重试`);
-		}
-
-		bucket.cwd = target;
-
-		// 预览服务按 cwd 懒建（多根池），与 applyWorkspace / resumeSession 同口径。
-		await previewServers.ensure(target);
-
-		try {
-			// 归组键改写必须先于 open：open 读 header 定内存 cwd，分组读 header 定归组。
-			rewriteSessionHeaderCwd(sessionFile, target);
-		} catch (error) {
-			// header 没改成功：把目录改回原名、cwd 复位，再恢复宿主 —— 否则 header 仍
-			// 指向已被改走的旧路径，resume 会凭空补出一个空目录、用户以为产物丢了。
-			if (renamed) {
-				try {
-					renameSync(target, originalCwd);
-				} catch {
-					// 回退 rename 也失败（极少）：目录留在 target、header 仍指旧路径，
-					// 交给 resume 按 header 补目录 —— 比在这里静默吞掉更可排查。
-				}
-			}
-			bucket.cwd = originalCwd;
-			await reopenHost(bucket, sessionFile);
-			throw error;
-		}
-
-		// 复用 createHost 的全部组装（扩展、两轴、权限门、当前模型选择）。
-		// SessionManager.open 重新打开同一文件：header 已是新 cwd，sessionId 不变
-		//（adoptHost 按同 id 重新入注册表，覆盖同一只桶）。
-		const manager = SessionManager.open(sessionFile, getSessionsDir());
-		const attempt = createHost(bucket, manager);
-		bucket.hostPromise = attempt;
-		try {
-			adoptHost(bucket, await attempt);
-		} catch (error) {
-			// 重建失败时旧宿主已 dispose：出表让会话回到「未打开」态
-			//（文件与历史在盘，header 已指向 target，resume 可完整重开）—— 不留
-			//「注册了却没有宿主」的僵尸桶，否则下次 prompt 会在旧 id 名下静默开出新会话文件。
-			bucketsById.delete(bucket.sessionId);
-			bucket.hostPromise = undefined;
-			throw error;
-		}
-		pushTaskListChanged(); // isTempTask / 归组变了
-	});
-}
 
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
 
@@ -3424,7 +3227,7 @@ async function resolveBranchAnchor(
  *   ① 抽枝（仅当分叉点之后确有内容）：**先写分支文件、再动母文件**。顺序反了就是
  *      数据丢失 —— 母文件已截断而分支没写成，被放弃的那段内容就没有第二份了。
  *   ② dispose 母宿主 → 截断母文件 → 同文件重建：session-file 的写契约是「写入前
- *      宿主必须已 dispose」，重建顺序照抄 saveToWorkspace 那套成熟范式。
+ *      宿主必须已 dispose」（resumeSession 同一套重建次序）。
  *   ③ 历史清空只能走 history_reset（session_state 不动 entries），且要**同步**填回
  *      重建结果 —— 理由见 applyRebuiltConversation。
  *
@@ -3445,7 +3248,7 @@ async function restartSession(
 	// —— 排进去要等 run 收尾才轮到，用户这次点击会被静默吞掉（他要的是「稍后再试」）。
 	if (bucket.running) return branchFail("busy");
 	return enqueue(bucket, async () => {
-		// 链上不变式断言（同 saveToWorkspace / compact）：run 在链上占整段，走到这里
+		// 链上不变式断言（同 compact）：run 在链上占整段，走到这里
 		// 仍 running 说明存在绕过互斥链的起 run 路径。
 		if (bucket.running) return branchFail("busy");
 		const anchor = await resolveBranchAnchor(bucket, userIndex);
@@ -3502,8 +3305,8 @@ async function restartSession(
 			eventLog.append({ kind: "ipc_error", channel: INVOKE.sessionRestart, message: detail });
 			/*
 			 * 母文件已是「回退后」的形态、分支文件也已在盘（内容不丢），但宿主没能重建：
-			 * 出表让会话回到「未打开」态（同 saveToWorkspace 的失败恢复），下次 resume
-			 * 可正常重开。留着「注册了却没有宿主」的僵尸桶，下次 prompt 会在旧 id 名下
+			 * 出表让会话回到「未打开」态（文件与历史都在盘上），下次 resume 可正常
+			 * 重开。留着「注册了却没有宿主」的僵尸桶，下次 prompt 会在旧 id 名下
 			 * 静默开出新会话文件。
 			 */
 			bucketsById.delete(bucket.sessionId);
@@ -4006,7 +3809,7 @@ const handlers: Record<string, Handler> = {
 	},
 
 	// 会话分支（spec: add-session-branching）：两条流程都排进该会话的互斥链，
-	// 与 prompt / rename / delete / saveToWorkspace 串行（见 restartSession /
+	// 与 prompt / rename / delete 串行（见 restartSession /
 	// forkSession 的顺序注释）。拒绝走返回值而不是 reject（reason 是界面文案的
 	// 分支依据，契约见 shared/ipc.ts 的 SessionBranchResult）。
 	[INVOKE.sessionRestart]: async ([path, userIndex, options]) =>
@@ -4107,9 +3910,6 @@ const handlers: Record<string, Handler> = {
 		await host.exportHtml(outputPath);
 		return { outputPath };
 	},
-
-	// 临时任务转正：命名 → 根下把任务目录 rename 为空间名（自动目录整体改名，非自动目录回退建新目录）→ 当前会话以新 cwd 重建（见 saveToWorkspace）。
-	[INVOKE.saveToWorkspace]: async ([name]) => saveToWorkspace(name as string),
 
 	/*
 	 * worktree（对齐清单 C22 / L27）。两者都不碰既有会话：
