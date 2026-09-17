@@ -1285,6 +1285,60 @@ describe("turn 边界 → 台账 llm_call", () => {
 		});
 	});
 
+	it("llm_call 在助手 message_end 结算：窗口不含本轮工具，条目排在本轮工具之前", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession();
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		runStarted(host);
+		translate(host, { type: "turn_start" } as unknown as AgentSessionEvent);
+		assistantStart(host);
+		assistantEnd(host, "toolUse");
+		// 本轮的工具在助手消息之后才跑：pi 的 turn_end 要等它们全跑完才发
+		//（agent-session.js "A turn ends after its assistant message and every
+		// tool result has been appended"），所以窗口的右端点只能取 message_end。
+		translate(host, {
+			type: "tool_execution_start",
+			toolCallId: "c1",
+			toolName: "task",
+			args: {},
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "task",
+			isError: false,
+			result: { content: [] },
+		} as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "turn_end",
+			message: {
+				role: "assistant",
+				content: "",
+				stopReason: "toolUse",
+				usage: USAGE,
+				timestamp: 1,
+			},
+			toolResults: [],
+		} as unknown as AgentSessionEvent);
+
+		const llm = calls.find((c) => c.kind === "llm_call")?.data as {
+			startedAt: number;
+			endedAt: number;
+		};
+		const tool = calls.find((c) => c.kind === "tool_call")?.data as {
+			startedAt: number;
+		};
+		// 窗口右端不晚于工具开始 —— 含工具执行的话 tok/s 的分母就会被撑大。
+		expect(llm.endedAt).toBeLessThanOrEqual(tool.startedAt);
+		// 写入序：llm_call 先于本轮工具。renderer 的 foldRunSteps 按位置归属工具，
+		// 顺序反了每轮的工具就挂到上一步头上（2026-09-17 修的就是这个）。
+		const kinds = calls.map((c) => c.kind);
+		expect(kinds.indexOf("llm_call")).toBeLessThan(kinds.indexOf("tool_call"));
+		// turn_end 不再重复结算（一次调用只有一条 llm_call）。
+		expect(kinds.filter((k) => k === "llm_call")).toHaveLength(1);
+	});
+
 	it("tool_call 条目是执行期口径（execution_start → end），不含参数生成期", () => {
 		const { ledger, calls } = createFakeLedger();
 		const { session } = createLedgerSession();

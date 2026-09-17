@@ -422,6 +422,28 @@ describe("首字延迟与解码速度（会话级，对齐 dsh sessionStats）",
 		expect(snapshotOf(store).sessions[0]?.cacheHitRate).toBeCloseTo(0.75, 10);
 	});
 
+	it("provider 从未上报过缓存活动 → 命中率留空（不是 0%），并标记 cacheReported=false", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		// 无缓存能力的服务商：pi 把 cacheRead/cacheWrite 一律填 0，直接算就是
+		// 误导性的「命中 0%」（2026-09-17 修正）。
+		foldCalls(store, [llmCall(0, 1000, 2000, promptUsage(5000, 0, 0), 100)]);
+
+		expect(snapshotOf(store).sessions[0]).toMatchObject({
+			cacheReported: false,
+			cacheHitRate: undefined,
+		});
+	});
+
+	it("cacheWrite 也算缓存活动的证据：写缓存但本轮没命中 → 0%，不是留空", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldCalls(store, [llmCall(0, 1000, 2000, promptUsage(100, 0, 500), 100)]);
+
+		expect(snapshotOf(store).sessions[0]).toMatchObject({
+			cacheReported: true,
+			cacheHitRate: 0,
+		});
+	});
+
 	it("没跑过台账的会话，sessionCard 返回 undefined（调用方据此不推）", () => {
 		const store = new ObservabilityStore(() => 1000);
 		expect(store.sessionCard("nope")).toBeUndefined();

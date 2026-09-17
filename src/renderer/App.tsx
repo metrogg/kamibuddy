@@ -1504,6 +1504,9 @@ export function App(): React.JSX.Element {
 						// 面板只服务本地文件（静态服务根=工作区）。
 						if (/^https?:\/\//i.test(path)) openArtifact(path);
 						else {
+							// panelOpen 是渲染门的唯一开关：面板被用户收起后再点产物卡，
+							// 只写 previewTabs/previewActive 会静默无反应（点了没动静）。
+							setPanelOpen(true);
 							// 来源面板开着时先翻回产物面板（同位互斥），否则预览不可见。
 							setSourcesOpen(false);
 							openPreview({ kind: "file", path });
@@ -1513,6 +1516,8 @@ export function App(): React.JSX.Element {
 					onOpenPanelGroup={(_group) => {
 						// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
 						// 面板概览视图里常驻展示，无需额外展开动作。
+						// 与 onPreviewArtifact 同理，漏了 setPanelOpen 面板就不会露面。
+						setPanelOpen(true);
 						// 来源面板开着时先翻回产物面板（同位互斥）。
 						setSourcesOpen(false);
 						const first = conversation.artifacts[0];

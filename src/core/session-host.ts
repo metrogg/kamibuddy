@@ -13,8 +13,10 @@
  *    工具卡片是例外：toolCallId 本身稳定，直接用。
  *
  * 2. **turn 级事件对 UI 无意义** —— 用户看到的是一条条消息和工具卡片，不是「轮」。
- *    turn_start / turn_end 仍不往上传，但不白吞：它们是单次模型调用的边界，
- *    进运行台账（llm_call 条目，spec: add-observability-ledger）。
+ *    turn_start / turn_end 仍不往上传，但不白吞：单次模型调用的边界进运行台账
+ *    （llm_call 条目，spec: add-observability-ledger）。**边界取 turn_start →
+ *    助手 message_end，不取 turn_end** —— pi 的 turn_end 在本轮工具跑完之后才发，
+ *    用它会把工具耗时算进模型耗时（settleLlmCall 有完整根因）。
  */
 
 import {
@@ -488,9 +490,9 @@ export class SessionHost {
 	private lastClosedRunId: string | undefined;
 	/** 台账 run 内的 turn 计数（llm_call 条目的 turnIndex）。 */
 	private ledgerTurnIndex = 0;
-	/** 当前 turn 的开始时刻（turn_start 记账，turn_end 结算 llm_call）。 */
+	/** 当前 turn 的开始时刻（turn_start 记账，助手 message_end 结算 llm_call）。 */
 	private turnStartedAt: number | undefined;
-	/** 当前 turn 首个 text/thinking delta 的到达时刻（TTFT 基准）。 */
+	/** 当前 turn 首个输出 delta 的到达时刻（TTFT 基准，见 markFirstOutput）。 */
 	private turnFirstDeltaAt: number | undefined;
 	/** 执行中的工具调用（toolCallId → 开始现场），tool_execution_end 结算 tool_call 条目。 */
 	private readonly openLedgerTools = new Map<
@@ -1061,8 +1063,8 @@ export class SessionHost {
 	 * （AGENTS.md §7：不写防御性兜底掩盖上游问题）。
 	 *
 	 * 只处理 UI 真正需要的那几类；turn_start / turn_end 不上传但进台账
-	 * （llm_call），auto_retry / queue_update 台账与转发都做（renderer 的
-	 * 重试状态行 / 排队徽标）。其余未知类型忽略。
+	 * （llm_call 的起止，见 settleLlmCall），auto_retry / queue_update 台账与转发都做
+	 * （renderer 的重试状态行 / 排队徽标）。其余未知类型忽略。
 	 * 不写 default 分支抛错：pi 会持续新增事件类型，未知类型忽略才是正确行为。
 	 */
 	private translate(event: AgentSessionEvent): void {
@@ -1270,35 +1272,11 @@ export class SessionHost {
 				// turn 结束（含 abort 收尾）必须 flush：本 turn 最后一批 delta 不能拖到
 				// 窗口到期才发，否则会落到终态之后（内容边界与顺序都错）。正常时序下
 				// message_end 已先 flush，这里是幂等的兜底。
+				//
+				// **台账 llm_call 不在这里结算**（2026-09-17 修正）：pi 的 turn_end 是
+				// 「这一轮全部结束」（工具结果都 append 完才 emit），挂在这里会把本轮
+				// 工具耗时算进模型耗时。结算点已挪到助手 message_end，理由见 settleLlmCall。
 				this.flushDeltas();
-				const startedAt = this.turnStartedAt;
-				this.turnStartedAt = undefined;
-				// turn_start 缺失（理论上不发生，见 turn_start 注释）就不造条目 ——
-				// 编一个 startedAt=endedAt 的假跨度比丢一条更难查。
-				if (startedAt === undefined) return;
-				const endedAt = Date.now();
-				const turnIndex = this.ledgerTurnIndex - 1;
-				const message = event.message;
-				const assistant = message.role === "assistant" ? message : undefined;
-				this.ledger?.append("llm_call", {
-					...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
-					turnIndex,
-					startedAt,
-					endedAt,
-					...(this.turnFirstDeltaAt === undefined
-						? {}
-						: { ttftMs: this.turnFirstDeltaAt - startedAt }),
-					...(assistant === undefined
-						? {}
-						: {
-							stopReason: assistant.stopReason,
-							usage: toTokenUsage(assistant.usage),
-							...(assistant.errorMessage === undefined
-								? {}
-								: { errorMessage: assistant.errorMessage }),
-						}),
-				});
-				this.turnFirstDeltaAt = undefined;
 				return;
 			}
 
@@ -1353,6 +1331,8 @@ export class SessionHost {
 				 * 这条路径不依赖 currentAssistantId（卡片定位靠 toolCallId），放最前。
 				 */
 				if (inner.type === "toolcall_start") {
+					// 工具调用参数也是模型输出：TTFT 基准同样认它（见 markFirstOutput）。
+					this.markFirstOutput();
 					this.streamToolCalls.set(inner.contentIndex, { rawArgs: "" });
 					return;
 				}
@@ -1366,11 +1346,9 @@ export class SessionHost {
 				}
 
 				if (inner.type === "text_delta" || inner.type === "thinking_delta") {
-					// TTFT 基准：本 turn 首个正文/思考 delta 的到达时刻（台账 llm_call）。
+					// TTFT 基准：本 turn 首个输出 delta 的到达时刻（台账 llm_call）。
 					// 必须在缓冲之前记录 —— 它量的是 pi 事件到达时刻，不是 flush 时刻。
-					if (this.turnStartedAt !== undefined && this.turnFirstDeltaAt === undefined) {
-						this.turnFirstDeltaAt = Date.now();
-					}
+					this.markFirstOutput();
 				}
 
 				const id = this.currentAssistantId;
@@ -1392,6 +1370,10 @@ export class SessionHost {
 				this.flushDeltas();
 				const message = event.message;
 				if (message.role !== "assistant") return;
+
+				// 台账 llm_call 在助手消息完成这一刻结算（不是 turn_end）——
+				// 详见 settleLlmCall：这一步之后才会跑本轮的工具。
+				this.settleLlmCall(message);
 
 				const id = this.currentAssistantId;
 				this.currentAssistantId = undefined;
@@ -1596,6 +1578,65 @@ export class SessionHost {
 			case "session_info_changed":
 				this.emitState();
 				return;
+		}
+	}
+
+	/**
+	 * 结算一次模型调用（台账 llm_call）。
+	 *
+	 * **挂在助手 message_end，不挂 turn_end**（2026-09-17 修正）：pi 的 turn_end 是
+	 * 「这一轮全部结束」—— 助手消息与每个工具结果都 append 完才 emit
+	 *（agent-session.js "A turn ends after its assistant message and every tool
+	 * result has been appended"）。挂 turn_end 有三处后果，多 agent 场景尤其明显
+	 *（一个 task 子代理工具就是几分钟）：
+	 *   1. endedAt − startedAt 里混进本轮工具执行时间 → 解码窗口（shared 的
+	 *      stepDecode）跟着虚高，tok/s 的分母被撑大（面板实测出现过 3 tok/s，
+	 *      而同一步扣掉 task 工具后约 200 tok/s）；
+	 *   2. llmMs 与 toolMs 相互重叠，「模型耗时 · 工具耗时」并列展示等于重复计时；
+	 *   3. 写入顺序变成「先本轮工具、后本轮 llm_call」，而 renderer 的
+	 *      foldRunSteps 按位置归属工具 → 每轮的工具都挂到上一步头上，每轮开头
+	 *      还多出一个假的「台账截尾」组（2026-09-17 面板实测）。
+	 *
+	 * 失败路径也走这里：pi 的 abort / 报错收尾同样先发 message_end（带 errorMessage
+	 * 与 stopReason），每次 attempt 各自成一条，语义比挂 turn_end 更细。
+	 */
+	private settleLlmCall(
+		message: Extract<
+			Extract<AgentSessionEvent, { type: "message_end" }>["message"],
+			{ role: "assistant" }
+		>,
+	): void {
+		const startedAt = this.turnStartedAt;
+		// turn_start 缺失（理论上不发生，见 turn_start 注释）就不造条目 ——
+		// 编一个 startedAt=endedAt 的假跨度比丢一条更难查。
+		if (startedAt === undefined) return;
+		// 先清态再写：这一轮的窗口已经用掉了，重复到达的 message_end 不会二次结算。
+		this.turnStartedAt = undefined;
+		const firstDeltaAt = this.turnFirstDeltaAt;
+		this.turnFirstDeltaAt = undefined;
+		this.ledger?.append("llm_call", {
+			...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
+			turnIndex: this.ledgerTurnIndex - 1,
+			startedAt,
+			endedAt: Date.now(),
+			...(firstDeltaAt === undefined ? {} : { ttftMs: firstDeltaAt - startedAt }),
+			stopReason: message.stopReason,
+			usage: toTokenUsage(message.usage),
+			...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
+		});
+	}
+
+	/**
+	 * 首个模型输出到达的记账（TTFT 基准与解码窗口的左端点）。
+	 *
+	 * 正文 / 思考 / 工具调用参数任一先到都算首字：纯工具调用的轮次（模型直接吐一个
+	 * write 的参数、不写正文）以前拿不到 ttftMs，于是那一轮既没有首字延迟读数、
+	 * 也拿不到解码速度样本（stepDecode 要求 ttftMs 与 usage 兼备）—— 长任务里
+	 * 这类轮次占比不低。
+	 */
+	private markFirstOutput(): void {
+		if (this.turnStartedAt !== undefined && this.turnFirstDeltaAt === undefined) {
+			this.turnFirstDeltaAt = Date.now();
 		}
 	}
 

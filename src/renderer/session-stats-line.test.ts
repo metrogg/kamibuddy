@@ -30,6 +30,7 @@ function card(overrides: Partial<SessionStatCard> = {}): SessionStatCard {
 		decodeTokens: 0,
 		usage: emptyUsage(),
 		cacheHitRate: undefined,
+		cacheReported: true,
 		lastActiveAt: 0,
 		...overrides,
 	};

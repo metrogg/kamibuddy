@@ -5,6 +5,7 @@ import {
 	cacheHitRate,
 	decodeTokensPerSecond,
 	emptyUsage,
+	reportsCacheActivity,
 	type SessionStatCard,
 } from "./observability.ts";
 
@@ -22,6 +23,7 @@ function card(overrides: Partial<SessionStatCard> = {}): SessionStatCard {
 		decodeTokens: 0,
 		usage: emptyUsage(),
 		cacheHitRate: undefined,
+		cacheReported: true,
 		lastActiveAt: 0,
 		...overrides,
 	};
@@ -44,20 +46,40 @@ describe("cacheHitRate", () => {
 		// 旧口径 input + cacheRead = 100 + 900 = 1000 → 90%
 		// 新口径三桶之和 1200 → 75%；cacheWrite 确实没命中，该占分母。
 		const usage = { ...emptyUsage(), input: 100, cacheRead: 900, cacheWrite: 200 };
-		expect(cacheHitRate(usage)).toBeCloseTo(900 / 1200, 10);
+		expect(cacheHitRate(usage, true)).toBeCloseTo(900 / 1200, 10);
 	});
 
 	it("没有任何 prompt 侧 token 时为 undefined（UI 显示「—」而非 0%）", () => {
-		expect(cacheHitRate({ ...emptyUsage(), output: 50 })).toBeUndefined();
+		expect(cacheHitRate({ ...emptyUsage(), output: 50 }, true)).toBeUndefined();
 	});
 
 	it("只有 cacheWrite（首次写缓存、本轮未命中）时为 0，不是 undefined", () => {
 		// 修正前分母为 0 会返回 undefined，把「确实没命中」说成「没有数据」。
-		expect(cacheHitRate({ ...emptyUsage(), cacheWrite: 500 })).toBe(0);
+		expect(cacheHitRate({ ...emptyUsage(), cacheWrite: 500 }, true)).toBe(0);
 	});
 
 	it("全命中（无未缓存输入）时为 1", () => {
-		expect(cacheHitRate({ ...emptyUsage(), cacheRead: 1000 })).toBe(1);
+		expect(cacheHitRate({ ...emptyUsage(), cacheRead: 1000 }, true)).toBe(1);
+	});
+
+	it("provider 从未上报过缓存活动时为 undefined，而不是误导性的 0%", () => {
+		// 不支持缓存的服务商，pi 把 cacheRead/cacheWrite 一律填 0，「全 miss」与
+		// 「没有这个数据」在数字上完全一样 —— 后者必须留空（2026-09-17 修正）。
+		const usage = { ...emptyUsage(), input: 5000, output: 10 };
+		expect(cacheHitRate(usage, false)).toBeUndefined();
+		expect(cacheHitRate(usage, true)).toBe(0);
+	});
+});
+
+describe("reportsCacheActivity", () => {
+	it("cacheRead / cacheWrite 任一非零即为 true", () => {
+		expect(reportsCacheActivity({ ...emptyUsage(), cacheRead: 1 })).toBe(true);
+		expect(reportsCacheActivity({ ...emptyUsage(), cacheWrite: 1 })).toBe(true);
+	});
+
+	it("两者都是 0（或字段缺席）为 false", () => {
+		expect(reportsCacheActivity(emptyUsage())).toBe(false);
+		expect(reportsCacheActivity({})).toBe(false);
 	});
 });
 

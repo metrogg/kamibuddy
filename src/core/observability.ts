@@ -29,6 +29,7 @@
 import { basename } from "node:path";
 import {
 	cacheHitRate,
+	reportsCacheActivity,
 	stepDecode,
 	type CacheMissReason,
 	type CacheMissRecord,
@@ -276,6 +277,13 @@ interface MutableSessionStats {
 	decodeTokens: number;
 	usage: MutableUsage;
 	lastActiveAt: number;
+	/**
+	 * 这个会话的 provider 是否上报过缓存活动（口径见 shared 的 cacheHitRate）。
+	 * 单独一个字段而不是复用 prevRequest.reportedCache：那个是 miss 归因的
+	 * 对比基线，压缩时会重置（上下文合法变化），而「provider 支不支持缓存」
+	 * 是会话的固有属性，不该被压缩抹掉。
+	 */
+	cacheReported: boolean;
 	/** 缓存 fold 状态：当前 run 的模型（run_start 记账，llm_call 自身不带模型字段）。 */
 	currentRunModel: string | undefined;
 	prevRequest: PreviousRequest | undefined;
@@ -293,6 +301,7 @@ function mutableSessionStats(): MutableSessionStats {
 		decodeTokens: 0,
 		usage: mutableUsage(),
 		lastActiveAt: 0,
+		cacheReported: false,
 		currentRunModel: undefined,
 		prevRequest: undefined,
 	};
@@ -525,6 +534,10 @@ export class ObservabilityStore {
 			stats.decodeTokens += decode.tokens;
 		}
 		addUsage(stats.usage, usage);
+		// provider 能力判定：出现过一次非零缓存活动就认定它在报缓存（同 pi
+		// reportedCache）。必须在下面那个 promptTokens 早退**之前**记 ——
+		// 零 prompt 的异常轮也可能带着缓存数据。
+		if (reportsCacheActivity(usage)) stats.cacheReported = true;
 
 		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
 		// 零 prompt 轮（异常路径）不提供对比信息，基线不动（同 pi asPreviousRequest）。
@@ -734,7 +747,8 @@ export class ObservabilityStore {
 			decodeMs: s.decodeMs,
 			decodeTokens: s.decodeTokens,
 			usage,
-			cacheHitRate: cacheHitRate(usage),
+			cacheReported: s.cacheReported,
+			cacheHitRate: cacheHitRate(usage, s.cacheReported),
 			lastActiveAt: s.lastActiveAt,
 		};
 	}

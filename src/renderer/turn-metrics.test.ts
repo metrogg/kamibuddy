@@ -22,6 +22,7 @@ function usage(fields: {
 	input?: number;
 	output?: number;
 	cacheRead?: number;
+	cacheWrite?: number;
 }): TokenUsage {
 	return fields as TokenUsage;
 }
@@ -71,6 +72,25 @@ describe("usage 聚合", () => {
 		expect(m.inputTokens).toBe(100);
 		expect(m.outputTokens).toBe(20);
 		expect(m.cacheReadTokens).toBeUndefined();
+		expect(m.hitRate).toBeUndefined();
+	});
+
+	it("命中率分母含 cacheWrite（与 daemon 会话卡同一口径）", () => {
+		const entries: readonly ConversationEntry[] = [
+			user("u1"),
+			assistant("a1", usage({ input: 100, output: 10, cacheRead: 900, cacheWrite: 200 })),
+		];
+		const m = foldTurnMetrics(entries, { startedAt: 1_000, endedAt: 2_000 }, 2_000);
+		// 900 / (100 + 900 + 200) = 0.75；修正前只传 input + cacheRead 会算成 0.9。
+		expect(m.hitRate).toBeCloseTo(0.75, 10);
+	});
+
+	it("整段对话都没上报过缓存活动 → 留空（不是误导性的 0%）", () => {
+		const entries: readonly ConversationEntry[] = [
+			user("u1"),
+			assistant("a1", usage({ input: 5_000, output: 20, cacheRead: 0 })),
+		];
+		const m = foldTurnMetrics(entries, { startedAt: 1_000, endedAt: 2_000 }, 2_000);
 		expect(m.hitRate).toBeUndefined();
 	});
 });
