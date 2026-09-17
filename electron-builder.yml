@@ -1,0 +1,56 @@
+# electron-builder 打包配置（Windows NSIS 安装包，spec 见 docs/试用前自查报告.md §三）。
+#
+# 与 electron.vite.config.ts 的分工：那边产出 out/（main 双入口 index+daemon、
+# preload、renderer），这边把 out/ + 生产依赖 node_modules + resources/ 组装成
+# 安装包。全仓库没有 app.isPackaged 分支——路径解析靠两件事：
+#   1. import.meta 相对定位（asar 内成立，daemon fork 的 daemon.mjs 与 main 同目录）；
+#   2. main 起 daemon 时注入 KAMIBUDDY_RESOURCES_DIR（src/main/index.ts 的 daemonEnv）
+#      指向下面的 extraResources 物理目录——daemon 侧所有 resources 消费方零改动，
+#      docx-engine 也因此天然物理化（外部 python 进程读不了 asar）。
+appId: com.jlc.kamibuddy
+productName: 嘉立创Work
+directories:
+  output: release           # .gitignore 已含 release/
+  buildResources: build     # 目录暂不存在：无 build/icon.ico 时用默认图标并告警（已定：图标后补）
+files:
+  # 白名单语义：只收构建产物与清单。生产依赖 node_modules 由 builder 自动收包
+  #（externalizeDepsPlugin 全量 external，pi/koffi 等必须原样走 node_modules）；
+  # 仓库根的 开源项目/ docs/ .trae/ scripts/ 等一律不进 asar。
+  - out/**
+  - package.json
+asar: true
+# .node 原生模块（koffi / clipboard / console-mode / canvas）靠 smartUnpack 自动解包；
+# 若打包后 koffi 动态 import 报「不是有效的 Win32 应用」即解包没生效，显式加：
+# asarUnpack:
+#   - "**/*.node"
+extraResources:
+  # resources/ 整体物理化 → <安装>/resources/resources/。
+  # KAMIBUDDY_RESOURCES_DIR 指向这里；bin/uv.exe（fetch:uv 拉取）一并随包，
+  # main 把该目录前置进 daemon 的 PATH——docx-env 的「裸 uv」候选直接命中。
+  - from: resources
+    to: resources
+    filter:
+      - "**/*"
+win:
+  # exe 文件名必须 ASCII：rcedit（写版本/图标资源的原生工具）对中文路径不兼容
+  # （实测 UNKNOWN open 错误）；安装目录与快捷方式仍按 productName 显示中文。
+  executableName: JLCWork
+  # 本机（企业 AV 实时扫描）拦「新建 exe 的资源改写」：rcedit 对刚落盘的
+  # JLCWork.exe 写资源必报 UNKNOWN，重试无效（2026-09-17 实测）。关掉后 exe
+  # 保留 Electron 默认版本信息与图标——试用阶段本就用默认图标，无损失；
+  # 换正式图标/签名时在无 AV 干扰的打包机上再打开此项。
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: true
+  perMachine: false               # 用户级安装，免管理员（部门同事未必有管理员权限）
+  allowToChangeInstallationDirectory: false
+  deleteAppDataOnUninstall: false # 卸载不删 ~/.kamibuddy（配置/会话保留）
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 嘉立创Work
+  unicode: true                   # 26.x 默认已开，显式声明：中文 productName 的前提
+artifactName: JLC-Work-Setup-${version}.${ext}   # 产物文件名刻意 ASCII（下载/网盘/杀软兼容），界面与快捷方式仍是中文

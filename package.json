@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "办公 AI Agent 桌面端（基于 pi agent harness）",
+  "author": "嘉立创",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -12,6 +13,9 @@
     "dev": "node scripts/run-electron.mjs dev",
     "build": "electron-vite build",
     "start": "node scripts/run-electron.mjs preview",
+    "fetch:uv": "node scripts/fetch-uv.mjs",
+    "dist:dir": "node scripts/fetch-uv.mjs && node scripts/pack.mjs --dir",
+    "dist": "node scripts/fetch-uv.mjs && node scripts/pack.mjs",
     "smoke:sdk": "tsx scripts/smoke-pi-sdk.ts",
     "smoke:session": "tsx scripts/smoke-session.ts",
     "smoke:session-branch": "tsx scripts/smoke-session-branch.ts",
@@ -52,6 +56,7 @@
   },
   "devDependencies": {
     "@pdf-lib/fontkit": "1.1.1",
+    "electron-builder": "^26.0.0",
     "@types/node": "22.19.19",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.4",
