@@ -441,10 +441,54 @@ export interface QueueData {
 	readonly followUp: readonly string[];
 }
 
+/**
+ * 内容指纹（32 位 FNV-1a）。
+ *
+ * **唯一实现处**：消息逐条清单（`MessageRef.fp`，core/session-host.ts 的
+ * buildMessageRefs）与系统提示词分段（`SystemSegmentStat.fp`，
+ * core/system-prompt-composer.ts 的组装出口）共用同一个函数 —— 两处回答的是
+ * 同一个问题「这段文本的内容有没有变」，各写一份必然漂移（AGENTS.md §4）。
+ *
+ * 为什么不用 crypto：这里是同步热路径（每条消息、每个分段都要算），而 2^-32 的
+ * 碰撞概率对等值比较足够。逐字符迭代是 UTF-16 码元而不是码点 —— 同样的文本得到
+ * 同样的值就够了，这个用途不需要语义正确的哈希。
+ *
+ * **不可逆**：指纹只能比等值，还原不出文本 —— 台账「不双写正文」的纪律不因此破例。
+ */
+export function contentFingerprint(text: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < text.length; i += 1) {
+		hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+	}
+	return hash >>> 0;
+}
+
+/**
+ * 「每请求现算、不落会话」的瞬态注入消息的自定义类型（pi CustomMessage.customType）。
+ *
+ * 由 extensions/prompt-switch.ts 的 `context` 事件注入（记忆内容 + 个性化），
+ * 追加在消息数组末尾、下一个请求里就不在了。定义在这里而不是扩展里的原因：
+ * request_snapshot 的逐条清单（core/session-host.ts）也要靠它把这类幽灵条目标成
+ * 瞬态（`MessageRef.transient`），而 core 不许 import extensions（AGENTS.md §1），
+ * 常量放 shared 才是唯一实现处（防重复，AGENTS.md §4）。
+ */
+export const RUNTIME_CONTEXT_CUSTOM_TYPE = "kamibuddy-runtime-context";
+
 /** 系统提示词一个分段的 provenance（source 来自 prompt-composer 的 PromptSegmentSource）。 */
 export interface SystemSegmentStat {
 	readonly source: string;
 	readonly chars: number;
+	/**
+	 * 该段内容的指纹（`contentFingerprint`，与 MessageRef.fp 同一算法）。
+	 *
+	 * 用途：相邻两轮的分段清单直接 diff 出「系统提示词的哪一段变了」—— 缓存断点
+	 * 落在消息列表之前（CACHE6 的 before_messages）时，这是唯一能指认到段的依据。
+	 *
+	 * 可选：加它之前落的旧台账没有这个字段，消费方按「没有指纹」降级（只能比
+	 * 字符数，判不出就说判不出），不抛错 —— 落盘 schema 的向后兼容纪律同
+	 * TokenUsage 的可选细分字段。**仍然不落正文**：指纹不可逆。
+	 */
+	readonly fp?: number;
 }
 
 /** 一类消息的条数与字符数。 */
@@ -478,8 +522,21 @@ export interface MessageRef {
 	/**
 	 * 内容指纹（32 位 FNV-1a，仅用于「这一条的内容有没有变」的等值比较）。
 	 * 不落正文、不可逆——台账「不双写正文」的纪律不因此破例。
+	 * 算法唯一实现处：shared/observability.ts 的 `contentFingerprint`。
 	 */
 	readonly fp: number;
+	/**
+	 * 这一条是「每请求现算、不落会话」的瞬态注入项（`RUNTIME_CONTEXT_CUSTOM_TYPE`，
+	 * 由 extensions/prompt-switch.ts 的 `context` 事件追加在消息数组末尾）。
+	 *
+	 * 有了它，缓存断点归因（shared/cache-prefix.ts）才认得出「上一轮尾部有、这一轮
+	 * 没了」的幽灵条目是**有意设计**，不把它当成断点原因（否则每轮都会误报一次）。
+	 *
+	 * 可选：加它之前落的台账没有这个字段，消费方按「旧台账」降级（退到
+	 * 「role 归 other 的尾部条目」这一可判定条件）；只在瞬态条目上写 true，
+	 * 真历史条目**不写** `transient: false`（每条都写白白撑大落盘体积）。
+	 */
+	readonly transient?: boolean;
 }
 
 /**

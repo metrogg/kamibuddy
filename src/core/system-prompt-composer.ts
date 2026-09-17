@@ -19,9 +19,12 @@
  *     记忆行为纪律段 / pi-context）才进系统提示词；
  *   - 逐轮可能变的事实（运行时间、三层记忆内容、个性化、cwd）一律走 append-only
  *     的消息注入，**不进这里**（见 core/prompt-composer.ts 文件头）。
+ *
+ * 纪律的完整来历与对照：docs/提示词前缀缓存契约.md（dsh 的 PromptContext /
+ * in-history 契约、计量纪律与门禁做法的消化稿，含我们仍未对齐的差距）。
  */
 
-import type { SystemSegmentStat } from "../shared/observability.ts";
+import { contentFingerprint, type SystemSegmentStat } from "../shared/observability.ts";
 import type { ExpertDefinition } from "./experts.ts";
 import { loadMemorySystemPrompt } from "./memory.ts";
 import { estimateTokens } from "./observability.ts";
@@ -200,7 +203,15 @@ export function createSystemPromptComposer(deps: SystemPromptComposerDeps): Syst
 			prompt: assembled.text,
 			systemTokens: deps.estimateTokens(assembled.text),
 			skillsTokens: deps.estimateTokens(assembled.skillsSection),
-			segments: assembled.segments.map((s) => ({ source: s.source, chars: s.text.length })),
+			// 分段内容指纹（与消息指纹同一算法，见 shared/observability.ts 的
+			// contentFingerprint）：相邻两轮的分段清单 diff 出「哪一段变了」靠它，
+			// 缓存断点落在消息列表之前时（CACHE6 的 before_messages）才有话可说。
+			// 仍不落正文：指纹不可逆。
+			segments: assembled.segments.map((s) => ({
+				source: s.source,
+				chars: s.text.length,
+				fp: contentFingerprint(s.text),
+			})),
 		};
 	};
 }

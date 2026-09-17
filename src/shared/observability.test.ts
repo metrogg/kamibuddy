@@ -3,6 +3,7 @@ import {
 	averageTtftMs,
 	billedInputTokens,
 	cacheHitRate,
+	contentFingerprint,
 	decodeTokensPerSecond,
 	emptyUsage,
 	reportsCacheActivity,
@@ -101,5 +102,26 @@ describe("decodeTokensPerSecond", () => {
 
 	it("没有解码样本（decodeMs 为 0）时为 undefined", () => {
 		expect(decodeTokensPerSecond(card({ decodeMs: 0, decodeTokens: 999 }))).toBeUndefined();
+	});
+});
+
+describe("contentFingerprint（消息与系统提示词分段共用的内容指纹）", () => {
+	it("同内容同指纹 —— 等值比较的前提", () => {
+		expect(contentFingerprint("技能清单段")).toBe(contentFingerprint("技能清单段"));
+		// 空串也是一个合法输入（空段压平后不会出现，但判据不该依赖它）。
+		expect(contentFingerprint("")).toBe(contentFingerprint(""));
+	});
+
+	it("不同内容不同指纹（含同长度改一个字符）", () => {
+		expect(contentFingerprint("技能清单A")).not.toBe(contentFingerprint("技能清单B"));
+		// 长度相同、只差一个字符：字符数比不出来，只有指纹能。
+		expect(contentFingerprint("abc")).not.toBe(contentFingerprint("abd"));
+	});
+
+	it("指纹是 32 位无符号整数 —— 只有等值比较这一种用法，带不出正文", () => {
+		const fp = contentFingerprint("长期记忆：用户偏好简洁");
+		expect(Number.isInteger(fp)).toBe(true);
+		expect(fp).toBeGreaterThanOrEqual(0);
+		expect(fp).toBeLessThanOrEqual(0xffffffff);
 	});
 });

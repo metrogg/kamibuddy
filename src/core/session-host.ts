@@ -58,7 +58,13 @@ import type { RunLedger } from "./run-ledger.ts";
 // 因而入参摘要字段表只有那一份（见 summarizeArgs 注释）。
 import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import { estimateTokens } from "./observability.ts";
-import type { MessageClass, MessageRef, SystemSegmentStat } from "../shared/observability.ts";
+import {
+	contentFingerprint,
+	RUNTIME_CONTEXT_CUSTOM_TYPE,
+	type MessageClass,
+	type MessageRef,
+	type SystemSegmentStat,
+} from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
 import { splitSkillBlocks } from "../shared/skill-block.ts";
@@ -1835,7 +1841,7 @@ export class SessionHost {
 	 * **不记正文**（口径钉住）：消息正文在会话 JSONL 已有，台账只记
 	 * 「这轮往模型里送了什么结构」——分段来源、各类条数/字符数、以及每条消息的
 	 * 稳定标识与体量（LOG13）。正文双写既膨胀又会与会话 JSONL 漂移，所以逐条
-	 * 也只落 id / 字符数 / token 估算 / 内容指纹，不落文本。
+	 * 也只落 id / 字符数 / token 估算 / 内容指纹（+ 瞬态注入项的标记），不落文本。
 	 *
 	 * 类别聚合由逐条清单累加而来（同一次循环、同一份文本）：两处各统计一遍
 	 * 必然漂移，而这两个数字在面板上是并排显示的。
@@ -2046,21 +2052,6 @@ function messageClassOf(rawRole: string): MessageClass {
 }
 
 /**
- * 内容指纹（32 位 FNV-1a）。
- *
- * 只有「这一条的内容有没有变」这一个用途，所以不用 crypto（要 import node:crypto，
- * 且这里是同步热路径）：2^-32 的碰撞概率对等值比较足够。逐字符迭代是 UTF-16 码元
- * 而不是码点 —— 同样的文本得到同样的值，这个用途不需要语义正确的哈希。
- */
-function messageFingerprint(text: string): number {
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < text.length; i += 1) {
-		hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
-	}
-	return hash >>> 0;
-}
-
-/**
  * 消息的稳定 id 基名：不依赖内容、不依赖位置，只取 pi 消息里稳定的身份字段。
  *
  *   - toolResult → `toolResult:<toolCallId>`：toolCallId 由模型发起工具调用时给定，
@@ -2101,6 +2092,11 @@ function messageIdBase(message: unknown, rawRole: string): string {
  *   4. **同一条消息在序列里出现两次**（pi 理论上不做，但流式态下 partial 消息与
  *      终态消息共用同一 timestamp 时可能出现）：按 1 的后缀规则区分，两者都不与
  *      别的消息撞名。
+ *   5. **瞬态注入项**（`RUNTIME_CONTEXT_CUSTOM_TYPE`：prompt-switch 的 `context`
+ *      事件每请求现算、不落会话的那条）：标记 `transient: true`。它每轮都是新的
+ *      一条（id 由 `custom:<timestamp>` 生成，轮轮不同），不标记的话缓存断点归因
+ *      **每一轮都会**把它当成「上一轮尾部那条没了 / 换了」的假差异 —— 那是设计
+ *      如此（见 shared/cache-prefix.ts 的 dropTransient），不是故障。
  */
 export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 	const refs: MessageRef[] = [];
@@ -2111,12 +2107,17 @@ export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 		const occurrence = (occurrences.get(base) ?? 0) + 1;
 		occurrences.set(base, occurrence);
 		const text = messageText(message, rawRole);
+		// 只在瞬态条目上写标记：真历史条目写 `transient: false` 会白白撑大落盘体积
+		// （一条几十字节 × 每轮几十条），而缺席的语义就是「不是瞬态」（消费方的旧台账
+		// 降级判据见 shared/cache-prefix.ts 的 dropTransient）。
+		const customType = (message as { customType?: unknown }).customType;
 		refs.push({
 			id: occurrence === 1 ? base : `${base}#${occurrence}`,
 			role: messageClassOf(rawRole),
 			chars: text.length,
 			tokens: estimateTokens(text),
-			fp: messageFingerprint(text),
+			fp: contentFingerprint(text),
+			...(customType === RUNTIME_CONTEXT_CUSTOM_TYPE ? { transient: true } : {}),
 		});
 	}
 	return refs;

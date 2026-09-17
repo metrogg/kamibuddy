@@ -126,3 +126,57 @@
 
 `npm run check` → exit 0（typecheck + check:deps + check:tokens 全过）；`npm test` → **126 文件全绿**。
 本机 `confinement.win.test.ts`（受限令牌被外部沙箱拦截）在最终一轮通过 —— 该用例的结果随 IDE 沙箱状态浮动，与本改动无关。
+
+# 第三轮：分段指纹归因 + dsh 契约文档 + 底部指标条验收（2026-09-17）
+
+- [x] ① 把「系统提示词的哪一段变了」变成确证（不再只报「断在消息列表之前」）
+  - 指纹抽到唯一处：`src/shared/observability.ts` 的 `contentFingerprint`（FNV-1a），
+    `session-host.buildMessageRefs` 与 `system-prompt-composer` 的分段产出共用（原 `session-host` 里那份已删）
+  - `SystemSegmentStat.fp?: number`（可选、不可逆、仍不落正文）；扩展 `inferCachePrefixBreak` 的 `before_messages` 分支，
+    输出 `segment_changed` / `segment_appended` / `segment_removed` / `unchanged`（断在提示词之前）/ `undetermined`（旧台账无 fp）
+  - **瞬态注入项不再误报**：`MessageRef.transient` 标记 `kamibuddy-runtime-context`（每请求现算、不落盘），
+    归因时剔除 —— 否则每轮都在尾部造一个假差异（旧台账退到「role 为 other 的尾部条目」判据）
+  - 面板文案（实拍）：`缓存断点：系统提示词的 skills 段变了（前 2 段命中，1200 → 1180 字符），其后的消息全部失效。`
+  - 自证：改坏指纹 → 2 例红；改坏 `dropTransient` → 2 例红；均还原后全绿
+  - `npm run check` exit 0；`npm test` 126 文件全绿（2292 passed）
+
+- [x] ② dsh 必要文档消化落地（不整篇抄，避免漂移与合规风险）
+  - 新建 `docs/提示词前缀缓存契约.md`：11 条契约要点（每条含「dsh 来源路径 / 我们的对应物 / 差距」）+
+    「已对齐 4 条 / 仍未对齐 8 条」对照 + 「升级 pi 时的复核入口」；文件头声明「本文件是消化稿，不是替代，以克隆为准」
+  - `src/core/system-prompt-composer.ts` 文件头加指针（避免死文档）
+  - 关键结论：dsh 的 **delta 方案被它自己依模型契约否决**，而我们的探针实测显示该契约在本端点未复现 ——
+    所以升级 pi 时**不能照搬整条路线**，必须先复跑 `npm run probe:prompt-cache`
+
+- [x] ③ 底部指标条验收（重点：缓存命中）—— 独立验收者结论
+  - **口径与显示路径 PASS**：分子 `ΣcacheRead`、分母 `Σ(input+cacheRead+cacheWrite)`（**含 cacheWrite**）；
+    pi 的 `input` 是「未缓存输入」（openai-completions 路径实测 `input = prompt_tokens − cached − cache_write`）；
+    `cacheReported` 门控单点判定、会话级粘性；一位小数只由 daemon 的卡驱动，renderer 不二次计算
+  - **回归基线 PASS**：用**生产 fold** 复算真实台账 `01a0adb2-…`（旧台账、无 fp、无 messageList）得到
+    `cacheHitRate = 0.9244169427115737` → 显示 **92.4%**，`ΣbilledInputTokens = 594,710` → 显示 **594.7K**，
+    与界面一致。**注意**：610,943 是 `totalTokens`（含 output），不是「输入」那个数
+  - **端到端 PASS**：4 次真实模型会话，卡里的值与 provider usage 明文逐项相等；台账 usage 与进程内 usage 逐条相等
+  - **改动未污染读数 PASS**：注入块在 payload 里恰好出现 1 次、不落会话文件、台账里恰好 1 条 `transient`；
+    `messageList` 与 `fp`/`transient` 不参与指标条口径（fold 对 `request_snapshot` 直接跳过）
+  - **降级路径 PASS**：`cacheReported=false` → 「缓存命中」整项消失（不是 0%）；无数据 → 整行不渲染
+  - **发现一个会压低这个数的真问题（未修，待决策）**：见下方「待决策」
+
+# 待决策：hidden context 的插入位置让「上一轮整段」每轮重付
+
+独立验收者用 `before_provider_request` 逐条 diff payload 得到：**缓存断点固定在「上一轮那条 user 消息」处** ——
+hidden context 是 `prependHiddenContext` 贴进**最后一条 user 消息的内容**（`src/shared/hidden-context.ts` +
+`core/session-host.ts` 的 `composeRunHiddenContext`），而 transformContext 的改写**不落会话**，下一轮该条恢复原文、
+hidden 改贴到新的最后一条 user。
+
+后果（本次修复的同类缺陷，只是位置从系统提示词挪到了消息里）：断点落在上一轮 user 消息上 ⇒
+**上一轮整段（user + 助手回复 + 全部工具结果）在下一轮被重新计费**。
+
+机制已由 payload diff 确证；**幅度尚未实测**（验收者的 3 轮样本每轮输出极小，看不出来；用户那次 16 步会话只有 1 轮）。
+
+两个方向（都需要用户拍板，因为都会动到模型可见布局或既有压缩语义）：
+1. 把 hidden context 从「贴进最后一条 user 消息」改为「作为**尾部独立消息**追加」（与 `context` 事件的注入同位）——
+   按前缀匹配推算，跨轮断点会从「上一轮 user 之前」后移到「上一轮最后一条工具结果之后」，
+   即**回收上一轮整段的重计费**。风险：`data-role="user-context" / "additional-data"` 的压缩语义
+   （user-context 整块保留、additional-data 可整体剥离）是按「挂在 user 消息里」设计的，要一并核对。
+2. 接受现状，只在 UI 上把口径说清（明示「缓存命中 = 本轮 prompt 的三桶之比，跨轮会有一次尾部重计费」）。
+
+先补一次测量再决定：跑一个 **10+ 轮、带工具调用**的长会话，用同一套 fold 看命中率随轮次的走势。
