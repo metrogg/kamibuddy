@@ -34,6 +34,7 @@ import { SessionHost } from "../core/session-host.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
+import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
@@ -41,6 +42,7 @@ import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
+import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { AutomationTask } from "../shared/automation.ts";
@@ -75,6 +77,12 @@ export interface AutomationRunExecutorDeps {
 	/** 自家目录判定（生效根 / 配置目录内直接信任，见 project-trust.ts）。 */
 	readonly isOwnWorkspace: (dir: string) => boolean;
 	readonly getWebSearchConfig: () => WebSearchConfig | undefined;
+	/**
+	 * run 会话可见的技能（daemon 注入的技能单一出口 sessionSkills 的产物）。
+	 * run 会话恒不绑专家（两轴固定 work + craft），因此这里就是全局技能池 —— 但
+	 * 仍走同一个出口：技能清单段进提示词，use_skill 工具就得看得到同一批技能。
+	 */
+	readonly resolveSkills: () => readonly UseSkillTarget[];
 }
 
 export function createAutomationRunExecutor(
@@ -221,12 +229,29 @@ function buildRunExtensions(
 		powershellExtensionFactory({ unattended: true }),
 		createDocReadTool(),
 		/*
+		 * 技能加载：run 会话的提示词走双轴 compose，技能清单段照常注入
+		 * （craft 白名单含 use_skill）—— 不注册等于在提示词里承诺一个不存在的工具。
+		 * 无需 unattended 变体：只读、无副作用、不需要人批，与 docx_convert 同档；
+		 * 技能取的是与清单段同一个出口（deps.resolveSkills）。
+		 */
+		createUseSkillTool({ resolveSkills: deps.resolveSkills }),
+		/*
 		 * docx 生成：craft 白名单含 docx_convert，run 会话注册同名真实工具
 		 * （否则模型对着白名单调一个不存在的能力）。无需 unattended 变体 ——
 		 * 它不像 shell 需要人批：写侧判定锚定产物路径，工作区内 outputPath
 		 * 在权限门直接放行，无人值守下语义自洽（定时产出周报 docx 是正当场景）。
 		 */
 		createDocxConvertTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
+		/*
+		 * docx 版式提取：craft 白名单含 docx_extract，run 会话注册同名真实工具。
+		 * 与 docx_convert 同档：受控 spawn venv python（命令与参数写死在
+		 * documents/docx-extract.ts）、不经 powershell；写侧判定锚定 outputPath，
+		 * 产物在工作区内直接放行，无需 unattended 变体。
+		 */
+		createDocxExtractTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
 		}),

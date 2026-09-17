@@ -21,13 +21,43 @@ export interface CompletionQuery {
 	readonly start: number;
 }
 
+/**
+ * 补全项分组：`/` 菜单的两节。
+ *
+ * 取值由 IPC 契约的 `CommandItem.source` 派生（`skill` → `skill`；`template` / `builtin` →
+ * `command`）—— 技能项与模板项在 label 上都只是一个 `/` 开头的名字，渲染层无从分辨类型，
+ * 所以分组必须是数据自带的，不许在 UI 里按名字前缀猜。
+ */
+export type CompletionGroup = "skill" | "command";
+
 /** 一条补全项。label 用于显示，insert 用于替换进输入框。 */
 export interface CompletionItem {
 	readonly label: string;
 	readonly insert: string;
 	/** 副标题（命令的 description、文件的目录），可选。 */
 	readonly hint?: string;
+	/** 所属分组。@ 文件候选不带它（文件没有分组概念）。 */
+	readonly group?: CompletionGroup;
+	/**
+	 * 技能项的**裸技能名**（`/skill:` 命名空间前缀已去掉），如 `docx`。
+	 *
+	 * 只有 `group === "skill"` 的项有值。选中技能时输入卡不插文本、而是把它变成一枚
+	 * chip：chip 上要显示「选中的是什么」（裸名），发送时才拼回 pi 认的
+	 * `/skill:<name>` 语法（shared/skill-block.ts 的 skillInvocationText）。
+	 * 两个用途都需要裸名，所以随项带出来，不在渲染层反解 label。
+	 */
+	readonly skill?: string;
 }
+
+/** 一页补全的一节。空节不产出（菜单不为空组渲染标题）。 */
+export interface CompletionSection {
+	/** undefined = 无标题节，即未声明分组的项（@ 文件候选）。 */
+	readonly group: CompletionGroup | undefined;
+	readonly items: readonly CompletionItem[];
+}
+
+/** 组序：技能在前、指令在后（WorkBuddy 的 `/` 面板同序）。 */
+const GROUP_ORDER: readonly CompletionGroup[] = ["skill", "command"];
 
 /** 光标位置。textarea 是单值字符串，用 selectionStart 一个下标即可。 */
 export interface Cursor {
@@ -109,4 +139,25 @@ export function filterItems(
 		.sort((a, b) => a.score - b.score)
 		.slice(0, limit)
 		.map((s) => s.item);
+}
+
+/**
+ * 把（过滤排序后的）补全项切成菜单要的分节，并按组序重排。
+ *
+ * 为什么重排必须在纯逻辑层：`filterItems` 的打分是**全表**排序 —— 一个命中更好的模板项
+ * 完全可能排在技能项前面，组序（技能恒在前）就在那一刻丢了。所以「先过滤、再分节」是
+ * 一条完整的流水线，分节必须与过滤同处一个可单测的纯函数里；渲染层只管画标题与图标。
+ * 组内保持 `filterItems` 给的相对顺序（打分仍然决定组内次序）。
+ */
+export function sectionize(items: readonly CompletionItem[]): readonly CompletionSection[] {
+	const sections: CompletionSection[] = [];
+	for (const group of GROUP_ORDER) {
+		const grouped = items.filter((item) => item.group === group);
+		if (grouped.length > 0) sections.push({ group, items: grouped });
+	}
+	// 未分组的项（@ 文件候选）合成一节排在末尾。@ 与 / 不会同时出现（触发字符只有一个），
+	// 这条只是让两种 kind 共用同一套渲染路径。
+	const rest = items.filter((item) => item.group === undefined);
+	if (rest.length > 0) sections.push({ group: undefined, items: rest });
+	return sections;
 }

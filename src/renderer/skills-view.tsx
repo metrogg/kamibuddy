@@ -17,9 +17,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SkillsSnapshot, SkillInfo } from "@shared/settings.ts";
 import type { ExpertListItem } from "@shared/ipc.ts";
+import { formatMessageTime } from "@shared/message-time.ts";
 import { ConnectorsView } from "./connectors-view.tsx";
 import { ExpertsView } from "./experts-view.tsx";
-import { IconBack, IconFolder, IconPlus } from "./icons.tsx";
+import { IconBack, IconFolder, IconPlus, IconSkill } from "./icons.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface SkillsViewProps {
@@ -95,6 +96,25 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 			onToast(`已导入技能「${skill.name}」，下一轮对话即可使用`);
 		});
 	}, [run, onToast]);
+
+	/**
+	 * 切开关。**直接用返回的新快照**，不调 load() 再拉一次：
+	 * 写通道返回的就是「此刻的全量 + 成本数字」，再拉一次既多一个来回，
+	 * 也可能与刚写下的状态错位（spec: 一次拉取渲染全页）。
+	 */
+	const setEnabled = useCallback((name: string, enabled: boolean): void => {
+		void (async () => {
+			setBusy(true);
+			setError(undefined);
+			try {
+				setSnapshot(await window.kami.setSkillEnabled(name, enabled));
+			} catch (e) {
+				setError(e instanceof Error ? e.message : String(e));
+			} finally {
+				setBusy(false);
+			}
+		})();
+	}, []);
 
 	const openSkillsDir = useCallback((): void => {
 		if (snapshot === undefined) return;
@@ -173,11 +193,32 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 							description="点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；或把技能文件夹直接放进技能目录。"
 						/>
 					) : (
-						<div className="skill-grid">
-							{snapshot.skills.map((skill) => (
-								<SkillCard key={skill.filePath} skill={skill} />
-							))}
-						</div>
+						<>
+							{/*
+							 * 成本常显行 + 超阈值提示。数字全部来自同一次 skills:snapshot
+							 * （开关动作返回的新快照），渲染层不重算 —— 重算就会与模型实际
+							 * 收到的清单段分家（spec: 技能成本可见）。
+							 */}
+							<div className="skill-cost">
+								<p className="stat-hint">
+									已启用 {snapshot.enabledCount} / 共 {snapshot.skills.length} 个技能 ·
+									技能清单约 {snapshot.skillsTokens} token
+								</p>
+								{snapshot.warning !== undefined && (
+									<p className="stat-hint skill-cost-warn">{snapshot.warning}</p>
+								)}
+							</div>
+							<div className="skill-grid">
+								{snapshot.skills.map((skill) => (
+									<SkillCard
+										key={skill.filePath}
+										skill={skill}
+										busy={busy}
+										onToggle={setEnabled}
+									/>
+								))}
+							</div>
+						</>
 					)
 				)}
 			</div>
@@ -185,13 +226,68 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 	);
 }
 
-function SkillCard({ skill }: { readonly skill: SkillInfo }): React.JSX.Element {
+/**
+ * 来源文案：内置 / 导入（有 `_installed.json`）/ 手工放置（自装但没有 sidecar）。
+ * 三种都是**确定的信息**，没有「未知」这一态 —— 缺失项不显示伪造值（spec: 技能包元数据）。
+ */
+function sourceLabel(skill: SkillInfo): string {
+	if (skill.origin === "builtin") return "内置";
+	return skill.sourcePath === undefined ? "手工放置" : "导入";
+}
+
+/**
+ * 来源路径在卡片上只留末两段（完整路径挂在 title 上），长路径不撑爆卡片。
+ * 只取文件名（末一段）信息量太低 —— 那个通常就是技能名本身。
+ */
+function shortSourcePath(path: string): string {
+	const parts = path.split(/[\\/]/).filter((part) => part !== "");
+	return parts.length <= 2 ? path : `…/${parts.slice(-2).join("/")}`;
+}
+
+function SkillCard({
+	skill,
+	busy,
+	onToggle,
+}: {
+	readonly skill: SkillInfo;
+	readonly busy: boolean;
+	readonly onToggle: (name: string, enabled: boolean) => void;
+}): React.JSX.Element {
+	const meta: string[] = [];
+	// 缺失项直接不出现：留白好过「未知」这种占位噪声。
+	if (skill.version !== undefined) meta.push(`v${skill.version}`);
+	meta.push(sourceLabel(skill));
+	if (skill.sourcePath !== undefined) meta.push(shortSourcePath(skill.sourcePath));
+	if (skill.installedAt !== undefined) meta.push(formatMessageTime(skill.installedAt, Date.now()));
+
 	return (
-		<div className="skill-card">
+		<div className={`skill-card${skill.enabled ? "" : " skill-card-off"}`}>
 			<div className="skill-card-head">
+				{/* 与 `/` 菜单技能组同一个图标（用户决策：不引入技能自定义图标）。 */}
+				<IconSkill size={15} className="skill-card-icon" />
 				<span className="skill-card-name">{skill.name}</span>
-				<span className="provider-tag">{skill.origin === "builtin" ? "内置" : "自装"}</span>
+				{/*
+				 * 启停开关：结构与连接器页的既有开关一致（label 包住原生 checkbox，
+				 * 轨道与滑块是展示层）—— 视觉声明复用同一组 CSS，见 index.css 的 .skill-switch。
+				 * 停用的技能**留在列表里**（否则开关没有落点），只是卡片降一档灰度。
+				 */}
+				<label className="skill-switch" title={skill.enabled ? "点击停用" : "点击启用"}>
+					<input
+						type="checkbox"
+						checked={skill.enabled}
+						disabled={busy}
+						aria-label={`${skill.enabled ? "停用" : "启用"}技能 ${skill.name}`}
+						onChange={(e) => onToggle(skill.name, e.currentTarget.checked)}
+					/>
+					<span className="skill-switch-track">
+						<span className="skill-switch-thumb" />
+					</span>
+				</label>
 			</div>
+			{/* 元数据行。来源路径被截短，故整行的 title 给完整路径（没有来源时不给 title）。 */}
+			<p className="skill-card-meta" title={skill.sourcePath}>
+				{meta.join(" · ")}
+			</p>
 			<p className="skill-card-desc">{skill.description}</p>
 			<p className="skill-card-path" title={skill.filePath}>
 				{skill.filePath}

@@ -3,6 +3,8 @@ import {
 	applyCompletion,
 	completionTrigger,
 	filterItems,
+	sectionize,
+	type CompletionGroup,
 	type CompletionItem,
 } from "./autocomplete.ts";
 
@@ -106,5 +108,40 @@ describe("filterItems", () => {
 
 	it("limit 生效", () => {
 		expect(filterItems(items, "main", 2)).toHaveLength(2);
+	});
+});
+
+describe("sectionize", () => {
+	const item = (label: string, group?: CompletionGroup): CompletionItem =>
+		group === undefined ? { label, insert: label } : { label, insert: label, group };
+
+	it("技能组恒在指令组前（即使过滤结果里模板项更靠前）", () => {
+		const out = sectionize([item("/weekly", "command"), item("/skill:docx", "skill")]);
+		expect(out.map((s) => s.group)).toEqual(["skill", "command"]);
+		expect(out[0]?.items.map((i) => i.label)).toEqual(["/skill:docx"]);
+		expect(out[1]?.items.map((i) => i.label)).toEqual(["/weekly"]);
+	});
+
+	it("空组不产出（菜单不为它渲染标题）", () => {
+		const skillOnly = sectionize([item("/skill:docx", "skill")]);
+		expect(skillOnly.map((s) => s.group)).toEqual(["skill"]);
+		const commandOnly = sectionize([item("/new", "command")]);
+		expect(commandOnly.map((s) => s.group)).toEqual(["command"]);
+	});
+
+	it("组内保持传入顺序（打分仍决定组内次序）", () => {
+		const out = sectionize([item("/skill:b", "skill"), item("/skill:a", "skill")]);
+		expect(out[0]?.items.map((i) => i.label)).toEqual(["/skill:b", "/skill:a"]);
+	});
+
+	it("未分组的项（@ 文件候选）合成无标题节，排在最后", () => {
+		const out = sectionize([item("@a.ts"), item("@b.ts")]);
+		expect(out).toHaveLength(1);
+		expect(out[0]?.group).toBeUndefined();
+		expect(out[0]?.items).toHaveLength(2);
+	});
+
+	it("空表 → 无节", () => {
+		expect(sectionize([])).toEqual([]);
 	});
 });

@@ -92,6 +92,12 @@ export interface UserMessage {
 	readonly at: number;
 	/** 本条消息携带的图片附件（仅用于 UI 展示缩略图）。 */
 	readonly images?: readonly ImagePart[];
+	/**
+	 * 本条消息里调用的技能名（`/skill:<name>` 被 pi 展开、由 shared/skill-block.ts
+	 * 剥出的结果）。技能正文只进模型上下文、不进 UI —— 气泡按这里的名字渲染胶囊。
+	 * 无技能时**不带该字段**，UI 按缺省渲染（口径同 images）。
+	 */
+	readonly skillNames?: readonly string[];
 }
 
 export interface AssistantMessage {

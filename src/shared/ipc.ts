@@ -150,6 +150,19 @@ export const INVOKE = {
 	sessionArchive: "session:archive",
 	/** 重命名会话（写入 pi 的 session_info 条目）。path 定位，name 为新名。 */
 	sessionRename: "session:rename",
+	/**
+	 * 「重新开始」：把会话回退到锚点消息**之前**并继续，被放弃的后续
+	 * （若确有内容）抽成一条新会话留在侧栏，不丢东西。
+	 * 锚点用**用户消息序号（0 基）**而非条目 id：在线路径下渲染层的 user 消息
+	 * id 是 session-host 自己造的，与落盘条目 id 不一致，daemon 侧按序号
+	 * 用 `getUserMessagesForForking()` 解析真实条目 id（spec「实测修订」）。
+	 */
+	sessionRestart: "session:restart",
+	/**
+	 * 「分支出新会话」：从锚点消息（同样是用户消息序号）之前派生一条新会话，
+	 * 母会话原样不动（对比 sessionRestart 的「就地回退 + 抽枝」）。
+	 */
+	sessionBranch: "session:branch",
 	/** 删除会话文件。当前活动会话由 daemon 拒删（需先新建任务）。 */
 	sessionDelete: "session:delete",
 	/**
@@ -384,8 +397,13 @@ export const INVOKE = {
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
-	/** 已安装技能清单（独立页面用，不再借道设置快照）。 */
+	/** 已安装技能清单 + 启停状态 + 清单段成本（独立页面用，不再借道设置快照）。 */
 	skillsSnapshot: "skills:snapshot",
+	/**
+	 * 启用 / 停用一个技能（技能页卡片上的开关）。停用是**用户级覆盖**，不改 SKILL.md。
+	 * 返回**新的完整快照**：列表、已启用数与 token 数字一次到位，页面不必再拉一次。
+	 */
+	setSkillEnabled: "skills:set-enabled",
 	/**
 	 * 导入技能：把含 SKILL.md 的文件夹（或单个 .md）复制进用户技能目录。
 	 * 返回安装后的技能信息；同名已存在、缺 SKILL.md、frontmatter 不全都会报错。
@@ -637,12 +655,18 @@ export interface RunLedgerResult {
 	readonly entries: readonly RunLedgerEntry[];
 }
 
-/** 一条 `/` 命令的展示信息（技能 / 自有命令）。 */
+/** 一条 `/` 命令的展示信息（技能 / 提示词模板 / 内置命令）。 */
 export interface CommandItem {
 	/** 命令名（不含 /）。技能形如 `skill:docx`，模板形如 `weekly`。 */
 	readonly name: string;
 	readonly description: string;
-	/** 来源，供 renderer 分组显示。 */
+	/**
+	 * 来源，供 renderer 分组显示：`skill` → `/` 菜单的「技能」组（带图标、置顶），
+	 * `template` / `builtin` → 「指令」组。
+	 *
+	 * 分组**只认这个字段**，不在渲染层按名字前缀推断 —— 技能与模板在菜单里
+	 * 都只是一个 `/` 开头的名字，看不出类型。
+	 */
 	readonly source: "skill" | "template" | "builtin";
 }
 
@@ -672,7 +696,36 @@ export interface ExpertListItem {
 	readonly source: "builtin" | "user";
 }
 
-/** 一条历史会话的列表项（session:list 的结果元素）。 */
+/**
+ * 会话分支（session:restart / session:branch）的失败原因。
+ * 走「返回结果」而不是 reject：这些是**可预期的业务拒绝**（流式中、锚点不存在…），
+ * 界面要按 reason 给不同文案，异常通道承载不了这种区分。
+ */
+export type SessionBranchFailReason =
+	/** 会话正在生成中（run 未结束，不允许换历史）。 */
+	| "busy"
+	/** 该会话还没有会话文件（未发送过消息）。 */
+	| "no-file"
+	/** 锚点条目不在该会话里（renderer 传的 id 已失效/不属于此会话）。 */
+	| "no-such-entry"
+	/** 落盘失败（分支文件写入 / 母文件截断失败）。 */
+	| "write-failed";
+
+/**
+ * session:restart / session:branch 的统一返回。
+ *
+ * branchPath / branchTitle 仅在**确实抽枝产生了分支会话**时有值：
+ * 「重新开始」在分叉点之后没有内容时不产生分支会话（没有需要保存的未来），
+ * 此时二者缺席，调用方据此只提示「已回到这一轮之前」。
+ */
+export type SessionBranchResult =
+	| { readonly ok: true; readonly branchPath?: string; readonly branchTitle?: string }
+	| { readonly ok: false; readonly reason: SessionBranchFailReason; readonly message: string };
+
+/**
+ * 一条历史会话的列表项（session:list 的结果元素）。
+ * parentSession 有值即分支会话（来源标记）；path 仍是定位键。
+ */
 export interface SessionSummary {
 	readonly id: string;
 	/** 会话文件绝对路径（resume/rename/delete 的定位键）。 */
@@ -685,6 +738,12 @@ export interface SessionSummary {
 	readonly cwd: string;
 	/** 是否临时任务会话（daemon 按 cwd 目录名形态判定好：自动时间戳目录 / 历史「临时任务」目录 / 旧 playground 占位；生效根本身归空间区，2026-09-15。UI 不推导）。 */
 	readonly isTempTask: boolean;
+	/**
+	 * 母会话文件绝对路径（分支会话的来源标记，取自会话文件 header 的
+	 * parentSession，pi 未写入时由我方补写）；普通会话为 undefined，
+	 * 不要用空串。母会话已被删除时该值照旧保留 —— 标记不提供跳转即可。
+	 */
+	readonly parentSession?: string;
 	/** epoch ms。 */
 	readonly createdAt: number;
 	readonly modifiedAt: number;
@@ -837,6 +896,22 @@ export interface InvokeMap {
 	 */
 	[INVOKE.sessionArchive]: { args: [path: string, archived: boolean]; result: void };
 	[INVOKE.sessionRename]: { args: [path: string, name: string]; result: void };
+	/**
+	 * 「重新开始」：回退到该锚点消息之前并继续（被放弃的后续抽成新会话）。
+	 * userIndex 是**用户消息序号（0 基）**，与 renderer 的用户消息列表同序；
+	 * 不是条目 id（在线路径两侧 id 不一致，见 INVOKE.sessionRestart 的说明）。
+	 * 返回而非 reject —— 拒绝原因（busy/no-file/no-such-entry/write-failed）
+	 * 是界面文案的分支依据，且失败时保证会话状态不变。
+	 */
+	[INVOKE.sessionRestart]: {
+		args: [path: string, userIndex: number];
+		result: SessionBranchResult;
+	};
+	/** 「分支出新会话」：从该锚点消息（用户消息序号）之前派生新会话（母会话不动），返回同上。 */
+	[INVOKE.sessionBranch]: {
+		args: [path: string, userIndex: number];
+		result: SessionBranchResult;
+	};
 	[INVOKE.sessionDelete]: { args: [path: string]; result: void };
 	[INVOKE.sessionExport]: { args: [path: string]; result: { outputPath: string } };
 	[INVOKE.saveToWorkspace]: { args: [name: string]; result: void };
@@ -899,6 +974,8 @@ export interface InvokeMap {
 	[INVOKE.setPermissions]: { args: [settings: PermissionSettings]; result: PermissionInfo };
 
 	[INVOKE.skillsSnapshot]: { args: []; result: SkillsSnapshot };
+	/** enabled=true 时 daemon 删掉该技能在 skillOverrides 里的键（缺省即启用，只有一种表示）。 */
+	[INVOKE.setSkillEnabled]: { args: [name: string, enabled: boolean]; result: SkillsSnapshot };
 	[INVOKE.importSkill]: { args: [sourcePath: string]; result: SkillInfo };
 	[INVOKE.pickSkillDirectory]: { args: []; result: string | undefined };
 

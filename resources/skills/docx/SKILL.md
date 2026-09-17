@@ -61,7 +61,9 @@ description: "专业 Word 文档（.docx）创作与交付助手。生成需要�
 ├── design-token/      # 样式决策查表（skill 说明 + 预编译脚本）
 ├── tokens/            # 预编译 design tokens（compiled/ 运行时直读）
 ├── typeset/           # 8 模板骨架 + 4 装饰组件 + 8 排版 prompt
-└── html-review/       # HTML 静态门禁（纯 stdlib 脚本 + 规则 references）
+├── html-review/       # HTML 静态门禁（纯 stdlib 脚本 + 规则 references）
+├── format-extract/    # 既有 .docx → HTML + 图片（复用原文档版式，内部能力）
+└── generate-fillable-contract-html/   # 待填合同/报价单/委托书 HTML（书签契约）
 ```
 
 ---

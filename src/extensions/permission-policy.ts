@@ -199,8 +199,14 @@ export function declareReadOnlyTools(toolNames: readonly string[]): void {
  * htmlPath 读侧不单判：它通常是模型刚在工作区写好的排版中间态。
  * venv（~/.venv-html-to-docx）与引擎目录的写入是工具内部 spawn 的副作用，
  * 不经工具入参 —— 与 AutomationStore 落 configDir 同例，不需要也不许为阶段 1 开口子。
+ *
+ * docx_extract 同档（spec Requirement: docx→HTML 版式提取）：它读 docxPath、
+ * 写 outputPath（HTML）+ assetsDir（图片目录）。判定锚定 outputPath ——
+ * 「照既有文档版式重排」的产物就该落工作区，写侧语义与 write / docx_convert 一致。
+ * assetsDir 不单判：缺省时它就在 outputPath 旁边（同目录），显式给也只在产物目录附近；
+ * 要锚两个路径会把判定链复杂化，收益却只是同一目录再问一次。
  */
-const MUTATING = new Set(["write", "edit", "docx_convert"]);
+const MUTATING = new Set(["write", "edit", "docx_convert", "docx_extract"]);
 
 /** 会执行任意命令的工具。powershell 在 craft 白名单里；bash 默认工具集没有，但扩展或设置可能启用。 */
 const SHELL = new Set(["bash", "powershell"]);
@@ -633,7 +639,7 @@ function decideUnderMode(
 		return {
 			kind: "ask",
 			risk: "medium",
-			// docx_convert 与 write 同为「产出新文件」，edit 是改已有文件。
+			// docx_convert / docx_extract 与 write 同为「产出新文件」，edit 是改已有文件。
 			summary: toolName === "edit" ? "修改工作目录之外的文件" : "写入工作目录之外的文件",
 			details: target,
 		};

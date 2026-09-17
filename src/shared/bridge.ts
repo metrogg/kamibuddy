@@ -29,6 +29,7 @@ import type {
 	QuestionnaireResponse,
 	RunLedgerResult,
 	SaveArtifactRequest,
+	SessionBranchResult,
 	SessionSummary,
 	UiRequest,
 	UiResponse,
@@ -119,6 +120,21 @@ export interface KamiBridge {
 	readonly resumeSession: (path: string) => Promise<void>;
 	/** 重命名会话（写入 pi 的 session_info 条目）。 */
 	readonly renameSession: (path: string, name: string) => Promise<void>;
+	/**
+	 * 「重新开始」：把 path 会话回退到 userIndex（用户消息序号，0 基）之前并继续。
+	 * 被放弃的后续会抽成一条新会话；不产生分支时结果里没有 branchPath/branchTitle。
+	 * 失败是可预期的业务拒绝（流式中 / 无会话文件 / 锚点不存在 / 落盘失败），
+	 * 按 SessionBranchResult.reason 给文案，且此时会话状态不变。
+	 */
+	readonly restartSessionFrom: (
+		path: string,
+		userIndex: number,
+	) => Promise<SessionBranchResult>;
+	/** 「分支出新会话」：从 userIndex（用户消息序号）之前派生一条新会话并切过去，母会话原样不动。 */
+	readonly branchSessionFrom: (
+		path: string,
+		userIndex: number,
+	) => Promise<SessionBranchResult>;
 	/** 删除会话文件。当前活动会话会被 daemon 拒删（reject 原因）。 */
 	readonly deleteSession: (path: string) => Promise<void>;
 	/**
@@ -290,6 +306,8 @@ export interface KamiBridge {
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
 	readonly skillsSnapshot: () => Promise<SkillsSnapshot>;
+	/** 启停一个技能，返回新快照（列表 + 成本数字一次到位，页面不必再拉一次）。 */
+	readonly setSkillEnabled: (name: string, enabled: boolean) => Promise<SkillsSnapshot>;
 	readonly importSkill: (sourcePath: string) => Promise<SkillInfo>;
 	readonly pickSkillDirectory: () => Promise<string | undefined>;
 

@@ -58,6 +58,7 @@ import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import type { SystemSegmentStat } from "../shared/observability.ts";
 import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
+import { splitSkillBlocks } from "../shared/skill-block.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
 import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -118,6 +119,10 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	// 见 TOOL_DONE_LABELS）：卡片本体就是清单渲染，进度由 todos 内容表达，
 	// 标题不随 执行中/已完成 跳变。
 	todo_write: "任务列表",
+	// 与工具注册的 label 同词（WorkBuddy 的动作词：「正在加载技能 xxx」）。
+	use_skill: "加载技能",
+	// 与工具注册的 label 同词（动作词；执行态是本地读 docx → 落 HTML + 图片）。
+	docx_extract: "提取文档版式",
 };
 
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
@@ -137,6 +142,8 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	questionnaire: "已回答",
 	task: "已完成",
 	todo_write: "任务列表",
+	use_skill: "已加载",
+	docx_extract: "已提取",
 };
 
 /**
@@ -150,6 +157,10 @@ const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
  * read/ls/grep/find/read_me 不在列：本地快操作几乎瞬时完成，
  * 参数又小（一个路径/一个词/一个模块名），生成期上屏反而闪一下，卡片等执行态再上
  * （WorkBuddy 同：listFile/readFile 的卡片只有 列出中/读取中 执行态标签）。
+ * use_skill 同档（同一口径）：读一份本地 SKILL.md，入参只有一个短技能名，
+ * 参数生成期上屏只会闪一下接执行态 —— 不进本表。
+ * docx_extract 同档：本地快操作（读一份 docx + 落 HTML/图片），
+ * 入参只有两个路径，参数生成期上屏同样只会闪一下。
  */
 const STREAM_CARD_TOOLS: readonly string[] = [
 	"write",
@@ -827,6 +838,41 @@ export class SessionHost {
 		return this.session.sessionManager.getSessionFile();
 	}
 
+	/* ── 会话分支的窄出口（spec: add-session-branching）──────────────────
+	 * 会话分支要「回退到某条用户消息之前」与「从那里派生新会话」，需要 pi 的
+	 * 用户消息清单 / 条目树指针 / 叶子。**只开窄方法、不暴露 AgentSession 对象**：
+	 * daemon 拿到的就是普通数据（字符串 id 与 parentId），pi 的类型仍然止步于
+	 * 本文件（AGENTS.md §1.2 的适配层纪律）。
+	 */
+
+	/**
+	 * 可分支的用户消息（用户消息序号 → 落盘条目 id 的桥接）。
+	 *
+	 * 为什么必须由宿主桥接（spec「实测修订」）：渲染层在线路径的 user 消息 id 是
+	 * `nextId("user")` 造的（translate 的 message_start 分支），与落盘条目 id
+	 * **不一致**，所以 IPC 只传用户消息序号，真 id 在这里现取。技能消息在条目里
+	 * 就是普通 user 消息，不额外拆条（同一条只出现一次）。
+	 */
+	listForkableUserMessages(): readonly { entryId: string; text: string }[] {
+		return this.session.getUserMessagesForForking();
+	}
+
+	/**
+	 * 条目树指针（id / parentId）。会话分支的「分叉点之后是否还有内容」判定
+	 * 与「分叉点的父条目」定位只用这两个字段，故不返回整条目。
+	 */
+	listEntryRefs(): readonly { id: string; parentId: string | null }[] {
+		return this.session.sessionManager.getEntries().map((entry) => ({
+			id: entry.id,
+			parentId: entry.parentId ?? null,
+		}));
+	}
+
+	/** 当前叶子条目 id（空会话为 null）—— 「重新开始」抽枝时抽到哪一条。 */
+	currentLeafId(): string | null {
+		return this.session.sessionManager.getLeafId();
+	}
+
 	async setModel(modelKey: string): Promise<void> {
 		const model = this.options.catalog.resolveModel(modelKey);
 		if (model === undefined) throw new Error("该模型不可用");
@@ -1265,14 +1311,20 @@ export class SessionHost {
 					// 用户消息由 daemon 确认后回显，而不是 UI 乐观插入 ——
 					// 排队（steer / followUp）时消息的实际落位与发送顺序可能不同。
 					const { text, images } = userContentOf(message.content);
+					// 技能正文（pi 展开的整篇 SKILL.md）只该进模型上下文，不该进用户气泡：
+					// 剥成技能名 + 用户自己打的补充文本，两条产出路径同一个解析出口
+					// （历史重建见 session-rebuild 的 userView）。
+					const { skillNames, text: displayText } = splitSkillBlocks(text);
 					emit({
 						type: "user_message",
 						message: {
 							id: this.nextId("user"),
 							role: "user",
-							text,
+							text: displayText,
 							// 无图不带字段：UserMessage.images 是可选契约，UI 按缺省渲染。
 							...(images === undefined ? {} : { images }),
+							// 无技能同理，不带空数组（口径同 images）。
+							...(skillNames.length === 0 ? {} : { skillNames }),
 							at: message.timestamp,
 						},
 					});

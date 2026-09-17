@@ -157,6 +157,23 @@ describe("buildConversationEntries · 消息映射", () => {
 		]);
 	});
 
+	it("user 的 pi 技能展开文本（/skill:docx 写周报）：text 只留补充文本，skillNames 结构化下发", () => {
+		// 落盘的是 pi 展开后的用户消息（agent-session.js:995-996 的形状），
+		// 重建必须与在线路径（session-host 的 message_start）剥出同一份结果。
+		const expanded =
+			'<skill name="docx" location="C:\\Users\\me\\SKILL.md">\n' +
+			"References are relative to C:\\Users\\me.\n\n做 Word 文档。\n</skill>\n\n写周报";
+		const out = buildConversationEntries([userEntry("u4", expanded)]);
+		// toEqual 同时钉住「无 images 键」：重建结果与在线事件逐字段同形。
+		expect(asUser(out[0]!)).toEqual({
+			id: "u4",
+			role: "user",
+			text: "写周报",
+			skillNames: ["docx"],
+			at: AT,
+		});
+	});
+
 	it("assistant：text/thinking 多块拼接，usage 翻译成 TokenUsage（全字段含 cost 分项）", () => {
 		const out = buildConversationEntries([
 			assistantEntry("a1", [

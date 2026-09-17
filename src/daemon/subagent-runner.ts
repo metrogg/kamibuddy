@@ -32,6 +32,7 @@ import { sanitizeSubagentOutput } from "../core/subagent-sanitize.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
+import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
 import { createSandboxedRunner } from "./sandbox-runner.ts";
@@ -385,8 +386,22 @@ export function buildSubagentExtensions(
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
 		}),
+		/*
+		 * docx 版式提取：与 docx_convert 同档 —— 受控 spawn venv python
+		 * （命令与参数写死在 documents/docx-extract.ts）、不经 powershell，
+		 * 写侧判定锚定 outputPath。同样预先挂进子代理工具面：doc-formatter
+		 * 一类的角色在重排流程里要拿原文档版式，白名单里会有 docx_extract。
+		 */
+		createDocxExtractTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
 		// 不注册 visualizer（read_me / show_widget）：子代理的输出只以文本回传
 		// 主代理，widget 没有渲染通道 —— 注册了只会白占上下文
 		// （spec: add-inline-widgets）。
+		// 不注册 use_skill 同理，分界另有其理由：子代理提示词**不注入技能清单段**
+		// （composeSubagentPrompt 的注释：子代理能力面由自己的 tools 白名单界定），
+		// 模型手上没有技能清单，却多一个只能瞎猜技能名的工具 —— 注册等于给它一个
+		// 用不上的工具，还会诱使它去猜名字撞错。
 	];
 }

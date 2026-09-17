@@ -474,6 +474,45 @@ describe("formatSkillsSection", () => {
 		// 保守检查：不该出现我们自己旧格式的痕迹。
 		expect(section).not.toContain("可用技能：");
 	});
+
+	it("清单段含本会话的调用约定一句：优先 use_skill，无该工具时 read + <location>", () => {
+		const section = formatSkillsSection([
+			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
+		]);
+		expect(section).toContain("优先调用 use_skill");
+		expect(section).toContain("<location>");
+		// 「技能名不许凭记忆编」的约束语义必须保留。
+		expect(section).toContain("不要凭记忆拼写");
+		// 约定句在 pi 的清单之后（追加，不是重写）。
+		expect(section.indexOf("</available_skills>")).toBeLessThan(section.indexOf("优先调用 use_skill"));
+	});
+
+	it("disableModelInvocation 的技能不进清单段（pi 的过滤依赖这个字段）", () => {
+		const section = formatSkillsSection([
+			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
+			{
+				name: "typeset",
+				description: "内部排版子技能",
+				filePath: "C:\\skills\\typeset\\SKILL.md",
+				disableModelInvocation: true,
+			},
+		]);
+		expect(section).toContain("meeting-notes");
+		expect(section).not.toContain("typeset");
+	});
+
+	it("技能全被 disable-model-invocation 过滤掉 → 空串（不留孤零零的调用约定）", () => {
+		expect(
+			formatSkillsSection([
+				{
+					name: "typeset",
+					description: "内部排版子技能",
+					filePath: "C:\\skills\\typeset\\SKILL.md",
+					disableModelInvocation: true,
+				},
+			]),
+		).toBe("");
+	});
 });
 
 describe("会话技能路径（专家私有技能预加载）", () => {
@@ -534,7 +573,12 @@ describe("skillsSectionForMode（技能段门控）", () => {
 		expect(skillsSectionForMode(["bash"], SKILLS)).toContain("meeting-notes");
 	});
 
-	it("白名单无 read / bash → 不注入（plan 模式：模型调不到 read，注入等于留坑）", () => {
+	it("白名单只有 use_skill（无 read / bash）→ 也注入（技能加载工具算数）", () => {
+		// use_skill 自带「读 SKILL.md」的能力，模型据此能兑现清单里的每个技能名。
+		expect(skillsSectionForMode(["use_skill"], SKILLS)).toContain("meeting-notes");
+	});
+
+	it("白名单 read / bash / use_skill 一个都没有 → 不注入（注入等于留坑）", () => {
 		expect(skillsSectionForMode(["grep", "write"], SKILLS)).toBe("");
 		// 无技能时同样是空串（零 token），两态不靠字面量区分。
 		expect(skillsSectionForMode(["read"], [])).toBe("");

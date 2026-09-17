@@ -23,7 +23,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { AutomationStore } from "../core/automation-store.ts";
 import { SessionArchive } from "../core/session-archive.ts";
@@ -37,6 +37,7 @@ import {
 	getTempTasksDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
+import { optionalBoolean, parseFrontmatter, type ParsedDocument } from "../core/frontmatter.ts";
 import { ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
@@ -79,7 +80,9 @@ import {
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
 import { DEFAULT_STYLE_ID, loadResources, resolveStyle, toDescriptors } from "../core/resources.ts";
-import { importSkill, userSkillsDir } from "../core/skill-install.ts";
+import { importSkill, readInstalledMeta, userSkillsDir } from "../core/skill-install.ts";
+import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
+import { computeSkillsCost } from "../core/skills-cost.ts";
 import { buildExportPath } from "../core/session-export.ts";
 import { restoredToolLabel, SessionHost } from "../core/session-host.ts";
 import {
@@ -123,6 +126,7 @@ import {
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
 import { teamExtensionFactory } from "../extensions/team-tools.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
+import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
 	DEFAULT_PERMISSIONS,
@@ -136,12 +140,14 @@ import {
 } from "../shared/permissions.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
+import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createMcpClient, type McpClientHandle } from "../extensions/mcp-client.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
+import { SKILL_COMMAND_PREFIX } from "../shared/skill-block.ts";
 import {
 	artifactsFromEntries,
 	conversationReducer,
@@ -181,6 +187,7 @@ import {
 	type QuestionnaireRequest,
 	type QuestionnaireResponse,
 	type RunLedgerResult,
+	type SessionBranchResult,
 	type SessionSummary,
 	type WorkspaceGroupMeta,
 } from "../shared/ipc.ts";
@@ -207,6 +214,7 @@ import { searchWeb } from "../core/web-search.ts";
 import {
 	isStreamingEvent,
 	isThinkingLevel,
+	type ConversationEntry,
 	type ModeDescriptor,
 	type SessionEvent,
 	type SessionEventEnvelope,
@@ -214,9 +222,27 @@ import {
 	type SubagentStatus,
 } from "../shared/session-events.ts";
 import { requireBranchName } from "../shared/worktree.ts";
-import type { CustomModelInput, CustomProviderInput, SkillInfo } from "../shared/settings.ts";
+import type { CustomModelInput, CustomProviderInput, SkillInfo, SkillsSnapshot } from "../shared/settings.ts";
 import { deriveContextUsageDetail } from "./context-usage-detail.ts";
 import { deriveSessionTitle, searchSessionFiles } from "./conversation-search.ts";
+import {
+	createBranchedSessionFile,
+	createEmptySessionFile,
+	createSessionFileFromPrefix,
+	readSessionHeader,
+	setSessionName,
+	setSessionParentSession,
+	truncateSessionTo,
+	truncateSessionToStart,
+} from "../core/session-file.ts";
+import {
+	branchFail,
+	branchOk,
+	buildBranchTitle,
+	decideExtract,
+	resolveAnchorForIndex,
+} from "./session-branch.ts";
+import type { ContextUsageDetail } from "../shared/context-usage.ts";
 import { readUsageStats } from "./usage-stats.ts";
 import { createAutomationRunExecutor } from "./automation-runner.ts";
 import { AutomationScheduler } from "./automation-scheduler.ts";
@@ -350,6 +376,68 @@ ensureUserMemoryFiles();
 /** 内置技能目录（resources/skills/，随应用分发）。 */
 const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
 
+/** 技能列表需要、而 pi 的 loader 不提供的 frontmatter 字段。 */
+interface SkillMeta {
+	readonly userInvocable: boolean;
+	readonly version: string | undefined;
+}
+
+/**
+ * 读 `version`（缺省 = 不带该字段）。
+ *
+ * 只认非空字符串：写成裸数字（`version: 1.0`）会被我们的 frontmatter 解析器当数字
+ * （值变成 1，`.0` 丢掉）——拿它当版本号是**静默改值**，宁可显式记日志 + 不带。
+ * 单独判它而不是并进 readSkillMeta 的解析失败兜底：一个字段写坏不该连带
+ * 把 `user-invocable` 一起降级（那会让技能莫名从 `/` 菜单消失）。
+ */
+function readSkillVersion(doc: ParsedDocument, filePath: string): string | undefined {
+	const value = doc.frontmatter["version"];
+	if (value === undefined) return undefined;
+	if (typeof value === "string" && value !== "") return value;
+	console.error(`技能「${filePath}」的 frontmatter 字段 version 应为非空字符串（写裸数字会丢精度，如 1.0 → 1），已忽略：`, value);
+	return undefined;
+}
+
+/**
+ * 读一个技能的 `user-invocable`（缺省 true）与 `version`（缺省不带）。
+ *
+ * 为什么要**多读一次盘**：真正加载技能的是 pi 的 `loadSkills`，而它只认
+ * name / description / disable-model-invocation，未知键（含 `user-invocable`、`version`）直接丢弃
+ * （pi core/skills.js 的 frontmatter 映射表）—— 这些字段根本到不了我们手上。
+ * 选择再解析一次而不是改 pi 的加载器或自己接管加载：只补这几个字段，路径发现、
+ * 优先级、name 校验、正文装载仍全由 pi 决定（AGENTS.md §1.2 的适配层口径），
+ * 代价是一次小文件读取，技能列表本来就是现读不缓存的。
+ * **两个字段共用这一次读盘**，不要为新增字段再开一次读取。
+ *
+ * 解析失败（我们的解析器是真 YAML 的子集，pi 能读、我们读不了的文件是可能的）：
+ * 响亮记日志，但**逐文件降级**（`user-invocable` 为 true、无 version）。两条理由：
+ * ① 整个列表接口不能因为一个坏 SKILL.md 打挂（`listSkills` 外层 catch 的既有口径是
+ * 「页面照常打开」）；② 降级成 false 更糟 —— 技能会从 `/` 菜单静默消失，用户连手动
+ * `/skill:name` 都补不出来，故障被藏进「看不见」。默认可见 + 日志里的报错，坏文件是能被发现的。
+ */
+function readSkillMeta(filePath: string): SkillMeta {
+	try {
+		const doc = parseFrontmatter(readFileSync(filePath, "utf8"), filePath);
+		return {
+			userInvocable: optionalBoolean(doc, "user-invocable", true),
+			version: readSkillVersion(doc, filePath),
+		};
+	} catch (error) {
+		console.error(`技能「${filePath}」的 frontmatter 解析失败，暂按可在 / 菜单调用处理：`, error);
+		return { userInvocable: true, version: undefined };
+	}
+}
+
+/**
+ * `listSkills` 的产物：`SkillInfo` 去掉 `enabled`。
+ *
+ * 为什么少了那个字段：`enabled` 是**用户级覆盖**（`preferences.json` 的 skillOverrides），
+ * 与技能自身的元数据无关，只能由 skillSets() 在读偏好之后统一标注 —— 一个技能的
+ * 「全量」与「启用」两面必须来自同一次读盘、同一份 overrides，否则两次读之间用户
+ * 正好改了开关，就会出现「列表里显示启用、过滤集合里却没有」的瞬时错位。
+ */
+type SkillEntry = Omit<SkillInfo, "enabled">;
+
 /**
  * 技能清单。技能页展示与提示词组装共用这一个来源，且**每次现读** ——
  * 导入新技能后下一轮对话即生效，无需重启应用。
@@ -362,7 +450,7 @@ const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
  * 独立于 SessionHost 的加载（宿主懒建，技能页要在第一次发消息前就能看）。
  * 加载失败不抛：页面不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
  */
-function listSkills(expertSkillsDir?: string): SkillInfo[] {
+function listSkills(expertSkillsDir?: string): SkillEntry[] {
 	try {
 		const { skills } = loadSkills({
 			/*
@@ -377,13 +465,33 @@ function listSkills(expertSkillsDir?: string): SkillInfo[] {
 			skillPaths: sessionSkillPaths(BUILTIN_SKILLS_DIR, expertSkillsDir),
 			includeDefaults: true,
 		});
-		return skills.map((s) => ({
-			name: s.name,
-			description: s.description,
-			filePath: s.filePath,
-			origin: s.filePath.startsWith(BUILTIN_SKILLS_DIR) ? "builtin" : "user",
-			disableModelInvocation: s.disableModelInvocation,
-		}));
+		return skills.map((s): SkillEntry => {
+			const origin = s.filePath.startsWith(BUILTIN_SKILLS_DIR) ? "builtin" : "user";
+			const meta = readSkillMeta(s.filePath);
+			/*
+			 * 安装元数据只对**自装且经技能页导入**的技能存在（sidecar 写在技能目录里）。
+			 * 内置技能不该有、手工放进技能目录的技能没有 —— 两种都没有 sidecar，
+			 * 于是 installedAt / sourcePath 不带字段，卡片按「手工放置」呈现。
+			 */
+			const installed = origin === "user" ? readInstalledMeta(dirname(s.filePath)) : undefined;
+			/*
+			 * version 以 SKILL.md 为准（技能自身的真源，用户可能手改过），
+			 * sidecar 里那份安装时的记录只在 SKILL.md 没声明时兜底。
+			 */
+			const version = meta.version ?? installed?.version;
+			return {
+				name: s.name,
+				description: s.description,
+				filePath: s.filePath,
+				origin,
+				disableModelInvocation: s.disableModelInvocation,
+				userInvocable: meta.userInvocable,
+				// 元数据缺失即不带字段（不填默认值）——UI 据此留白，不显示伪造值。
+				...(version === undefined ? {} : { version }),
+				...(installed?.installedAt === undefined ? {} : { installedAt: installed.installedAt }),
+				...(installed?.sourcePath === undefined ? {} : { sourcePath: installed.sourcePath }),
+			};
+		});
 	} catch (error) {
 		console.error("技能加载失败（设置页列表为空）：", error);
 		return [];
@@ -401,6 +509,117 @@ function listSkills(expertSkillsDir?: string): SkillInfo[] {
 function loadExpertsNow(): readonly ExpertDefinition[] {
 	// 第三个参数是全局技能目录：私有技能与它重名要在加载期拦下（spec: 专家技能重名防护）。
 	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILLS_DIR);
+}
+
+/**
+ * 会话技能来源的**单一出口**：语义 = `listSkills(绑定专家的私有技能目录)`，
+ * 未绑定专家时就是全局技能池。
+ *
+ * 为什么必须同源：清单段是模型看到的「有哪些技能」，use_skill 是它唯一能兑现这句话
+ * 的手段 —— 两处各读一份盘，模型就会看到清单里有、工具却加载不了的技能（或反之）。
+ *
+ * 为什么**不**用 SessionHost 自持的 `resourceLoader.getSkills()`（其 skillDescriptors
+ * getter，当前无消费方）：那份是宿主按自己的加载路径发现的第三个技能集，与清单段走的
+ * listSkills（内置 + 用户 + 可选专家私有）并不一致 —— 用它等于再制造一个来源，
+ * 与「工具与提示词一致」正好相反。该 getter 保持无消费方。
+ *
+ * 每次现读不缓存：与 listSkills 同一口径，导入新技能后下一次工具调用/下一轮对话即生效。
+ */
+function sessionSkills(expertId: string | undefined): SkillEntry[] {
+	// expertId 缺失时**短路**：未绑专家的会话不该走专家库读路径（专家库加载从紧，
+	// 坏专家文件抛错——与 composeSystemPrompt 里那次短路同一个理由）。
+	if (expertId === undefined) return listSkills();
+	return listSkills(resolveSessionExpert(loadExpertsNow(), expertId)?.skillsDir);
+}
+
+/**
+ * 会话技能的两面视图（spec: add-skill-management）：
+ *   all     —— 全量，逐项标注用户级启停（技能页/快照口径）
+ *   enabled —— 过了用户开关的集合（清单段 / `/` 菜单 / use_skill 判定口径）
+ *
+ * 一次读盘、一份 overrides 同时算出两面：分两次读会出现「读盘 A 时启用、过滤时已被关掉」
+ * 的瞬时错位；两次读偏好同理（每轮 compose 都在走这条路径）。
+ */
+function skillSets(expertId: string | undefined): {
+	readonly all: readonly SkillInfo[];
+	readonly enabled: readonly SkillInfo[];
+} {
+	const overrides = readPreferences().skillOverrides;
+	const all: SkillInfo[] = sessionSkills(expertId).map((skill) => ({
+		...skill,
+		enabled: isSkillEnabled(skill.name, overrides),
+	}));
+	return { all, enabled: filterEnabledSkills(all, overrides) };
+}
+
+/**
+ * 已启用技能的**单一出口**。清单段、`/` 菜单、use_skill 的可加载集合都必须从这里取
+ * —— 三处各写一份过滤，迟早出现「菜单里有但 use_skill 加载不了」。
+ *
+ * 技能页与 `skills:snapshot` **不走这里**（它们要全量，包括被停用的，否则开关没有落点）。
+ */
+function enabledSkills(expertId: string | undefined): readonly SkillInfo[] {
+	return skillSets(expertId).enabled;
+}
+
+/**
+ * SkillInfo → use_skill 工具的技能描述符（工具认五个字段，不关心 origin / userInvocable）。
+ * 两个注册点（用户会话 / 定时 run 会话）共用，字段集不会各自漂移。
+ *
+ * 传的是**全量**（含停用，逐项带 enabled）：工具要能分辨「没有这个技能」与
+ * 「这个技能被停用了」，两者给用户的行动项不同（见 extensions/use-skill-tool.ts）。
+ * 同源没有被破坏 —— enabled 与 enabledSkills() 出自 skillSets() 的同一次判定。
+ */
+function toUseSkills(expertId: string | undefined): UseSkillTarget[] {
+	return skillSets(expertId).all.map((s) => ({
+		name: s.name,
+		description: s.description,
+		filePath: s.filePath,
+		disableModelInvocation: s.disableModelInvocation,
+		enabled: s.enabled,
+	}));
+}
+
+/**
+ * SkillInfo → 提示词组装用的技能描述符。三个调用点（真实组装 / 提示词预览 / 快照成本）
+ * 共用同一份映射：字段集一旦分叉，就会出现「预览漏字段」「成本算少一截」这类静默漂移。
+ */
+function toSkillDescriptors(
+	skills: readonly Pick<SkillInfo, "name" | "description" | "filePath" | "disableModelInvocation">[],
+): SkillDescriptor[] {
+	return skills.map((s) => ({
+		name: s.name,
+		description: s.description,
+		filePath: s.filePath,
+		// 这一项不能省：pi 的 formatSkillsForPrompt 靠它把 disable-model-invocation
+		// 的技能从清单段过滤掉 —— 曾经在这里降维成三字段丢掉它 = 过滤整条失效，
+		// 声明「模型不可调用」的内部技能照样进提示词。
+		disableModelInvocation: s.disableModelInvocation,
+	}));
+}
+
+/**
+ * 技能快照的**唯一组装点**：`skills:snapshot`（打开技能页）与 `skills:set-enabled`
+ * （切开关后返回新快照）共用同一份，免得两处各算一遍、算出不同的数字
+ * （spec: 技能快照契约 —— 列表、开关状态、成本数字都来自同一次拉取）。
+ *
+ * 口径 = **全量**（含被停用的，逐项带 enabled）：技能页是开关的落点，
+ * 只给已启用的会让用户再也打不开。
+ *
+ * 成本用 computeSkillsCost（= formatSkillsSection + estimateTokens，与真实注入同一份
+ * 组装逻辑）对**已启用**技能算 —— 渲染层不另算一套，否则两个数字会慢慢分家。
+ */
+function buildSkillsSnapshot(): SkillsSnapshot {
+	const { all, enabled } = skillSets(undefined);
+	const cost = computeSkillsCost(toSkillDescriptors(enabled));
+	return {
+		skills: all,
+		userSkillsDir: userSkillsDir(),
+		enabledCount: cost.enabledCount,
+		skillsTokens: cost.skillsTokens,
+		// 未超阈值就不带这个字段（渲染层据此决定有没有提示条），而不是带一个空串。
+		...(cost.warning === undefined ? {} : { warning: cost.warning }),
+	};
 }
 
 /**
@@ -464,17 +683,13 @@ async function composeSystemPrompt(
 	// 未绑定专家不走这条读路径：专家库加载从紧（坏文件抛错），三模式会话不该被
 	// 一个坏专家包拖垮（短路求值刻意保留）。
 	const expert = expertId === undefined ? undefined : resolveSessionExpert(loadExpertsNow(), expertId);
-	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。绑定专家时
-	// 追加其私有技能目录（未绑定时与全局技能池完全一致）。
-	const skills: SkillDescriptor[] = listSkills(expert?.skillsDir).map((s) => ({
-		name: s.name,
-		description: s.description,
-		filePath: s.filePath,
-	}));
-	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里没有能读技能文件
-	// 的工具（read / bash）时，不注入技能段（见 core/prompt-composer.ts
-	// skillsSectionForMode）—— 否则会让模型去调用一个并不存在的 read 工具
-	//（plan 模式就是这个坑）。
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。技能与 use_skill
+	// 工具走同一个出口（skillSets）：绑定专家时其私有技能既进清单段、也进工具。
+	// 清单段只放**已启用**的（enabledSkills）—— 三处同源的那一份过滤，见 enabledSkills 注释。
+	const skills: SkillDescriptor[] = toSkillDescriptors(enabledSkills(expertId));
+	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里 read / bash / use_skill 一个
+	// 都没有时，不注入技能段（见 core/prompt-composer.ts skillsSectionForMode）
+	// —— 否则会让模型去调用一个并不存在的工具（plan 这类只读配置就是这个坑）。
 	const skillsSection = skillsSectionForMode(mode.tools, skills);
 	/*
 	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
@@ -783,6 +998,9 @@ const automationScheduler = new AutomationScheduler({
 		isOwnWorkspace: (dir) =>
 			isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
 		getWebSearchConfig,
+		// run 会话恒不绑专家，技能就是全局池 —— 但仍走技能单一出口 skillSets
+		//（与它自己的提示词技能清单段同源，见 skillSets / enabledSkills 注释）。
+		resolveSkills: () => toUseSkills(undefined),
 	}),
 	push: (event) => {
 		post({ kind: "push", channel: PUSH.automationEvent, payload: event });
@@ -1988,6 +2206,19 @@ async function createHost(
 			// （与 read 同语义），区外读取走通用的低风险询问，这里无需额外接线。
 			createDocReadTool(),
 			/*
+			 * 技能加载（三模式白名单都含 use_skill）：模型**自动**命中技能时用它取
+			 * SKILL.md 全文 —— pi 只有手动 /skill: 的展开，自动路径本来没有工具
+			 * （旧约定是让模型 read 技能文件，界面上只显示成一堆「读取文件」）。
+			 * 技能来源经回调注入、且与技能清单段**同源**（skillSets）；闭包在
+			 * 工具调用时才求值：会话中途换绑专家后，工具看到的技能集立刻跟上同出口
+			 * 产出的清单段，不会出现「清单里有、工具查不到」。
+			 * 传的是全量 + enabled 标记：被停用的技能要能被工具分辨出来并报出
+			 * 「已在技能页停用」（与「没这个技能」区分开），见 toUseSkills。
+			 */
+			createUseSkillTool({
+				resolveSkills: () => toUseSkills(bucket.conversation.state.expertId),
+			}),
+			/*
 			 * docx 生成：craft 白名单含 docx_convert，所有用户会话都装。
 			 * 转换是 daemon 进程内受控 spawn venv python（命令与参数写死在
 			 * documents/docx-convert.ts），不经 agent 的 powershell 自由 shell ——
@@ -1995,6 +2226,16 @@ async function createHost(
 			 * 产物文件」档：写侧判定锚定 outputPath（permission-policy 的 MUTATING）。
 			 */
 			createDocxConvertTool({
+				engineDir: join(getResourcesDir(), "docx-engine"),
+				homeDir: homedir(),
+			}),
+			/*
+			 * docx 版式提取：craft 白名单含 docx_extract，所有用户会话都装。
+			 * 与 docx_convert 同档：daemon 进程内受控 spawn venv python
+			 * （命令与参数写死在 documents/docx-extract.ts），不经 powershell；
+			 * 权限按「写工作区产物文件」档，写侧判定锚定 outputPath。
+			 */
+			createDocxExtractTool({
 				engineDir: join(getResourcesDir(), "docx-engine"),
 				homeDir: homedir(),
 			}),
@@ -2327,6 +2568,9 @@ async function listSessions(): Promise<SessionSummary[]> {
 				// 任务区判定收在 isTempCwd 一处（自动目录 / 历史共享临时目录 / 旧 playground 占位；
 				// 生效根本身归空间区，2026-09-15）。
 				isTempTask: isTempCwd(info.cwd),
+				// 分支来源：pi 的 listAll 已经从 header.parentSession 读出（SessionInfo.parentSessionPath），
+				// 不必为此再读一遍文件首行 —— 列表是热路径（每次 run 边界都推）。
+				parentSession: info.parentSessionPath,
 				createdAt: info.created.getTime(),
 				modifiedAt: info.modified.getTime(),
 				messageCount: info.messageCount,
@@ -2511,93 +2755,15 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	// 专家绑定同属这套沿用口径 —— resume 后专家身份不丢（state.expertId
 	// 随 freshConversation 进新桶，compose 时按 expertId 重新解析人格注入）。
 	// 历史归一（旧 "expert" 模式 → craft）也在 freshConversation 内完成。
-	const bucket = createBucket<SessionHost>({
+	const { bucket, contextUsage } = await mountSessionFile({
+		manager,
 		cwd: nextCwd,
-		conversation: freshConversation(
-			nextCwd,
-			currentBucket.conversation.state.sceneId,
-			currentBucket.conversation.state.interactionId,
-			currentBucket.conversation.state.expertId,
-		),
-		spawnBudget: readPreferences().spawnBudget,
+		sceneId: currentBucket.conversation.state.sceneId,
+		interactionId: currentBucket.conversation.state.interactionId,
+		expertId: currentBucket.conversation.state.expertId,
+		lastNonPlanInteraction: currentBucket.lastNonPlanInteraction,
+		skippedLines,
 	});
-	bucket.lastNonPlanInteraction = currentBucket.lastNonPlanInteraction;
-	/*
-	 * 副本身份从 cwd 反推（副本路径就是会话 cwd，形态可逆）。baseBranch 与
-	 * sourceCwd 反推不出 —— 副本目录名里的 slug 是**不可逆**的清洗结果
-	 *（`origin/main` 与 `origin-main` 都成了 `origin-main`），原仓库路径更是
-	 * 完全不在里面。按类型缺省留空，硬凑一个假的基准分支比不显示更糟。
-	 */
-	bucket.worktree = worktreeInfoFromCwd(nextCwd);
-	// 降级打开的跳过计数进桶：emitSessionEvent 把它并入该桶发出的 session_state。
-	if (skippedLines > 0) bucket.skippedLines = skippedLines;
-
-	// hostPromise 先占位（createHost 的扩展闭包会读它），失败清回 ——
-	// 与 getHost 的缓存语义一致。此处失败：桶未注册、指针未切，会话原样可重试。
-	const attempt = createHost(bucket, manager);
-	bucket.hostPromise = attempt;
-	attempt.catch(() => {
-		if (bucket.hostPromise === attempt) bucket.hostPromise = undefined;
-	});
-	const host = await attempt;
-	adoptHost(bucket, host);
-
-	// 桶内历史整体重建：entries 来自落盘条目（buildContextEntries 已完成
-	// 压缩裁剪，恢复视图与模型实际看到的上下文一致）。turn / cancelledTurns
-	// 属于旧 run 的瞬态，清空；artifacts 从落盘的 artifacts_presented
-	// custom 条目恢复（buildConversationEntries 翻译 → artifactsFromEntries 折叠，
-	// 清成 [] 会让恢复出的会话丢掉产物卡）；state 保留现值 ——
-	// 它刚被 adoptHost 的 session_state 换成新会话的权威值。
-	//
-	// usageDetail 不在清空之列：它描述「当前上下文占用多少」而不是旧 run 的
-	// 瞬态 —— resume 后 pi 从落盘消息重建了上下文，getContextUsage() 仍然
-	// 有效，圆环理应立即恢复。contextUsage 缺失（压缩后无响应的空窗）时派生
-	// 结果为 undefined，圆环隐藏才是正确语义（shared/conversation.ts 的
-	// reducer 对 session_state 同口径）。派生必须等 entries 重建之后：
-	// adoptHost 那次 session_state 已触发过一轮 emitContextUsageDetail，
-	// 彼时桶内 entries 还是空的 —— 那轮派生的是空历史成分（时序坑），
-	// 下方补发的事件在顺序上后发覆盖它。
-	const rebuilt = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
-	const contextUsage = host.state.contextUsage;
-	/*
-	 * resume 桶的系统提示词估算必须在这里现算（2026-09-16 实证修的 bug）：
-	 * compose 只在 before_agent_start（下一次发消息）跑，而新桶的
-	 * systemPromptTokens 默认 0 —— 不补算，下方补发的 context_usage 会把
-	 * sys/skills 记成 0，并且 renderer 是「后到覆盖」，把运行期桶推的正确值
-	 * 盖成 ~0（面板分类里「系统提示词 ~0」就是它）。piContext 置空与
-	 * prompt:preview 同口径（缺 pi 上下文段，估算略低——比例尺可接受）；
-	 * 组装失败降级为 0（估算缺席好过炸 resume）。
-	 */
-	try {
-		const state = bucket.conversation.state;
-		const composed = await composeSystemPrompt(
-			bucket.cwd,
-			state.sceneId,
-			state.interactionId,
-			state.expertId,
-			undefined,
-		);
-		bucket.systemPromptTokens = composed.systemTokens;
-		bucket.skillsTokens = composed.skillsTokens;
-		bucket.systemPromptSegments = composed.segments;
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		eventLog.append({ kind: "ipc_error", channel: "resume:compose-estimate", message });
-	}
-	const usageDetail = deriveContextUsageDetail({
-		entries: rebuilt,
-		contextUsage,
-		systemPromptTokens: bucket.systemPromptTokens,
-		skillsTokens: bucket.skillsTokens,
-	});
-	bucket.conversation = {
-		...bucket.conversation,
-		entries: rebuilt,
-		usageDetail,
-		turn: undefined,
-		cancelledTurns: [],
-		artifacts: artifactsFromEntries(rebuilt),
-	};
 
 	defaultWorkspaceDir = defaultCwdAfterResume(nextCwd);
 	setCurrentBucket(bucket);
@@ -2614,6 +2780,166 @@ async function resumeSessionOnce(path: string): Promise<void> {
 		emitContextUsageDetail(bucket, contextUsage);
 	}
 	pushTaskListChanged(); // current 标记易主
+}
+
+/* ── 会话文件的挂载（resume / fork / restart 共用，Task 5.4）────────── */
+
+/**
+ * 在既有桶上按一份已打开的会话文件重建宿主。
+ *
+ * hostPromise 先占位再创建（createHost 的扩展闭包会读它），失败清回 —— 与
+ * getHost 的缓存语义一致。此处失败时：新桶未注册、指针未切（resume/fork）或
+ * 母桶正被截断（restart，见调用处的顺序），都由调用方按各自的失败语义收尾。
+ */
+async function remountHostInBucket(
+	bucket: SessionBucket<SessionHost>,
+	manager: SessionManager,
+): Promise<SessionHost> {
+	const attempt = createHost(bucket, manager);
+	bucket.hostPromise = attempt;
+	attempt.catch(() => {
+		if (bucket.hostPromise === attempt) bucket.hostPromise = undefined;
+	});
+	const host = await attempt;
+	adoptHost(bucket, host);
+	return host;
+}
+
+/** 桶内历史的重建结果；赋值时机由调用方决定（时序理由见 applyRebuiltConversation）。 */
+interface RebuiltConversation {
+	readonly entries: readonly ConversationEntry[];
+	readonly usageDetail: ContextUsageDetail | undefined;
+	/**
+	 * pi 的精确用量（used/total）。调用方在重建结果**已进桶之后**补发
+	 * context_usage（reducer 对它直接覆盖 usageDetail，后发胜出）。
+	 */
+	readonly contextUsage:
+		| { readonly usedTokens: number; readonly maxTokens: number }
+		| undefined;
+}
+
+/**
+ * 按已打开的 manager 重建桶内历史：entries + 用量明细 + 系统提示词估算。
+ * **只算不赋值** —— 赋值的时序由调用方掌握（见 applyRebuiltConversation）。
+ *
+ * entries 来自落盘条目（buildContextEntries 已完成压缩裁剪，恢复视图与模型
+ * 实际看到的上下文一致）；artifacts 从落盘的 artifacts_presented custom 条目
+ * 恢复（assign 时折叠，清成 [] 会让恢复出的会话丢掉产物卡）。
+ *
+ * 量与 entries 的先后是**踩过的坑**：adoptHost 那次 session_state 已触发过一轮
+ * emitContextUsageDetail，彼时桶内 entries 还是空/旧的 —— 那轮派生的是空历史
+ * 成分。所以派生必须等 entries 重建之后，且调用方要在赋值后补发一次覆盖它。
+ */
+async function buildConversationForBucket(
+	bucket: SessionBucket<SessionHost>,
+	manager: SessionManager,
+	host: SessionHost,
+): Promise<RebuiltConversation> {
+	const entries = buildConversationEntries(manager.buildContextEntries(), restoredToolLabel);
+	const contextUsage = host.state.contextUsage;
+	/*
+	 * 系统提示词估算必须在这里现算（2026-09-16 实证修的 bug）：compose 只在
+	 * before_agent_start（下一次发消息）跑，而新桶的 systemPromptTokens 默认 0
+	 * —— 不补算，补发的 context_usage 会把 sys/skills 记成 0，并且 renderer 是
+	 * 「后到覆盖」，把运行期桶推的正确值盖成 ~0（面板分类里「系统提示词 ~0」就是它）。
+	 * piContext 置空与 prompt:preview 同口径（缺 pi 上下文段，估算略低——比例尺
+	 * 可接受）；组装失败降级为 0（估算缺席好过炸掉整条恢复路径）。
+	 */
+	try {
+		const state = bucket.conversation.state;
+		const composed = await composeSystemPrompt(
+			bucket.cwd,
+			state.sceneId,
+			state.interactionId,
+			state.expertId,
+			undefined,
+		);
+		bucket.systemPromptTokens = composed.systemTokens;
+		bucket.skillsTokens = composed.skillsTokens;
+		bucket.systemPromptSegments = composed.segments;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		eventLog.append({ kind: "ipc_error", channel: "session:compose-estimate", message });
+	}
+	const usageDetail = deriveContextUsageDetail({
+		entries,
+		contextUsage,
+		systemPromptTokens: bucket.systemPromptTokens,
+		skillsTokens: bucket.skillsTokens,
+	});
+	return { entries, usageDetail, contextUsage };
+}
+
+/**
+ * 把重建结果整体赋给桶（turn / cancelledTurns 属旧 run 的瞬态，一律清空）。
+ *
+ * 为什么与「计算」拆开（**顺序敏感**）：「重新开始」要在 history_reset
+ * （两端同步清空，见 shared/conversation.ts）之后**同步**填回重建结果 ——
+ * renderer 收到 history_reset 就去重拉 snapshot，中间只要有一个 await，它
+ * 拉到的就是空视图，且此后不会再拉（用户看到历史凭空消失）。所以赋值必须是
+ * 一个不含 await 的动作。
+ *
+ * state 也必须在这里用权威值覆盖：history_reset 会把 state.sessionId 复位成
+ * 空串（reducer 的口径），不覆盖回去，renderer 按快照重指的可见指针就会失位。
+ */
+function applyRebuiltConversation(
+	bucket: SessionBucket<SessionHost>,
+	host: SessionHost,
+	rebuilt: RebuiltConversation,
+): void {
+	bucket.conversation = {
+		...bucket.conversation,
+		state: host.state,
+		entries: rebuilt.entries,
+		usageDetail: rebuilt.usageDetail,
+		turn: undefined,
+		cancelledTurns: [],
+		artifacts: artifactsFromEntries(rebuilt.entries),
+	};
+}
+
+/**
+ * 按一份会话文件建桶 + 建宿主 + 重建历史（resume / fork 共用的完整流程）。
+ *
+ * 为什么两轴显式入参而不读 currentBucket：fork 的分支必须继承**母会话**的
+ * 场景/模式/专家（母桶未必是当前桶），resume 才是「沿用当前会话的选择」。
+ * 除这一处差异，时序只有这一份 —— 复制第二份的代价是「先条目、后用量」这类
+ * 踩坑只会被修在一条路径上。
+ */
+async function mountSessionFile(options: {
+	readonly manager: SessionManager;
+	readonly cwd: string;
+	readonly sceneId: string;
+	readonly interactionId: string;
+	readonly expertId: string | undefined;
+	readonly lastNonPlanInteraction: string;
+	readonly skippedLines: number;
+}): Promise<{ readonly bucket: SessionBucket<SessionHost>; readonly contextUsage: RebuiltConversation["contextUsage"] }> {
+	const bucket = createBucket<SessionHost>({
+		cwd: options.cwd,
+		conversation: freshConversation(
+			options.cwd,
+			options.sceneId,
+			options.interactionId,
+			options.expertId,
+		),
+		spawnBudget: readPreferences().spawnBudget,
+	});
+	bucket.lastNonPlanInteraction = options.lastNonPlanInteraction;
+	/*
+	 * 副本身份从 cwd 反推（副本路径就是会话 cwd，形态可逆）。baseBranch 与
+	 * sourceCwd 反推不出 —— 副本目录名里的 slug 是**不可逆**的清洗结果
+	 *（`origin/main` 与 `origin-main` 都成了 `origin-main`），原仓库路径更是
+	 * 完全不在里面。按类型缺省留空，硬凑一个假的基准分支比不显示更糟。
+	 */
+	bucket.worktree = worktreeInfoFromCwd(options.cwd);
+	// 降级打开的跳过计数进桶：emitSessionEvent 把它并入该桶发出的 session_state。
+	if (options.skippedLines > 0) bucket.skippedLines = options.skippedLines;
+
+	const host = await remountHostInBucket(bucket, options.manager);
+	const rebuilt = await buildConversationForBucket(bucket, options.manager, host);
+	applyRebuiltConversation(bucket, host, rebuilt);
+	return { bucket, contextUsage: rebuilt.contextUsage };
 }
 
 /**
@@ -2856,6 +3182,243 @@ async function newTask(targetCwd = ""): Promise<void> {
 	updateStateLocally(bucket, {});
 }
 
+/* ── 会话分支（spec: add-session-branching Task 5）────────────────────── */
+
+/**
+ * 抽枝：把母文件「root→entryId 全量条目」写成一条新会话文件（母文件不动），
+ * 返回新路径。
+ *
+ * 为什么先试 pi 的 createBranchedSession、再兜底自己的前缀写入器：header 的形状
+ *（version / id 生成规则）属于 pi，能由它生成就不要手写（抗格式漂移）；但 pi 的
+ * 落盘守卫让「抽出的内容不含 assistant」时**只返回路径、不写文件**（探针 1d），
+ * 而侧栏读的是磁盘真相 —— 这种情况由 session-file 的前缀写入器补齐（header 仍由
+ * pi 生成，见 createSessionFileFromPrefix 的注释）。
+ */
+function extractBranchFile(motherPath: string, entryId: string): string {
+	const branched = createBranchedSessionFile(motherPath, entryId);
+	if (branched !== undefined && existsSync(branched)) return branched;
+	const fallback = createSessionFileFromPrefix(motherPath, entryId);
+	if (fallback === undefined) throw new Error("分叉点的条目不在会话文件里，无法抽枝");
+	return fallback;
+}
+
+/**
+ * 分支会话标题：`母标题 · 分支`（重名递增）。
+ *
+ * 母标题取**会话列表的同一条口径**（deriveSessionTitle，renderer 侧栏同源），
+ * 不另写一份推导 —— 否则分支名里的母标题可能与侧栏显示的不一致。
+ */
+async function branchTitleFor(motherPath: string): Promise<string> {
+	const sessions = await listSessions();
+	const resolved = resolve(motherPath);
+	const motherTitle = sessions.find((session) => resolve(session.path) === resolved)?.title ?? "";
+	return buildBranchTitle(motherTitle, sessions.map((session) => session.title));
+}
+
+/** pi 未写 parentSession 时补写（来源标记是列表与侧栏的数据源）。 */
+function ensureParentSession(branchPath: string, motherPath: string): void {
+	const header = readSessionHeader(branchPath);
+	if (header === undefined) throw new Error("分支会话缺少头部，无法写入来源会话");
+	if (header.parentSession === undefined) setSessionParentSession(branchPath, motherPath);
+}
+
+/**
+ * 分支会话落盘的全部动作：抽枝（或建空历史）→ 命名 → 补来源标记。
+ * entryId 为 null = 分叉点在首条用户消息之前（新会话历史为空）。
+ *
+ * 为什么空历史单独一条路：pi 的 `createBranchedSession(null)` 实测无效（静默回落
+ * 到当前叶子、抽出全量历史，探针 1f），空历史必须走 createEmptySessionFile。
+ */
+async function materializeBranch(
+	motherPath: string,
+	motherCwd: string,
+	entryId: string | null,
+): Promise<{ readonly path: string; readonly title: string }> {
+	const path =
+		entryId === null
+			? createEmptySessionFile(motherCwd, motherPath)
+			: extractBranchFile(motherPath, entryId);
+	const title = await branchTitleFor(motherPath);
+	setSessionName(path, title);
+	ensureParentSession(path, motherPath);
+	return { path, title };
+}
+
+/** resolveBranchAnchor 的结果：ok 带锚点，其余两种直接把 reason 交回调用方。 */
+type BranchAnchor =
+	| {
+			readonly kind: "ok";
+			readonly host: SessionHost;
+			readonly anchorEntryId: string;
+			/** 分叉点（该用户消息）的父条目 id；null = 分叉点是首条消息。 */
+			readonly parentId: string | null;
+			readonly entries: readonly { readonly id: string; readonly parentId: string | null }[];
+	  }
+	| { readonly kind: "no-file" }
+	| { readonly kind: "no-such-entry" };
+
+/**
+ * 链内解析锚点：取宿主 → 用户消息序号 → 落盘条目 id → 分叉点的父条目。
+ *
+ * 入参是**用户消息序号（0 基）**而不是条目 id（spec 的实测修订）：在线路径下
+ * 渲染层的 user 消息 id 是 session-host 的 nextId("user") 造的，与落盘条目 id
+ * 不一致；序号在这里经宿主桥接成真 id。序号越界 / 条目查不到一律 no-such-entry，
+ * 此刻**一个字节都还没写**（Task 5.7 的一致性守卫）。
+ */
+async function resolveBranchAnchor(
+	bucket: SessionBucket<SessionHost>,
+	userIndex: number,
+): Promise<BranchAnchor> {
+	const hostPromise = bucket.hostPromise;
+	if (hostPromise === undefined) return { kind: "no-file" };
+	const host = await hostPromise;
+	const anchor = resolveAnchorForIndex(host.listForkableUserMessages(), userIndex);
+	if (anchor === undefined) return { kind: "no-such-entry" };
+	const entries = host.listEntryRefs();
+	// 条目树里查不到锚点 = 宿主与文件不同步（理论不发生）。按「找不到这条消息」
+	// 拒绝，绝不用猜出来的 parentId 去截断历史。
+	const ref = entries.find((entry) => entry.id === anchor.entryId);
+	if (ref === undefined) return { kind: "no-such-entry" };
+	return { kind: "ok", host, anchorEntryId: anchor.entryId, parentId: ref.parentId, entries };
+}
+
+/**
+ * 「重新开始」：把当前会话回退到某条用户消息**之前**并继续，被放弃的后续抽成
+ * 一条新会话（内容一点不丢）。
+ *
+ * 顺序敏感，每一步的理由：
+ *   ① 抽枝（仅当分叉点之后确有内容）：**先写分支文件、再动母文件**。顺序反了就是
+ *      数据丢失 —— 母文件已截断而分支没写成，被放弃的那段内容就没有第二份了。
+ *   ② dispose 母宿主 → 截断母文件 → 同文件重建：session-file 的写契约是「写入前
+ *      宿主必须已 dispose」，重建顺序照抄 saveToWorkspace 那套成熟范式。
+ *   ③ 历史清空只能走 history_reset（session_state 不动 entries），且要**同步**填回
+ *      重建结果 —— 理由见 applyRebuiltConversation。
+ *
+ * 为什么母文件要**物理截断**（而不是在内存里 branch）：pi 的叶子位置不落盘，不截断
+ * 的话重开时叶子仍指向旧尾部，回退就退回旧历史（spec 的实测修订 2）。
+ */
+async function restartSession(path: string, userIndex: number): Promise<SessionBranchResult> {
+	const target = resolve(path);
+	const bucket = findBucketByFile(target);
+	// 未注册 / 未落盘 = 这条路径没有会话文件。分支只作用于 daemon 已打开的会话
+	//（渲染层的入口也只出现在当前会话的用户消息上），未注册就没有宿主可重建。
+	if (bucket === undefined || !existsSync(target)) return branchFail("no-file");
+	// 流式守卫在链外先判：链上是「等上一棒结束」，而 prompt 那一棒就是整段 run
+	// —— 排进去要等 run 收尾才轮到，用户这次点击会被静默吞掉（他要的是「稍后再试」）。
+	if (bucket.running) return branchFail("busy");
+	return enqueue(bucket, async () => {
+		// 链上不变式断言（同 saveToWorkspace / compact）：run 在链上占整段，走到这里
+		// 仍 running 说明存在绕过互斥链的起 run 路径。
+		if (bucket.running) return branchFail("busy");
+		const anchor = await resolveBranchAnchor(bucket, userIndex);
+		if (anchor.kind !== "ok") return branchFail(anchor.kind);
+
+		/* ── ① 抽枝（此处失败：母会话一个字节都没动）── */
+		const leafId = anchor.host.currentLeafId();
+		let branch: { readonly path: string; readonly title: string } | undefined;
+		try {
+			// 「分叉点之后没有内容」不抽枝：抽一条只含前缀的会话只是往侧栏塞噪声
+			//（spec 的「分叉点之后没有内容」场景：可执行但不产生分支会话）。
+			branch =
+				leafId !== null && decideExtract(anchor.entries, anchor.anchorEntryId)
+					? await materializeBranch(target, bucket.cwd, leafId)
+					: undefined;
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			eventLog.append({ kind: "ipc_error", channel: INVOKE.sessionRestart, message: detail });
+			return branchFail("write-failed");
+		}
+
+		/* ── ② 母文件回退（从 dispose 起，失败恢复的语义与上一步不同）── */
+		anchor.host.dispose();
+		try {
+			// 分叉点是首条用户消息（父条目为 null）时清空历史、只留 header
+			//（会话文件与目录保留）—— 没有 id 可传给 truncateSessionTo。
+			let truncated = true;
+			if (anchor.parentId === null) truncateSessionToStart(target);
+			else truncated = truncateSessionTo(target, anchor.parentId);
+			// 分叉点的父条目不在文件里 = 宿主与文件不同步。此刻 truncateSessionTo
+			// 一个字节都没写（它返回 false 前不落盘），母文件仍是原样。
+			if (!truncated) {
+				bucketsById.delete(bucket.sessionId);
+				bucket.hostPromise = undefined;
+				return branchFail("no-such-entry");
+			}
+			const manager = SessionManager.open(target, getSessionsDir());
+			const host = await remountHostInBucket(bucket, manager);
+			const rebuilt = await buildConversationForBucket(bucket, manager, host);
+			// ③ 先清空（两端同步）、**紧接着同步**填回重建结果 —— 中间不能有 await，
+			// renderer 收到 history_reset 就去重拉 snapshot（App.tsx 的同名分支）。
+			emitSessionEvent(bucket, { type: "history_reset" });
+			applyRebuiltConversation(bucket, host, rebuilt);
+			if (rebuilt.contextUsage !== undefined) emitContextUsageDetail(bucket, rebuilt.contextUsage);
+			pushTaskListChanged();
+			return branchOk(branch);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			eventLog.append({ kind: "ipc_error", channel: INVOKE.sessionRestart, message: detail });
+			/*
+			 * 母文件已是「回退后」的形态、分支文件也已在盘（内容不丢），但宿主没能重建：
+			 * 出表让会话回到「未打开」态（同 saveToWorkspace 的失败恢复），下次 resume
+			 * 可正常重开。留着「注册了却没有宿主」的僵尸桶，下次 prompt 会在旧 id 名下
+			 * 静默开出新会话文件。
+			 */
+			bucketsById.delete(bucket.sessionId);
+			bucket.hostPromise = undefined;
+			return branchFail("write-failed", `已回退到这一轮之前，但重新打开会话失败：${detail}`);
+		}
+	});
+}
+
+/**
+ * 「分支出新会话」：从某条用户消息**之前**派生一条新会话并切过去，母会话原样不动
+ *（连文件字节都不变 —— 抽枝是「另写一个新文件」，实测见探针 1b）。
+ *
+ * 与「重新开始」的关键差异：
+ *   - **显式拷贝母桶的会话级状态**（sceneId / interactionId / expertId /
+ *     lastNonPlanInteraction）：这四项不落会话文件，resume 的「沿用当前会话」口径
+ *     在这里是错的（母桶未必是当前桶），不拷贝分支会漂到别的模式/专家；
+ *   - cwd 沿用母会话的（不分配新目录，spec 的「同一工作目录」）；
+ *   - thinkingLevel 绝不传：createHost 只在全新会话注入它，传了会覆盖会话文件里的
+ *     逐会话还原（spec 的「推理强度沿用会话文件」）。
+ */
+async function forkSession(path: string, userIndex: number): Promise<SessionBranchResult> {
+	const target = resolve(path);
+	const mother = findBucketByFile(target);
+	if (mother === undefined || !existsSync(target)) return branchFail("no-file");
+	if (mother.running) return branchFail("busy");
+	return enqueue(mother, async () => {
+		if (mother.running) return branchFail("busy");
+		const anchor = await resolveBranchAnchor(mother, userIndex);
+		if (anchor.kind !== "ok") return branchFail(anchor.kind);
+		try {
+			// 分叉点在首条用户消息之前 → 新会话为空历史（materializeBranch 的 entryId=null）。
+			const branch = await materializeBranch(target, mother.cwd, anchor.parentId);
+			const axes = mother.conversation.state;
+			const { bucket } = await mountSessionFile({
+				manager: SessionManager.open(branch.path, getSessionsDir()),
+				cwd: mother.cwd,
+				sceneId: axes.sceneId,
+				interactionId: axes.interactionId,
+				expertId: axes.expertId,
+				lastNonPlanInteraction: mother.lastNonPlanInteraction,
+				skippedLines: 0,
+			});
+			defaultWorkspaceDir = defaultCwdAfterResume(bucket.cwd);
+			setCurrentBucket(bucket);
+			await previewServers.ensure(bucket.cwd);
+			pushTaskListChanged();
+			return branchOk(branch);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			eventLog.append({ kind: "ipc_error", channel: INVOKE.sessionBranch, message: detail });
+			// 母会话一个字节都没动（抽枝不动源文件），失败可安全重试。分支文件可能
+			// 已写出（成宿主失败）—— 它是一条合法会话，留在盘上比删掉更安全。
+			return branchFail("write-failed", `创建分支会话失败，母会话未改动：${detail}`);
+		}
+	});
+}
+
 const handlers: Record<string, Handler> = {
 	// 返回折叠后的真实历史。ConversationView 与 SessionSnapshot 结构一致。
 	// sessionId 缺省 = 当前会话；指定 id 时按注册表查桶 —— 未注册
@@ -2875,9 +3438,41 @@ const handlers: Record<string, Handler> = {
 
 	/* ── 技能 ─────────────────────────────────────────────────────── */
 
-	// 技能页口径 = 全局技能池：不传专家技能目录 —— 专家私有技能只在会话组装
+	// 技能页口径 = 全局技能池（不传专家技能目录）—— 专家私有技能只在会话组装
 	//（composeSystemPrompt 按绑定专家追加）时进入提示词，不进技能页清单。
-	[INVOKE.skillsSnapshot]: async () => ({ skills: listSkills(), userSkillsDir: userSkillsDir() }),
+	// 组装逻辑收在 buildSkillsSnapshot 一处（与 setSkillEnabled 共用，见其注释）。
+	[INVOKE.skillsSnapshot]: async () => buildSkillsSnapshot(),
+
+	/**
+	 * 开关一个技能（技能页卡片上的启停）。返回**新的完整快照**：切换后列表、
+	 * 已启用数与 token 数字一次到位，渲染层不必再拉一次（spec: 数字随开关即时更新）。
+	 *
+	 * 写入走「读改写」（`writePreferences` 是整存覆盖，直接写会清掉模型选择等其它键，
+	 * 同 setMemoryEnabled 的写法）。
+	 */
+	[INVOKE.setSkillEnabled]: async ([name, enabled]) => {
+		// 双端校验（同 setPermissions）：渲染层只可能传已列出的技能名，
+		// 这里防的是绕过 —— 键名非法会被读取层忽略并记日志，不如当场拒掉。
+		if (typeof name !== "string" || !SKILL_NAME_PATTERN.test(name)) {
+			throw new Error(`技能名不合法：${String(name)}`);
+		}
+		const preferences = readPreferences();
+		const overrides: Record<string, SkillOverride> = { ...preferences.skillOverrides };
+		/*
+		 * 开启 = **删键**，不是写 "on"：「缺省 = 启用」只有这一种表示，
+		 * 文件里不会出现两套等价写法（见 core/skill-status.ts 的 SkillOverride 注释）。
+		 */
+		if (enabled === true) delete overrides[name];
+		else overrides[name] = "off";
+
+		// 没有任何覆盖时把整个键删掉（同 setDefaultWorkspacePath 清键的写法）：
+		// 空对象与「没写过」在读取层都归一 undefined，写出后者才是唯一表示。
+		const { skillOverrides: _dropped, ...rest } = preferences;
+		writePreferences(
+			Object.keys(overrides).length === 0 ? rest : { ...rest, skillOverrides: overrides },
+		);
+		return buildSkillsSnapshot();
+	},
 
 	[INVOKE.importSkill]: async ([sourcePath]) => importSkill(sourcePath as string),
 
@@ -3250,6 +3845,16 @@ const handlers: Record<string, Handler> = {
 		SessionManager.open(target, getSessionsDir()).appendSessionInfo(trimmed);
 		pushTaskListChanged();
 	},
+
+	// 会话分支（spec: add-session-branching）：两条流程都排进该会话的互斥链，
+	// 与 prompt / rename / delete / saveToWorkspace 串行（见 restartSession /
+	// forkSession 的顺序注释）。拒绝走返回值而不是 reject（reason 是界面文案的
+	// 分支依据，契约见 shared/ipc.ts 的 SessionBranchResult）。
+	[INVOKE.sessionRestart]: async ([path, userIndex]) =>
+		restartSession(path as string, userIndex as number),
+
+	[INVOKE.sessionBranch]: async ([path, userIndex]) =>
+		forkSession(path as string, userIndex as number),
 
 	[INVOKE.sessionDelete]: async ([path]) => {
 		const target = path as string;
@@ -3802,11 +4407,16 @@ const handlers: Record<string, Handler> = {
 		const expert = resolveSessionExpert(experts, preview.expertId);
 		return buildPromptPreview(RESOURCES, preview, {
 			cwd: currentBucket.cwd,
-			skills: listSkills(expert?.skillsDir).map((s) => ({
-				name: s.name,
-				description: s.description,
-				filePath: s.filePath,
-			})),
+			/*
+			 * 技能清单要过**同一份**启用过滤（enabledSkills 用的也是这个纯函数）：
+			 * 预览里出现一个「此刻发消息根本看不到」的技能，就是与真实组装的静默漂移。
+			 * 这里直接调 filterEnabledSkills 而不是 enabledSkills(preview.expertId)，
+			 * 是因为上面已经把专家解析过一次了 —— 再调一次会把专家库整库重载一遍
+			 * （列表同源：同一份 listSkills 结果 + 同一份 overrides + 同一个过滤函数）。
+			 */
+			skills: toSkillDescriptors(
+				filterEnabledSkills(listSkills(expert?.skillsDir), readPreferences().skillOverrides),
+			),
 			// 预览按请求里的 expertId 解析人格（同一条 requireExpertPersona 路径）。
 			experts,
 			preferredStyleId: readPreferences().styleId,
@@ -3854,11 +4464,20 @@ const handlers: Record<string, Handler> = {
 		commands: [
 			// 技能：/skill:name 由 pi 的 prompt 自动展开（_expandSkillCommand），
 			// renderer 只需把名字补全出来，原样传给 session.prompt 即可。
-			...listSkills().map((s) => ({
-				name: `skill:${s.name}`,
-				description: s.description,
-				source: "skill" as const,
-			})),
+			// `user-invocable: false` 的（纯内部技能）不进菜单 —— 面板是给用户手动选的地方；
+			// 手动敲 /skill:<name> 仍然照旧可用（可见性只收菜单，不拦 pi 的展开）。
+			// 技能集必须走 enabledSkills（与清单段、use_skill 同一个出口）：
+			// 各写一份过滤就会出现「菜单里有但 use_skill 加载不了」。
+			// 不传专家 id = 与今日行为一致的全局池口径（专家私有技能只在绑定该专家的
+			// 会话里可见，那条差异与本轮的启停过滤无关）。
+			...enabledSkills(undefined)
+				.filter((s) => s.userInvocable)
+				.map((s) => ({
+					// 前缀用共享常量（渲染层要按它切出裸技能名去渲染 chip）。
+					name: `${SKILL_COMMAND_PREFIX}${s.name}`,
+					description: s.description,
+					source: "skill" as const,
+				})),
 			// 提示词模板：/模板名 由 pi 的 expandPromptTemplate 展开。
 			// 发现目录必须与会话实际生效的一致 —— cwd 取当前会话桶的 cwd
 			//（会话与 cwd 终身绑定，桶即真相）。空串 = 待分配（还没工作目录）由

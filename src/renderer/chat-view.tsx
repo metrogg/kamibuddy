@@ -16,10 +16,12 @@ import type { ExpertListItem, QuestionnaireAnswer, QuestionnaireRequest } from "
 import { formatMessageTime } from "@shared/message-time.ts";
 import { leadToolName } from "@shared/metafold.ts";
 import type { CompactionReason, ConversationEntry, ModeDescriptor, QueuedMessages, RunId, RunRetryState, SourceRef, TodoItem, ToolCard, TurnTiming } from "@shared/session-events.ts";
+import { skillInvocationText } from "@shared/skill-block.ts";
 import { WAITING_SOOTHED_TEXT, WAITING_TIPS, WELCOME_GREETINGS } from "@shared/waiting-tips.ts";
 import {
 	IconAlert,
 	IconBack,
+	IconBranch,
 	IconCheck,
 	IconChevronDown,
 	IconClipboard,
@@ -37,6 +39,7 @@ import {
 	IconSend,
 	IconTrash,
 } from "./icons.tsx";
+import { branchTargetsOf, type BranchTarget } from "./branch-target.ts";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
 import { ExpertChip } from "./expert-chip.tsx";
@@ -134,6 +137,25 @@ interface ChatViewProps {
 	 * reject 的 message 是 daemon 的校验原因，命名弹层原位透出。
 	 */
 	readonly onSaveToWorkspace: (name: string) => Promise<void>;
+	/**
+	 * 当前会话是否具备分支条件：daemon 已注册宿主、会话文件已在盘
+	 * （App 从任务列表的 current 行判定；「会话尚未落盘」时 daemon 连锚点都解析不了）。
+	 * false 时用户气泡的两个分支入口与助手侧「重试」一律不渲染（spec 的
+	 * 「会话尚未落盘」场景：界面不出现分支入口；重试同样要先回退，没有文件就没得退）。
+	 */
+	readonly branchAvailable: boolean;
+	/**
+	 * 「重新开始」：回退到该用户消息（userIndex 为 0 基用户消息序号）**之前**，
+	 * 被放弃的后续由 daemon 抽成分支会话。refillText 给出时 App 会在成功后把它
+	 * 填回输入框（不自动发送）；不传 = 不回填（重试路径要立刻重发，填了会占住输入框）。
+	 * 返回值 = daemon 是否成功（失败文案由 App 统一提示）。
+	 */
+	readonly onRestartFrom: (userIndex: number, refillText?: string) => Promise<boolean>;
+	/**
+	 * 「分支出新会话」：从该用户消息之前派生新会话并**已由 daemon 切过去**，
+	 * App 跟随切换完成后把原文填回输入框（同样不发送）。
+	 */
+	readonly onBranchFrom: (userIndex: number, refillText: string) => Promise<boolean>;
 	readonly onTodo: (feature: string) => void;
 	/**
 	 * 当前会话的待答问卷（App 按 sessionId 路由后下发；undefined = 无）。
@@ -235,7 +257,7 @@ function ThinkingBlock({
 
 /**
  * 用户消息气泡（对标 WorkBuddy）：右侧浅色气泡，hover 时下方浮现工具条
- * （时间戳 + 复制）。工具条常驻占位、只切透明度 —— 若 hover 才插入 DOM，
+ * （时间戳 + 复制 + 分支两个入口）。工具条常驻占位、只切透明度 —— 若 hover 才插入 DOM，
  * 每次划过都会推动下方消息流抖动，长对话里非常刺眼。
  */
 function UserBubble({
@@ -243,6 +265,11 @@ function UserBubble({
 	text,
 	at,
 	images,
+	skillNames,
+	target,
+	branchable,
+	onRestart,
+	onBranch,
 }: {
 	/** 刻度轨（TurnRail）的测量锚点：data-entry-id 落在根 div 上。 */
 	readonly entryId: string;
@@ -250,6 +277,24 @@ function UserBubble({
 	readonly at: number;
 	/** 本条消息携带的图片附件（仅 UI 展示；进模型的翻译在 daemon 侧）。 */
 	readonly images?: readonly ImagePart[];
+	/**
+	 * 本条消息调用的技能名（`/skill:<name>` 被 pi 展开后剥出的结果，见 shared/skill-block.ts）。
+	 * 与 WorkBuddy 的 userMessage 侧同口径：徽标只读展示，不带删除按钮 ——
+	 * 消息已发出，撤技能等于改历史。
+	 */
+	readonly skillNames?: readonly string[];
+	/**
+	 * 本条消息的分支锚点（用户消息序号 + 可回填的原文，见 branch-target.ts）。
+	 * undefined = 锚点表里没有它（表由同源 entries 构造，正常不会缺席）—— 此时不渲染入口。
+	 */
+	readonly target: BranchTarget | undefined;
+	/**
+	 * 分支入口是否可用：流式中 / 会话尚未落盘时为 false（spec 的「分支操作的前置条件」）。
+	 * 与助手侧「重试」在流式期直接不渲染同口径 —— 不给按下去只会被 daemon 拒掉的死按钮。
+	 */
+	readonly branchable: boolean;
+	readonly onRestart: (target: BranchTarget) => void;
+	readonly onBranch: (target: BranchTarget) => void;
 }): React.JSX.Element {
 	const { copied, copy } = useCopyWithTick();
 	// 点击放大的那张图；undefined = 预览关闭。MVP 不做轮播/缩放（YAGNI）。
@@ -275,6 +320,22 @@ function UserBubble({
 	return (
 		<div className="entry user" data-entry-id={entryId}>
 			<div className="user-bubble">
+				{/*
+					技能胶囊**内联在正文流里**（WB 同款：`[图标] 技能名  正文` 同一行），
+					不是先占一行的块 —— 块级排法会让气泡凭空高出一档（胶囊 23 高 vs 正文行 24，
+					再加一道间隙就是几十像素的空行）。间距靠 .user-bubble 下的 margin-right
+					（内联元素吃不到 flex 的 gap）。
+					key 用下标与 user-bubble-images 同口径：列表项无本地状态，
+					且同一条消息可以两次调用同一个技能（名字不是唯一键）。
+				*/}
+				{skillNames?.map((name, index) => (
+					<span key={index} className="skill-chip">
+						<IconSkill size={14} className="skill-chip-icon" />
+						{/* 名字走 .skill-chip-name（nowrap + 省略号）：胶囊是固定 23 高，
+						    名字折行会顶破胶囊。与输入卡那枚的技能名同一个类。 */}
+						<span className="skill-chip-name">{name}</span>
+					</span>
+				))}
 				{text}
 				{images !== undefined && images.length > 0 && (
 					// key 用下标与 AttachmentStrip 同口径：列表项无本地状态，src 是同步解码的 data URL。
@@ -297,12 +358,43 @@ function UserBubble({
 			</div>
 			<div className="entry-toolbar entry-toolbar-right">
 				<span className="user-time">{formatMessageTime(at, Date.now())}</span>
+				{/*
+					分支入口（spec: add-session-branching）：与「复制」同处一个工具条、
+					同一档按钮（.entry-icon-btn —— 这是用户气泡工具条的既有档位，
+					见 index.css 该类的注释）。两个动作说的是「从这一条消息之前」，
+					而这条消息本身就是入口的落点，所以贴在它自己的工具条上。
+				*/}
+				{target !== undefined && branchable && (
+					<>
+						<button
+							type="button"
+							className="entry-icon-btn"
+							aria-label="重新开始"
+							title="重新开始（回到这条消息之前）"
+							onClick={() => onRestart(target)}
+						>
+							{/* 沿用重试的「回退」图形：语义相近（退回并重来），不另造图标。 */}
+							<IconRefresh size={13} />
+						</button>
+						<button
+							type="button"
+							className="entry-icon-btn"
+							aria-label="分支出新会话"
+							title="分支出新会话（从这条消息之前另起一条）"
+							onClick={() => onBranch(target)}
+						>
+							<IconBranch size={13} />
+						</button>
+					</>
+				)}
 				<button
 					type="button"
 					className="entry-icon-btn"
 					aria-label="复制消息内容"
 					title={copied ? "已复制" : "复制"}
-					onClick={() => void copy(text)}
+					// 复制的是用户打过的话（技能消息拼回 `/skill:<name> …`）：技能名在气泡里
+					// 是胶囊、不在 text 里，直接复制 text 在「只调技能、没写正文」时是空串。
+					onClick={() => void copy(skillInvocationText(skillNames ?? [], text))}
 				>
 					{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
 				</button>
@@ -353,7 +445,7 @@ function UserBubble({
  *
  * 重试 / 指标 / 模型名都只挂在「本轮最后一条 assistant 消息」上
  * （调用点的 metricsAnchorId，与 WB 的 credit 挂 isLastMessageOfRequest 同口径）：
- * 它们说的是**本轮**，挂到历史消息上就是错的（重试会重发最后一条用户消息）。
+ * 它们说的是**本轮**，挂到历史消息上就是错的（重试会把会话回退到本轮的起点重发）。
  * 操作条本体（复制）则每一轮的末条 assistant 都有 —— 那是**那条回答**的操作条。
  */
 function AssistantActions({
@@ -371,7 +463,7 @@ function AssistantActions({
 	/** 是否显示「执行计划」（父组件按 plan 模式 + 非流式 + 末条判定）。 */
 	readonly showExecutePlan: boolean;
 	readonly onExecutePlan: () => void;
-	/** 是否显示「重试」（父组件按「本轮末条 assistant + 非流式 + 有可重发的用户消息」判定）。 */
+	/** 是否显示「重试」（父组件按「本轮末条 assistant + 分支入口可用 + 有可重发的用户消息」判定）。 */
 	readonly showRetry: boolean;
 	readonly onRetry: () => void;
 	/** 本轮指标读数；不是本轮的挂点消息时传 undefined（整段不渲染，不给空壳）。 */
@@ -419,7 +511,7 @@ function AssistantActions({
 					type="button"
 					className="bar-btn"
 					aria-label="重试"
-					title="重试（重新发送上一条消息）"
+					title="重试（回到这一轮之前重新生成）"
 					onClick={onRetry}
 				>
 					<IconRefresh size={16} />
@@ -505,7 +597,8 @@ function buildErrorReport(message: string, runId: RunId | undefined, at: number,
 /**
  * 内嵌错误卡（机制对标 WorkBuddy）：run 异常结束或提交失败时落在消息流里，
  * 错误图标 + 可折行的标题 + runId 区（复制结构化报告）+ 重试实心按钮。
- * 重试 = 重发最后一条 user 消息；没有可重发的消息时按钮隐藏。
+ * 重试 = 回退到最后一条 user 消息之前并重发（与操作条同一个实现）；
+ * 没有可重发的消息时按钮隐藏。
  * 卡片是历史的一部分：新回合开始后留在原位（ErrorEntry 不挪位）。
  */
 function ErrorCard({
@@ -522,7 +615,7 @@ function ErrorCard({
 	/** 错误落库时间；缺省时报告取复制当下的时间。 */
 	readonly at?: number;
 	readonly modelId: string | undefined;
-	/** 最后一条 user 消息正文；undefined 时隐藏重试按钮。 */
+	/** 最后一条 user 消息的原文（含技能回拼）；undefined 时隐藏重试按钮。 */
 	readonly retryText: string | undefined;
 	readonly onRetry: () => void;
 }): React.JSX.Element {
@@ -1466,6 +1559,9 @@ export function ChatView({
 	onOpenSettings,
 	onError,
 	onSaveToWorkspace,
+	branchAvailable,
+	onRestartFrom,
+	onBranchFrom,
 	onTodo,
 	pendingQuestionnaire,
 	onQuestionnaireSubmit,
@@ -1574,14 +1670,14 @@ export function ChatView({
 			queued === undefined
 				? []
 				: [
-						...queued.steering.map((text) => ({ text, kind: "steering" as const })),
-						...queued.followUp.map((text) => ({ text, kind: "followUp" as const })),
-					].map(({ text, kind }) => ({
-						text,
-						kind,
-						rest: removeQueuedMessage(queued, text),
-						insertNow: insertQueuedNow(queued, text),
-					})),
+					...queued.steering.map((text) => ({ text, kind: "steering" as const })),
+					...queued.followUp.map((text) => ({ text, kind: "followUp" as const })),
+				].map(({ text, kind }) => ({
+					text,
+					kind,
+					rest: removeQueuedMessage(queued, text),
+					insertNow: insertQueuedNow(queued, text),
+				})),
 		[queued],
 	);
 	// 当前专家（绑定专家才有值，与交互模式正交）：composer-bar chip、起手 chips
@@ -1623,7 +1719,29 @@ export function ChatView({
 	// 与消息流无关的重渲染（折叠开合、面板交互）不再重扫。
 	const lastUserEntry = useMemo(() => entries.findLast((e) => e.role === "user"), [entries]);
 	const lastUserId = lastUserEntry?.id;
-	const retryText = lastUserEntry?.text;
+	/*
+		用户消息锚点表（序号 + 可回填/可重发的原文，见 branch-target.ts 纯函数）：
+		用户气泡的两个分支入口与「重试」共用这一份 —— 序号口径与技能回拼都只写一次
+		（AGENTS.md §4）。按 [entries] memo：流式期间每个 delta 都会重渲染，
+		若让每条气泡各自扫一遍 entries 数序号，就是 O(n²)。
+	*/
+	const branchTargets = useMemo(() => branchTargetsOf(entries), [entries]);
+	/*
+		分支入口的可用性（spec: add-session-branching「分支操作的前置条件」）：
+		流式期间 daemon 会以 busy 拒绝（run 在互斥链上占整段，排进去等于静默吞掉这次点击），
+		会话尚未落盘时连锚点都解析不了 —— 两种情况都不给入口。
+		用户气泡的两个入口与助手侧「重试」合流到这一个判定（重试同样要先回退）。
+	*/
+	const branchReady = branchAvailable && !streaming;
+	/*
+		重试要重发的是**用户打过的话**，不是气泡里那块展示文本。
+		技能消息的 text 只剩补充文本（技能块已在翻译层剥掉，见 shared/skill-block.ts），
+		直接拿 text 重发会把技能丢掉 —— 用户看到的「重试」结果和上一条不是同一个请求。
+		回拼 `/skill:<name> …` 的活儿收在 branch-target.ts（与两个分支入口同一份口径），
+		这里只取「最后一条用户消息」的锚点。
+	*/
+	const retryTarget = lastUserId === undefined ? undefined : branchTargets.get(lastUserId);
+	const retryText = retryTarget?.text;
 	// 起手 chips「发送一条后消失」的判定：entries 里有无 user 消息（权威口径，
 	// 恢复历史会话也正确 —— 有历史的会话 chips 本就不该再出现）。
 	const hasUserMessage = lastUserEntry !== undefined;
@@ -1882,9 +2000,37 @@ export function ChatView({
 		return submitWithAnchor(() => onSubmit(text, images, whileStreaming));
 	};
 
-	/** 错误卡重试：纯文本重发（失败原因已由 App 落进错误卡，这里只消费 promise）。 */
-	const retrySubmit = (text: string): void => {
-		submitWithAnchor(() => onSubmit(text)).catch(() => { });
+	/**
+	 * 用户气泡的「重新开始」：回退到这条消息之前，被放弃的后续由 daemon 抽成分支会话。
+	 * 回填输入框在 App 侧完成（成功后原文经 prefill 通道填回，不自动发送）——
+	 * 与「分支出新会话」共用一个交接口，两边行为不会各走一路。
+	 */
+	const restartFrom = (target: BranchTarget): void => {
+		void onRestartFrom(target.userIndex, target.text);
+	};
+
+	/** 「分支出新会话」：daemon 派生新会话并已切过去，App 跟随切换后把原文填回输入框。 */
+	const forkFrom = (target: BranchTarget): void => {
+		void onBranchFrom(target.userIndex, target.text);
+	};
+
+	/**
+	 * 重试 = 回退重发（spec 的 MODIFIED「重试」）：先让 daemon 把当前会话回退到最后一条
+	 * 用户消息**之前**（旧回答与过程按同一规则抽成分支会话，可从侧栏找回），成功后再把
+	 * 该原文发一次。
+	 *
+	 * 原实现是纯重发，历史里留下两条完全相同的用户消息 —— 模型读到的是「用户又问了一遍」，
+	 * 语义错误且污染上下文，被放弃的那版回答也永远躺在本会话里。
+	 *
+	 * **失败时不发送**：daemon 的拒绝（busy / no-file / write-failed…）意味着会话没动，
+	 * 这时再发一次就等于把纯重发那条老路重走一遍。文案由 App 统一提示。
+	 * 操作条与错误卡共用本函数（spec：同一个实现，不写第二条分支逻辑）。
+	 */
+	const retrySubmit = (target: BranchTarget): void => {
+		void onRestartFrom(target.userIndex).then((ok) => {
+			if (!ok) return;
+			submitWithAnchor(() => onSubmit(target.text)).catch(() => { });
+		});
 	};
 
 	/**
@@ -1971,7 +2117,20 @@ export function ChatView({
 		}
 		// 用户消息走气泡（at 由 daemon 打点，UI 不自己取时间）。
 		if (entry.role === "user") {
-			return <UserBubble key={entry.id} entryId={entry.id} text={entry.text} at={entry.at} images={entry.images} />;
+			return (
+				<UserBubble
+					key={entry.id}
+					entryId={entry.id}
+					text={entry.text}
+					at={entry.at}
+					images={entry.images}
+					skillNames={entry.skillNames}
+					target={branchTargets.get(entry.id)}
+					branchable={branchReady}
+					onRestart={restartFrom}
+					onBranch={forkFrom}
+				/>
+			);
 		}
 		// artifacts_presented 条目不直接渲染（产物清单已由 reducer 折叠进
 		// conversation.artifacts，产物卡在消息流底部统一展示）。
@@ -1988,9 +2147,9 @@ export function ChatView({
 					modelId={conversation.state.modelId}
 					retryText={retryText}
 					onRetry={() => {
-						if (retryText === undefined) return;
-						// 重试后旧错误卡保留为历史；重发最后一条 user 消息。
-						retrySubmit(retryText);
+						if (retryTarget === undefined) return;
+						// 重试后旧错误卡保留为历史；先回退到最后一条用户消息之前再重发。
+						retrySubmit(retryTarget);
 					}}
 				/>
 			);
@@ -2021,7 +2180,7 @@ export function ChatView({
 					「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 					流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
 					重试/指标/模型名再收紧一层，只在本轮挂点（metricsAnchorId）上：
-					重试重发的是最后一条用户消息，挂到历史轮就是错的；指标只 fold
+					重试回退的是本轮的起点，挂到历史轮就是错的；指标只 fold
 					当前轮、模型名也只在本轮成立，散到每条消息上就是同一串读数重复
 					或干脆是错值。
 				*/}
@@ -2031,10 +2190,10 @@ export function ChatView({
 						modelId={entry.id === metricsAnchorId ? conversation.state.modelId : undefined}
 						showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
 						onExecutePlan={executePlan}
-						showRetry={!streaming && entry.id === metricsAnchorId && retryText !== undefined}
+						showRetry={branchReady && entry.id === metricsAnchorId && retryTarget !== undefined}
 						onRetry={() => {
-							if (retryText === undefined) return;
-							retrySubmit(retryText);
+							if (retryTarget === undefined) return;
+							retrySubmit(retryTarget);
 						}}
 						metrics={
 							entry.id === metricsAnchorId && metricsTurn !== undefined
@@ -2236,8 +2395,8 @@ export function ChatView({
 					modelId={conversation.state.modelId}
 					retryText={retryText}
 					onRetry={() => {
-						if (retryText === undefined) return;
-						retrySubmit(retryText);
+						if (retryTarget === undefined) return;
+						retrySubmit(retryTarget);
 					}}
 				/>
 			)}
@@ -2326,6 +2485,11 @@ export function ChatView({
 										text={userEntry.text}
 										at={userEntry.at}
 										images={userEntry.images}
+										skillNames={userEntry.skillNames}
+										target={branchTargets.get(userEntry.id)}
+										branchable={branchReady}
+										onRestart={restartFrom}
+										onBranch={forkFrom}
 									/>
 								)}
 								{/*
@@ -2384,61 +2548,61 @@ export function ChatView({
 				)}
 			</div>
 
-		<footer className="chat-composer">
-			{/*
+			<footer className="chat-composer">
+				{/*
 				排队 chips（WorkBuddy 同位同语义）：steer/followUp 发出去之后、
 				被 pi 消费之前的「已发出、待生效」消息就挂在这里 —— 文本可读、
 				可编辑（填回草稿并从队列摘除）、可删除。数据是 queue_changed 事件
 				携带的队列内容（pi _steeringMessages / _followUpMessages 的快照），
 				消息被消费时 pi 自己出队并推新快照，chips 随之消失。
 			*/}
-			{queuedItems.map(({ text, kind, rest, insertNow }) => (
-				<div key={text} className="queued-chip">
-					<span className="queued-chip-label">{kind === "steering" ? "将插入" : "排队中"}</span>
-					<span className="queued-chip-text" title={text}>
-						{text}
-					</span>
-					{kind === "followUp" && (
+				{queuedItems.map(({ text, kind, rest, insertNow }) => (
+					<div key={text} className="queued-chip">
+						<span className="queued-chip-label">{kind === "steering" ? "将插入" : "排队中"}</span>
+						<span className="queued-chip-text" title={text}>
+							{text}
+						</span>
+						{kind === "followUp" && (
+							<button
+								type="button"
+								className="queued-chip-btn"
+								aria-label="立即插入当前任务"
+								title="不等排队，立刻插进当前这轮"
+								onClick={() => {
+									// 挪进 steering 队列：重排的底层（清空 + 重入队）会让它走 steer 通道。
+									if (insertNow !== queued) onQueueRewrite(insertNow);
+								}}
+							>
+								<IconSend size={13} />
+							</button>
+						)}
 						<button
 							type="button"
 							className="queued-chip-btn"
-							aria-label="立即插入当前任务"
-							title="不等排队，立刻插进当前这轮"
+							aria-label="编辑这条排队消息"
+							title="编辑"
 							onClick={() => {
-								// 挪进 steering 队列：重排的底层（清空 + 重入队）会让它走 steer 通道。
-								if (insertNow !== queued) onQueueRewrite(insertNow);
+								// 摘出后填回草稿：改完由用户自己重新发送（仍是 steer 语义）。
+								composerRef.current?.fillText(text);
+								if (rest !== queued) onQueueRewrite(rest);
 							}}
 						>
-							<IconSend size={13} />
+							<IconEdit size={13} />
 						</button>
-					)}
-					<button
-						type="button"
-						className="queued-chip-btn"
-						aria-label="编辑这条排队消息"
-						title="编辑"
-						onClick={() => {
-							// 摘出后填回草稿：改完由用户自己重新发送（仍是 steer 语义）。
-							composerRef.current?.fillText(text);
-							if (rest !== queued) onQueueRewrite(rest);
-						}}
-					>
-						<IconEdit size={13} />
-					</button>
-					<button
-						type="button"
-						className="queued-chip-btn"
-						aria-label="删除这条排队消息"
-						title="删除"
-						onClick={() => {
-							if (rest !== queued) onQueueRewrite(rest);
-						}}
-					>
-						<IconTrash size={13} />
-					</button>
-				</div>
-			))}
-			{pendingQuestionnaire !== undefined ? (
+						<button
+							type="button"
+							className="queued-chip-btn"
+							aria-label="删除这条排队消息"
+							title="删除"
+							onClick={() => {
+								if (rest !== queued) onQueueRewrite(rest);
+							}}
+						>
+							<IconTrash size={13} />
+						</button>
+					</div>
+				))}
+				{pendingQuestionnaire !== undefined ? (
 					/*
 					问卷浮层替换输入区（WorkBuddy CBChat 的 hasQuestionFloating 语义：
 					答题期间 composer 让位，答完/跳过后 composer 恢复）。key 按请求 id
