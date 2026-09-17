@@ -902,15 +902,19 @@ export function App(): React.JSX.Element {
 	 * 会话内 /new 等 daemon 侧重建了会话的场景的统一收口）。
 	 * sessionId 缺省 = daemon 当前会话。会话切换后旧预览 tab 不再属于
 	 * 新会话的工作区，面板一并关掉。
+	 *
+	 * 返回 Promise：调用方要「等这次切换真正落地」时（分支后回填输入框，
+	 * 见 branchFromUserMessage）需要接在它后面 —— 失败已在内部 toast，
+	 * 所以这个 promise 恒 resolve。
 	 */
-	const resyncSnapshot = useCallback((sessionId?: string) => {
-		window.kami
+	const resyncSnapshot = useCallback((sessionId?: string): Promise<void> => {
+		closePreviewPanel();
+		return window.kami
 			.snapshot(sessionId)
 			.then(applySnapshot)
 			.catch((error: unknown) => {
 				showToast(error instanceof Error ? error.message : String(error));
 			});
-		closePreviewPanel();
 		// applySnapshot/closePreviewPanel/showToast 都是稳定 useCallback（空依赖）。
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
@@ -1113,6 +1117,84 @@ export function App(): React.JSX.Element {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[taskList, resyncSnapshot, openArtifact],
 	);
+
+	/**
+	 * 用户消息上的分支动作与「重试」的统一出口（spec: add-session-branching Task 6/7）。
+	 *
+	 * 会话路径不在渲染状态里（SessionState 只有 sessionId）：从任务列表的 current 行取，
+	 * 与 resume / rename / delete 用 path 定位同一口径。取不到 = daemon 侧还没注册宿主
+	 *（会话文件未落盘），这时连锚点都解析不了 —— 直接提示，不发请求。
+	 *
+	 * 结果文案一律在这里出：失败用 daemon 给的中文 message（不再写一份 reason→文案映射），
+	 * 成功说清「后续内容已存为分支会话《标题》」还是「只回退、没有分支」—— spec 明确
+	 * 要求不许静默（没有 branchTitle = 分叉点之后已无内容，不产生分支会话）。
+	 *
+	 * mode="branch" 时 daemon 已把当前会话切到新分支，这里按权威快照跟随切换
+	 *（与 saveToWorkspace / resume 同款收口）。refillText 的填回**必须等切换落地**：
+	 * Composer 的 draftKey 就是 sessionId，切会话会重载该会话的草稿，早一步填进去的
+	 * 文本会被那一次重载清掉。
+	 */
+	const branchFromUserMessage = useCallback(
+		(mode: "restart" | "branch", userIndex: number, refillText: string | undefined): Promise<boolean> => {
+			const path = taskListRef.current?.find((item) => item.current)?.path;
+			if (path === undefined) {
+				showToast("当前会话还没有落盘，暂时不能这样做", "error");
+				return Promise.resolve(false);
+			}
+			const call =
+				mode === "restart"
+					? window.kami.restartSessionFrom(path, userIndex)
+					: window.kami.branchSessionFrom(path, userIndex);
+			return call.then(
+				(result) => {
+					if (!result.ok) {
+						showToast(result.message, "error");
+						return false;
+					}
+					showToast(
+						result.branchTitle === undefined
+							? "已回到这一轮之前"
+							: `后续内容已存为分支会话《${result.branchTitle}》`,
+						"success",
+					);
+					// 「重新开始」的视图刷新由 daemon 的 history_reset 事件驱动（本文件的
+					// 同名分支按权威快照重指指针），只有分支需要在这里等切换落地。
+					const settled = mode === "branch" ? resyncSnapshot() : Promise.resolve();
+					return settled.then(() => {
+						if (refillText !== undefined) setPendingPrefill(refillText);
+						return true;
+					});
+				},
+				(error: unknown) => {
+					showToast(error instanceof Error ? error.message : String(error));
+					return false;
+				},
+			);
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[resyncSnapshot, showToast],
+	);
+
+	/** 「重新开始」（用户气泡工具条）：回退到该消息之前，并把原文填回输入框（不发送）。 */
+	const restartFromUserMessage = useCallback(
+		(userIndex: number, refillText?: string): Promise<boolean> =>
+			branchFromUserMessage("restart", userIndex, refillText),
+		[branchFromUserMessage],
+	);
+
+	/** 「分支出新会话」（用户气泡工具条）：派生新会话并切过去，切换完成后把原文填回输入框。 */
+	const forkFromUserMessage = useCallback(
+		(userIndex: number, refillText: string): Promise<boolean> =>
+			branchFromUserMessage("branch", userIndex, refillText),
+		[branchFromUserMessage],
+	);
+
+	/*
+		分支入口的可用性（spec 的「会话尚未落盘」场景）：任务列表里有 current 行 =
+		daemon 已注册宿主且会话文件在盘。列表尚未拉回（undefined）按不可用处理 ——
+		与「在途不当空」同一取向：宁可晚一拍给入口，也不给一个必然被 daemon 拒的按钮。
+	*/
+	const branchAvailable = taskList?.some((item) => item.current) === true;
 
 	/**
 	 * 空间组「+」：在**该空间**里开新任务（WorkBuddy 同款：组头的 + 把 groupKey 交给
@@ -1444,6 +1526,9 @@ export function App(): React.JSX.Element {
 					onOpenSettings={openSettings}
 					onError={showToast}
 					onSaveToWorkspace={saveToWorkspace}
+					branchAvailable={branchAvailable}
+					onRestartFrom={restartFromUserMessage}
+					onBranchFrom={forkFromUserMessage}
 					onTodo={showTodo}
 					pendingQuestionnaire={pendingQuestionnaire}
 					onQuestionnaireSubmit={(answers) => {

@@ -23,9 +23,9 @@
  *    入参叫这个名字，卡片摘要自动就是技能名（「加载技能 docx」），不必为这张卡
  *    另开一条摘要通道。
  *
- * 3. **错误即 throw**：未知技能名、模型不可见的技能一律抛错（pi 会标 isError 并把
- *    消息回给模型），错误文本里带当前可用的技能名清单供它自我纠正。不返回
- *    「好像失败了」的字符串 —— 那会让模型以为技能已加载，照着不存在的内容干活。
+ * 3. **错误即 throw**：未知技能名、被用户停用的技能、模型不可见的技能一律抛错
+ *    （pi 会标 isError 并把消息回给模型），错误文本里带当前可用的技能名清单供它自我纠正。
+ *    不返回「好像失败了」的字符串 —— 那会让模型以为技能已加载，照着不存在的内容干活。
  *
  * 技能来源经**回调注入**（extensions 不许 import daemon，AGENTS.md §1）：daemon 把
  * 「当前会话可见的技能」传进来，与技能清单段同源（spec Requirement: 会话技能来源单一出口）。
@@ -52,12 +52,22 @@ export interface UseSkillTarget {
 	readonly filePath: string;
 	/** frontmatter 的 disable-model-invocation：true = 模型不可自动加载。 */
 	readonly disableModelInvocation: boolean;
+	/**
+	 * 用户级启停（`preferences.json` 的 `skillOverrides`，缺省启用）。
+	 *
+	 * 为什么注入的是**全量**（含停用的）而不是过滤后的集合：工具要能分辨三种拒绝理由 ——
+	 * 「没这个技能」/「这个技能被用户在技能页停用了」/「作者声明仅限手动」。
+	 * 只喂过滤后的集合，前两种会混成同一句「没有名为 X 的技能」，用户看到会以为技能丢了。
+	 * 三处同源仍然成立：这里的 enabled 与清单段、`/` 菜单来自 daemon 的同一个过滤出口。
+	 */
+	readonly enabled: boolean;
 }
 
 export interface UseSkillToolOptions {
 	/**
-	 * 当前会话可见的技能集合。**每次调用现取**（不是注册时快照）：会话中途换绑
-	 * 专家后，工具看到的能力面要立刻与提示词里的技能清单段一致。
+	 * 当前会话可见的**全量**技能集合（含被用户停用的，逐项带 `enabled`）。
+	 * **每次调用现取**（不是注册时快照）：会话中途换绑专家后，工具看到的能力面要立刻
+	 * 与提示词里的技能清单段一致。全量而非过滤后的理由见 `UseSkillTarget.enabled`。
 	 */
 	readonly resolveSkills: () => readonly UseSkillTarget[];
 }
@@ -93,17 +103,30 @@ export function createUseSkillTool(options: UseSkillToolOptions): ExtensionFacto
 				const skill = skills.find((s) => s.name === name);
 				if (skill === undefined) {
 					/*
-					 * 可用清单里**排除** disable-model-invocation 的技能：清单段
-					 * （pi 的 formatSkillsForPrompt）本来就把它过滤掉了，错误提示
-					 * 列一个模型加载不了的技能，只会让它照着再撞一次同样的错。
+					 * 可用清单里**排除**两类：disable-model-invocation 的技能（清单段
+					 * 本来就把它过滤掉了）与用户停用的技能。列一个加载不了的技能，
+					 * 只会让模型照着再撞一次同样的错。
 					 */
-					const visible = skills.filter((s) => !s.disableModelInvocation).map((s) => s.name);
+					const visible = skills
+						.filter((s) => s.enabled && !s.disableModelInvocation)
+						.map((s) => s.name);
 					const available =
 						visible.length === 0
 							? "当前会话没有可自动加载的技能。"
 							: `当前可用的技能：${visible.join("、")}。`;
 					throw new Error(
 						`没有名为「${name}」的技能。${available}技能名必须取自技能清单 <available_skills> 里的 <name>，不要凭记忆拼写。`,
+					);
+				}
+				/*
+				 * 停用与「作者声明仅限手动」是**两个原因**，文案必须分开 ——
+				 * 用户看到的行动项完全不同：前者去技能页把开关打开，后者改 SKILL.md 也没用，
+				 * 只能手动 /skill:name。混成一句会让用户走错方向。
+				 * 先判停用：用户开关是他刚做的动作，也是唯一能在界面上解决的。
+				 */
+				if (!skill.enabled) {
+					throw new Error(
+						`技能「${name}」已在技能页被停用，不能自动加载 —— 到技能页把它重新打开即可（技能本身的 SKILL.md 没有被改过）。`,
 					);
 				}
 				if (skill.disableModelInvocation) {

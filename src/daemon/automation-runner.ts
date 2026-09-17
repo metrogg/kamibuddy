@@ -34,6 +34,7 @@ import { SessionHost } from "../core/session-host.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
+import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
@@ -241,6 +242,16 @@ function buildRunExtensions(
 		 * 在权限门直接放行，无人值守下语义自洽（定时产出周报 docx 是正当场景）。
 		 */
 		createDocxConvertTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
+		/*
+		 * docx 版式提取：craft 白名单含 docx_extract，run 会话注册同名真实工具。
+		 * 与 docx_convert 同档：受控 spawn venv python（命令与参数写死在
+		 * documents/docx-extract.ts）、不经 powershell；写侧判定锚定 outputPath，
+		 * 产物在工作区内直接放行，无需 unattended 变体。
+		 */
+		createDocxExtractTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
 		}),

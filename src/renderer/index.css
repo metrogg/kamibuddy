@@ -759,6 +759,18 @@ textarea:focus-visible {
 	background: var(--ok);
 }
 
+/* 分支会话标记：压在标题之前（同未读点/转圈的位置约定——行尾会被省略号裁掉）。
+   色取 --text-secondary：它是「来源说明」性质的次级标记，不抢标题与状态点的注意力，
+   也不借用状态色（分支不是状态，DESIGN.md §2.4）。
+   内联 SVG 默认坐在基线上会整体偏上，故下沉 0.18em——量与手法同 .clickable-path-icon
+   （相对字号的量，不引入新的间距/尺寸档位）。 */
+.task-branch-mark {
+	display: inline-block;
+	vertical-align: -0.18em;
+	margin-right: var(--space-1);
+	color: var(--text-secondary);
+}
+
 .sidebar-footer {
 	margin-top: auto;
 	display: flex;
@@ -1621,9 +1633,11 @@ textarea:focus-visible {
 	align-items: center;
 	gap: var(--space-1);
 	box-sizing: border-box;
-	height: 23px; /* WB 原值，非档位值：§3.6 */
+	height: 23px;
+	/* WB 原值，非档位值：§3.6 */
 	max-width: 100%;
-	padding: 1px var(--space-3); /* 1px 是 WB 原值（胶囊内不塞 4px 档） */
+	padding: 1px var(--space-3);
+	/* 1px 是 WB 原值（胶囊内不塞 4px 档） */
 	border-radius: var(--radius-full);
 	background: var(--bg-chip);
 	font-size: var(--text-list);
@@ -6933,6 +6947,18 @@ textarea:focus-visible {
 	overflow: hidden;
 }
 
+/* 元数据行（版本 / 来源 / 导入时间）：沿用 DESIGN.md §3.3 的卡片 meta 行口径
+   （--text-meta + --text-secondary）。单行省略号收尾 —— 来源路径已在 JSX 里截短，
+   完整路径挂在 title 上；不新造视觉值。 */
+.skill-card-meta {
+	margin: 0;
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .skill-card-path {
 	margin: 0;
 	font-size: var(--text-meta);
@@ -6941,6 +6967,31 @@ textarea:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* 停用态：名称与描述降一档灰度（DESIGN.md §2.1 的三级文字色）。
+   只改字色、不动底与边框 —— §3.4「禁用行不置灰背景」，背景一变会与 hover/选中态撞色。
+   状态不只靠颜色：右侧开关的位置本身就是可读的开关态（DESIGN.md §7.6）。 */
+.skill-card-off .skill-card-name {
+	color: var(--text-secondary);
+}
+
+.skill-card-off .skill-card-desc {
+	color: var(--text-secondary);
+}
+
+/* 技能清单成本行（技能页顶部常显一行 + 超阈值提示）。
+   排版沿用 .stat-hint（§3.3 的 meta 行口径）；超阈值那条只把字色换成 --warning
+   —— 与 .task-confirm-badge 的琥珀同色，不新造卡片视觉。 */
+.skill-cost {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-bottom: var(--space-4);
+}
+
+.skill-cost-warn {
+	color: var(--warning);
 }
 
 /* ── 专家市场页（experts-view，WorkBuddy ExpertCenterPage 同构）────────────
@@ -7719,8 +7770,12 @@ textarea:focus-visible {
 }
 
 /* 启停开关：原生 checkbox 透明铺满 label（点击区 = 轨道），
-   轨道与滑块是纯展示层（pointer-events: none，点击落在 input 上）。 */
-.mcp-switch {
+   轨道与滑块是纯展示层（pointer-events: none，点击落在 input 上）。
+   `.skill-switch` 是第二个消费方（技能页卡片）—— 同一组声明、逐个选择器并进列表，
+   不复制视觉值。抽共享 Switch 组件是 DESIGN.md §6 的待办（「新造类名」同性质），
+   抽的时候这两处一起收。 */
+.mcp-switch,
+.skill-switch {
 	position: relative;
 	display: inline-flex;
 	flex: 0 0 auto;
@@ -7728,7 +7783,8 @@ textarea:focus-visible {
 	height: 18px;
 }
 
-.mcp-switch input {
+.mcp-switch input,
+.skill-switch input {
 	position: absolute;
 	inset: 0;
 	margin: 0;
@@ -7736,7 +7792,8 @@ textarea:focus-visible {
 	cursor: pointer;
 }
 
-.mcp-switch-track {
+.mcp-switch-track,
+.skill-switch-track {
 	position: absolute;
 	inset: 0;
 	border-radius: var(--radius-full);
@@ -7745,7 +7802,8 @@ textarea:focus-visible {
 	pointer-events: none;
 }
 
-.mcp-switch-thumb {
+.mcp-switch-thumb,
+.skill-switch-thumb {
 	position: absolute;
 	top: 2px;
 	left: 2px;
@@ -7758,23 +7816,28 @@ textarea:focus-visible {
 	transition: transform var(--dur-fast) ease;
 }
 
-.mcp-switch input:checked~.mcp-switch-track {
+.mcp-switch input:checked~.mcp-switch-track,
+.skill-switch input:checked~.skill-switch-track {
 	background: var(--ok);
 }
 
-.mcp-switch input:checked~.mcp-switch-track .mcp-switch-thumb {
+.mcp-switch input:checked~.mcp-switch-track .mcp-switch-thumb,
+.skill-switch input:checked~.skill-switch-track .skill-switch-thumb {
 	transform: translateX(14px);
 }
 
-.mcp-switch input:disabled {
+.mcp-switch input:disabled,
+.skill-switch input:disabled {
 	cursor: default;
 }
 
-.mcp-switch input:disabled~.mcp-switch-track {
+.mcp-switch input:disabled~.mcp-switch-track,
+.skill-switch input:disabled~.skill-switch-track {
 	opacity: 0.5;
 }
 
-.mcp-switch input:focus-visible~.mcp-switch-track {
+.mcp-switch input:focus-visible~.mcp-switch-track,
+.skill-switch input:focus-visible~.skill-switch-track {
 	outline: 2px solid var(--primary);
 	outline-offset: 2px;
 }

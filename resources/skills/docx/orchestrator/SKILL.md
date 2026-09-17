@@ -21,6 +21,7 @@ description: "文档创作与转换的统一编排入口。当用户意图涉及
 | 优先级 | 何时加载 | 文件 |
 |--------|----------|------|
 | P0 | **短篇创作**（无文档 + 创作动词 + 模型判断目标篇幅 <1000 字） | **brief-compose**（路径：`<docx_root>/brief-compose/SKILL.md`） |
+| P1 | **需要复用既有 .docx 的版式**（用户给了 .docx，诉求涉及按它的版式重排/续写） | **format-extract**（路径：`<docx_root>/format-extract/SKILL.md`） |
 
 ---
 
@@ -86,7 +87,10 @@ Stage 0 识别到用户意图属"在既有文档上改动/润色/美化/重排"�
 
 1. **不做**：不创建 `output/<任务名>/` 目录、不写 `pipeline-state.yaml`、不派任何 stage、不追问细节。
 2. **只做**：
-   - 用 `read_document`（.docx/.pdf 等二进制文档）或 `read`（纯文本/Markdown）读取原文内容；
+   - 读取原文：输入是 **.docx 且诉求涉及版式**（整篇美化 / 重排 / 套用它的版式）→ 先按
+     `<docx_root>/format-extract/SKILL.md` 调 `docx_extract`，取得原文 + 版式特征
+     （标题层级 / 字体字号 / 表格 / 图片）后再重排；**纯文本 / Markdown**（或只是改文字、
+     与版式无关）→ 用 `read` / `read_document` 读原文内容，走原路径；
    - 按用户诉求处理——**具体修改/润色**：直接改内容；**整篇美化/重排**：按 `<docx_root>/agents/doc-formatter.md` 的排版方法自行重排为 HTML（设计决策查 `<docx_root>/design-token/SKILL.md`、模板用 `<docx_root>/typeset/`）；
    - 落盘：文本类文件（.md 等）用 `edit`/`write` 直接写回；要交付 .docx → 生成 HTML 后调 **`docx_convert`** 转换（转换只许调 `docx_convert`，禁止用 powershell 跑 python），再 `present_files` 打开预览；
    - 一句话向用户说明结果与文件路径，本轮结束。
@@ -95,6 +99,15 @@ Stage 0 识别到用户意图属"在既有文档上改动/润色/美化/重排"�
 > 判据速查：
 > - 有已存在的文档 + 修改/润色/美化动词 → 编辑就地处理。
 > - 无文档 + 创作动词 → 本流程（或 brief-compose）。
+
+### 待填业务文档的 HTML 出口（S2 创作链与就地重排共用）
+
+**WHEN** 目标体裁是**合同 / 报价单 / 授权委托书**，且用户**明确要求「待填 / 空白 / 可填空（可按书签填写）」**：
+
+- HTML 由 `<docx_root>/generate-fillable-contract-html/SKILL.md` 产出（每个待填字段带 `data-docx-field` + 唯一中文 `data-docx-bookmark`），**不走 typeset 的 legal-contract 模板**；
+- 只要「一份合同」、没有「待填 / 空白」诉求时，仍走 typeset 的 legal-contract 通道，本技能不触发。
+
+> 该判据对 S2（创作链）与"编辑就地处理"（重排既有 .docx）两条路径都生效 —— 两者最终都经 `docx_convert` 转换交付。
 
 ### 数据流衔接（预设表之外、必须由编排层填的字段；控制流见预设表）
 

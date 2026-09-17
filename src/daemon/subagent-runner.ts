@@ -32,6 +32,7 @@ import { sanitizeSubagentOutput } from "../core/subagent-sanitize.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
+import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createPermissionGate } from "../extensions/permission-gate.ts";
 import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
 import { createSandboxedRunner } from "./sandbox-runner.ts";
@@ -382,6 +383,16 @@ export function buildSubagentExtensions(
 		 * 现有内置 agent 的白名单都不含它，pi 对未注册名静默忽略，此处注册无副作用。
 		 */
 		createDocxConvertTool({
+			engineDir: join(getResourcesDir(), "docx-engine"),
+			homeDir: homedir(),
+		}),
+		/*
+		 * docx 版式提取：与 docx_convert 同档 —— 受控 spawn venv python
+		 * （命令与参数写死在 documents/docx-extract.ts）、不经 powershell，
+		 * 写侧判定锚定 outputPath。同样预先挂进子代理工具面：doc-formatter
+		 * 一类的角色在重排流程里要拿原文档版式，白名单里会有 docx_extract。
+		 */
+		createDocxExtractTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
 		}),

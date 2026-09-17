@@ -19,6 +19,7 @@ import {
 	type PermissionSettings,
 } from "../shared/permissions.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../shared/session-events.ts";
+import { SKILL_NAME_PATTERN, type SkillOverride, type SkillOverrides } from "./skill-status.ts";
 
 export interface Preferences {
 	/** 选中的模型，形如 `provider/model`。未选则 undefined。 */
@@ -94,6 +95,18 @@ export interface Preferences {
 	readonly welcomeGreeting?: boolean;
 	/** 展示文件变更过程详情：write/edit 卡「生成中」实时计数显隐。缺省 true。 */
 	readonly showChangeDetails?: boolean;
+	/**
+	 * 技能启停的用户级覆盖（spec: add-skill-management）。
+	 *
+	 * 键名与语义对齐 WorkBuddy 的 `skillOverrides`，当前只实现两态：**缺省启用**，
+	 * `"off"` = 用户在技能页关掉了它（从 `/` 菜单、模型技能清单段、use_skill 加载集合
+	 * 一起消失）。将来加 `name-only` 等态是加联合成员，键名与文件形状不变，零迁移
+	 * —— 详见 core/skill-status.ts 的 SkillOverride 注释。
+	 *
+	 * 语义边界：这是**用户级覆盖**，不改技能自身的 SKILL.md；与 frontmatter 的
+	 * `user-invocable` / `disable-model-invocation` 各自生效，互不覆盖。
+	 */
+	readonly skillOverrides?: SkillOverrides;
 }
 
 export interface WebSearchPrefs {
@@ -212,6 +225,8 @@ export function readPreferences(): Preferences {
 		};
 		const spawnBudget = optPositiveInt("spawnBudget");
 		const subagentTimeoutMs = optPositiveInt("subagentTimeoutMs");
+		// 技能启停：逐条形状校验（坏键 / 坏值忽略并记日志），见 readSkillOverrides。
+		const skillOverrides = readSkillOverrides(rec["skillOverrides"]);
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -231,6 +246,7 @@ export function readPreferences(): Preferences {
 			...(personaDescription !== undefined ? { personaDescription } : {}),
 			...(welcomeGreeting !== undefined ? { welcomeGreeting } : {}),
 			...(showChangeDetails !== undefined ? { showChangeDetails } : {}),
+			...(skillOverrides !== undefined ? { skillOverrides } : {}),
 		};
 	} catch {
 		return EMPTY;
@@ -269,6 +285,41 @@ function readPermissions(value: unknown): PermissionSettings | undefined {
 		: derived;
 
 	return { sandbox: record.sandbox, approval: record.approval, presetId };
+}
+
+/**
+ * 解析技能启停覆盖。
+ *
+ * 容错口径同 spawnBudget（手改文件的容错）：坏数据不抛错 —— 偏好读取挂在应用启动
+ * 与每轮 compose 的路径上，不值得为一个可再生字段打挂它们。但**响亮记日志**：
+ * 静默丢掉一个用户显式关掉的技能，表现为「关了又自己开了」，故障被藏进「看不见」，
+ * 比一行日志糟得多（同 daemon 里 readSkillMeta 对坏 frontmatter 的取舍）。
+ *
+ * 逐条过滤而不是整块作废：用户手改时通常只错一处，一条坏键不该连累其它键。
+ * 全部条目都非法（或本来就是空对象）→ 归一 undefined，让「缺省 = 全启用」
+ * 只有一种表示（写入侧同样在无键时删掉整个键）。
+ */
+function readSkillOverrides(value: unknown): SkillOverrides | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		console.error(`偏好文件的 skillOverrides 应为对象（技能名 → "on" | "off"），已整块忽略：`, value);
+		return undefined;
+	}
+
+	const out: Record<string, SkillOverride> = {};
+	for (const [name, state] of Object.entries(value as Record<string, unknown>)) {
+		// 键是技能名：键名非法说明文件被手改过，按「忽略该条」处理（不纠正成别的名字）。
+		if (!SKILL_NAME_PATTERN.test(name)) {
+			console.error(`skillOverrides 的键「${name}」不是合法技能名（小写字母/数字/连字符），已忽略该条`);
+			continue;
+		}
+		if (state !== "on" && state !== "off") {
+			console.error(`skillOverrides["${name}"] 的值应为 "on" 或 "off"，实际是 ${JSON.stringify(state)}，已忽略该条`);
+			continue;
+		}
+		out[name] = state;
+	}
+	return Object.keys(out).length === 0 ? undefined : out;
 }
 
 export function writePreferences(preferences: Preferences): void {

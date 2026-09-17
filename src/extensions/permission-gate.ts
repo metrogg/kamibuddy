@@ -58,7 +58,8 @@ function extractFacts(toolName: string, input: Record<string, unknown>): ToolCal
 	return {
 		toolName,
 		// pi 的内置工具用 `path`；自定义工具可能用 file_path 之类的别名。
-		// docx_convert 的产物路径参数叫 outputPath —— 写侧判定锚定产物（policy 的 MUTATING 注释）。
+		// docx_convert / docx_extract 的产物路径参数叫 outputPath —— 写侧判定锚定产物
+		// （policy 的 MUTATING 注释）；两者共用这一条，不必按工具名分支。
 		path: pick("path") ?? pick("file_path") ?? pick("filePath") ?? pick("outputPath"),
 		command: pick("command"),
 	};

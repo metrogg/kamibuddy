@@ -9,7 +9,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTempTasksDir } from "./config-paths.ts";
 import {
 	getEffectiveWorkspaceRoot,
@@ -190,6 +190,90 @@ describe("preferences", () => {
 		expect(next.activeModelKey).toBe("smart/glm");
 		expect(next.showChangeDetails).toBe(true);
 		expect(next.personaDescription).toBe("严谨");
+	});
+});
+
+describe("skillOverrides（技能启停，spec: add-skill-management）", () => {
+	it("读写往返；读改写不丢其他键，改其他键也不丢它", () => {
+		// 旧偏好文件没有这个键 → 未配置（调用方按「全部启用」处理）。
+		expect(readPreferences().skillOverrides).toBeUndefined();
+
+		writePreferences({ activeModelKey: "smart/glm", skillOverrides: { legacy: "off" } });
+		expect(readPreferences().skillOverrides).toEqual({ legacy: "off" });
+
+		writePreferences({ ...readPreferences(), webSearch: { providerId: "tavily", apiKey: "k1" } });
+		expect(readPreferences()).toEqual({
+			activeModelKey: "smart/glm",
+			skillOverrides: { legacy: "off" },
+			webSearch: { providerId: "tavily", apiKey: "k1" },
+		});
+	});
+
+	it("非法值与非法键名逐条忽略并响亮记日志（一条坏的连累不到别的键）", () => {
+		writeFileSync(
+			join(dir, "preferences.json"),
+			JSON.stringify({
+				activeModelKey: "smart/glm",
+				skillOverrides: { docx: "off", "Bad_Name": "off", "meeting-notes": "maybe", "": "off" },
+			}),
+			"utf8",
+		);
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(readPreferences().skillOverrides).toEqual({ docx: "off" });
+			// 三条坏条目各记一条日志：静默丢掉「用户显式关掉的技能」表现为「关了又自己开」。
+			expect(spy).toHaveBeenCalledTimes(3);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("非对象（数组 / 字符串 / null）整块忽略并记日志", () => {
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			for (const value of [[], "off", null, 42]) {
+				writeFileSync(
+					join(dir, "preferences.json"),
+					JSON.stringify({ activeModelKey: "smart/glm", skillOverrides: value }),
+					"utf8",
+				);
+				expect(readPreferences()).toEqual({ activeModelKey: "smart/glm" });
+			}
+			expect(spy).toHaveBeenCalledTimes(4);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("空对象 / 全部非法 → 归一 undefined（与「没写过」同一表示，不写空对象）", () => {
+		writeFileSync(
+			join(dir, "preferences.json"),
+			JSON.stringify({ activeModelKey: "smart/glm", skillOverrides: {} }),
+			"utf8",
+		);
+		expect(readPreferences().skillOverrides).toBeUndefined();
+
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			writePreferences({ ...readPreferences(), skillOverrides: { "UPPER": "off" } });
+			expect(readPreferences().skillOverrides).toBeUndefined();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("坏了不影响其它键（偏好可再生，读取不抛错）", () => {
+		writeFileSync(
+			join(dir, "preferences.json"),
+			JSON.stringify({ activeModelKey: "smart/glm", skillOverrides: [1, 2] }),
+			"utf8",
+		);
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(readPreferences().activeModelKey).toBe("smart/glm");
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 

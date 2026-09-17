@@ -46,6 +46,10 @@ const bridge: KamiBridge = {
 	resumeSession: (path) => ipcRenderer.invoke(INVOKE.sessionResume, path),
 	renameSession: (path, name) =>
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
+	restartSessionFrom: (path, anchorEntryId) =>
+		ipcRenderer.invoke(INVOKE.sessionRestart, path, anchorEntryId),
+	branchSessionFrom: (path, anchorEntryId) =>
+		ipcRenderer.invoke(INVOKE.sessionBranch, path, anchorEntryId),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),
 	archiveSession: (path, archived) =>
 		ipcRenderer.invoke(INVOKE.sessionArchive, path, archived),
@@ -140,6 +144,7 @@ const bridge: KamiBridge = {
 	setPermissions: (settings) => ipcRenderer.invoke(INVOKE.setPermissions, settings),
 
 	skillsSnapshot: () => ipcRenderer.invoke(INVOKE.skillsSnapshot),
+	setSkillEnabled: (name, enabled) => ipcRenderer.invoke(INVOKE.setSkillEnabled, name, enabled),
 	importSkill: (sourcePath) => ipcRenderer.invoke(INVOKE.importSkill, sourcePath),
 	pickSkillDirectory: () => ipcRenderer.invoke(INVOKE.pickSkillDirectory),
 

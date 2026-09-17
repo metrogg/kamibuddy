@@ -14,10 +14,12 @@ import { useEffect, useState } from "react";
 import type { SessionSummary } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import type { SessionGroups, SpaceGroup } from "./session-groups.ts";
+import { resolveSessionOrigin, sessionRowTitle } from "./session-origin.ts";
 import {
 	IconAssistant,
 	IconAutomation,
 	IconBrand,
+	IconBranch,
 	IconChart,
 	IconChevronDown,
 	IconFolder,
@@ -185,12 +187,27 @@ export function Sidebar({
 	}, [menuCwd, menuPath]);
 
 	/**
+	 * 分支来源解析用的可见会话全集。groups 是会话列表的完整划分
+	 * （groupSessions 只按 isTempTask / cwd 分桶，不丢条目），两区并集即
+	 * 「当前侧栏可见的会话」—— 归档会话已在 App 分组前滤掉，故母会话被归档
+	 * 也自然落进「来源不在列表」。
+	 * 渲染时算一份即可（不是每行各拼一遍数组）：侧栏行数少，线性查找够用，
+	 * 不值得为此引入 path→标题 的索引。
+	 */
+	const allSessions: readonly SessionSummary[] =
+		groups === undefined
+			? []
+			: [...groups.tasks, ...groups.spaces.flatMap((group) => group.sessions)];
+
+	/**
 	 * 会话行渲染：任务区与空间组内共用同一份（标题/meta/当前高亮/hover
 	 * 三操作钮/行内编辑态/删除确认态 + 转圈/未读点），写成闭包而不是两份
 	 * JSX —— 两处行结构一旦漂移，「同一任务在两区表现不同」就是 bug。
 	 */
 	const renderTaskRow = (task: SessionSummary): React.JSX.Element => {
 		const meta = formatMessageTime(task.modifiedAt, Date.now());
+		/** undefined = 非分支会话；有值则本行要画来源标记（title 可能解析不到）。 */
+		const origin = resolveSessionOrigin(allSessions, task);
 		const rowClass = task.current
 			? "task-item task-item-current"
 			: "task-item";
@@ -255,7 +272,9 @@ export function Sidebar({
 				<button
 					type="button"
 					className="task-item-body"
-					title={task.title}
+					// 分支行在标题下多一行来源会话标题（session-origin.ts 决定文案）；
+					// 非分支行就是原标题，不额外加字。
+					title={sessionRowTitle(task, origin)}
 					onClick={() => {
 						// 顺带收掉其他行可能开着的操作态，恢复后列表语义干净。
 						setEditingPath(undefined);
@@ -269,6 +288,19 @@ export function Sidebar({
 						taskListChanged 推送更新）：多任务并发后同时可有多行在跑，
 						旧的「本地 streaming && 当前行」推导只看得见当前会话，已废。 */}
 						{task.running && <Spinner size={11} />}
+						{/*
+							分支标记：parentSession 有值才出现（daemon 写死在会话文件 header）。
+							图标本套已 aria-hidden（icons.tsx 统一），分支身份在可访问名里由
+							标题后缀「· 分支」承担，故这里不再补隐藏文字。
+							来源标题走上面的行 title：标记只有 12px，来源信息要能在整行 hover 读到。
+							刻意不做「点标记跳到母会话」——母会话可能已删除，跳转入口必须按来源
+							实际在不在列表决定，本任务（只做标记）不给这条交互。
+						*/}
+						{origin !== undefined && (
+							<span className="task-branch-mark">
+								<IconBranch size={12} />
+							</span>
+						)}
 						{task.title}
 					</span>
 					{/* 「待确认」压在时间之前（flex:none，与 meta 同排常驻可见）；

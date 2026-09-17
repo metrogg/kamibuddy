@@ -224,6 +224,33 @@ describe("入参别名", () => {
 		expect(result).toBeUndefined();
 	});
 
+	it("docx_extract 判定同样锚定 outputPath（HTML 产物在工作区内放行、不拿 docxPath 判）", async () => {
+		const { call, asked } = mount({});
+		// 输入 docx 故意给区外路径：读侧不是写侧风险，锚错参数会误弹窗。
+		const result = await call({
+			toolName: "docx_extract",
+			input: {
+				docxPath: join(HOME, "别处", "原文.docx"),
+				outputPath: join(WORKSPACE, "原文.html"),
+			},
+		});
+
+		expect(result).toBeUndefined();
+		expect(asked).toHaveLength(0);
+	});
+
+	it("docx_extract 产物出工作区 → 询问", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+		const result = await call({
+			toolName: "docx_extract",
+			input: { docxPath: join(WORKSPACE, "原文.docx"), outputPath: join(HOME, "原文.html") },
+		});
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toMatchObject({ toolName: "docx_extract", risk: "medium" });
+		expect(result).toBeUndefined();
+	});
+
 	it("路径缺失时拒绝，而不是放行", async () => {
 		const { call } = mount({});
 		const result = await call({ toolName: "write", input: {} });

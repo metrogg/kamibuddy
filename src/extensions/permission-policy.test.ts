@@ -446,6 +446,37 @@ describe("docx_convert（写工作区产物文件档，与 write 同语义）", 
 	});
 });
 
+describe("docx_extract（与 docx_convert 同档：写 HTML + 图片产物）", () => {
+	/*
+	 * 判定同样锚定产物路径 outputPath（permission-gate 的 extractFacts 通用地
+	 * 把它映射进 facts.path）—— 这一组是「它确实登记在 MUTATING 里」的护栏：
+	 * 漏登记会落到末尾的 fail-safe 询问，只读档更会从「拒」变成「问」。
+	 */
+	it("产物在工作区内 → 放行", () => {
+		const target = join(PATHS.workspaceDir, "原文.html");
+		expect(decide(facts({ toolName: "docx_extract", path: target }), PATHS, CWD)).toEqual({
+			kind: "allow",
+		});
+	});
+
+	it("产物出工作区 → 中风险询问，文案按「写入」（产出新文件）", () => {
+		const target = join(HOME, "Desktop", "原文.html");
+		expect(decide(facts({ toolName: "docx_extract", path: target }), PATHS, CWD)).toEqual({
+			kind: "ask",
+			risk: "medium",
+			summary: "写入工作目录之外的文件",
+			details: target,
+		});
+	});
+
+	it("read-only 档 → 拒（它写 HTML 与图片，这是模式的全部含义）", () => {
+		const target = join(PATHS.workspaceDir, "原文.html");
+		expect(decide(facts({ toolName: "docx_extract", path: target }), PATHS, CWD, READONLY).kind).toBe(
+			"deny",
+		);
+	});
+});
+
 describe("shell 工具", () => {
 	it("bash 一律高风险询问", () => {
 		const result = decide(facts({ toolName: "bash", command: "rm -rf /" }), PATHS, CWD);

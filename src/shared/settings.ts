@@ -70,12 +70,26 @@ export interface ModelInfo {
 
 /** 技能页一次性拉取的内容。 */
 export interface SkillsSnapshot {
+	/**
+	 * 全量技能（含被用户停用的，逐项带 `enabled`）—— 技能页必须看到全量，
+	 * 否则开关没有落点，「停用还能再启用」这条就无从操作。
+	 */
 	readonly skills: readonly SkillInfo[];
 	/**
 	 * 用户自装技能的落盘目录（导入的默认目标）。「打开技能目录」直接 openArtifact 它 ——
 	 * 高级用户可以绕过导入，把技能文件夹手工放进去。
 	 */
 	readonly userSkillsDir: string;
+	/** 已启用技能数（`skills` 里 `enabled` 为真的条数）。开关口径，见 core/skills-cost.ts。 */
+	readonly enabledCount: number;
+	/**
+	 * 技能清单段（系统提示词里常驻的那一段）的 token 估算。
+	 * **不是整条提示词的 token** —— 口径与算法见 core/skills-cost.ts；由 daemon 用与真实
+	 * 注入同一份组装逻辑算出，渲染层只显示、不重算。
+	 */
+	readonly skillsTokens: number;
+	/** 超过警戒线时的提示文案（未超则不带该字段）。阈值与文案见 core/skills-cost.ts。 */
+	readonly warning?: string;
 }
 
 /** 技能在技能页面的一行。 */
@@ -96,6 +110,31 @@ export interface SkillInfo {
 	 * 一个收模型入口），两者都命中才是纯内部技能。
 	 */
 	readonly userInvocable: boolean;
+	/**
+	 * 技能声明的版本。内置技能取自其 SKILL.md frontmatter 的 `version`；
+	 * 自装技能同样以 SKILL.md 为准（它是技能自身的真源，用户可能手改过），
+	 * 安装时写下的 `_installed.json` 只在 SKILL.md 没声明时兜底。
+	 *
+	 * 没声明就**不带这个字段**（不填默认值）——卡片上留白，不写「未知」那种占位噪声。
+	 */
+	readonly version?: string;
+	/**
+	 * 导入时刻（epoch ms）。**只对「经技能页导入」的技能有值**：它来自导入时写进技能目录的
+	 * `_installed.json`；用户手工把文件夹放进技能目录的技能没有这份记录，不带该字段。
+	 */
+	readonly installedAt?: number;
+	/**
+	 * 导入时的来源路径（文件夹来源是那个文件夹，单文件来源是那个 .md）。
+	 * 同样只对经导入安装的技能有值 —— 手工放置的技能无从得知来源。
+	 */
+	readonly sourcePath?: string;
+	/**
+	 * 是否启用（用户级开关，`preferences.json` 的 `skillOverrides`，缺省启用）。
+	 *
+	 * 快照里的**全量**列表逐项带它：被停用的技能仍留在列表里（否则开关没有落点），
+	 * 靠这个标记置灰。列表来源是 daemon 的启用过滤单一出口（spec: 技能清单来源单一出口）。
+	 */
+	readonly enabled: boolean;
 }
 
 /** 设置界面一次性拉取的全部内容。 */
