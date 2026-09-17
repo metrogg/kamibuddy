@@ -6,7 +6,7 @@
  * renderer 只拿快照、不做二次计算——两端各算一份必然漂移（同 conversation.ts 的理由）。
  */
 
-import type { RunId, ToolOutcome } from "./session-events.ts";
+import type { CompactionReason, RunId, ToolOutcome } from "./session-events.ts";
 
 /**
  * 一次或多次模型调用的 token 用量。cost 为美元总计。
@@ -315,6 +315,7 @@ export type RunLedgerEntryKind =
 	| "llm_call"
 	| "retry"
 	| "tool_call"
+	| "compaction_start"
 	| "compaction"
 	| "queue"
 	| "request_snapshot";
@@ -426,13 +427,75 @@ export interface ToolCallData {
 	readonly outcome: ToolOutcome;
 }
 
+/**
+ * 一次压缩的开始（锁时间点，dsh `compaction/start` 的最小等价物）。
+ *
+ * 为什么必须有这条独立记录：压缩的「锁」只能由我们自己落 —— 实测压缩期间
+ * pi 只发 compaction_start / compaction_end、**不发 assistant 事件**
+ * （stabilize-prompt-prefix 第五轮），所以这条完全在我们这侧实现，
+ * 不必等 pi，也不改 pi 的压缩内部行为。
+ *
+ * **锁最后释放**：start 先落盘，压缩真做完（pi 报 compaction_end）才落
+ * `compaction` 条目。于是压缩中途进程被杀时，盘上留下的是「有
+ * compaction_start 没有 compaction」的**可检测孤儿**，而不是一条谎称
+ * 压缩完成的记录 —— 启动回放据此合成闭合（core/run-ledger.ts）。
+ */
+export interface CompactionStartData {
+	/**
+	 * 锁的持有者（dsh 的 `turn: number | null`）：run 内自动压缩 = 那个 run 的 id；
+	 * 空闲手动压缩 = null（独立的一次尝试，不挂在任何 run 上）。
+	 */
+	readonly lock: string | null;
+	/** 触发原因。随锁一起落盘：中断合成闭合要补出一条完整条目，reason 是必填。 */
+	readonly reason: CompactionReason;
+}
+
+/**
+ * 一次压缩遮蔽掉的历史（dsh `shadowedRange` / `shadowedSeqs` /
+ * `shadowedTokenCount` 的最小等价物）。
+ *
+ * 回答的问题：「哪一段历史被这次压缩遮蔽了、有多大」。压缩不丢信息
+ * （会话 JSONL 里原条目都在），但模型看到的不再是它们 —— 排查
+ * 「明明聊过它却不知道」这类问题时，这是唯一能指认范围的地方。
+ */
+export interface CompactionShadow {
+	/**
+	 * 被遮蔽范围的首尾条目 id（可见位置上的跨度，不是 id 的数值区间）。
+	 * `shadowedSeqs` 才是权威集合 —— 与 dsh 同口径。
+	 */
+	readonly shadowedRange: { readonly start: string; readonly end: string };
+	/** 被遮蔽的全部条目 id，按可见顺序。 */
+	readonly shadowedSeqs: readonly string[];
+	/**
+	 * 被遮蔽内容的估算 token（口径与 request_snapshot 的逐条估算同一份
+	 * estimateTokens：两处各算一遍必然漂移，而这个数字会与快照并排看）。
+	 * 只算真正入模的文本（message 条目 / 上一次压缩的摘要），
+	 * 不产生模型 token 的条目计 0 而不是编一个数。
+	 */
+	readonly shadowedTokenCount: number;
+}
+
 /** 一次上下文压缩（pi compaction_end 携带；reason 与 pi 词汇平行定义，同 ThinkingLevel 先例）。 */
 export interface CompactionData {
-	readonly reason: "manual" | "threshold" | "overflow";
+	readonly reason: CompactionReason;
 	/** 压缩前的上下文 token 数；压缩失败/中断（无 result）时缺省。 */
 	readonly tokensBefore?: number;
 	readonly aborted: boolean;
 	readonly errorMessage?: string;
+	/**
+	 * 释放的锁（与 compaction_start 同值，成对判定的两半）。
+	 * 缺省 = 没观察到 start（旧台账，或 daemon 在压缩中途才起来）——
+	 * 那时不写 lock，而不是编一个 null 冒充「独立手动尝试」。
+	 */
+	readonly lock?: string | null;
+	/** 本次压缩遮蔽掉的历史；算不出来时缺省（已由 reportFailure 响亮上报，不编造范围）。 */
+	readonly shadow?: CompactionShadow;
+	/**
+	 * 合成闭合：上次进程死在这次压缩中间（启动回放补记的条目，与
+	 * `run_end{reason:"interrupted"}` 同一手法）。机器可读的判据 ——
+	 * 有它才分得清「压缩被中断」与「一次正常（或失败）的压缩历史」。
+	 */
+	readonly interrupted?: boolean;
 }
 
 /** steer / followUp 排队变化（pi queue_update 直转；内容数组，渲染端只用计数）。 */
@@ -613,6 +676,7 @@ export interface RunLedgerDataMap {
 	readonly llm_call: LlmCallData;
 	readonly retry: RetryData;
 	readonly tool_call: ToolCallData;
+	readonly compaction_start: CompactionStartData;
 	readonly compaction: CompactionData;
 	readonly queue: QueueData;
 	readonly request_snapshot: RequestSnapshotData;

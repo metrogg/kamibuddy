@@ -29,15 +29,25 @@
  *
  * 技能来源经**回调注入**（extensions 不许 import daemon，AGENTS.md §1）：daemon 把
  * 「当前会话可见的技能」传进来，与技能清单段同源（spec Requirement: 会话技能来源单一出口）。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: use_skill 的名称、description 与 command 入参的 schema（错误文本里带当前
+ * 可用技能清单）；返回的**整份 SKILL.md 正文**（`<skill>` 标签 + 基准行 + 去 frontmatter 的正文，
+ * 与 pi 的 `/skill:` 展开逐字同形）。
+ * Token effect: 定义常驻；返回是一次性大块（数千字符起，随技能长度增长），同一技能重复加载会重复付
+ * —— 工具不拦重复调用，幂等靠模型自律。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；技能正文是工具结果（追加在历史之后），
+ * **SKILL.md 被改/更新只影响此后新增的内容**，不回溯破坏已命中的前缀。
  */
 
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import {
-	stripFrontmatter,
-	type ExtensionAPI,
-	type ExtensionFactory,
-} from "@earendil-works/pi-coding-agent";
+/*
+ * stripFrontmatter 是 pi 的值导入里唯一还在本文件的一处；改成首用时动态 import
+ * 的理由：pi 整包实测热态 1809ms，而它只在本工具**真的被模型调用**时才需要
+ * （daemon 的启动关键路径：post ready 之前不跑任何工具）。类型引用仍走 import type。
+ */
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { declareReadOnlyTools } from "./permission-policy.ts";
 
@@ -68,8 +78,9 @@ export interface UseSkillToolOptions {
 	 * 当前会话可见的**全量**技能集合（含被用户停用的，逐项带 `enabled`）。
 	 * **每次调用现取**（不是注册时快照）：会话中途换绑专家后，工具看到的能力面要立刻
 	 * 与提示词里的技能清单段一致。全量而非过滤后的理由见 `UseSkillTarget.enabled`。
+	 * async：技能清单要 pi 的 loadSkills，而 pi 是首用时才装配的（见 daemon 的 listSkills）。
 	 */
-	readonly resolveSkills: () => readonly UseSkillTarget[];
+	readonly resolveSkills: () => Promise<readonly UseSkillTarget[]>;
 }
 
 export function createUseSkillTool(options: UseSkillToolOptions): ExtensionFactory {
@@ -96,7 +107,7 @@ export function createUseSkillTool(options: UseSkillToolOptions): ExtensionFacto
 				}),
 			}),
 			async execute(_toolCallId, params) {
-				const skills = options.resolveSkills();
+				const skills = await options.resolveSkills();
 				// 只 trim 首尾空白：模型偶尔把名字带空格粘进来；大小写仍要求精确 ——
 				// 宽容匹配（大小写/别名）会让模型以为名字可以随便写，清单也就白给了。
 				const name = params.command.trim();
@@ -136,6 +147,7 @@ export function createUseSkillTool(options: UseSkillToolOptions): ExtensionFacto
 				}
 				// 读盘失败（技能文件被删/不可读）原样抛错：与未知技能同样是响亮失败，
 				// 错误消息里的路径比任何降级文案都更有用。
+				const { stripFrontmatter } = await import("@earendil-works/pi-coding-agent");
 				const body = stripFrontmatter(readFileSync(skill.filePath, "utf8")).trim();
 				// 与 pi 的展开逐字同形；基准行取 dirname(filePath)，即 pi 的 Skill.baseDir。
 				const baseDir = dirname(skill.filePath);

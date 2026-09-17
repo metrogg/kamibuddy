@@ -14,6 +14,16 @@
  * 不打断 agent）。例外是 automation_delete 的「无命中 / 多名命中」：那不是
  * 执行失败而是需要澄清，返回正常结果模型才会转去与用户核对，isError 反而
  * 诱导它原样重试。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 三个工具（automation_create / automation_list / automation_delete）
+ * 的名称、description 与 typebox 参数 schema 进请求的 tools 段；promptSnippet / promptGuidelines
+ * 由 pi 汇总成系统提示词的 Available tools / Guidelines 段。每次调用的返回文本（调度摘要 /
+ * 任务清单 / 无命中澄清文案）作为 tool 消息进对话历史。
+ * Token effect: 定义是常驻项（每请求都付）；返回文本只在被调用那一步新增，量级由任务条数决定。
+ * KV Cache effect: 三处文本都是代码字面量、会话内恒定 ⇒ 前缀稳定。工具结果作为新增消息追加在
+ * 历史之后，不改动任何既有字节；但改动这些字面量（含描述与 schema）会让改动点之后的整段前缀
+ * （含历史）在下次请求失配（判据见 docs/可观测性清单.md CACHE8）。
  */
 
 import { randomUUID } from "node:crypto";

@@ -18,7 +18,14 @@
 
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { SessionManager, type SessionHeader } from "@earendil-works/pi-coding-agent";
+/*
+ * SessionManager 为什么 type-only + 首用时动态 import（勿改回静态值）：
+ * pi 整包实测热态 1809ms（冷态 4.7s）——daemon 的启动关键路径（post ready 之前）
+ * 只做 loadResources / 偏好 / 权限规则这类 ms 级读，不碰任何会话文件；
+ * 本模块的每一个导出都在「用户/模型真的要动会话文件」时才被调用。
+ * 静态 import 会在 daemon 的模块体之前求值，等于每次启动先白付整包 pi 的钱。
+ */
+import type { SessionHeader } from "@earendil-works/pi-coding-agent";
 import { getSessionsDir } from "./config-paths.ts";
 import { validateSessionFilePath } from "./session-rebuild.ts";
 
@@ -253,8 +260,12 @@ export function truncateSessionToStart(path: string): void {
  *     本函数如实返回那个路径，由调用方用 existsSync 判定后改走前缀写入器；
  *   - leafId 在文件里不存在时 pi 会抛错，这里不吞（那是调用方的锚点算错了）。
  */
-export function createBranchedSessionFile(sourcePath: string, leafId: string): string | undefined {
+export async function createBranchedSessionFile(
+	sourcePath: string,
+	leafId: string,
+): Promise<string | undefined> {
 	assertInsideSessionsDir(sourcePath);
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 	const temp = SessionManager.open(sourcePath, getSessionsDir());
 	return temp.createBranchedSession(leafId);
 }
@@ -284,15 +295,20 @@ export function setSessionParentSession(path: string, parentSession: string): vo
  * 不手写这一行：id 生成规则属于 pi（generateId 要避开已有 id），自己造容易撞。
  * 目标名已是当前会话名时跳过 —— 重复追加只会让文件多一条完全相同的 session_info。
  */
-export function setSessionName(path: string, name: string): void {
+export async function setSessionName(path: string, name: string): Promise<void> {
 	assertInsideSessionsDir(path);
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 	const manager = SessionManager.open(path, getSessionsDir());
 	if (manager.getSessionName() === name) return;
 	manager.appendSessionInfo(name);
 }
 
 /** pi 生成 header 与文件路径，落盘由本模块负责（理由见 createEmptySessionFile）。 */
-function newSessionHeader(cwd: string, parentSession: string): { path: string; header: SessionHeader } {
+async function newSessionHeader(
+	cwd: string,
+	parentSession: string,
+): Promise<{ path: string; header: SessionHeader }> {
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 	const manager = SessionManager.create(cwd, getSessionsDir(), {
 		parentSession: resolve(parentSession),
 	});
@@ -312,8 +328,8 @@ function newSessionHeader(cwd: string, parentSession: string): { path: string; h
  * hasAssistant 分支），而侧栏列表读的是磁盘真相 —— 所以路径与 header 交给 pi 生成
  * （版本号 / uuidv7 id / 时间戳跟它自己的口径一致，不手写），落盘由本模块补上。
  */
-export function createEmptySessionFile(cwd: string, parentSession: string): string {
-	const created = newSessionHeader(cwd, parentSession);
+export async function createEmptySessionFile(cwd: string, parentSession: string): Promise<string> {
+	const created = await newSessionHeader(cwd, parentSession);
 	writeSessionFileLines(created.path, [JSON.stringify(created.header)]);
 	return created.path;
 }
@@ -326,12 +342,15 @@ export function createEmptySessionFile(cwd: string, parentSession: string): stri
  * createBranchedSession 只返回路径，见探针 1d）。为什么不给调用方自己拼 header：
  * header 形状（version / id 生成规则）属于 pi，多一份手写就会漂。
  */
-export function createSessionFileFromPrefix(sourcePath: string, entryId: string): string | undefined {
+export async function createSessionFileFromPrefix(
+	sourcePath: string,
+	entryId: string,
+): Promise<string | undefined> {
 	const prefix = sessionPrefixLines(sourcePath, entryId);
 	if (prefix === undefined) return undefined;
 	const sourceHeader = readSessionHeader(sourcePath);
 	if (sourceHeader === undefined) throw new Error("会话文件缺少头部，无法派生新会话");
-	const created = newSessionHeader(sourceHeader.cwd, sourcePath);
+	const created = await newSessionHeader(sourceHeader.cwd, sourcePath);
 	writeSessionFileLines(created.path, [JSON.stringify(created.header), ...prefix.entryLines]);
 	return created.path;
 }

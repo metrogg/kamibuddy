@@ -59,6 +59,17 @@
  *
  * 本文件是薄胶水：只 import core 的类型（PromptContextOptions，编译期擦除），
  * 运行时仍只依赖注入的回调，同 permission-gate 的做法，便于脱离宿主测试。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 两个通道 —— ① `before_agent_start` 返回**整串 systemPrompt**（pi 把它写成
+ * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② `context` 事件把逐轮可变事实
+ * （记忆内容 / 个性化）作为**尾部独立消息**追加（role:"custom" / customType:
+ * "kamibuddy-runtime-context" / display:false），模型每轮都读到、界面不显示、也不落会话文件。
+ * Token effect: 系统提示词每请求全量付（常驻在请求头部，与历史长度无关）；注入块按当前记忆 / 个性化
+ * 内容计，逐轮可能变（记忆会被模型自己写、个性化会被用户改），但不沉积成历史节点。
+ * KV Cache effect: 系统提示词是缓存前缀的**头部** —— 它内部一个字节变化就让其后的一切（含整段历史）
+ * 失配（实测：字节不变 93.2% / 变更一行 62.0%，见 docs/可观测性清单.md CACHE8）；注入块位于历史之后，
+ * 自身变化不破坏前缀，且不落盘 ⇒ 不存在「上一轮注入的陈旧副本」需要清理。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

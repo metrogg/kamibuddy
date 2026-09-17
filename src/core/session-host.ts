@@ -19,16 +19,14 @@
  *    用它会把工具耗时算进模型耗时（settleLlmCall 有完整根因）。
  */
 
-import {
-	type AgentSessionEvent,
-	createAgentSession,
-	DefaultResourceLoader,
-	type InlineExtension,
-	type PromptOptions,
+import type {
+	AgentSessionEvent,
+	InlineExtension,
+	PromptOptions,
 	SessionManager,
-	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
+	CompactionReason,
 	SessionEvent,
 	SessionState,
 	ThinkingLevel,
@@ -61,6 +59,7 @@ import { estimateTokens } from "./observability.ts";
 import {
 	contentFingerprint,
 	TRANSIENT_INJECTION_CUSTOM_TYPES,
+	type CompactionShadow,
 	type MessageClass,
 	type MessageRef,
 	type SystemSegmentStat,
@@ -74,6 +73,18 @@ import type { ModelCatalog } from "./model-catalog.ts";
 import { parseModelKey, toModelKey } from "./model-catalog.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+
+/**
+ * 为什么 pi 的运行时值不再静态导入（勿改回去）：pi 整包实测热态 1809ms
+ * （冷态 4.7s），是本进程启动开销里最大的一笔。而 daemon 的启动关键路径
+ * （post ready 之前）只做 loadResources / 偏好 / 权限规则这类 ms 级读 ——
+ * 一次会话都还没建，createAgentSession / DefaultResourceLoader / SettingsManager
+ * 一个都用不到。静态 import 会在 daemon 的模块体**之前**求值，于是「懒建会话」
+ * 变成假的：用户什么都还没点，整包 pi 已经加载完了。
+ * 这四个值改在 SessionHost.create（本来就是 async、且是唯一的会话装配入口）里
+ * 首用时 await import；上面的类型引用是编译期擦除的，不产生运行时依赖。
+ */
+type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 
 /**
  * 默认工具集：**不含 bash / powershell**。
@@ -576,6 +587,16 @@ export class SessionHost {
 	/** 最近一次 auto_retry_start 的退避参数（auto_retry_end 不携带，转发 run_retry 时补齐）。 */
 	private pendingRetry: { maxAttempts: number; delayMs: number } | undefined;
 	/**
+	 * 进行中的压缩的锁（compaction_start 落，compaction_end 清）。
+	 *
+	 * 进程内不变量：同一时刻最多一次压缩（pi 自己保证），所以这是个单值而不是
+	 * 集合。锁的**持有者与原因在 start 时取定**：空闲手动压缩会在自己的分支里
+	 * 起一个新 run，若到 end 时才现读 currentRunId，同一次压缩的首尾就会记成
+	 * 两把不同的锁 —— 成对判定必须两端同值（dsh 的 compaction/end 用同一个
+	 * numeric-or-null 释放）。
+	 */
+	private pendingCompaction: { readonly lock: string | null; readonly reason: CompactionReason } | undefined;
+	/**
 	 * 本 run 的 hidden context（F5，对齐 WorkBuddy 的 composeUserPrompt）。
 	 *
 	 * **按 run 冻结**（prompt() 时算一次，agent_end 清）：transformContext 每次
@@ -598,7 +619,7 @@ export class SessionHost {
 
 	private constructor(
 		private readonly session: Awaited<
-			ReturnType<typeof createAgentSession>
+			ReturnType<PiSdk["createAgentSession"]>
 		>["session"],
 		private readonly options: SessionHostOptions,
 		private sceneId: string,
@@ -614,6 +635,9 @@ export class SessionHost {
 	}
 
 	static async create(options: SessionHostOptions): Promise<SessionHost> {
+		// 首用处（唯一）：装配 pi。见文件头上方的惰性说明。
+		const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } =
+			await import("@earendil-works/pi-coding-agent");
 		const model =
 			options.modelKey === undefined
 				? undefined
@@ -1182,6 +1206,20 @@ export class SessionHost {
 
 		switch (event.type) {
 			case "compaction_start": {
+				/*
+				 * 压缩锁先落（dsh 的 compaction/start，**最后释放**语义见
+				 * run-ledger 的合成闭合）：compaction_start 与 compaction 两条
+				 * 台账记录夹住整个操作 —— 压缩中途进程被杀，盘上留下的是
+				 * 「有 start 没有 compaction」的可检测孤儿，下次启动据此补一条
+				 * 合成闭合（interrupted: true），而不是把那段历史当成一次正常压缩。
+				 *
+				 * 锁的持有者在**这里**取定（run 内自动压缩 = 当前 run；空闲手动
+				 * 压缩 = null）—— 下面手动分支紧接着会起一个新 run，
+				 * 到 end 再现读就会拿到一个新 id，首尾记成两把不同的锁。
+				 */
+				const lock = this.currentRunId ?? null;
+				this.pendingCompaction = { lock, reason: event.reason };
+				this.ledger?.append("compaction_start", { lock, reason: event.reason });
 				// 无论 run 内自动还是空闲手动，压缩过程都要上屏（会话流尾部状态行）
 				// —— 压缩调模型写摘要，耗时与一轮对话相当，静默等于黑洞。
 				// run 内的自动压缩（threshold/overflow）：流式态由原 run 覆盖，不动记账。
@@ -1204,7 +1242,18 @@ export class SessionHost {
 			}
 
 			case "compaction_end": {
-				// 压缩事实进台账：无论它挂在哪个 run 上（run 内自动 / 空闲手动）。
+				/*
+				 * 压缩事实进台账：无论它挂在哪个 run 上（run 内自动 / 空闲手动）。
+				 * 这条同时是**锁的释放**（dsh 的 compaction/end）—— 它只在 pi 报
+				 * 「压缩做完了」时落，所以「先声明完成再干活」这条假账在结构上
+				 * 不可能发生（compaction_start 注释）。
+				 *
+				 * lock 与 shadow 都取自已观察到的 start：没观察到 start 就不写
+				 * lock（见 CompactionData.lock 注释），不编一把锁出来。
+				 */
+				const pending = this.pendingCompaction;
+				this.pendingCompaction = undefined;
+				const shadow = event.result === undefined ? undefined : this.compactionShadow();
 				this.ledger?.append("compaction", {
 					reason: event.reason,
 					...(event.result?.tokensBefore === undefined
@@ -1212,6 +1261,8 @@ export class SessionHost {
 						: { tokensBefore: event.result.tokensBefore }),
 					aborted: event.aborted,
 					...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
+					...(pending === undefined ? {} : { lock: pending.lock }),
+					...(shadow === undefined ? {} : { shadow }),
 				});
 				// 压缩结束一律清 renderer 的压缩态（无论成功/中断/失败），状态行随之消失。
 				// 先于下面的 run 收尾事件发：reducer 先落定压缩终态，随后的 session_state
@@ -1814,6 +1865,64 @@ export class SessionHost {
 	}
 
 	/**
+	 * 刚落地的这次压缩遮蔽了哪一段历史（dsh `shadowedRange`/`shadowedSeqs`/
+	 * `shadowedTokenCount` 的最小等价物）。
+	 *
+	 * **取法只用 pi 落盘的条目树，不推断压缩内部**：pi 的 compaction 条目
+	 * （session-manager.ts `appendCompaction`）parentId 指向压缩前的叶子、
+	 * firstKeptEntryId 指向保留段的第一条 —— 于是「从这个 compaction 条目沿
+	 * parentId 走到根」恰好就是被这次压缩遮蔽掉的整段可见路径（含上一次压缩的
+	 * 摘要条目：迭代摘要把它也遮蔽掉，与 dsh 的 shadowedSeqs 同语义）。
+	 *
+	 * 不按文件顺序切片：条目树允许分叉，只有本次压缩的父链定义「被遮蔽的可见
+	 * 那一串」；文件序会混进别的枝。
+	 *
+	 * 算不出来时返回 undefined 并**响亮上报**（reportFailure 进 event-log），
+	 * 不编一个范围出来 —— 记不上的事实必须看得见（AGENTS.md §7）。
+	 */
+	private compactionShadow(): CompactionShadow | undefined {
+		const entries = this.session.sessionManager.getEntries();
+		const byId = new Map(entries.map((entry) => [entry.id, entry]));
+		let latest: SessionEntry | undefined;
+		for (let i = entries.length - 1; i >= 0; i -= 1) {
+			const entry = entries[i];
+			if (entry !== undefined && entry.type === "compaction") {
+				latest = entry;
+				break;
+			}
+		}
+		if (latest === undefined) {
+			this.ledger?.reportFailure("压缩遮蔽范围未记录：条目树里找不到刚落下的 compaction 条目");
+			return undefined;
+		}
+		const shadowed: SessionEntry[] = [];
+		let parentId = latest.parentId ?? null;
+		while (parentId !== null) {
+			const parent = byId.get(parentId);
+			if (parent === undefined) {
+				this.ledger?.reportFailure(
+					`压缩遮蔽范围未记录：条目 ${latest.id} 的父链在 ${parentId} 处断了`,
+				);
+				return undefined;
+			}
+			shadowed.push(parent);
+			parentId = parent.parentId ?? null;
+		}
+		// 父链是从叶往根走的，翻转过来才是可见顺序（shadowedSeqs 的权威顺序）。
+		shadowed.reverse();
+		const first = shadowed[0];
+		const last = shadowed[shadowed.length - 1];
+		if (first === undefined || last === undefined) return undefined;
+		let shadowedTokenCount = 0;
+		for (const entry of shadowed) shadowedTokenCount += entryTokens(entry);
+		return {
+			shadowedRange: { start: first.id, end: last.id },
+			shadowedSeqs: shadowed.map((entry) => entry.id),
+			shadowedTokenCount,
+		};
+	}
+
+	/**
 	 * 挂 pi 的 transformContext 钩子注入 hidden context（F5）。
 	 *
 	 * transformContext 是 agent-loop 每次模型调用前的官方改写口，且**返回值
@@ -2151,6 +2260,30 @@ function messageText(message: unknown, rawRole: string): string {
 	if (rawRole === "user" || rawRole === "toolResult") return textOf(content);
 	// convertToLlm 之前的原始角色：pi 随后会转写或过滤，这里 best-effort。
 	return customMessageText(message);
+}
+
+/**
+ * 会话条目的形状。从 SessionManager 的读口取，而不是再 import pi 内部的
+ * SessionEntry 联合 —— 本条只需要 id/parentId/type/message/summary 五个字段，
+ * 少一个 pi 的类型依赖就少一个升级时的塌方面（AGENTS.md §1.2 的适配层纪律）。
+ */
+type SessionEntry = ReturnType<SessionManager["getEntries"]>[number];
+
+/**
+ * 一个会话条目占用多少 token（估算；口径与 request_snapshot 的逐条估算同一份
+ * estimateTokens —— 两处各算一遍必然漂移，而这两个数字在面板上并排看）。
+ *
+ * 只算**真正入模的文本**：message 条目按角色取文本（messageText），compaction
+ * 条目取上一轮摘要（它会被下一次压缩遮蔽掉，摘要本身也是 token）。其余条目
+ * （model_change / thinking_level_change / custom / session_info）不产生模型
+ * token，计 0 而不是编一个数。
+ */
+function entryTokens(entry: SessionEntry): number {
+	if (entry.type === "message") {
+		return estimateTokens(messageText(entry.message, rawRoleOf(entry.message)));
+	}
+	if (entry.type === "compaction") return estimateTokens(entry.summary);
+	return 0;
 }
 
 /** pi 消息的原始角色字符串（自定义角色的 role 就是自己的名字）。 */

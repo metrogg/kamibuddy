@@ -26,7 +26,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { getAppDir, getConfigDir, getResourcesDir } from "../core/config-paths.ts";
+import { getAppDir, getConfigDir, getResourcesDir, getSpillsDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -41,6 +41,7 @@ import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
+import { spillExtensionFactory } from "../extensions/spill-hook.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
 import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
@@ -97,7 +98,15 @@ export interface AutomationRunExecutorDeps {
 	 * run 会话恒不绑专家（两轴固定 work + craft），因此这里就是全局技能池 —— 但
 	 * 仍走同一个出口：技能清单段进提示词，use_skill 工具就得看得到同一批技能。
 	 */
-	readonly resolveSkills: () => readonly UseSkillTarget[];
+	readonly resolveSkills: () => Promise<readonly UseSkillTarget[]>;
+	/**
+	 * 工具结果落盘失败的上报（daemon 接到 event-log）。
+	 *
+	 * run 会话与用户会话装**同一个** spill 钩子：无人值守下结果被截断/落盘
+	 * 失败同样要留痕迹，否则「文件里为什么少了 3 万字」在日志里查不到。
+	 * 落盘目录是 run 的 cwd（与用户会话同口径：模型要能用 read/grep 读回去）。
+	 */
+	readonly reportSpill: (message: string) => void;
 }
 
 export function createAutomationRunExecutor(
@@ -228,6 +237,12 @@ function buildRunExtensions(
 			composeRuntimeContext: () => deps.composeRuntimeContext(cwd),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
+		/*
+		 * 工具结果 spill：与用户会话同一个钩子（无人值守不改变「结果超限就落盘 +
+		 * 给路径」这条口径；run 会话的 web_fetch / read_document 一样会吐长正文）。
+		 * 只有 read 例外，见 spill-hook 文件头。
+		 */
+		spillExtensionFactory({ dir: getSpillsDir(cwd), report: deps.reportSpill }),
 		/*
 		 * 结构化提问的无人值守变体：craft 白名单含 questionnaire，run 会话
 		 * 必须注册同名工具（否则模型对着白名单调一个不存在的能力）；

@@ -12,7 +12,14 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+/*
+ * ModelRuntime 为什么 type-only + 首用时动态 import（勿改回静态值与静态类型）：
+ * pi 整包实测热态 1809ms（冷态 4.7s），而 ModelCatalog 本身是**懒加载**的
+ * （daemon 的 getCatalog，第一次需要模型目录时才建）。静态 import 会把这个
+ * 「懒」变成假的 —— 模块求值先于 daemon 模块体，用户还没打开任何界面就先付了
+ * 整包 pi 的装配钱。类型仍走 import type（编译期擦除，不产生运行时依赖）。
+ */
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
 	CredentialSource,
 	CustomModelInput,
@@ -53,6 +60,7 @@ export class ModelCatalog {
 		// pi 会往这些路径写文件，先确保目录存在（我们自选的路径，责任在我们）。
 		mkdirSync(getConfigDir(), { recursive: true });
 
+		const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
 		const runtime = await ModelRuntime.create({
 			authPath: getAuthPath(),
 			modelsPath: getModelsPath(),

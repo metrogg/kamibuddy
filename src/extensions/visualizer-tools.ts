@@ -17,6 +17,15 @@
  * 3. **边界只在本层**：resources 目录经 core/config-paths.ts 的 getResourcesDir()
  *    取（extensions → core 是合法依赖方向）；指南文件缺失抛错响亮失败
  *    （AGENTS.md §7），不静默降级成空指南——没有指南的产出必然跑偏。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: read_me / show_widget 的名称、description 与参数 schema；read_me 返回
+ * resources/visualizer 的指南正文（按模块拼装成 JSON 的 content 字段）；show_widget 返回同构 JSON
+ * —— 成功时把**模型自己写的 widget_code 原样回显**，校验失败时 success:false + 中文原因（不是工具错误）。
+ * Token effect: 定义常驻；read_me 的指南是一次性大块（只在真调用时读）；show_widget 的返回约等于
+ * 入参里的 SVG/HTML 本体 —— 同一段代码被回显一次，属刻意的可校验形态。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；指南正文来自 resources/，文件改动会让结果变，
+ * 但结果在历史之后 —— 只影响新增内容，不回溯破坏前缀。
  */
 
 import { readFileSync } from "node:fs";

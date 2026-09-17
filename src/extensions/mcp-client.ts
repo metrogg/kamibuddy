@@ -28,11 +28,25 @@
  * JSON Schema 分支（pi-ai validation.ts 的 TYPEBOX_KIND 检查 +
  * coerceWithJsonSchema 回落），provider 侧也把 parameters 原样序列化进请求。
  * 写转换器只会引入失真（oneOf/$ref/嵌套），这条直通路径是 pi 留好的。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 每个 MCP server 的工具以 `mcp__<server>__<tool>` 注册进 pi 的工具面 ——
+ * 名称、server 给的 description、原样透传的 MCP JSON Schema，以及调用结果（MCP content 原样回传，
+ * 未连接或 isError 时抛错文案）。连接 / 断开 / reload 热应用都会改变这个集合。
+ * Token effect: 定义是常驻项，且**随 server 数量与 schema 体积线性增长**（外部 schema 不可控）；
+ * 单次结果文本也由外部 server 决定，量不可控。
+ * KV Cache effect: **工具集本身是缓存前缀的一部分**（判据见 docs/提示词前缀缓存契约.md §6 的
+ * 「可见工具集变化」）：会话内连上/断开 server 或 reload 都会让改动点之后的整段前缀（含历史）失配。
+ * 工具 schema 由外部 server 提供、我们无法保证其逐次字节一致 —— 这是本模块最需要警惕的缓存风险。
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+/*
+ * MCP SDK 为什么走首用时的动态 import（勿改回静态）：它实测热态 288ms（冷态更高），
+ * 而**只有真的配了 MCP server 并去连**时才用得上（connectMcpServer 是唯一调用点）。
+ * daemon 的启动关键路径（post ready 之前）只读 resources / 偏好 / 权限规则，
+ * 静态挂在这里等于每次启动白付这笔钱。Client 的类型引用仍在（type-only，编译期擦除）。
+ */
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import {
@@ -494,6 +508,12 @@ async function connectMcpServer(
 	config: McpServerConfig,
 	onClosed: () => void,
 ): Promise<McpServerConnection> {
+	const [{ Client }, { StdioClientTransport }, { StreamableHTTPClientTransport }] =
+		await Promise.all([
+			import("@modelcontextprotocol/sdk/client/index.js"),
+			import("@modelcontextprotocol/sdk/client/stdio.js"),
+			import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
+		]);
 	// name/version 会经 initialize 握手报给 server（对齐 package.json 的版本号）。
 	const client = new Client({ name: "kamibuddy", version: "0.1.0" });
 	const transport =

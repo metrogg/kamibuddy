@@ -130,6 +130,36 @@ export function getWorkspaceDir(): string {
 }
 
 /**
+ * 工具结果 spill 目录：`<会话 cwd>/.kamibuddy/spills`。
+ *
+ * **为什么不跟 event-log / run-ledger 一起放配置目录**（其他路径都在那儿）：
+ * 配置目录对文件工具是**禁读**的（permission-policy 阶段 1，凭据禁读任何档
+ * 都不可越过），而 spill 提示的任务就是让模型用 read/grep 把落盘结果读回去
+ * ——落在配置目录里等于落进一个模型够不着的地方，等于没落。
+ *
+ * `<cwd>/.kamibuddy/` 是既有约定（记忆系统的 memory/ 就住在这儿，权限策略也
+ * 为它开了白名单），而 cwd 就是工作区 ⇒ read/grep 直接放行。代价是用户能在
+ * 工作区里看到这些文件：可接受，它们是工具输出的完整副本，删掉只影响模型
+ * 按路径回读（会话历史里那份预览不受影响）。
+ *
+ * 只拼路径不建目录：本文件是纯路径推导层（目录由 spill 落盘时按需建）。
+ *
+ * 注意取回手段只有**文件工具**（read/grep）：目录名带 `.kamibuddy` 会被
+ * command-guard 的凭据段规则拦下（那条规则挡的是
+ * `Get-Content ...\.kamibuddy\auth.json`）。所以 spill 提示里只教 read/grep，
+ * 不教用 powershell 去 `Get-Content`。这与 cwd 下的记忆目录同一命运
+ * （`<cwd>/.kamibuddy/memory/**` 的 shell 访问同样被拦），不是新引入的怪癖。
+ *
+ * 另一处**已知怪癖**（与记忆同源，不新增）：若用户把工作空间设成家目录，
+ * `<cwd>/.kamibuddy` 就与配置目录重合 ⇒ 文件工具对它的读会被阶段 1 禁读拦下
+ * （权限层靠路径判定，改名才能区分）。这时 spill 提示里的路径读不回来 ——
+ * 现象是明确的拒绝，不是静默失败；要根治得让权限层认这个子目录，属权限侧的事。
+ */
+export function getSpillsDir(cwd: string): string {
+	return join(cwd, ".kamibuddy", "spills");
+}
+
+/**
  * 历史共享临时目录：`<工作空间根>/临时任务`。
  *
  * 退役为历史目录：新任务已改为每任务独立时间戳目录（见 spec: align-per-task-dirs），

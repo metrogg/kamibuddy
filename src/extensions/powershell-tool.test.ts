@@ -28,7 +28,6 @@ interface FakeToolResult {
 		readonly blocked: boolean;
 		readonly category: string | undefined;
 		readonly exitCode: number | null | undefined;
-		readonly truncated: boolean;
 	};
 }
 
@@ -212,11 +211,13 @@ describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", ()
 		expect(result.content[0]?.text).toContain("沙箱未生效说明");
 	});
 
-	it("**输出超长被截断时 note 仍然保留**", async () => {
+	it("**长输出不在工具层截断，且 note 仍排在输出之前**", async () => {
 		/*
-		 * 这条验证的是 formatOutcome 里「note 紧跟状态行、排在输出之前」那个
-		 * 设计断言：24k 截断是从尾部砍的，若 note 排在输出之后，
-		 * 命令一话多就会把「沙箱未生效」这句安全说明整段吞掉。
+		 * 两个断言各对应一个设计决定：
+		 *   1. 工具层不截断 —— 截断归 spill 层（extensions/spill-hook.ts）统一做，
+		 *      这里先砍一刀的话 spill 拿到的是残缺文本，落盘也救不回来；
+		 *   2. note 排在输出之前 —— spill 是从尾部砍的，note 若排在输出之后
+		 *      「沙箱未生效」这句安全说明会被整段砍掉。
 		 */
 		const { runner } = fakeRunner({
 			stdout: "A".repeat(40_000),
@@ -226,9 +227,10 @@ describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", ()
 		const result = await tool.execute("t1", { command: "Get-Date" });
 		const text = result.content[0]?.text ?? "";
 
-		expect(result.details.truncated).toBe(true);
+		expect(text.length).toBeGreaterThan(40_000);
+		expect(text).not.toContain("已截断");
 		expect(text).toContain("沙箱未生效说明");
-		expect(text).toContain("已截断");
+		expect(text.indexOf("沙箱未生效说明")).toBeLessThan(text.indexOf("A".repeat(100)));
 	});
 
 	it("非零退出码与超时如实回传（不被执行器形态改变）", async () => {

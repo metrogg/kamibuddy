@@ -16,8 +16,11 @@
  *    IO/序列化问题都不许让对话失败。读侧同理：回放容忍坏行（崩溃截断的
  *    半行不该让台账再也打不开，dsh 同口径）。
  * 4. **中断合成闭合，不截断**：启动扫到未闭合 run（有 run_start 无 run_end）
- *    补一条合成 run_end{reason:"interrupted"}。合成条的 at 是「发现中断」的
- *    时刻 —— 原 run 的真实结束时刻不可知，不编造。
+ *    补一条合成 run_end{reason:"interrupted"}；压缩的锁同理（有
+ *    compaction_start 无 compaction，补一条 interrupted:true 的 compaction）——
+ *    锁是**最后释放**的，所以「进程死在压缩中间」留下的就是这条可检测的孤儿。
+ *    合成条的 at 是「发现中断」的时刻 —— 原 run / 原压缩的真实结束时刻不可知，
+ *    不编造。
  *
  * 为什么同步写：与 event-log 同理由（崩溃前最后一条也要在盘上；事件量小，
  * 每 run 几十条，同步写不是瓶颈）。
@@ -36,10 +39,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type {
+	CompactionData,
+	CompactionStartData,
 	RunLedgerDataMap,
 	RunLedgerEntry,
 	RunLedgerEntryKind,
 } from "../shared/observability.ts";
+import { isCompactionReason } from "../shared/session-events.ts";
 
 /** 写入失败的上报通道（daemon 接到 event-log）。只进不出，绝不回抛。 */
 export type LedgerReport = (message: string) => void;
@@ -104,20 +110,27 @@ interface LedgerScan {
 	readonly maxSeq: number;
 	/** 最后一个未闭合 run 的 runId（有 run_start 无 run_end）；全闭合为 undefined。 */
 	readonly openRunId: string | undefined;
+	/**
+	 * 最后一个未闭合的压缩（有 compaction_start 无 compaction）；全闭合为 undefined。
+	 * 判定同样是**位置性**的（理由同 run）：同一时刻只可能有一次压缩。
+	 */
+	readonly openCompaction: CompactionStartData | undefined;
 }
 
 /**
- * 回放扫描一份台账文件：取最大 seq、检出未闭合 run。
+ * 回放扫描一份台账文件：取最大 seq、检出未闭合的 run 与未闭合的压缩。
  *
  * 逐行解析、坏行跳过（读侧容忍：崩溃截断的半行 / 手滑编辑的坏行不该让
  * 台账再也打不开）。run 的闭合判定是位置性的 —— run_start 之后没有任何
  * run_end 即未闭合。不按 runId 配对：宿主的 runId 是进程内自增（run-N），
  * daemon 重启后新一轮从 run-1 重新计数，跨进程代际 runId 必然撞名，
  * 而同一时刻一个会话只可能有一个未闭合 run（单写者不变式），位置判定才可靠。
+ * 压缩的锁同款（compaction_start → compaction 的成对判定也按位置）。
  */
 function scanLedgerFile(filePath: string): LedgerScan {
 	let maxSeq = 0;
 	let openRunId: string | undefined;
+	let openCompaction: CompactionStartData | undefined;
 	for (const line of readFileSync(filePath, "utf8").split("\n")) {
 		if (line.trim() === "") continue;
 		let entry: RunLedgerEntry;
@@ -132,9 +145,42 @@ function scanLedgerFile(filePath: string): LedgerScan {
 			openRunId = typeof runId === "string" ? runId : undefined;
 		} else if (entry.kind === "run_end") {
 			openRunId = undefined;
+		} else if (entry.kind === "compaction_start") {
+			/*
+			 * 逐字段校验后再留用：下一步要拿它合成一条完整的 compaction 条目
+			 * （reason 在那边是必填），不校验就会把半截数据写进类型标着必填的记录。
+			 * 判据放在这里而不是 compactSeal 里，是因为「这条 start 可用吗」
+			 * 只有读侧答得出来。
+			 */
+			const { lock, reason } = entry.data as { lock?: unknown; reason?: unknown };
+			if ((lock === null || typeof lock === "string") && isCompactionReason(reason)) {
+				openCompaction = { lock, reason };
+			}
+		} else if (entry.kind === "compaction") {
+			openCompaction = undefined;
 		}
 	}
-	return { maxSeq, openRunId };
+	return { maxSeq, openRunId, openCompaction };
+}
+
+/**
+ * 未闭合压缩的合成闭合（实例构造与静态清扫两条路径共用一份 —— 两处各写一遍
+ * 必然漂移，AGENTS.md §4）。
+ *
+ * `aborted: true` 是诚实的：这次压缩没有落地。「有 start 没有 compaction」
+ * 就是 dsh 说的 orphaned lock —— 补一条闭合记录而不是把痕迹留在那里，
+ * 也不能让它被读成一次正常压缩，所以 `interrupted: true` 是机器可读的判据。
+ * `errorMessage` 写明这是补记（时刻由 append / 写盘时决定：原压缩的真实结束
+ * 时刻不可知，不编造 —— 与 run_end 合成闭合同口径）。
+ */
+function compactSeal(open: CompactionStartData): CompactionData {
+	return {
+		reason: open.reason,
+		aborted: true,
+		lock: open.lock,
+		interrupted: true,
+		errorMessage: "上次压缩未完成即退出（进程中断），本条为启动回放补记的合成闭合",
+	};
 }
 
 /**
@@ -164,7 +210,7 @@ function tryScan(filePath: string, report: LedgerReport): LedgerScan {
 		return scanLedgerFile(filePath);
 	} catch (error) {
 		report(`台账回放失败按空台账继续：${filePath} —— ${error instanceof Error ? error.message : String(error)}`);
-		return { maxSeq: 0, openRunId: undefined };
+		return { maxSeq: 0, openRunId: undefined, openCompaction: undefined };
 	}
 }
 
@@ -201,10 +247,14 @@ export class RunLedger {
 		}
 		const scan = existsSync(this.filePathValue)
 			? tryScan(this.filePathValue, (m) => this.safeReport(m))
-			: { maxSeq: 0, openRunId: undefined };
+			: { maxSeq: 0, openRunId: undefined, openCompaction: undefined };
 		this.nextSeq = scan.maxSeq + 1;
 		// 中断合成闭合（dsh：闭合优于截断）——上次进程死在一个开着的 run 上，
 		// 不补这条，投影回放会把那个 run 当成「至今仍在跑」。
+		// 压缩的孤儿锁先补：它的 compaction_start 排在 run 中间，位置序不能倒过来。
+		if (scan.openCompaction !== undefined) {
+			this.append("compaction", compactSeal(scan.openCompaction));
+		}
 		if (scan.openRunId !== undefined) {
 			this.append("run_end", { runId: scan.openRunId, reason: "interrupted" });
 		}
@@ -272,10 +322,11 @@ export class RunLedger {
 	}
 
 	/**
-	 * 启动清扫：对目录下所有台账文件做中断合成闭合。
+	 * 启动清扫：对目录下所有台账文件做中断合成闭合（run 与压缩各一份）。
 	 *
 	 * 冷会话（崩溃后还没被 resume 的）的孤儿 run 也要补上 —— 否则投影回放
-	 * （observability 的台账 fold）会把它们当成「至今仍在跑」。
+	 * （observability 的台账 fold）会把它们当成「至今仍在跑」。压缩的孤儿锁同理：
+	 * 不补，「有 start 没有 compaction」就只是一段谁也没读懂的痕迹。
 	 * 目录不存在（从没记过台账）是正常态，秒退。
 	 */
 	static sealOrphans(dir: string, report: (file: string, message: string) => void): void {
@@ -293,15 +344,34 @@ export class RunLedger {
 				report(file, `台账截断修复失败：${error instanceof Error ? error.message : String(error)}`);
 			}
 			const scan = tryScan(path, (message) => report(file, message));
-			if (scan.openRunId === undefined) continue;
+			if (scan.openRunId === undefined && scan.openCompaction === undefined) continue;
+			/*
+			 * 写序与构造器里的合成闭合一致：压缩的孤儿锁先补（它的 start 排在
+			 * run 中间），run_end 收尾 —— 位置序倒了，投影回放会把闭合记到错的
+			 * 位置上（run 泳道按位置归属事件）。
+			 */
+			let seq = scan.maxSeq + 1;
 			try {
-				const line = JSON.stringify({
-					seq: scan.maxSeq + 1,
-					at: Date.now(),
-					kind: "run_end",
-					data: { runId: scan.openRunId, reason: "interrupted" },
-				});
-				appendFileSync(path, `${line}\n`, "utf8");
+				if (scan.openCompaction !== undefined) {
+					appendFileSync(
+						path,
+						`${JSON.stringify({ seq, at: Date.now(), kind: "compaction", data: compactSeal(scan.openCompaction) })}\n`,
+						"utf8",
+					);
+					seq += 1;
+				}
+				if (scan.openRunId !== undefined) {
+					appendFileSync(
+						path,
+						`${JSON.stringify({
+							seq,
+							at: Date.now(),
+							kind: "run_end",
+							data: { runId: scan.openRunId, reason: "interrupted" },
+						})}\n`,
+						"utf8",
+					);
+				}
 			} catch (error) {
 				report(file, `台账合成闭合写盘失败：${error instanceof Error ? error.message : String(error)}`);
 			}

@@ -28,8 +28,10 @@
     "probe:prompt-cache": "tsx scripts/probe-prompt-cache.ts",
     "check:deps": "tsx scripts/check-dependency-rules.ts",
     "check:tokens": "tsx scripts/check-design-tokens.ts",
+    "check:model-experience": "tsx scripts/check-model-experience.ts",
+    "check:invariants": "tsx scripts/check-module-invariants.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run check:deps && npm run check:tokens",
+    "check": "npm run typecheck && npm run check:deps && npm run check:tokens && npm run check:model-experience && npm run check:invariants",
     "test": "vitest run"
   },
   "dependencies": {

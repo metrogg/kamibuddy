@@ -35,8 +35,13 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-
+/*
+ * getAgentDir 为什么走首用时的动态 import（勿改回静态）：pi 整包实测热态 1809ms
+ * （冷态 4.7s），而这里只为一个纯路径函数（getAgentDir）。本函数在 daemon 启动
+ * 时就跑，但**不必阻塞 ready**：它只做一次幂等的二进制拷贝 + 日志，pi 的 find/grep
+ * 要到第一次会话才有意义 —— 所以 daemon 侧改成 ready 之后 fire-and-forget
+ * （与 venv 预热同一口径）。
+ */
 import { getResourcesDir } from "./config-paths.ts";
 
 /** 随包资产与 pi 期望的文件名都用这套（Windows 上加 .exe）。 */
@@ -66,12 +71,13 @@ export interface EnsureAgentToolsOptions {
 	readonly platform?: NodeJS.Platform;
 }
 
-export function ensureAgentTools(options: EnsureAgentToolsOptions = {}): AgentToolsResult {
+export async function ensureAgentTools(options: EnsureAgentToolsOptions = {}): Promise<AgentToolsResult> {
 	const platform = options.platform ?? process.platform;
 	const sourceDir = options.sourceDir ?? join(getResourcesDir(), "bin");
-	// 与 pi 的 `getBinDir()` 同规则（`config.ts`：join(getAgentDir(), "bin")）。
-	// 用它的公开函数而不是自己拼 homedir：`PI_CODING_AGENT_DIR` 覆盖时两边一致。
-	const targetDir = options.targetDir ?? join(getAgentDir(), "bin");
+	// 只有真要推导目录时才装配 pi（调用方给了 targetDir 就完全不碰它）。
+	const targetDir =
+		options.targetDir ??
+		join((await import("@earendil-works/pi-coding-agent")).getAgentDir(), "bin");
 	const binaries = options.binaries ?? BUNDLED_BINARIES;
 
 	// 随包资产只有 Windows x64。别的平台不猜、不假装成功：直接说明跳过，

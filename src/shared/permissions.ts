@@ -290,6 +290,80 @@ export function resolveAsk(policy: ApprovalPolicy): "ask" | "deny" {
 	return policy === "ask" ? "ask" : "deny";
 }
 
+/**
+ * 生效的审批策略会不会**问人**（唯一判据）。
+ *
+ * 两个来源在这一处合成：设置里的审批策略旋钮，与会话的「无人值守」属性
+ * （定时任务 run 会话没有人在场，挂起等审批等于把 run 卡死到超时）。
+ * 谁都不许再在别处写 `approval === "never"` 或 `unattended === true` ——
+ * 散落的直判正是「一处拒、一处放」的缝，而这条缝的方向是 fail-open。
+ * （dsh 把 never 的强制放在服务内部、answerer 之前，理由同。）
+ *
+ * 调用点：判定链的审批策略阶段（permission-policy 的 decide）、权限门的
+ * 无人值守拦截、沙箱提权的三处「还能不能问人」（sandbox-runner ——
+ * 那里此前各判一次，注释自己都写着「两处若分歧，模型就会被指向一条走不通的路」）。
+ */
+export function willAskUser(settings: PermissionSettings, unattended = false): boolean {
+	if (unattended) return false;
+	return resolveAsk(settings.approval) === "ask";
+}
+
+/* ── 审批结果的闭集（fail-closed） ────────────────────────────────── */
+
+/**
+ * 审批结果闭集（dsh `ApprovalOutcome` 的最小等价物，取值逐字相同）。
+ *
+ * 为什么必须是闭集：调用方只回答一个问题「这次工具调用能不能执行」，
+ * 而答案里**有且只有一个「可以」**（`allowed-once`，且只对问的那一次有效）。
+ * 一旦放进中间态（「本次会话都行」之类），调用方就得逐档判断，而漏判任何一档
+ * 的默认行为恰恰是放行 —— 那就是 fail-open。
+ *
+ * `cancelled` 目前**没有生产者**：我们的审批请求没有中止通道（daemon 的
+ * pendingApprovals 无超时，窗口关闭即随进程一起结束，见 daemon/index.ts 注释），
+ * 它只作为闭集里的一档存在，语义上与 `unavailable` 同为拒绝。
+ */
+export type ApprovalOutcome = "allowed-once" | "rejected" | "cancelled" | "unavailable";
+
+export const APPROVAL_OUTCOMES: readonly ApprovalOutcome[] = [
+	"allowed-once",
+	"rejected",
+	"cancelled",
+	"unavailable",
+] as const;
+
+/**
+ * 只有 `allowed-once` 放行 —— 调用方的唯一判据。
+ *
+ * 写成类型谓词而不是让各处写 `outcome === "allowed-once"`：判据要能被测试钉住，
+ * 而且调用方在 `if (!isGranted(x))` 的假分支里自动窄化出「非放行」那三档，
+ * 拒绝文案的穷尽表因此不必再断言一次。
+ */
+export function isGranted(outcome: ApprovalOutcome): outcome is "allowed-once" {
+	return outcome === "allowed-once";
+}
+
+/**
+ * 把一次审批往返的返回值规范化为闭集成员（**唯一规范化处**）。
+ *
+ * 三条口子全部收敛到 `unavailable`，一条都不放行：
+ *   - 应答者缺失（undefined / null / 非对象）；
+ *   - 应答值不合契约（`decision` 既不是 allow 也不是 deny —— 版本错配、
+ *     被篡改的渲染进程、将来加档但旧 daemon 读不懂）；
+ *   - 抛错（本函数看不到，调用方必须 try/catch 后按 `unavailable` 处理，
+ *     见 permission-gate 的审批往返）。
+ *
+ * 为什么不合规归 `unavailable` 而不是 `rejected`：两者都是拒绝，但对审计的
+ * 含义不同 —— 「有人明确说不」与「问了没人答 / 答了读不懂」在事后还原时
+ * 是两件事，混在一起就再也分不出「通道坏了」。
+ */
+export function normalizeApprovalOutcome(response: unknown): ApprovalOutcome {
+	if (typeof response !== "object" || response === null) return "unavailable";
+	const decision = (response as { decision?: unknown }).decision;
+	if (decision === "allow") return "allowed-once";
+	if (decision === "deny") return "rejected";
+	return "unavailable";
+}
+
 /* ── 持久前缀规则（permissions.rules.json） ────────────────────── */
 
 /**

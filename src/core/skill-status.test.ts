@@ -12,6 +12,15 @@ import type { SkillDescriptor } from "./prompt-composer.ts";
 import { filterEnabledSkills, isSkillEnabled } from "./skill-status.ts";
 import { computeSkillsCost, SKILLS_TOKEN_WARNING_THRESHOLD, skillsCostWarning } from "./skills-cost.ts";
 
+/*
+ * 预热 pi 的惰性装配（业务见 core/prompt-composer.ts 的惰性说明）：被测的
+ * computeSkillsCost → formatSkillsSection 首用时才 `await import("pi")`，而本文件
+ * 没有静态 import 它（也不需要）—— 不预热的话，**每个测试文件**的第一个用例都会
+ * 替整个 vitest worker 付一次整包装配（本机实测 2~8s），直接撞 vitest 默认 5s 的
+ * 用例超时。这里的顶层 await 发生在收集阶段（无超时预算），装好后用例只测逻辑。
+ */
+await import("@earendil-works/pi-coding-agent");
+
 /** 造一个技能描述符：描述用中文（有真实 token 量），路径只为可读。 */
 function skill(name: string, patch: Partial<SkillDescriptor> = {}): SkillDescriptor {
 	return {
@@ -67,10 +76,12 @@ describe("启用过滤", () => {
 });
 
 describe("清单段成本", () => {
-	it("停用技能后 enabledCount 与 skillsTokens 一起下降", () => {
+	it("停用技能后 enabledCount 与 skillsTokens 一起下降", async () => {
 		const skills = [skill("docx"), skill("meeting-notes"), skill("typeset")];
-		const full = computeSkillsCost(skills);
-		const reduced = computeSkillsCost(filterEnabledSkills(skills, { "meeting-notes": "off", typeset: "off" }));
+		const full = await computeSkillsCost(skills);
+		const reduced = await computeSkillsCost(
+			filterEnabledSkills(skills, { "meeting-notes": "off", typeset: "off" }),
+		);
 
 		expect(full.enabledCount).toBe(3);
 		expect(reduced.enabledCount).toBe(1);
@@ -79,22 +90,22 @@ describe("清单段成本", () => {
 		expect(full.warning).toBeUndefined();
 	});
 
-	it("disable-model-invocation 的技能计入「已启用数」，但不计 token（它根本进不了清单段）", () => {
+	it("disable-model-invocation 的技能计入「已启用数」，但不计 token（它根本进不了清单段）", async () => {
 		const visible = skill("docx");
 		const hidden = skill("typeset", { disableModelInvocation: true });
-		const cost = computeSkillsCost([visible, hidden]);
+		const cost = await computeSkillsCost([visible, hidden]);
 		expect(cost.enabledCount).toBe(2);
-		expect(cost.skillsTokens).toBe(computeSkillsCost([visible]).skillsTokens);
+		expect(cost.skillsTokens).toBe((await computeSkillsCost([visible])).skillsTokens);
 	});
 
-	it("超阈值产出 warning（阈值可注入，测试不必真造 4000 token）", () => {
-		const cost = computeSkillsCost([skill("docx")], 1);
+	it("超阈值产出 warning（阈值可注入，测试不必真造 4000 token）", async () => {
+		const cost = await computeSkillsCost([skill("docx")], 1);
 		expect(cost.warning).toContain("超过 1 的警戒线");
 		expect(cost.warning).toContain("停用不常用的技能");
 	});
 
-	it("恰好等于阈值不算超（提示说的是「超过」）", () => {
-		const tokens = computeSkillsCost([skill("docx")]).skillsTokens;
+	it("恰好等于阈值不算超（提示说的是「超过」）", async () => {
+		const tokens = (await computeSkillsCost([skill("docx")])).skillsTokens;
 		expect(skillsCostWarning(tokens, tokens)).toBeUndefined();
 		expect(skillsCostWarning(tokens + 7, tokens)).toContain("超出 7");
 	});

@@ -12,6 +12,14 @@
  *
  * 空数组是收尾语义（清单关闭），不是入参错误，故不设 minItems。
  * 确认文本不复述清单内容：清单已在 UI 可见，复述是纯 token 开销。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: todo_write 的名称、description 与 todos 的 schema（0-50 项、三态 status）；
+ * 返回的一句确认文本（不复述整张清单）。
+ * Token effect: 定义常驻；**清单本体是模型自己写的工具入参**（全量替换语义 ⇒ 每次都整张传入，
+ * 长清单反复付）；返回刻意只有一句 —— 复述清单是纯开销，已在 UI 可见。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；每次调用的入参与确认文本都追加在历史之后，
+ * 同一份清单重复传入属于新增内容（不是前缀），不影响此前已命中的缓存。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";

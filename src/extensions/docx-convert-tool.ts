@@ -15,6 +15,14 @@
  * 只是省首次等待，这里的 ensure 才是兜底 —— 与 WB「每次转换前重跑 setup
  * 脚本」同语义。环境装不上（无外网等）如实报错并建议 Markdown 降级交付，
  * 不静默吞（spec Scenario: 无外网/安装失败时返回明确降级）。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: docx_convert 的名称、description（含首次冷启动 1-3 分钟的如实说明）与
+ * 参数 schema；成功时返回一条 JSON 文本（docx_path / warnings / 下一步提示），失败时报错文案
+ * 可能附带引擎给的 Markdown 降级内容（上限 FALLBACK_MESSAGE_CAP = 16k 字符，超出截断并标注）。
+ * Token effect: 定义常驻；成功返回很短（路径 + 警告）；**失败路径可能一次带上万字符**的降级正文
+ * （那是刻意给的救援内容 —— 让模型能存成 .md 交付，而不是空手报错）。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

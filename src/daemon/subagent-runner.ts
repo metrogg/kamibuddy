@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "../core/agents.ts";
-import { getAppDir, getConfigDir, getResourcesDir } from "../core/config-paths.ts";
+import { getAppDir, getConfigDir, getResourcesDir, getSpillsDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import { composeSubagentPrompt } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -39,6 +39,7 @@ import { createSandboxedRunner } from "./sandbox-runner.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
+import { spillExtensionFactory } from "../extensions/spill-hook.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { PermissionRequest, PermissionResponse } from "../shared/ipc.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
@@ -349,6 +350,14 @@ export function buildSubagentExtensions(
 			composeRuntimeContext: () => "",
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
+		/*
+		 * 工具结果 spill：子代理/成员会话与主会话同一个钩子，**不能漏**。
+		 * 子代理的工具结果进的是它自己的上下文，少了这一层，web_fetch 抓回的
+		 * 长正文（core 层已不自行截断，见 core/web-fetch.ts）会整篇灌进去。
+		 * 不接 report：本装配没有 event-log 通道，落盘失败仍会写进工具的返回文本
+		 * （core/spill.ts 的响亮失败），只是不进事件日志。
+		 */
+		spillExtensionFactory({ dir: getSpillsDir(cwd) }),
 		/*
 		 * shell 的用户在场变体：三道防线与主会话**完全一致**
 		 * （危险命令检查器 + 权限门 + 沙箱）。worker 的 frontmatter 含 powershell，

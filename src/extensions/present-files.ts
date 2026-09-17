@@ -12,6 +12,13 @@
  *   （存在性/大小也是信息，区外一滴不漏）。
  * - URL（http/https）只进交付列表，不自动打开（X-Frame-Options 不可控，
  *   且我们的预览面板只服务本地文件）。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: present_files 的名称、description 与 files/explanation 的 schema；返回一条
+ * JSON 文本（交付的路径列表、previewed、explanation、message，工作区内缺失的路径进 warnings）。
+ * Token effect: 定义常驻；返回与本次交付的文件数成正比（只有路径与一句说明，不含文件内容与大小）。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后；文件大小探测与交付事件
+ * （artifacts_presented）只服务 UI 通道（details 为空对象），不进请求。
  */
 
 import { statSync } from "node:fs";

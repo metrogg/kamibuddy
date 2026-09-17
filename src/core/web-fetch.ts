@@ -13,27 +13,31 @@
  *      目标极少见，但代价是明确的失败，不能静默。
  *   3. 大小上限 —— 原始 HTML 超 5MB 直接拒绝（防止把整个上下文撑爆）。
  *
- * 输出限制：正文超过 maxChars（默认 24k 字符 ≈ 6k tokens）截断并注明——
- * 模型拿着 8 万字的网页内容只会又慢又贵。
+ * 输出长度**不在这里限制**：正文原样返回，超过 24k 字符的部分由工具结果
+ * spill 层落盘并把文件路径给模型（extensions/spill-hook.ts + core/spill.ts，
+ * spec: adopt-dsh-disciplines Task 2.1）。本层若先截断，spill 层拿到的就是
+ * 残缺文本，落盘也救不回来 —— 「谁能落盘谁才截断」。
+ * 原始 HTML 的 5MB 硬上限保留（防止把一个几十 MB 的页面拉进内存）。
  */
 
 import { isIP } from "node:net";
 import { Readability } from "@mozilla/readability";
-import { parseHTML } from "linkedom";
-import TurndownService from "turndown";
+/*
+ * linkedom / turndown 为什么走首用时的动态 import（勿改回静态）：
+ * 实测热态 linkedom 241ms、turndown 55ms（冷态更高），而它们只在**真的抓一个网页**
+ * 时才有用（daemon 的启动关键路径一个网页都不抓）—— 静态挂在这里，每次启动都要
+ * 替「用户可能永远不点的网页」白付近 300ms。@mozilla/readability 实测只有 10ms，
+ * 留在静态导入里（值不回那点收益，少一处动态形态少一处维护面）。
+ */
 
 export interface FetchedPage {
 	readonly title: string;
 	/** 重定向跟随后的最终 URL（redirect 后协议/主机仍须合法）。 */
 	readonly url: string;
 	readonly markdown: string;
-	/** 原文是否被截断过（工具层据此注明，模型知道不全）。 */
-	readonly truncated: boolean;
 }
 
 export interface WebFetchOptions {
-	/** 正文最大字符数。默认 24_000。 */
-	readonly maxChars?: number;
 	/** 原始 HTML 最大值。默认 5MB。 */
 	readonly maxRawBytes?: number;
 	/** 抓取与整体超时。默认 15s。 */
@@ -42,7 +46,6 @@ export interface WebFetchOptions {
 	readonly fetchImpl?: typeof fetch;
 }
 
-const DEFAULT_MAX_CHARS = 24_000;
 const DEFAULT_MAX_RAW_BYTES = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -125,7 +128,6 @@ export async function fetchPage(
 	rawUrl: string,
 	options: WebFetchOptions = {},
 ): Promise<FetchedPage> {
-	const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
 	const maxRawBytes = options.maxRawBytes ?? DEFAULT_MAX_RAW_BYTES;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const fetchImpl = options.fetchImpl ?? fetch;
@@ -160,6 +162,11 @@ export async function fetchPage(
 	// 流式读取累计，超上限即中止 —— 一个响应体几十 MB 的页面对上下文毫无价值。
 	const rawText = await readLimited(response.body, maxRawBytes);
 
+	// 正文提取这一整步才装配两者：只要不是 HTML 正文提取，一个字节都别加载。
+	const [{ parseHTML }, { default: TurndownService }] = await Promise.all([
+		import("linkedom"),
+		import("turndown"),
+	]);
 	const { document } = parseHTML(rawText);
 	const reader = new Readability(document);
 	const article = reader.parse();
@@ -201,7 +208,6 @@ export async function fetchPage(
 		throw new Error(`未能从 ${finalName === "" ? "该页面" : finalName} 提取到正文（可能需要登录，或不是 HTML 页面）`);
 	}
 
-	const truncated = markdown.length > maxChars;
 	const articleTitle = article?.title;
 	const title =
 		articleTitle === undefined || articleTitle === null || articleTitle.trim() === ""
@@ -210,8 +216,7 @@ export async function fetchPage(
 	return {
 		title,
 		url: response.url,
-		markdown: truncated ? `${markdown.slice(0, maxChars)}\n\n（内容过长，已截断）` : markdown,
-		truncated,
+		markdown,
 	};
 }
 

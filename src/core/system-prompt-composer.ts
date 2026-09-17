@@ -23,6 +23,16 @@
  *
  * 纪律的完整来历与对照：docs/提示词前缀缓存契约.md（dsh 的 PromptContext /
  * in-history 契约、计量纪律与门禁做法的消化稿，含我们仍未对齐的差距）。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 产出的 `prompt` 字符串就是请求的 message 0（pi 的 forced 整串替换）；
+ * `segments`（source + 字符数）与 `systemTokens` 只进台账与预览，不进请求。
+ * Token effect: `systemTokens` 是字符估算（estimateTokens：CJK 约 1 token/字、其余约 4 字符/token，
+ * **不是真 tokenizer**）；技能清单段另以 `skillsTokens` 单列供用量明细拆项。
+ * KV Cache effect: 本模块是**前缀缓存的头部生产者** —— 同一会话两次组装必须逐字节相同；逐轮/逐 run
+ * 会变的事实（时间、记忆内容、个性化、cwd）与随机器变的事实（托管 Python 路径）一律不得出现在产物里
+ * （违反的代价是其后整段历史每轮全价重计费，见 docs/可观测性清单.md CACHE8）。段序、片段或护栏的
+ * 产出字节一旦变化，改动点之后的整段前缀失配。
  */
 
 import { contentFingerprint, type SystemSegmentStat } from "../shared/observability.ts";
@@ -72,8 +82,10 @@ export interface ComposeSystemPromptInput {
 	readonly piContext?: PromptContextOptions;
 }
 
-/** 生产组装函数（创建一次、复用；无状态）。 */
-export type SystemPromptComposer = (input: ComposeSystemPromptInput) => ComposedSystemPrompt;
+/** 生产组装函数（创建一次、复用；无状态）。async：技能段要 pi（首用时才装配，见 prompt-composer.ts）。 */
+export type SystemPromptComposer = (
+	input: ComposeSystemPromptInput,
+) => Promise<ComposedSystemPrompt>;
 
 /**
  * 组装本体的输入：全部**已解析**（场景/模式已查到、技能已过滤、风格已解析、
@@ -111,8 +123,10 @@ export interface AssembledSystemPrompt {
  * use_skill 一个都没有时不注入 —— 之前 daemon 与 prompt-preview 各写一份镜像，
  * 改一处漏一处会让预览与真实组装静默分家，现在只有这一处。
  */
-export function assembleSystemPrompt(input: AssembleSystemPromptInput): AssembledSystemPrompt {
-	const skillsSection = skillsSectionForMode(input.mode.tools, input.skills);
+export async function assembleSystemPrompt(
+	input: AssembleSystemPromptInput,
+): Promise<AssembledSystemPrompt> {
+	const skillsSection = await skillsSectionForMode(input.mode.tools, input.skills);
 	const composed = composePromptWithMeta({
 		sceneBody: input.scene.body,
 		modeBody: input.mode.body,
@@ -148,9 +162,12 @@ export interface SystemPromptComposerDeps {
 	readonly loadExperts: () => readonly ExpertDefinition[];
 	/**
 	 * 已启用技能 → 提示词描述符（daemon 的 enabledSkills → toSkillDescriptors）。
-	 * 现读不缓存：导入新技能后下一轮对话即生效。
+	 * 现读不缓存：导入新技能后下一轮对话即生效。async：技能清单要 pi 的 loadSkills，
+	 * 而 pi 是首用时才装配的（见 daemon/index.ts 顶部的惰性说明）。
 	 */
-	readonly enabledSkills: (expertId: string | undefined) => readonly SkillDescriptor[];
+	readonly enabledSkills: (
+		expertId: string | undefined,
+	) => Promise<readonly SkillDescriptor[]>;
 	/** 偏好现读（风格三态：未配置 / 空串关闭 / 指定 id）。 */
 	readonly readPreferences: () => Preferences;
 	/** 记忆行为纪律段现读（loadMemorySystemPrompt(resourcesDir) 的产物）。 */
@@ -168,7 +185,7 @@ export interface SystemPromptComposerDeps {
  * —— 场景 id 写错时不该先读到专家库。
  */
 export function createSystemPromptComposer(deps: SystemPromptComposerDeps): SystemPromptComposer {
-	return (input) => {
+	return async (input) => {
 		const scene = deps.resources.scenes.find((s) => s.id === input.sceneId);
 		const mode = deps.resources.modes.find((m) => m.id === input.interactionId);
 		if (scene === undefined || mode === undefined) {
@@ -190,11 +207,11 @@ export function createSystemPromptComposer(deps: SystemPromptComposerDeps): Syst
 		// 记忆行为纪律段每轮现读（同技能清单口径）。读取失败单份降级为空、不抛错
 		// —— 记忆是增强不是门槛（core/memory.ts 文件头）。
 		const memorySystemBody = deps.loadMemorySystemBody();
-		const assembled = assembleSystemPrompt({
+		const assembled = await assembleSystemPrompt({
 			resources: deps.resources,
 			scene,
 			mode,
-			skills: deps.enabledSkills(input.expertId),
+			skills: await deps.enabledSkills(input.expertId),
 			...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 			...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
 			...(memorySystemBody === undefined ? {} : { memorySystemBody }),
@@ -224,7 +241,9 @@ export interface SystemPromptComposerDefaults {
 	/** 专家库现载（daemon 的 loadExpertsNow）。 */
 	readonly loadExperts: () => readonly ExpertDefinition[];
 	/** 已启用技能 → 提示词描述符（daemon 的 enabledSkills → toSkillDescriptors）。 */
-	readonly enabledSkills: (expertId: string | undefined) => readonly SkillDescriptor[];
+	readonly enabledSkills: (
+		expertId: string | undefined,
+	) => Promise<readonly SkillDescriptor[]>;
 	/** 风格漂移落点（daemon 写事件日志）。 */
 	readonly onStyleDrift: (drift: StyleDrift) => void;
 	/**

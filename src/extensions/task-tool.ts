@@ -25,6 +25,13 @@
  * 表现形式升级：Trae 把子代理事件以 fromSubagent 标记实时回流主消息流，
  * 我们保持隔离设计不转发事件，折中是在投影里带上按序动作行——用户展开
  * 分组就能看到子代理做过什么，缓解「回传只有最后一条文本」的纠错盲区。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: task 的名称、description（三模式、1-8 上限、{previous} 占位符）与参数 schema；
+ * 返回的子代理回传文本（单发 / 并行各分支 / 链式的逐步输出）。
+ * Token effect: 定义常驻；返回 = 子代理的最终文本，长度不可控（取决于委派的任务）；**进度投影
+ * （details.subagents）不进请求** —— onUpdate 只走 UI 的 subagent_progress 通道，模型看不到。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";

@@ -7,6 +7,9 @@
  *
  * 成本必须用**与真实注入同一份组装逻辑**（formatSkillsSection + estimateTokens）：
  * 渲染层另算一套的话，技能页显示的数字会和模型实际收到的清单段越走越远。
+ *
+ * 为什么是 async：formatSkillsSection 首用时才动态装配 pi（见 prompt-composer.ts），
+ * 而本函数只在打开技能页 / 切开关时跑，不在 daemon 的启动关键路径上。
  */
 
 import { estimateTokens } from "./observability.ts";
@@ -63,11 +66,11 @@ export interface SkillsCost {
  * 算一份成本快照。入参是**已启用**技能的描述符，与 daemon 注入模型的那批同形 ——
  * 过滤与估算分在两处做就会漂移，所以两者都收在这个模块的调用约定里。
  */
-export function computeSkillsCost(
+export async function computeSkillsCost(
 	enabled: readonly SkillDescriptor[],
 	threshold: number = SKILLS_TOKEN_WARNING_THRESHOLD,
-): SkillsCost {
-	const skillsTokens = estimateTokens(formatSkillsSection(enabled));
+): Promise<SkillsCost> {
+	const skillsTokens = estimateTokens(await formatSkillsSection(enabled));
 	return {
 		enabledCount: enabled.length,
 		skillsTokens,

@@ -330,6 +330,18 @@ export interface RunRetryState {
 export type CompactionReason = "manual" | "threshold" | "overflow";
 
 /**
+ * 触发原因的取值校验。
+ *
+ * 读侧用（台账回放）：`compaction_start` 条目的 reason 会被拿去补一条
+ * 合成闭合的 `compaction`（core/run-ledger.ts），未校验就写会让 reason
+ * 缺胳膊少腿地落进类型标明必填的记录里 —— 落盘 schema 宁缺条目不写坏值。
+ * 与 permissions.ts 的 isApprovalPolicy / isSandboxMode 同款。
+ */
+export function isCompactionReason(value: unknown): value is CompactionReason {
+	return value === "manual" || value === "threshold" || value === "overflow";
+}
+
+/**
  * 一次进行中的上下文压缩（compaction_started 折叠而来，reducer 视图状态）。
  *
  * 压缩要调模型写摘要，耗时与一轮对话相当 —— 没有这条状态行，这段窗口在 UI 上

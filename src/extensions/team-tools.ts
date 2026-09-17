@@ -20,6 +20,15 @@
  *
  * 投影：team_create 的 details 走批 4 通道（shared/child-agents 的契约键），
  * kind 盖 "team" —— 主会话活动卡按团队成员分组呈现，渲染层零改动。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 四个工具（team_create / team_send / team_status / team_delete）的名称、
+ * description 与参数 schema；返回的成员 spawn 计划、成员名单与状态摘要、以及错误文案
+ * （未知成员名 / 已有团队 / 成员不许再委派）。成员产出经完成回投作为新消息回到领导会话。
+ * Token effect: 定义常驻（**四条**定义，比单工具多三份）；返回是团队规模与状态的摘要文本。
+ * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时四个工具**根本不注册** ——
+ * 工具集本身就是前缀的一部分，开关在会话间翻转会让改动点之后的整段前缀（含历史）失配
+ * （判据同 mcp-client）。结果追加在历史之后，不动既有前缀。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";

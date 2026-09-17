@@ -21,8 +21,15 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 
-import { parseOfficeAsync } from "officeparser";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+/*
+ * parseOfficeAsync / getDocument 为什么走首用时的动态 import（勿改回静态）：
+ * 它们是本模块最重的两份装配 —— 实测热态 pdfjs 133~444ms、officeparser 223~241ms
+ * （冷态更高）。而 daemon 的启动关键路径（post ready 之前）只做 loadResources /
+ * 偏好 / 权限规则这类 ms 级读，一个文档都还没解析 —— 静态挂在这里，
+ * 每次启动都要替「用户可能永远不读的 PDF / Office 文件」白付这笔钱。
+ * 类型不丢：调用点的类型由 `await import(...)` 的返回类型直接推导，仍是 pi 之外
+ * 这两个包自己的声明（没有 as any / 手写形状）。
+ */
 
 // 扩展名集合的唯一来源在 shared（renderer 附件分类、main 选择框 filters 也用同一份）。
 import { LEGACY_DOC_EXTENSIONS, OFFICE_EXTENSIONS, PDF_EXTENSION } from "../shared/doc-formats.ts";
@@ -66,8 +73,11 @@ export interface DocExtractResult {
 }
 
 /**
- * 单次返回的最大字符数。对齐 web_fetch 的 24k（≈6k tokens）——
- * 模型拿着整份长文档只会又慢又贵，分页续读语义与 pi read 一致。
+ * 单次返回的最大字符数。对齐 spill 的 24k 口径（core/spill.ts）——
+ * 但**刻意不交给 spill 层统一处理**：这里的停点固定在页边界、且必然带续读
+ * offset（模型按 offset 再来一次就读到了），信息没有丢；换成「从头砍 + 落盘」
+ * 反而会打断 offset/limit 这套分页契约（spec: adopt-dsh-disciplines Task 2.1
+ * 把「无损的分页」与「有损的截断」分开：前者留在工具里，后者才归 spill）。
  */
 const MAX_CHARS = 24_000;
 
@@ -151,8 +161,12 @@ function getPdfAssetUrls(): { cMapUrl: string; standardFontDataUrl: string } {
 
 /** 逐页提取全部页文本。打开失败按 加密/损坏 映射；页级异常统一归 corrupt。 */
 async function readPdfPages(path: string): Promise<string[]> {
-	// worker 必须在 getDocument 之前挂好：装配只发生一次（见 ensurePdfWorker）。
-	await ensurePdfWorker();
+	// 与 worker 并行装配（两者互不依赖）；worker 仍先于 getDocument 就位。
+	const [{ getDocument }] = await Promise.all([
+		import("pdfjs-dist/legacy/build/pdf.mjs"),
+		// worker 必须在 getDocument 之前挂好：装配只发生一次（见 ensurePdfWorker）。
+		ensurePdfWorker(),
+	]);
 	const { cMapUrl, standardFontDataUrl } = getPdfAssetUrls();
 	// data 喂 Uint8Array 而不是裸 Buffer：pdfjs 类型声明如此，字节语义也更明确
 	// （Buffer 的 .buffer 可能带内存池余量，直接传会读出垃圾）。
@@ -274,6 +288,7 @@ function getOfficeTempDir(): string {
 }
 
 async function extractOffice(path: string, offset: number | undefined, limit: number | undefined): Promise<DocExtractResult> {
+	const { parseOfficeAsync } = await import("officeparser");
 	let full: string;
 	try {
 		full = await parseOfficeAsync(path, { tempFilesLocation: getOfficeTempDir() });

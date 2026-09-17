@@ -16,8 +16,19 @@
  * 命令直接失败而不是挂住。stdout/stderr 以 utf8 收集拼接（标清来源），
  * 非零退出码在结果里点名（响亮，不静默吞掉）。
  *
- * 输出截断沿用项目 24k 字符约定（web-fetch 的 DEFAULT_MAX_CHARS、
- * doc-extract 的 MAX_CHARS 同口径），截断标注格式也与 web-fetch 一致。
+ * 输出**不在本工具里截断**：超限由统一的工具结果 spill 层落盘并给模型文件路径
+ * （extensions/spill-hook.ts + core/spill.ts，口径 24k 字符只此一份）——
+ * 这里若先砍一刀，spill 层拿到的就已经是残缺内容，落盘也救不回来。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: powershell 的名称、description、promptSnippet/promptGuidelines 与参数 schema；
+ * 返回的 stdout/stderr 拼接文本（标清来源、非零退出码点名）、危险命令检查器的拒绝原因、执行器注入的
+ * note（如「沙箱未生效」），以及无人值守时的不可用文案。超限时模型看到的是 spill 层给的
+ * 「头部 + 省略字符数 + 落盘路径」（不再是旧版那句「已截断」）。
+ * Token effect: 定义常驻；返回可能撞上 spill 阈值（SPILL_MAX_CHARS，core/spill.ts，
+ * 超限部分落盘不进上下文）；等待提示走 onUpdate（瞬时通道，不进最终结果）。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后；权限规则与沙箱状态只决定
+ * 「这条命令能不能跑」以及结果里的说明文本，不改写前缀。
  */
 
 import { spawn } from "node:child_process";
@@ -106,9 +117,6 @@ function isBlocked(result: CommandRunResult): result is CommandBlocked {
 	return "blocked" in result;
 }
 
-/** 单次返回给模型的输出上限（字符），与 web-fetch / doc-extract 的 24k 同口径。 */
-const MAX_OUTPUT_CHARS = 24_000;
-
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const MAX_TIMEOUT_SECONDS = 600;
 
@@ -131,8 +139,6 @@ interface PowershellToolDetails {
 	readonly category: string | undefined;
 	/** 进程退出码；被拦截或超时为 undefined。 */
 	readonly exitCode: number | null | undefined;
-	/** 输出是否因超 24k 被截断。 */
-	readonly truncated: boolean;
 }
 
 /**
@@ -249,15 +255,13 @@ export function runCommand(
 }
 
 /**
- * 执行结果 → 模型可读文本：状态行（含退出码）+ 环境说明 + 分来源的输出 + 截断标注。
+ * 执行结果 → 模型可读文本：状态行（含退出码）+ 环境说明 + 分来源的输出。
  *
- * `note` 紧跟状态行、排在输出之前是有意的：输出可能长到被截断，
- * 而「沙箱未生效」这类说明不能因为命令话多就丢掉。
+ * 本函数**不做截断**：超限交给 spill 层（core/spill.ts 从尾部砍并落盘）。
+ * 但 `note` 紧跟状态行、排在输出之前这条仍然要守：spill 是从尾部砍的，
+ * note 排到输出之后同样会被砍掉，「沙箱未生效」这类安全说明不能因为命令话多就丢。
  */
-function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number, note?: string): {
-	readonly text: string;
-	readonly truncated: boolean;
-} {
+function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number, note?: string): string {
 	const sections: string[] = [];
 	if (outcome.aborted) {
 		// 与超时分开说：中断是「你点了停止」，不是命令有问题 —— 模型据此决定要不要换个做法重试。
@@ -276,12 +280,7 @@ function formatOutcome(outcome: CommandOutcome, timeoutSeconds: number, note?: s
 	if (stdout !== "") sections.push(`【标准输出】\n${stdout}`);
 	if (stderr !== "") sections.push(`【标准错误】\n${stderr}`);
 	if (stdout === "" && stderr === "") sections.push("（无输出）");
-	const text = sections.join("\n");
-	if (text.length <= MAX_OUTPUT_CHARS) return { text, truncated: false };
-	return {
-		text: `${text.slice(0, MAX_OUTPUT_CHARS)}\n\n（内容过长，已截断）`,
-		truncated: true,
-	};
+	return sections.join("\n");
 }
 
 export function powershellExtensionFactory(options?: PowershellToolOptions): ExtensionFactory {
@@ -302,7 +301,7 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 			promptGuidelines: [
 				"一次一条命令；多步操作分多次调用，不要拿 ; 或 && 串成一长串。",
 				"不要用交互式命令（等待输入、打开窗口的）——会话没有 stdin，进程会挂起到超时被杀。",
-				"输出超过 24k 字符会被截断；预期大输出时重定向到文件，再用 read 工具分段读取。",
+				"单个结果超过 24k 字符时会被落盘：结果末尾给出省略的字符数与文件路径，用 read（offset/limit）或 grep 按那个路径取回即可，不要因为「看到省略」就重跑命令。",
 				"被检查器拦截时按返回的改法重写命令；编码、拆字符串、起别名都绕不过检查器，反而浪费轮次。",
 				/*
 				 * 下面两条讲**写入沙箱**，是 2026-09-17 那次 3 连试的教训：模型把 pip 的输出
@@ -393,7 +392,6 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 							blocked: true,
 							category: "unattended",
 							exitCode: undefined,
-							truncated: false,
 						},
 					};
 				}
@@ -412,7 +410,6 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 							blocked: true,
 							category: verdict.category,
 							exitCode: undefined,
-							truncated: false,
 						},
 					};
 				}
@@ -429,7 +426,6 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 							blocked: true,
 							category: "escalation-malformed",
 							exitCode: undefined,
-							truncated: false,
 						},
 					};
 				}
@@ -461,7 +457,6 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 								blocked: false,
 								category: undefined,
 								exitCode: undefined,
-								truncated: false,
 							},
 						});
 					},
@@ -484,19 +479,17 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 							blocked: true,
 							category: result.category,
 							exitCode: undefined,
-							truncated: false,
 						},
 					};
 				}
 				const outcome = result;
-				const { text, truncated } = formatOutcome(outcome, timeoutSeconds, outcome.note);
+				const text = formatOutcome(outcome, timeoutSeconds, outcome.note);
 				return {
 					content: [{ type: "text", text }],
 					details: {
 						blocked: false,
 						category: undefined,
 						exitCode: outcome.timedOut || outcome.aborted ? undefined : outcome.exitCode,
-						truncated,
 					},
 				};
 			},
