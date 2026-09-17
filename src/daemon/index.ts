@@ -1105,9 +1105,11 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 	post({ kind: "push", channel: PUSH.sessionEvent, payload: envelope });
 
 	// run 边界推全量任务列表：侧栏的 running 标记靠它即时刷新（契约见 shared/ipc.ts）。
-	if (event.type === "run_started" || event.type === "run_finished") {
+	// run_error 也是 run 边界（出错同样终止流式态）—— 漏了它侧栏的转圈会一直转到
+	// 下一次 run 边界（2026-09-17 用户实测：中断出错后任务行一直在转）。
+	if (event.type === "run_started" || event.type === "run_finished" || event.type === "run_error") {
 		pushTaskListChanged();
-		if (event.type === "run_finished") evictIdleHosts();
+		if (event.type !== "run_started") evictIdleHosts();
 	}
 	// prompt IPC 的「受理即回」：run_started 解闸对应桶上等待受理的提交方
 	//（见 INVOKE.prompt 的 accepted 注释）。
