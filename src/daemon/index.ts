@@ -238,6 +238,7 @@ import {
 	branchFail,
 	branchOk,
 	buildBranchTitle,
+	endOfTurn,
 	decideExtract,
 	resolveAnchorForIndex,
 } from "./session-branch.ts";
@@ -3446,8 +3447,15 @@ async function restartSession(
 }
 
 /**
- * 「分支出新会话」：从某条用户消息**之前**派生一条新会话并切过去，母会话原样不动
- *（连文件字节都不变 —— 抽枝是「另写一个新文件」，实测见探针 1b）。
+ * 「分支出新会话」：派生一条新会话并切过去，母会话原样不动（连文件字节都不变
+ * —— 抽枝是「另写一个新文件」，实测见探针 1b）。
+ *
+ * 两种分叉点（options.includeTurn）：
+ *   - 缺省（false，「分支出新会话」入口）：**该用户消息之前** —— 新会话只带前缀，
+ *     原文由渲染层回填输入框，供用户改问法重发；
+ *   - true（回答操作条的「分支」按钮）：**带上这一轮**（复制到该轮末尾的回答为止），
+ *     输入框不填 —— 对齐 TRAE 的分支语义：点了就从这里接着往下聊，
+ *     不用把问题再打一遍（2026-09-17 用户选定）。
  *
  * 与「重新开始」的关键差异：
  *   - **显式拷贝母桶的会话级状态**（sceneId / interactionId / expertId /
@@ -3457,7 +3465,11 @@ async function restartSession(
  *   - thinkingLevel 绝不传：createHost 只在全新会话注入它，传了会覆盖会话文件里的
  *     逐会话还原（spec 的「推理强度沿用会话文件」）。
  */
-async function forkSession(path: string, userIndex: number): Promise<SessionBranchResult> {
+async function forkSession(
+	path: string,
+	userIndex: number,
+	options?: { includeTurn?: boolean },
+): Promise<SessionBranchResult> {
 	const target = resolve(path);
 	const mother = findBucketByFile(target);
 	if (mother === undefined || !existsSync(target)) return branchFail("no-file");
@@ -3467,8 +3479,13 @@ async function forkSession(path: string, userIndex: number): Promise<SessionBran
 		const anchor = await resolveBranchAnchor(mother, userIndex);
 		if (anchor.kind !== "ok") return branchFail(anchor.kind);
 		try {
-			// 分叉点在首条用户消息之前 → 新会话为空历史（materializeBranch 的 entryId=null）。
-			const branch = await materializeBranch(target, mother.cwd, anchor.parentId);
+			// includeTurn：叶子取「这一轮末尾」而非「锚点的父条目」——抽出来的是
+			// 前缀 + 本轮问答（见 endOfTurn）。缺省模式下分叉点在首条用户消息之前
+			// 时 → 新会话为空历史（materializeBranch 的 entryId=null）。
+			const leaf = options?.includeTurn === true
+				? endOfTurn(anchor.entries, anchor.anchorEntryId)
+				: anchor.parentId;
+			const branch = await materializeBranch(target, mother.cwd, leaf);
 			const axes = mother.conversation.state;
 			const { bucket } = await mountSessionFile({
 				manager: SessionManager.open(branch.path, getSessionsDir()),
@@ -3928,8 +3945,8 @@ const handlers: Record<string, Handler> = {
 	[INVOKE.sessionRestart]: async ([path, userIndex, options]) =>
 		restartSession(path as string, userIndex as number, options as { saveBranch?: boolean } | undefined),
 
-	[INVOKE.sessionBranch]: async ([path, userIndex]) =>
-		forkSession(path as string, userIndex as number),
+	[INVOKE.sessionBranch]: async ([path, userIndex, options]) =>
+		forkSession(path as string, userIndex as number, options as { includeTurn?: boolean } | undefined),
 
 	[INVOKE.sessionDelete]: async ([path]) => {
 		const target = path as string;

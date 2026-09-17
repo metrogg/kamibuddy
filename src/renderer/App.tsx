@@ -1141,7 +1141,7 @@ export function App(): React.JSX.Element {
 			mode: "restart" | "branch",
 			userIndex: number,
 			refillText: string | undefined,
-			opts?: { saveBranch?: boolean },
+			opts?: { saveBranch?: boolean; includeTurn?: boolean },
 		): Promise<boolean> => {
 			const path = taskListRef.current?.find((item) => item.current)?.path;
 			if (path === undefined) {
@@ -1151,7 +1151,13 @@ export function App(): React.JSX.Element {
 			const call =
 				mode === "restart"
 					? window.kami.restartSessionFrom(path, userIndex, opts)
-					: window.kami.branchSessionFrom(path, userIndex);
+					: window.kami.branchSessionFrom(
+							path,
+							userIndex,
+							// includeTurn：回答操作条的「分支」＝复制到这条回答为止（TRAE 式），
+							// 用户气泡的「分支出新会话」＝只带该消息之前的前缀（原文回填）。
+							opts?.includeTurn === undefined ? undefined : { includeTurn: opts.includeTurn },
+						);
 			return call.then(
 				(result) => {
 					if (!result.ok) {
@@ -1203,6 +1209,17 @@ export function App(): React.JSX.Element {
 	const forkFromUserMessage = useCallback(
 		(userIndex: number, refillText: string): Promise<boolean> =>
 			branchFromUserMessage("branch", userIndex, refillText),
+		[branchFromUserMessage],
+	);
+
+	/**
+	 * 「分支」（回答操作条）：**复制到这条回答为止**并切过去（TRAE 式，2026-09-17
+	 * 用户选定）—— 新分支已含本轮问答，输入框不填（refillText 传 undefined），
+	 * 用户接着往下问即可。
+	 */
+	const branchFromAnswer = useCallback(
+		(userIndex: number): Promise<boolean> =>
+			branchFromUserMessage("branch", userIndex, undefined, { includeTurn: true }),
 		[branchFromUserMessage],
 	);
 
@@ -1571,6 +1588,7 @@ export function App(): React.JSX.Element {
 					branchAvailable={branchAvailable}
 					onRestartFrom={restartFromUserMessage}
 					onBranchFrom={forkFromUserMessage}
+					onBranchFromAnswer={branchFromAnswer}
 					onTodo={showTodo}
 					pendingQuestionnaire={pendingQuestionnaire}
 					onQuestionnaireSubmit={(answers) => {

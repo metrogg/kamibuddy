@@ -497,6 +497,49 @@ check(
 		`新会话历史 = ${(await snapshot()).entries.length} 条，母文件字节不变=${readFileSync(sessionB.file).equals(bytesB)}`,
 );
 
+/* ── 回答操作条的分支：includeTurn（复制到这条回答为止）────────────── */
+
+{
+	// 会话丙是「u1 → a1 → u2（无回答）」的形态，另造一个完整两轮的会话丁来验：
+	// includeTurn 的分支应当**带上本轮**（含 u2/a2），而不是只带前缀。
+	const sessionD = buildSession("丁");
+	await invoke<void>(INVOKE.sessionResume, [sessionD.file]);
+	const bytesD = readFileSync(sessionD.file);
+
+	const included = await invoke<SessionBranchResult>(INVOKE.sessionBranch, [
+		sessionD.file,
+		1,
+		{ includeTurn: true },
+	]);
+	const includedPath = included.ok ? included.branchPath : undefined;
+
+	check(
+		"G1 includeTurn 分支：新会话 = 前缀 + 本轮问答 + session_info",
+		included.ok &&
+			includedPath !== undefined &&
+			entryIds(includedPath).slice(0, 5).join(",") ===
+				[sessionD.t0, sessionD.u1, sessionD.a1, sessionD.u2, sessionD.a2].join(",") &&
+			entryIds(includedPath).length === 6,
+		`新会话条目 = [${includedPath === undefined ? "" : entryIds(includedPath).join(", ")}]，期望 [t0,u1,a1,u2,a2] + session_info`,
+	);
+
+	check(
+		"G2 母会话字节完全不变（分支不动母会话）",
+		readFileSync(sessionD.file).equals(bytesD),
+		`${bytesD.length} → ${readFileSync(sessionD.file).length} 字节`,
+	);
+
+	check(
+		"G3 includeTurn 与缺省模式的分叉点确实不同（缺省只到本轮之前）",
+		includedPath !== undefined &&
+			entryIds(includedPath).includes(sessionD.u2) &&
+			forkPath !== undefined &&
+			!entryIds(forkPath).includes(sessionB.u2),
+		`includeTurn 含 u2=${includedPath !== undefined && entryIds(includedPath).includes(sessionD.u2)}；` +
+			`缺省分支含 u2=${forkPath !== undefined && entryIds(forkPath).includes(sessionB.u2)}`,
+	);
+}
+
 /* ── 拒绝路径 ───────────────────────────────────────────────────────── */
 
 {

@@ -162,10 +162,15 @@ interface ChatViewProps {
 		opts?: { saveBranch?: boolean },
 	) => Promise<boolean>;
 	/**
-	 * 「分支出新会话」：从该用户消息之前派生新会话并**已由 daemon 切过去**，
-	 * App 跟随切换完成后把原文填回输入框（同样不发送）。
+	 * 「分支出新会话」（用户气泡工具条）：从该用户消息之前派生新会话并**已由
+	 * daemon 切过去**，App 跟随切换完成后把原文填回输入框（同样不发送）。
 	 */
 	readonly onBranchFrom: (userIndex: number, refillText: string) => Promise<boolean>;
+	/**
+	 * 「分支」（回答操作条）：复制到这条回答为止（含本轮问答）并切过去，
+	 * **不回填输入框** —— 对齐 TRAE 的分支语义（2026-09-17 用户选定）。
+	 */
+	readonly onBranchFromAnswer: (userIndex: number) => Promise<boolean>;
 	readonly onTodo: (feature: string) => void;
 	/**
 	 * 当前会话的待答问卷（App 按 sessionId 路由后下发；undefined = 无）。
@@ -1606,6 +1611,7 @@ export function ChatView({
 	branchAvailable,
 	onRestartFrom,
 	onBranchFrom,
+	onBranchFromAnswer,
 	onTodo,
 	pendingQuestionnaire,
 	onQuestionnaireSubmit,
@@ -2238,7 +2244,8 @@ export function ChatView({
 						showBranch={branchReady && entry.id === metricsAnchorId && retryTarget !== undefined}
 						onBranch={() => {
 							if (retryTarget === undefined) return;
-							forkFrom(retryTarget);
+							// 回答条的「分支」＝复制到这条回答为止（不回填，见 prop 注释）。
+							void onBranchFromAnswer(retryTarget.userIndex);
 						}}
 						showRetry={branchReady && entry.id === metricsAnchorId && retryTarget !== undefined}
 						onRetry={() => {

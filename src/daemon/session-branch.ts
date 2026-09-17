@@ -52,10 +52,44 @@ export function resolveAnchorForIndex(
 /**
  * 会话条目的最小形状：判定抽枝只需要树指针。
  * 同样不 import pi（daemon 单测不该被迫构造 AgentSession）。
+ *
+ * role 只有 message 类条目才有（非消息条目——model_change 等——为 undefined）：
+ * endOfTurn 靠它认出「下一条用户消息 = 下一轮开始了」。
  */
 export interface BranchEntry {
 	readonly id: string;
 	readonly parentId: string | null;
+	readonly role?: string;
+}
+
+/**
+ * 锚点那一轮**末尾**的条目 id（「复制到这条回答为止」的分支用它当叶子）。
+ *
+ * 一轮 = 该用户消息之后、下一条用户消息之前的所有条目。沿子链一路走到
+ * 「下一个孩子是用户消息」或「没有孩子」为止，返回最后一条非用户条目。
+ *
+ * 线性会话是常态（母文件在分支时被物理截断，见 restartSession），多个孩子
+ * 时取第一个 —— 坏数据不该让分支操作抛错，取哪支由调用方的心智模型决定
+ *（用户点的是「这一轮的回答」，链上第一条就是它）。
+ * 锚点自己就是末尾（还没答）时返回锚点本身：调用方决定要不要拦。
+ */
+export function endOfTurn(entries: readonly BranchEntry[], anchorEntryId: string): string {
+	const children = new Map<string, BranchEntry[]>();
+	for (const entry of entries) {
+		if (entry.parentId === null) continue;
+		const siblings = children.get(entry.parentId);
+		if (siblings === undefined) children.set(entry.parentId, [entry]);
+		else siblings.push(entry);
+	}
+
+	let current = anchorEntryId;
+	const seen = new Set<string>([anchorEntryId]); // 坏数据（id 成环）不当机
+	for (;;) {
+		const next = (children.get(current) ?? []).find((entry) => !seen.has(entry.id));
+		if (next === undefined || next.role === "user") return current;
+		seen.add(next.id);
+		current = next.id;
+	}
 }
 
 /**
