@@ -30,6 +30,9 @@ function createFakeSession(): unknown {
 		sessionId: "test-session",
 		model: undefined,
 		isStreaming: true,
+		// abort() 路径要调这两个（取消记账 + 压缩中断）；本测试只验证记账语义。
+		abort: async () => {},
+		abortCompaction: () => {},
 		getContextUsage: () => undefined,
 		// thinking-level 落地后 getState 现读这两处（session-host.ts:678-679）；
 		// 取非推理模型形态：恒 "off" / ["off"]。
@@ -433,6 +436,48 @@ describe("自动重试期的错误卡抑制（pendingRunError）", () => {
 
 		expect(events.some((e) => e.type === "run_error")).toBe(false);
 		expect(events.find((e) => e.type === "run_finished")).toMatchObject({ outcome: "cancelled" });
+	});
+
+	/*
+	 * 2026-09-17 用户实测的真实形状：流式中断时 pi 给的收尾消息是
+	 * stopReason "error" + errorMessage "This operation was aborted"
+	 *（被中断的 fetch 抛的 DOMException），**没有** stopReason "aborted" 那条 ——
+	 * 只认 pi 的信号会把用户主动停止误判成错误卡（而 WorkBuddy 显示「用户已取消」）。
+	 * 判定因此补上「我们自己记的账」：调过 abort() 就是取消。
+	 */
+	it("用户按过停止 → 即便 pi 报 stopReason error（This operation was aborted）也落 cancelled", async () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		runStarted(host);
+		await host.abort();
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "This operation was aborted" });
+		agentEnd(host, false, [
+			{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" },
+		]);
+
+		expect(events.some((e) => e.type === "run_error")).toBe(false);
+		expect(events.find((e) => e.type === "run_finished")).toMatchObject({ outcome: "cancelled" });
+	});
+
+	it("空闲时的停止不污染下一个 run：之后的真错误照常弹错误卡", async () => {
+		const events: SessionEvent[] = [];
+		const host = createHost(createFakeSession(), (e) => events.push(e));
+
+		// 第一个 run 正常跑完（currentRunId 已清）。
+		runStarted(host);
+		agentEnd(host, false, []);
+		// 此时点停止：没有 run 在进行，不该记账。
+		await host.abort();
+
+		runStarted(host);
+		assistantStart(host);
+		assistantEnd(host, "error", { errorMessage: "Request timed out." });
+		agentEnd(host, false, [{ role: "assistant", stopReason: "error", errorMessage: "Request timed out." }]);
+
+		expect(events.filter((e) => e.type === "run_error")).toHaveLength(1);
+		expect(events.find((e) => e.type === "run_error")).toMatchObject({ message: "Request timed out." });
 	});
 });
 

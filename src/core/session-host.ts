@@ -453,6 +453,11 @@ export class SessionHost {
 	 * 必须等 agent_end（willRetry=false）确认重试耗尽/未开重试。成功的助手消息清账。
 	 */
 	private pendingRunError: string | undefined;
+	/**
+	 * 本 run 期间用户是否按过停止（abort() 置位，run 收尾清除）。
+	 * 终态判定用：见 abort() 的注释——pi 的中断收尾不保证 stopReason "aborted"。
+	 */
+	private abortRequested = false;
 	/** 已发出的工具卡片，tool_execution_end 时要在原卡上补 outcome 与 detail。 */
 	private readonly toolCards = new Map<string, ToolCard>();
 	/**
@@ -762,6 +767,16 @@ export class SessionHost {
 	}
 
 	async abort(): Promise<void> {
+		/*
+		 * 用户按过停止 = 本 run 的终态语义是「已取消」。这个账必须由我们自己记：
+		 * pi 的中断收尾**不保证**带 stopReason "aborted" —— 流式中断时它常给出
+		 * stopReason "error" + errorMessage "This operation was aborted"（
+		 * 被中断的 fetch 抛的 DOMException，经 createErrorMessage 落成 assistant
+		 * 消息），照 stopReason 判定会把它当成真错误弹错误卡，而 WorkBuddy 同场景
+		 * 显示「用户已取消」（2026-09-17 用户实测）。
+		 * 只在 run 进行中记账：跑完才点的停止不该污染下一个 run 的判定。
+		 */
+		if (this.currentRunId !== undefined) this.abortRequested = true;
 		await this.session.abort();
 		// 压缩是独立的模型调用，abort() 管不到它；停止键在压缩期间也必须有效。
 		// 无压缩进行时这是 no-op。
@@ -1170,6 +1185,8 @@ export class SessionHost {
 				const runId = this.nextId("run");
 				this.currentRunId = runId;
 				this.pendingRunError = undefined;
+				// 新 run 清零上一条停止指令的余账（上一个 run 若异常收尾没清掉）。
+				this.abortRequested = false;
 				this.ledgerRunId = runId;
 				this.ledgerTurnIndex = 0;
 				this.ledger?.append("run_start", { runId, ...this.modelIdForLedger() });
@@ -1203,14 +1220,21 @@ export class SessionHost {
 			this.pendingHidden = undefined;
 				/*
 				 * pi 没有独立的「已取消」事件：abort() 后 agent 循环照常走
-				 * message_end → turn_end → agent_end 收尾（agent.ts handleRunFailure /
-				 * agent-loop.ts:215），区别只在收尾消息里有一条 assistant 的
-				 * stopReason === "aborted"。取消与正常结束在 UI 是两种终态
-				 * （指示行、定格计时），所以在这里判定后随 run_finished 下发。
+				 * message_end → turn_end → agent_end 收尾。取消与正常结束在 UI 是
+				 * 两种终态（「用户已取消」指示行、定格计时），所以在这里判定后随
+				 * run_finished 下发。
+				 *
+				 * 判定取「或」的两条腿（2026-09-17 实测补齐第二条）：
+				 *   1. pi 的显式信号：收尾消息里有 assistant 且 stopReason "aborted"
+				 *     （干净中断路径会带这条）；
+				 *   2. 我们自己记的账 abortRequested：流式中断时常走不到第 1 条 ——
+				 *     pi 给出的是 stopReason "error" + "This operation was aborted"，
+				 *     只看 stopReason 会把用户主动停止误判成错误卡。
 				 */
-				const cancelled = event.messages.some(
-					(m) => m.role === "assistant" && m.stopReason === "aborted",
-				);
+				const cancelled =
+					this.abortRequested ||
+					event.messages.some((m) => m.role === "assistant" && m.stopReason === "aborted");
+				this.abortRequested = false;
 				/*
 				 * 失败记账优先于完成态：pendingRunError 未清说明本 run 最后停在错误上
 				 * （重试耗尽或未开重试）—— 这才是真的终态失败，此刻才发 run_error。
