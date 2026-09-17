@@ -2,7 +2,9 @@
  * 对话页 composer 的「+」菜单。
  *
  * 「+」原来直接弹系统图片选择框，功能单一；改成菜单后一处收纳
- * 添加文件 / 模式切换 / 专家选择 / 技能 / 连接器（后两项占位，走 onTodo）。
+ * 添加文件 / 模式切换 / 专家选择 / 技能 / 连接器（后两项经 onOpenSkills /
+ * onOpenConnectors 跳技能页对应页签，2026-09-17 前是「待做」占位 —— 技能页
+ * 早已实现，死入口是宣讲演示最先被同事点到的东西）。
  * 模式与专家两个子菜单与头部 ModeSwitch 同一份数据源（availableModes /
  * App 下发的 experts）、同一套交互语义（ready=false 的模式列出不切换，
  * 点击给 toast）——两处呈现不同是合理的，共享的只有数据，不会出现两处
@@ -37,6 +39,10 @@ interface PlusMenuProps {
 	 */
 	readonly onOpenExperts?: () => void;
 	readonly onPickFiles: () => void;
+	/** 跳技能页「技能」页签；缺省回落 onTodo（未接线的挂载点保持占位语义）。 */
+	readonly onOpenSkills?: () => void;
+	/** 跳技能页「连接器」页签；缺省回落 onTodo。 */
+	readonly onOpenConnectors?: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -49,6 +55,8 @@ export function PlusMenu({
 	onSelectExpert,
 	onOpenExperts,
 	onPickFiles,
+	onOpenSkills,
+	onOpenConnectors,
 	onTodo,
 }: PlusMenuProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
@@ -221,7 +229,8 @@ export function PlusMenu({
 							className="plus-menu-item"
 							onClick={() => {
 								close();
-								onTodo("技能");
+								if (onOpenSkills !== undefined) onOpenSkills();
+								else onTodo("技能");
 							}}
 						>
 							<IconSkill size={15} />
@@ -232,7 +241,8 @@ export function PlusMenu({
 							className="plus-menu-item"
 							onClick={() => {
 								close();
-								onTodo("连接器");
+								if (onOpenConnectors !== undefined) onOpenConnectors();
+								else onTodo("连接器");
 							}}
 						>
 							<IconWeb size={15} />

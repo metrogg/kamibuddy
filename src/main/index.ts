@@ -10,10 +10,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, delimiter, extname, join } from "node:path";
 import {
 	BrowserWindow,
 	app,
@@ -75,6 +75,37 @@ function send<T>(channel: string, payload: T): void {
 
 /* ── daemon 生命周期 ──────────────────────────────────────────────── */
 
+/**
+ * daemon 子进程的环境变量。
+ *
+ * dev（未打包）只透传 KAMIBUDDY_APP_DIR：config-paths.ts 的 getResourcesDir
+ * 走 import.meta 相对定位（out/main 上两级 = 仓库根），行为与历来一致。
+ *
+ * 打包后追加两项（electron-builder.yml 的 extraResources 布局）：
+ *   - KAMIBUDDY_RESOURCES_DIR = <安装>/resources/resources/——resources 整体
+ *     物理化在那里，daemon 侧全部消费方（loadResources / 技能 / docx-engine）
+ *     经这一项命中物理目录，外部 python 进程也读得了（asar 读不了）；
+ *   - resources/bin 前置进 PATH——随包分发的 uv.exe（fetch:uv 拉取）由此被
+ *     docx-env 的「裸 uv」候选命中（docx-env.ts uvCandidates[0]），同事机器
+ *     无需任何预装。
+ *
+ * PATH 回写必须按原键名：{ ...process.env } 展开成普通对象后丢失了 Node 的
+ * 大小写不敏感代理，直接写 env.PATH 会在子进程 env 块里同时出现 Path 与
+ * PATH 两份，行为未定义。
+ */
+function daemonEnv(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env, KAMIBUDDY_APP_DIR: app.getAppPath() };
+	if (!app.isPackaged) return env;
+	const resourcesDir = join(process.resourcesPath, "resources");
+	env.KAMIBUDDY_RESOURCES_DIR = resourcesDir;
+	const uvBinDir = join(resourcesDir, "bin");
+	if (existsSync(uvBinDir)) {
+		const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "Path";
+		env[pathKey] = `${uvBinDir}${delimiter}${env[pathKey] ?? ""}`;
+	}
+	return env;
+}
+
 function startDaemon(): void {
 	// daemon 是独立构建入口（electron.vite.config.ts 的 main.rollupOptions.input.daemon）。
 	// 用 import.meta.dirname 而非 __dirname：package.json 有 "type": "module"，
@@ -86,11 +117,12 @@ function startDaemon(): void {
 		serviceName: "kamibuddy-daemon",
 		/*
 		 * daemon 的 cwd 继承本进程的启动目录、不可靠（换种启动方式就变，打包后更甚）。
-		 * 而应用根是权限边界的输入（workspace 守卫拒「把应用目录设为工作空间」），
+		 * 而应用根是权限边界的���入（workspace 守卫拒「把应用目录设为工作空间」），
 		 * 值漂了会误伤无关目录或让边界失效 —— 所以用 Electron 的权威值显式传给 daemon
 		 * （dev = 项目根，打包 = app.asar）。见 core/config-paths.ts 的 getAppDir。
+		 * 打包态的 resources 定位与随包 uv 见 daemonEnv。
 		 */
-		env: { ...process.env, KAMIBUDDY_APP_DIR: app.getAppPath() },
+		env: daemonEnv(),
 	});
 	daemon = child;
 

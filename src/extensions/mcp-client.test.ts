@@ -67,6 +67,8 @@ interface MountedRun {
 interface Mounted {
 	readonly tools: Map<string, FakeToolDef>;
 	readonly logs: string[];
+	/** 假 pi 的当前激活工具集（模拟 pi 的 setActiveToolsByName 语义）。 */
+	readonly activeTools: string[];
 	readonly shutdown: () => void;
 	readonly run: (connect: McpConnector, config?: McpServersConfig | Error) => Promise<MountedRun>;
 }
@@ -75,6 +77,9 @@ function mount(): Mounted {
 	const tools = new Map<string, FakeToolDef>();
 	const logs: string[] = [];
 	const shutdownHandlers: Array<() => unknown> = [];
+	// 激活集语义照 pi 的真实行为：setActiveTools 整组替换（扩展自己负责合并），
+	// 初值模拟模式白名单（session-host 传给 createAgentSession 的 tools）。
+	let activeTools: string[] = ["read", "grep"];
 	const fakePi = {
 		registerTool: (def: FakeToolDef) => {
 			tools.set(def.name, def);
@@ -82,10 +87,17 @@ function mount(): Mounted {
 		on: (event: string, handler: () => unknown) => {
 			if (event === "session_shutdown") shutdownHandlers.push(handler);
 		},
+		getActiveTools: (): string[] => [...activeTools],
+		setActiveTools: (names: string[]) => {
+			activeTools = [...new Set(names)];
+		},
 	} as unknown as ExtensionAPI;
 	return {
 		tools,
 		logs,
+		get activeTools(): string[] {
+			return [...activeTools];
+		},
 		shutdown: () => {
 			for (const h of shutdownHandlers) h();
 		},
@@ -189,6 +201,35 @@ describe("工具注册", () => {
 		});
 		expect(m.tools.size).toBe(1);
 		expect(m.logs.some((l) => l.includes("撞名"))).toBe(true);
+	});
+});
+
+describe("注册名单（registeredToolNames）", () => {
+	/*
+	 * 「对模型可见」由 session-host 负责：把 registeredToolNames() **构造时**并进
+	 * tools（pi 的激活名单，名单外扩展工具连注册表都进不去，agent-session.js:2117）。
+	 * 这里钉名单的内容与跨 server 的全量性；激活语义的端到端验证在
+	 * smoke:mcp-activation（真实 pi 会话）。
+	 */
+	it("连接成功 → 名单含清洗后的全量工具名", async () => {
+		const m = mount();
+		const { handle } = await m.run(
+			async (name) => fakeConnection([tool(name === "a" ? "alpha" : "beta")]),
+			{ servers: { a: STDIO, b: HTTP } },
+		);
+		// 两个连接并行完成，插入顺序不承诺 —— 按集合语义比较。
+		expect([...handle.registeredToolNames()].sort()).toEqual(["mcp__a__alpha", "mcp__b__beta"]);
+	});
+
+	it("撞名被跳过的不进名单；无 server 时名单为空", async () => {
+		const m = mount();
+		const { handle } = await m.run(async () => fakeConnection([tool("read.file"), tool("read/file")]), {
+			servers: { fs: STDIO },
+		});
+		expect(handle.registeredToolNames()).toEqual(["mcp__fs__read_file"]);
+		const empty = mount();
+		const emptyRun = await empty.run(async () => fakeConnection([]));
+		expect(emptyRun.handle.registeredToolNames()).toEqual([]);
 	});
 });
 

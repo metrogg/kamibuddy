@@ -355,6 +355,17 @@ export interface SessionHostOptions {
 	 */
 	readonly extensions?: readonly InlineExtension[];
 	/**
+	 * 模式白名单之外、**构造时**并入 tools 的额外工具名（如 MCP 的 mcp__* 工具）。
+	 *
+	 * 为什么必须走构造入参而不能事后补：pi 把 `tools` 当作激活名单
+	 *（allowedToolNames），_refreshToolRegistry 对扩展工具**先按名单过滤再进
+	 * 注册表**（agent-session.js:2117）—— 名单外的名字事后 setActiveToolsByName
+	 * 无效（工具不在注册表）。扩展工厂在 resourceLoader.reload() 里同步跑完，
+	 * 这里调用时名单已确定。之后会话中途新配置的 server（名单快照之外）其工具
+	 * 要下个会话才可见；名单内 server 的启停/重连不受影响（名字已在名单里）。
+	 */
+	readonly extraActiveTools?: () => readonly string[];
+	/**
 	 * 会话持久化管理器。缺省 `SessionManager.create(cwd, getSessionsDir())`（全新会话）；
 	 * 恢复历史会话时传 `SessionManager.open(path, getSessionsDir())` 的结果。
 	 * open 是同步的（dist 类型：static open(...) : SessionManager），
@@ -619,9 +630,16 @@ export class SessionHost {
 			tools:
 				options.toolsOverride !== undefined
 					? [...options.toolsOverride]
-					: initialExtra.length === 0
-						? initialBase
-						: [...initialBase, ...initialExtra.filter((tool) => !initialBase.includes(tool))],
+					: [
+							...initialBase,
+							...initialExtra.filter((tool) => !initialBase.includes(tool)),
+							// MCP 等扩展工具的名字（extraActiveTools）：必须**构造时**进
+							// tools —— pi 的 _refreshToolRegistry 对扩展工具按 allowedToolNames
+							// （即本数组）过滤后才放行进注册表（agent-session.js:2117），
+							// 事后 setActiveToolsByName 对名单外的名字一律无效（不在注册表）。
+							// 名字此刻已就绪：扩展工厂在上方 reload() 里同步跑完。
+							...(options.extraActiveTools?.() ?? []),
+						],
 		});
 
 		// 技能清单由 pi 的 loader 发现（agentDir 下的 skills 目录等）。
@@ -650,6 +668,14 @@ export class SessionHost {
 	}
 
 	/* ── 对外操作 ────────────────────────────────────────────────── */
+
+	/**
+	 * 当前激活的工具名集合（pi getActiveToolNames 现读）。冒烟（smoke-mcp-activation）
+	 * 验证「MCP 工具注册后对模型可见」用；诊断视图将来要展示工具面也从这取。
+	 */
+	activeToolNames(): readonly string[] {
+		return this.session.getActiveToolNames();
+	}
 
 	async prompt(
 		text: string,

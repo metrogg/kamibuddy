@@ -25,7 +25,6 @@ import {
 	IconClipboard,
 	IconClose,
 	IconDoc,
-	IconMic,
 	IconRefresh,
 	IconResearch,
 	IconSlide,
@@ -87,6 +86,10 @@ interface HomeViewProps {
 	readonly onSubmit: (text: string, images?: readonly ImagePart[]) => Promise<void>;
 	/** 工作空间切换成功后调用：daemon 已重置会话，App 重拉快照。 */
 	readonly onWorkspaceChanged: () => void;
+	/** 「+」菜单的「技能」入口：跳技能页技能页签（缺省回落 onTodo 占位，见 plus-menu）。 */
+	readonly onOpenSkills?: () => void;
+	/** 「+」菜单的「连接器」入口：跳技能页连接器页签。 */
+	readonly onOpenConnectors?: () => void;
 	readonly onTodo: (feature: string) => void;
 }
 
@@ -145,6 +148,8 @@ export function HomeView({
 	onError,
 	onSubmit,
 	onWorkspaceChanged,
+	onOpenSkills,
+	onOpenConnectors,
 	onTodo,
 }: HomeViewProps): React.JSX.Element {
 	// 「+」菜单的「添加文件」要打开 Composer 内部附件状态的选择框（命令式动作，经 ref 句柄触发）；
@@ -264,9 +269,6 @@ export function HomeView({
 											onOpenSettings={onOpenSettings}
 											onError={onError}
 										/>
-										<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-											<IconMic size={16} />
-										</button>
 									</>
 								}
 							>
@@ -282,6 +284,8 @@ export function HomeView({
 									expertId={expertId}
 									onSelectExpert={onSelectExpert}
 									onPickFiles={() => void composerRef.current?.pickFiles()}
+									onOpenSkills={onOpenSkills}
+									onOpenConnectors={onOpenConnectors}
 									onTodo={onTodo}
 								/>
 								{/*

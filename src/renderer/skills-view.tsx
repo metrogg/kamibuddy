@@ -25,6 +25,8 @@ import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 interface SkillsViewProps {
 	readonly onClose: () => void;
+	/** 初始页签（「+」菜单直达技能/连接器页签用）；缺省 experts。 */
+	readonly initialTab?: TabId;
 	readonly onTodo: (feature: string) => void;
 	/** 导入成功 / 失败都走这个轻提示。 */
 	readonly onToast: (text: string) => void;
@@ -52,8 +54,10 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, onRetryExperts, onUseExpert, onCreateExpert }: SkillsViewProps): React.JSX.Element {
-	const [tab, setTab] = useState<TabId>("experts");
+export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, onRetryExperts, onUseExpert, onCreateExpert, initialTab }: SkillsViewProps): React.JSX.Element {
+	// initialTab：「+」菜单的「技能/连接器」入口直达对应页签（2026-09-17 接线，
+	// 此前这两个入口是「待做」占位）。缺省专家为首 tab。
+	const [tab, setTab] = useState<TabId>(initialTab ?? "experts");
 	const [snapshot, setSnapshot] = useState<SkillsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [busy, setBusy] = useState(false);

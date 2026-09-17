@@ -46,8 +46,8 @@ const bridge: KamiBridge = {
 	resumeSession: (path) => ipcRenderer.invoke(INVOKE.sessionResume, path),
 	renameSession: (path, name) =>
 		ipcRenderer.invoke(INVOKE.sessionRename, path, name),
-	restartSessionFrom: (path, anchorEntryId) =>
-		ipcRenderer.invoke(INVOKE.sessionRestart, path, anchorEntryId),
+	restartSessionFrom: (path, anchorEntryId, options) =>
+		ipcRenderer.invoke(INVOKE.sessionRestart, path, anchorEntryId, options),
 	branchSessionFrom: (path, anchorEntryId) =>
 		ipcRenderer.invoke(INVOKE.sessionBranch, path, anchorEntryId),
 	deleteSession: (path) => ipcRenderer.invoke(INVOKE.sessionDelete, path),

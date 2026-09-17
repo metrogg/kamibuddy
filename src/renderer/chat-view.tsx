@@ -30,7 +30,6 @@ import {
 	IconDoc,
 	IconEdit,
 	IconFolder,
-	IconMic,
 	IconRefresh,
 	IconResearch,
 	IconSkill,
@@ -114,6 +113,10 @@ interface ChatViewProps {
 	readonly onSelectExpert: (expertId: string | undefined) => void;
 	/** 「+」菜单专家子菜单底部的「更多专家…」入口：跳专家页（App 层路由）。 */
 	readonly onOpenExperts: () => void;
+	/** 「+」菜单的「技能」入口：跳技能页技能页签（缺省回落 onTodo 占位，见 plus-menu）。 */
+	readonly onOpenSkills?: () => void;
+	/** 「+」菜单的「连接器」入口：跳技能页连接器页签。 */
+	readonly onOpenConnectors?: () => void;
 	/**
 	 * 预填文本（专家市场页 quickPrompt 路径）：App 跳入对话页时带入，
 	 * 进输入框后即经 onPrefillConsumed 消费（留在 App state 会重复填充）。
@@ -148,9 +151,15 @@ interface ChatViewProps {
 	 * 「重新开始」：回退到该用户消息（userIndex 为 0 基用户消息序号）**之前**，
 	 * 被放弃的后续由 daemon 抽成分支会话。refillText 给出时 App 会在成功后把它
 	 * 填回输入框（不自动发送）；不传 = 不回填（重试路径要立刻重发，填了会占住输入框）。
+	 * opts.saveBranch = false 时不抽枝（重试路径：旧回答就地丢弃，重新生成与分支
+	 * 是两个功能，2026-09-17 用户实测反馈后与 TRAE/ChatGPT 对齐）。
 	 * 返回值 = daemon 是否成功（失败文案由 App 统一提示）。
 	 */
-	readonly onRestartFrom: (userIndex: number, refillText?: string) => Promise<boolean>;
+	readonly onRestartFrom: (
+		userIndex: number,
+		refillText?: string,
+		opts?: { saveBranch?: boolean },
+	) => Promise<boolean>;
 	/**
 	 * 「分支出新会话」：从该用户消息之前派生新会话并**已由 daemon 切过去**，
 	 * App 跟随切换完成后把原文填回输入框（同样不发送）。
@@ -453,6 +462,8 @@ function AssistantActions({
 	modelId,
 	showExecutePlan,
 	onExecutePlan,
+	showBranch,
+	onBranch,
 	showRetry,
 	onRetry,
 	metrics,
@@ -463,6 +474,13 @@ function AssistantActions({
 	/** 是否显示「执行计划」（父组件按 plan 模式 + 非流式 + 末条判定）。 */
 	readonly showExecutePlan: boolean;
 	readonly onExecutePlan: () => void;
+	/**
+	 * 是否显示「分支出新会话」：与重试同一挂点判定（本轮末条 assistant + 分支可用 +
+	 * 有锚点）。分支入口原来只在用户气泡的 hover 工具条里，实测没人找得到（2026-09-17
+	 * 用户反馈）—— 对齐 TRAE 把它放进回答的常驻操作条：复制 → 分支 → 重试。
+	 */
+	readonly showBranch: boolean;
+	readonly onBranch: () => void;
 	/** 是否显示「重试」（父组件按「本轮末条 assistant + 分支入口可用 + 有可重发的用户消息」判定）。 */
 	readonly showRetry: boolean;
 	readonly onRetry: () => void;
@@ -481,12 +499,19 @@ function AssistantActions({
 		挂点存在但无内容的情形是真的（上面那个纯思考挂点、无 usage 且无可重发消息的收尾），
 		留一个空白容器比不渲染更糟 —— 读起来像「这里本来有东西没加载出来」。
 	*/
-	if (!showExecutePlan && !copyable && !showRetry && items.length === 0 && modelId === undefined) {
+	if (
+		!showExecutePlan &&
+		!copyable &&
+		!showBranch &&
+		!showRetry &&
+		items.length === 0 &&
+		modelId === undefined
+	) {
 		return null;
 	}
 
-	// WorkBuddy 操作条位序：复制 → 赞踩 → 重试 → 分享 → ⋯ → 共消耗 | 模型名。
-	// 我们只做有数据/有能力的四项（赞踩是云端上报项、分享需后端，均 descope）。
+	// 位序对齐 TRAE 的回答操作条：复制 → 分支 → 重试（→ 指标 | 模型名）。
+	// WorkBuddy 的赞踩是云端上报项、分享需后端，均 descope。
 	return (
 		<div className="entry-toolbar entry-toolbar-left">
 			{/* 文字按钮而非图标：这个动作没有不言自明的图标（同 .bar-btn 档的文字变体）。 */}
@@ -504,6 +529,17 @@ function AssistantActions({
 					onClick={() => void copy(text)}
 				>
 					{copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+				</button>
+			)}
+			{showBranch && (
+				<button
+					type="button"
+					className="bar-btn"
+					aria-label="分支出新会话"
+					title="分支出新会话（从这一轮之前另起一条，母会话不动）"
+					onClick={onBranch}
+				>
+					<IconBranch size={16} />
 				</button>
 			)}
 			{showRetry && (
@@ -1550,6 +1586,8 @@ export function ChatView({
 	experts,
 	onSelectExpert,
 	onOpenExperts,
+	onOpenSkills,
+	onOpenConnectors,
 	prefill,
 	onPrefillConsumed,
 	onPreviewArtifact,
@@ -2015,19 +2053,20 @@ export function ChatView({
 	};
 
 	/**
-	 * 重试 = 回退重发（spec 的 MODIFIED「重试」）：先让 daemon 把当前会话回退到最后一条
-	 * 用户消息**之前**（旧回答与过程按同一规则抽成分支会话，可从侧栏找回），成功后再把
-	 * 该原文发一次。
+	 * 重试 = 就地回退重发（spec 修订 2026-09-17）：先让 daemon 把当前会话回退到最后一条
+	 * 用户消息**之前**，成功后再把该原文发一次。**不抽枝**（saveBranch:false）——
+	 * 重新生成与分支是两个功能，竞品（TRAE/ChatGPT）的重试都不产生新会话；旧回答
+	 * 就地丢弃，想保留就走用户气泡上的「分支出新会话」。
 	 *
 	 * 原实现是纯重发，历史里留下两条完全相同的用户消息 —— 模型读到的是「用户又问了一遍」，
-	 * 语义错误且污染上下文，被放弃的那版回答也永远躺在本会话里。
+	 * 语义错误且污染上下文。
 	 *
 	 * **失败时不发送**：daemon 的拒绝（busy / no-file / write-failed…）意味着会话没动，
 	 * 这时再发一次就等于把纯重发那条老路重走一遍。文案由 App 统一提示。
 	 * 操作条与错误卡共用本函数（spec：同一个实现，不写第二条分支逻辑）。
 	 */
 	const retrySubmit = (target: BranchTarget): void => {
-		void onRestartFrom(target.userIndex).then((ok) => {
+		void onRestartFrom(target.userIndex, undefined, { saveBranch: false }).then((ok) => {
 			if (!ok) return;
 			submitWithAnchor(() => onSubmit(target.text)).catch(() => { });
 		});
@@ -2179,10 +2218,10 @@ export function ChatView({
 					「每段过程下面一个孤立的复制图标」，理由见 actionsAnchorIds 的注释。
 					「执行计划」只钉在 plan 模式、非流式的末条 assistant 消息上：
 					流式中计划可能还没写完，历史消息上的计划已被后续对话淹没。
-					重试/指标/模型名再收紧一层，只在本轮挂点（metricsAnchorId）上：
-					重试回退的是本轮的起点，挂到历史轮就是错的；指标只 fold
-					当前轮、模型名也只在本轮成立，散到每条消息上就是同一串读数重复
-					或干脆是错值。
+					分支/重试/指标/模型名再收紧一层，只在本轮挂点（metricsAnchorId）上：
+					分支与重试回退的都是本轮的起点（最后一条用户消息），挂到历史轮就是
+					错的；指标只 fold 当前轮、模型名也只在本轮成立，散到每条消息上就是
+					同一串读数重复或干脆是错值。
 				*/}
 				{actionsAnchorIds.has(entry.id) && (
 					<AssistantActions
@@ -2190,6 +2229,11 @@ export function ChatView({
 						modelId={entry.id === metricsAnchorId ? conversation.state.modelId : undefined}
 						showExecutePlan={conversation.state.interactionId === "plan" && !streaming && entry.id === lastEntry?.id}
 						onExecutePlan={executePlan}
+						showBranch={branchReady && entry.id === metricsAnchorId && retryTarget !== undefined}
+						onBranch={() => {
+							if (retryTarget === undefined) return;
+							forkFrom(retryTarget);
+						}}
 						showRetry={branchReady && entry.id === metricsAnchorId && retryTarget !== undefined}
 						onRetry={() => {
 							if (retryTarget === undefined) return;
@@ -2671,6 +2715,8 @@ export function ChatView({
 								onSelectExpert={onSelectExpert}
 								onOpenExperts={onOpenExperts}
 								onPickFiles={() => void composerRef.current?.pickFiles()}
+								onOpenSkills={onOpenSkills}
+								onOpenConnectors={onOpenConnectors}
 								onTodo={onTodo}
 							/>
 							{/*
@@ -2701,9 +2747,11 @@ export function ChatView({
 								onOpenSettings={onOpenSettings}
 								onError={onError}
 							/>
-							<button type="button" className="bar-btn" aria-label="语音输入" onClick={() => onTodo("语音输入")}>
-								<IconMic size={16} />
-							</button>
+							{/*
+					语音输入按钮已移除（2026-09-17 试用前自查）：可见按钮点了只
+					toast「待做」，宣讲演示里观感比没有更差。能力落地时再放回
+					（.bar-btn + IconMic 的原实现见 git 历史）。
+				*/}
 							{/* 上下文饱和度常驻指示（used/total 精确值），点击看分类估算。 */}
 							{conversation.usageDetail !== undefined && <ContextUsageRing detail={conversation.usageDetail} />}
 						</Composer>

@@ -123,12 +123,14 @@ export interface KamiBridge {
 	/**
 	 * 「重新开始」：把 path 会话回退到 userIndex（用户消息序号，0 基）之前并继续。
 	 * 被放弃的后续会抽成一条新会话；不产生分支时结果里没有 branchPath/branchTitle。
+	 * options.saveBranch = false 时不抽枝（重试路径：就地丢弃旧内容，见 ipc.ts 契约）。
 	 * 失败是可预期的业务拒绝（流式中 / 无会话文件 / 锚点不存在 / 落盘失败），
 	 * 按 SessionBranchResult.reason 给文案，且此时会话状态不变。
 	 */
 	readonly restartSessionFrom: (
 		path: string,
 		userIndex: number,
+		options?: { saveBranch?: boolean },
 	) => Promise<SessionBranchResult>;
 	/** 「分支出新会话」：从 userIndex（用户消息序号）之前派生一条新会话并切过去，母会话原样不动。 */
 	readonly branchSessionFrom: (
