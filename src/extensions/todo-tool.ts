@@ -64,6 +64,7 @@ export function todoExtensionFactory(): ExtensionFactory {
 				"每次调用都传入完整清单（全量替换，不是增量修改），任务推进、完成或计划有变时就更新一次。" +
 				"每项含内容 content 与状态 status（pending 待办 / in_progress 进行中 / completed 已完成）；" +
 				"进行中的那一项用 activeForm 写一个进行时短语（如「正在整理数据」），执行期间界面上展示它。" +
+				"长任务每完成 3-5 项，用一句话在回复里小结：做到了什么、还剩几项、接着做哪一项。" +
 				"任务全部完成时传空数组，表示清单关闭。",
 			promptSnippet:
 				"todo_write: 多步任务维护待办清单（全量替换）——进行中项写 activeForm，完成立即标 completed，全部做完传空数组",
@@ -71,7 +72,11 @@ export function todoExtensionFactory(): ExtensionFactory {
 				"少于 3 步的简单任务不要用这个工具——直接做，清单是纯开销。",
 				"任何时刻恰好一项 in_progress；开始下一项前先把当前项标 completed。",
 				"每次调用都返回完整清单（全量替换，不是增量）。",
-				"所有任务完成时以空数组收尾，表示清单关闭。",
+				// 照 WorkBuddy 的 Mid-Session Checkpoints 条款（cli/product.json 的
+				// tool-todowrite-description，原文是 CRITICAL/non-negotiable）：清单本身在
+				// 界面上是折叠起来的，用户判断进度只能靠这几句小结。
+				"长任务每完成 3-5 项，用一段小结点名进度：已完成的要点、还剩几项、接下来做哪一项。",
+				"所有任务完成、传空数组收尾时，正文里明确说清做完了什么，不要静默收尾。",
 			],
 			parameters: Type.Object({
 				todos: Type.Array(TodoItemSchema, {

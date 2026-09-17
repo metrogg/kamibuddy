@@ -18,6 +18,8 @@ ready: true
 
 {{> delivery-rules}}
 
+{{> narration}}
+
 {{> tool-discipline}}
 
 {{> windows-notes}}

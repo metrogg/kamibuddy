@@ -107,7 +107,10 @@ const DELTA_FLUSH_MS = 16;
 const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 	read: "读取中",
 	read_document: "阅读文档",
-	read_me: "读取中",
+	// read_me 用专属名词（对齐 WorkBuddy 的 tool.visualizerReadMe：「读取可视化指南中...」）。
+	// 通用「读取中」会让这行看起来像在读用户的项目文件 —— 它读的是设计指南，
+	// 是内部准备步骤，词汇上就该区分开。
+	read_me: "读取可视化指南中",
 	ls: "列出中",
 	grep: "搜索中",
 	find: "查找中",
@@ -137,7 +140,8 @@ const TOOL_RUNNING_LABELS: Readonly<Record<string, string>> = {
 const TOOL_DONE_LABELS: Readonly<Record<string, string>> = {
 	read: "已读取",
 	read_document: "已阅读",
-	read_me: "已读取",
+	// 同 TOOL_RUNNING_LABELS：专属名词，别和「已读取 <用户文件>」混在一起。
+	read_me: "已读取可视化指南",
 	ls: "已列出",
 	grep: "已搜索",
 	find: "已查找",
