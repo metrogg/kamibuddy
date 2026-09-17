@@ -91,3 +91,38 @@
 `confinement.win.test.ts`）、实跑探针复现读数（62.0% / 94.1%）、并对两条核心钉子做了「改坏 → 变红 → 还原」实测。
 验证者提出的两处非功能性问题（spec 的 Requirements 段未随实测回写、探针形态漂移）已在本轮处理：前者已回写订正，
 后者登记在上方遗留。
+
+# 后续修复（2026-09-17，按重要级，已全部完成）
+
+- [x] 后续-A（最高）：**堵住门禁缺口** —— 抽出可测的生产组装入口，让门禁直接钉生产那份
+  - 新增 `src/core/system-prompt-composer.ts`：`assembleSystemPrompt`（字节来源：段序 + 技能段门控 + `composePromptWithMeta`）、
+    `createSystemPromptComposer(deps)`（依赖注入）、`createSystemPromptComposerFromDefaults(options)`（生产入口）
+  - `src/daemon/index.ts` 删掉私有 `composeSystemPrompt`，三个调用点改用生产入口（薄适配）
+  - `src/daemon/prompt-preview.ts` 改为复用 `assembleSystemPrompt` → **手抄的技能段门控镜像消失**（消掉验证者标记的弱证据⑩）
+  - 门禁测试改为透过生产入口断言；新增「产物不含任何时间/日期形态」用例
+  - **纯重构举证**：对 2 场景 × 3 模式 × 3 种 piContext × 4 种 styleId × 2 种 expertId = **144 组输入**，
+    与重构前逐字节比对 **prompt / systemTokens / skillsTokens / segments 全部一致**
+  - 新钉子自证：往 `assembleSystemPrompt` 塞 `new Date().toISOString()` → 7 例红（字节稳定 6 例 + 新钉子 1 例）→ 还原后 15 例全绿
+
+- [x] 后续-B：**探针改用真实组装产物**（成为出货形态的回归证据）
+  - `scripts/probe-prompt-cache.ts` 整篇重写：删除 `buildShapedPrompt`（含失效的 `replace("{{cwd}}")` 与自拼 `Current time:`），
+    改用 `createSystemPromptComposerFromDefaults`；A 组=同一真实产物三轮、B 组=真实产物+首行追加一处；去掉时钟冻结
+  - 实测（`deepseek/deepseek-flash`，work×craft，真实产物 9395 字符）：
+    A 组 51.6% → **93.6% / 93.4%**（产物字节未变）；B 组 96.1% → **0.0%**（首行改一处 = 断点在第 0 字符）
+  - 自断言：A 组三轮产物逐字一致、B 组只差一处、B 轮 1 与 A 组产物逐字节相同；请求结构 dump 显示 system 条数恒 `1/1/1`（无 patch）
+
+- [x] 后续-C：**LOG13 消息稳定标识 → CACHE6 命中前缀边界反推**
+  - 稳定 id：`toolResult:<toolCallId>` / `<rawRole>:<timestamp>`（同角色同毫秒按出现序加 `#n`），**只取身份不取内容**；
+    内容改写 → id 不变、指纹（FNV-1a）变；位置变化 → id 不变、下标变
+  - 台账：`RequestSnapshotData.messageList?: readonly MessageRef[]`（id/role/chars/tokens/fp，**不落正文**），可选字段向后兼容（旧台账返回 unknown）
+  - 纯函数 `src/shared/cache-prefix.ts` 的 `inferCachePrefixBreak`：先用「上一轮 prompt 总量 − 上一轮消息估算总量」定标前缀，
+    再按前缀累加与 `cacheRead` 对齐；超界时收敛到与上一轮的首个差异点并标 uncertain
+  - 面板：④ 单步详情加**一行**（复用既有 `task-diag-note` 类，零 CSS、零新组件）
+  - 文档：`docs/可观测性清单.md` 的 `LOG13` / `CACHE6` 两行由 ❌ 改 ✅，表头汇总同步（✅ 56 / ❌ 15）
+  - 自证：改坏 `fp` 与差异点收敛判定 → 2 例红 → 还原后 82 例全绿
+  - 如实登记的局限：系统提示词**内部**断在哪一段仍指不出来；token 是字符估算而非真 tokenizer；图片附件 token 未计
+
+# 合并态最终验收（2026-09-17）
+
+`npm run check` → exit 0（typecheck + check:deps + check:tokens 全过）；`npm test` → **126 文件全绿**。
+本机 `confinement.win.test.ts`（受限令牌被外部沙箱拦截）在最终一轮通过 —— 该用例的结果随 IDE 沙箱状态浮动，与本改动无关。

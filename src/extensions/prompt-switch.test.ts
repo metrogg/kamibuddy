@@ -6,8 +6,11 @@
  *      compose 的返回值原样成为 systemPrompt；以及逐轮可变事实的 context 注入
  *      （追加在消息末尾、不落盘、空串不注入）。
  *   2. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
- *      相等 —— 用**真实 resources/** 组装（两个场景 × 三个模式全组合）来证
- *      （spec: stabilize-prompt-prefix 的 Task 5.2）。
+ *      相等 —— 组装**走生产入口**（core/system-prompt-composer.ts 的
+ *      createSystemPromptComposerFromDefaults，与 daemon 同一个函数），用**真实
+ *      resources/**（两个场景 × 三个模式全组合）来证（spec: stabilize-prompt-prefix）。
+ *      「用同款输入自己镜像一遍」的旧写法已删：镜像测的不是生产组装，往生产那份里
+ *      拼一处逐轮可变事实它不会红 —— 那正是这条门禁要堵的洞。
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -16,14 +19,11 @@ import { join } from "node:path";
 import { loadSkills, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getResourcesDir } from "../core/config-paths.ts";
-import { loadMemorySystemPrompt } from "../core/memory.ts";
+import type { PromptContextOptions, SkillDescriptor } from "../core/prompt-composer.ts";
 import {
-	composePromptWithMeta,
-	skillsSectionForMode,
-	type PromptContextOptions,
-	type SkillDescriptor,
-} from "../core/prompt-composer.ts";
-import { loadResources, resolveStyle, type LoadedResources } from "../core/resources.ts";
+	createSystemPromptComposerFromDefaults,
+	type SystemPromptComposer,
+} from "../core/system-prompt-composer.ts";
 import { createPromptSwitch, RUNTIME_CONTEXT_CUSTOM_TYPE } from "./prompt-switch.ts";
 
 type Handler = (event: {
@@ -245,12 +245,19 @@ describe("context 接缝：逐轮可变事实的消息注入", () => {
  * 真资源只加载一次（六个组合用例共用）；技能加载指向临时 agentDir，不读用户配置目录
  * —— 用户级技能/开关是用户数据，不属这条不变量，读进来只会让结果随机器变。
  */
-let realResources: LoadedResources;
 let realSkills: readonly SkillDescriptor[];
 let skillsAgentDir: string;
+/**
+ * **生产组装入口**（与 daemon 用的同一个构造函数）。门禁钉的是它，不是镜像：
+ * daemon 顶层要 process.parentPort（测试 import 不进来），把组装本体搬进
+ * core/system-prompt-composer.ts 之后，两边跑的就是同一段代码路径。
+ *
+ * 与 daemon 的构造参数差异只有用户数据那三样（技能清单 / 专家库 / 偏好），
+ * 且都是**注入值**而非另一段逻辑：测试给固定的内置技能、空专家库、无偏好。
+ */
+let compose: SystemPromptComposer;
 
 beforeAll(() => {
-	realResources = loadResources(getResourcesDir());
 	skillsAgentDir = mkdtempSync(join(tmpdir(), "kami-prompt-stability-"));
 	realSkills = loadSkills({
 		cwd: skillsAgentDir,
@@ -263,44 +270,25 @@ beforeAll(() => {
 		filePath: skill.filePath,
 		disableModelInvocation: skill.disableModelInvocation === true,
 	}));
+	compose = createSystemPromptComposerFromDefaults({
+		resourcesDir: getResourcesDir(),
+		// 本用例不绑专家：组装器对 expertId === undefined 短路，专家库不会被读到
+		//（这也是 daemon 侧的既定语义 —— 未绑定专家不走专家库那条从紧的读路径）。
+		loadExperts: () => [],
+		enabledSkills: () => realSkills,
+		onStyleDrift: () => {
+			// 偏好注入了固定值（无 styleId），本用例不该出现漂移；漂移落点在
+			// 生产里是事件日志，这里不需要。
+		},
+		// 偏好是**用户数据**：注入固定值，免得测试机上的风格设置改变产物
+		//（与「真实 resources/」不冲突：资源是随应用分发的，偏好不是）。
+		readPreferences: () => ({ activeModelKey: undefined }),
+	});
 });
 
 afterAll(() => {
 	rmSync(skillsAgentDir, { recursive: true, force: true });
 });
-
-/**
- * 与 daemon 的 composeSystemPrompt 同款输入的真实组装（真骨架 / 真模式 / 真片段库 /
- * 真风格 / 真记忆纪律段 / 真内置技能清单 / 透传 piContext）。
- *
- * 与 daemon 那份的差异只有一处，且与「字节稳定」无关：不读用户配置（专家库、技能
- * 开关、个性化偏好）—— 那些是**用户数据**，逐轮可变是设计的一部分，本来就走注入
- * 路径（见 core/prompt-composer.ts 文件头）。daemon 那份是这条口径的真源：往系统
- * 提示词里加会变的事实时必须同步回来，否则本用例护不住那条改动。
- */
-function composeLikeDaemon(
-	sceneId: string,
-	interactionId: string,
-	piContext: PromptContextOptions | undefined,
-): string {
-	const scene = realResources.scenes.find((s) => s.id === sceneId);
-	const mode = realResources.modes.find((m) => m.id === interactionId);
-	if (scene === undefined || mode === undefined) {
-		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
-	}
-	const style = resolveStyle(realResources.styles, undefined).style;
-	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
-	return composePromptWithMeta({
-		sceneBody: scene.body,
-		modeBody: mode.body,
-		skillsSection: skillsSectionForMode(mode.tools, realSkills),
-		modeId: mode.id,
-		resolveFragment: (name) => realResources.fragments.get(name),
-		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
-		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
-		piContext,
-	}).text;
-}
 
 describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.2）", () => {
 	/*
@@ -350,10 +338,11 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 	for (const sceneId of SCENES) {
 		for (const modeId of MODES) {
 			it(`${sceneId} × ${modeId}：只推进墙钟，两轮系统提示词严格相等`, async () => {
+				// 组装走生产入口（与 daemon 同一个函数），透传 pi 事件里的真实上下文。
 				const { handler } = mount({
 					axes: { sceneId, interactionId: modeId },
-					compose: async (scene, interaction, _expertId, piContext) =>
-						composeLikeDaemon(scene, interaction, piContext),
+					compose: async (scene, interaction, expertId, piContext) =>
+						compose({ sceneId: scene, interactionId: interaction, expertId, piContext }).prompt,
 				});
 
 				vi.setSystemTime(FIRST_TURN_AT);
@@ -378,11 +367,35 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 				// 这里再钉一道文本层。
 				expect(prompt).not.toContain(SESSION_CWD);
 				expect(prompt).not.toContain("当前工作目录：");
-				// 时间单出口（负侧）：任何时间形态都不许进系统提示词（唯一出口是
+				// 时间单出口（负侧）：任何时间/日期形态都不许进系统提示词（唯一出口是
 				// hidden context 的 current_time）。
 				expect(prompt).not.toMatch(/Current time:/);
 				expect(prompt).not.toMatch(/\d{2}:\d{2}/);
+				expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/);
 			});
 		}
 	}
+
+	it("生产组装入口的产物不含任何时间/日期形态（堵「有人往组装里塞现在几点」的洞）", () => {
+		/*
+		 * 这条是本次补的钉子，针对的洞很具体：组装本体若被人加一句
+		 * `+ formatRunTime(new Date())`（哪怕只到日期粒度），系统提示词就会逐轮
+		 * 变化 —— 而它位于整段对话历史之前，一处失配就是整段历史重算。
+		 *
+		 * 为什么上面那六条不够：它们的两个时刻跨了日期，能拦住这件事，但那是
+		 * 巧合（换两个同一分钟/同一天的时刻就拦不住）。所以这里不看「两轮是否
+		 * 相等」，直接对产物做**形态断言**：任何时间/日期形态都不许出现。
+		 */
+		vi.setSystemTime(FIRST_TURN_AT);
+		const composed = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		// 非空守卫：空串能通过任何「不含」断言。
+		expect(composed.prompt.length).toBeGreaterThan(1_000);
+		for (const pattern of [/Current time:/, /\d{4}-\d{2}-\d{2}/, /\d{2}:\d{2}/, /\b\d{10,}\b/]) {
+			expect(composed.prompt).not.toMatch(pattern);
+		}
+		// 分段 provenance 同样不许出现曾经的时间段来源。
+		for (const segment of composed.segments) {
+			expect(segment.source).not.toBe("time");
+		}
+	});
 });

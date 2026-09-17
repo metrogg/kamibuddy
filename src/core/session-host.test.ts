@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 回归测试：回复输出完后 UI 卡在「正在思考…」（isStreaming 永远为 true）。
  *
  * 根因（pi 源码实证）：
@@ -1015,7 +1015,11 @@ describe("restoredToolLabel 的 show_widget 词汇", () => {
 
 /* ── 运行台账与事件转发（spec: add-observability-ledger Task 1）────────── */
 
-import type { RunLedgerDataMap, RunLedgerEntryKind } from "../shared/observability.ts";
+import type {
+	RequestSnapshotData,
+	RunLedgerDataMap,
+	RunLedgerEntryKind,
+} from "../shared/observability.ts";
 import type { RunLedger } from "./run-ledger.ts";
 
 interface LedgerCall<K extends RunLedgerEntryKind = RunLedgerEntryKind> {
@@ -1538,6 +1542,136 @@ describe("request_snapshot（transformContext 钩子）", () => {
 			| Record<string, unknown>
 			| undefined;
 		expect(snap !== undefined && "systemSegments" in snap).toBe(false);
+	});
+});
+
+/* ── 逐条消息的稳定标识（LOG13）────────────────────────────────────── */
+
+/**
+ * 取某次 request_snapshot 的逐条清单：喂 messages 给钩子，读回它新写的那条。
+ * 直接调 buildMessageRefs 也能测 id 规则，但经钩子走一遍才是真路径
+ * （快照在注入之后记录、聚合与逐条同一来源）。
+ */
+async function refsOf(
+	agent: { transformContext?: (m: unknown[], s?: AbortSignal) => Promise<unknown[]> },
+	calls: readonly LedgerCall[],
+	messages: unknown[],
+): Promise<{ ids: string[]; list: NonNullable<RequestSnapshotData["messageList"]> }> {
+	const before = calls.filter((c) => c.kind === "request_snapshot").length;
+	await agent.transformContext?.(messages, undefined);
+	// LedgerCall 的默认泛型形态里 kind 与 data 不联动（同 run-timeline 的入口窄化），
+	// 写入点已按 kind→data 校验，这里断言一次即可。
+	const snap = calls.filter((c) => c.kind === "request_snapshot")[before]?.data as
+		| RequestSnapshotData
+		| undefined;
+	const list = snap?.messageList ?? [];
+	return { ids: list.map((m) => m.id), list };
+}
+
+describe("request_snapshot 的逐条标识（LOG13）", () => {
+	const CONVERSATION = [
+		{ role: "user", content: "写个月报", timestamp: 100 },
+		{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "想想" },
+				{ type: "text", text: "好的" },
+				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+			],
+			timestamp: 200,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "c1",
+			toolName: "read",
+			content: [{ type: "text", text: "文件内容" }],
+			isError: false,
+			timestamp: 300,
+		},
+	];
+
+	it("同一条消息跨请求得到同一个 id；新增的那条是新 id", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		const first = await refsOf(agent, calls, CONVERSATION);
+		const second = await refsOf(agent, calls, [
+			...CONVERSATION,
+			{ role: "user", content: "再来一句", timestamp: 400 },
+		]);
+
+		// 工具结果用 toolCallId（比时间戳更可靠），其余角色用 role:timestamp。
+		expect(first.ids).toEqual(["user:100", "assistant:200", "toolResult:c1"]);
+		// 增量 diff 的前提：前三条在两个请求里逐条同 id。
+		expect(second.ids.slice(0, 3)).toEqual(first.ids);
+		expect(second.ids[3]).toBe("user:400");
+	});
+
+	it("内容被改写：id 不变、指纹变（工具结果截断重写走这条语义）", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		const before = await refsOf(agent, calls, CONVERSATION);
+		const rewritten = await refsOf(agent, calls, [
+			CONVERSATION[0],
+			CONVERSATION[1],
+			{
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "read",
+				content: [{ type: "text", text: "文件内容（已截断）" }],
+				isError: false,
+				timestamp: 300,
+			},
+		]);
+
+		expect(rewritten.ids[2]).toBe(before.ids[2]);
+		expect(rewritten.list[2]?.fp).not.toBe(before.list[2]?.fp);
+		expect(rewritten.list[2]?.chars).not.toBe(before.list[2]?.chars);
+	});
+
+	it("同角色同毫秒的两条消息按出现序消歧（id 在相邻请求里仍稳定）", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		const same = [
+			{ role: "user", content: "先插一句", timestamp: 7 },
+			{ role: "user", content: "再补一句", timestamp: 7 },
+		];
+		const first = await refsOf(agent, calls, same);
+		const second = await refsOf(agent, calls, [
+			...same,
+			{ role: "user", content: "第三条", timestamp: 7 },
+		]);
+
+		expect(first.ids).toEqual(["user:7", "user:7#2"]);
+		// 新增的同基名消息排到最后，已有两条的后缀不变。
+		expect(second.ids).toEqual(["user:7", "user:7#2", "user:7#3"]);
+	});
+
+	it("逐条清单不落正文，且类别聚合由逐条累加而来（助手含工具调用参数）", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		const { list } = await refsOf(agent, calls, CONVERSATION);
+		const snap = calls.find((c) => c.kind === "request_snapshot")?.data as
+			| (RequestSnapshotData & { messages: Record<string, { count: number; chars: number }> })
+			| undefined;
+
+		// 助手那条 = 思考 2 + 正文 2 + 工具调用（"read" + 参数 JSON）。
+		const assistantChars = list
+			.filter((m) => m.role === "assistant")
+			.reduce((sum, m) => sum + m.chars, 0);
+		expect(snap?.messages["assistant"]).toEqual({ count: 1, chars: assistantChars });
+		expect(assistantChars).toBeGreaterThan(4);
+		expect(list.every((m) => m.tokens >= 0)).toBe(true);
+		// 不落正文：逐条明细里没有任何消息文本。
+		expect(JSON.stringify(snap)).not.toContain("写个月报");
+		expect(JSON.stringify(snap)).not.toContain("文件内容");
 	});
 });
 

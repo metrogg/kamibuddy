@@ -771,8 +771,8 @@ export function sessionSkillPaths(globalSkillsDir: string, expertSkillsDir?: str
  * 三个都是「能加载技能」的工具：read（按 <location> 读文件）、bash（cat 技能文件）、
  * use_skill（本项目的技能加载工具）。一个都能没有还注入技能段，等于让模型去调一个
  * 并不存在的工具（plan 模式曾是这个坑）。
- * 与 daemon 的 composeSystemPrompt 及 prompt-preview.ts 是同一门控规则（两处必须一致，
- * 见 prompt-preview.ts 里的镜像注释）。
+ * 门控只有这一处：真实组装（core/system-prompt-composer.ts 的 assembleSystemPrompt）
+ * 与设置页预览都调它 —— 曾经 prompt-preview.ts 有一份「必须两处同改」的镜像，已删。
  */
 export function skillsSectionForMode(
 	modeTools: readonly string[],

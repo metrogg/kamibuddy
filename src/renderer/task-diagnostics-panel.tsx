@@ -8,6 +8,7 @@
  *                     「最近一次入模拆分」= **当时**（台账最后一条快照，真实计数）
  *   ③ 轮 / 步台账  —— 时间序的条目流水，工具挂在自己那一步之下
  *   ④ 单步详情     —— 点开某一步：计时五要素 + token 全字段 + 该轮**当时**的入模拆分
+ *                     + 缓存命中前缀断点（CACHE6：第几条起没命中、为什么）
  * 本面板是**单个任务**的微观诊断；统计页是跨会话宏观；诊断页是机器级环境自检。
  * 在此之前这三件事挤在同一个「诊断」页里 —— 它那 7 个区块只有 1 个名副其实。
  *（设置页的提示词预览只管系统提示词；完整上下文按任务走这里 —— 2026-09-16 用户定。）
@@ -39,6 +40,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import type { CachePrefixBoundary } from "@shared/cache-prefix.ts";
 import { formatTokenCount, type ContextUsageDetail } from "@shared/context-usage.ts";
 import type { RunLedgerResult } from "@shared/ipc.ts";
 import {
@@ -58,6 +60,7 @@ import { ContextUsageBreakdown } from "./context-usage.tsx";
 import { IconChevronDown, IconChevronRight, IconClose } from "./icons.tsx";
 import { formatCost, formatSpan, formatThroughput } from "./reading-format.ts";
 import {
+	foldCachePrefixBreaks,
 	foldRunLedger,
 	foldRunSteps,
 	indexRequestSnapshots,
@@ -67,7 +70,7 @@ import {
 	type LedgerStep,
 	type LedgerStepItem,
 } from "./run-timeline.ts";
-import { SnapshotBreakdown } from "./snapshot-breakdown.tsx";
+import { MESSAGE_CLASS_LABELS, SnapshotBreakdown } from "./snapshot-breakdown.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
 
 /** run 终态的中文标签（诊断页有同款私有映射，它瘦身后可合并到这里）。 */
@@ -331,14 +334,76 @@ function ContextSection({
 
 /* ── ④ 单步详情（内联展开） ──────────────────────────────────────── */
 
+/**
+ * 缓存命中前缀断点（CACHE6）的结论 —— 一行文字，不做卡片。
+ *
+ * 结论本身由 shared 的 inferCachePrefixBreak 定好（哪种形态对应哪种说法），
+ * 这里只负责措辞与「第几条」的 1-based 换算：反推算法在 shared（可单测），
+ * 台账配对在 run-timeline 的 foldCachePrefixBreaks，展示只此一处。
+ * 结论本身是**估算对齐**出来的（token 是字符估算、前缀靠上一轮定标），
+ * 所以 `uncertain` 有值时如实再补一行，绝不把估算说成账单。
+ */
+function CachePrefixNote({
+	boundary,
+}: {
+	readonly boundary: CachePrefixBoundary;
+}): React.JSX.Element {
+	if (boundary.kind === "unknown") {
+		return <p className="task-diag-note">缓存断点：{boundary.note}</p>;
+	}
+	if (boundary.kind === "before_messages") {
+		return (
+			<>
+				<p className="task-diag-note">
+					缓存断点：本轮前缀在消息列表之前就断了（系统提示词 / 工具定义变了，或缓存整体失效），消息一条都没命中。
+				</p>
+				{boundary.uncertain !== undefined && (
+					<p className="task-diag-note">{boundary.uncertain}</p>
+				)}
+			</>
+		);
+	}
+	if (boundary.kind === "all_hit") {
+		return (
+			<>
+				<p className="task-diag-note">缓存断点：本轮 {boundary.hitCount} 条消息全部命中前缀。</p>
+				{boundary.uncertain !== undefined && (
+					<p className="task-diag-note">{boundary.uncertain}</p>
+				)}
+			</>
+		);
+	}
+	const change =
+		boundary.change === "appended"
+			? "本轮新增的"
+			: boundary.change === "changed"
+				? "内容变了"
+				: boundary.change === "moved"
+					? "位置变了"
+					: "与上一轮相同";
+	return (
+		<>
+			<p className="task-diag-note">
+				缓存断点：前缀在第 {boundary.hitCount + 1} 条消息（
+				{MESSAGE_CLASS_LABELS[boundary.message.role]}）处断开 —— 该条是{change}
+				，前 {boundary.hitCount} 条命中。
+			</p>
+			{boundary.uncertain !== undefined && <p className="task-diag-note">{boundary.uncertain}</p>}
+		</>
+	);
+}
+
 /** 点开某一步后的详情：计时五要素 + token 全字段 + 该轮当时的入模拆分。 */
 function StepDetail({
 	call,
 	snapshot,
+	boundary,
 	cacheReported,
 }: {
 	readonly call: LlmCallData;
 	readonly snapshot: RequestSnapshotData | undefined;
+	/** 该轮的缓存命中前缀断点（台账里没有可比对的上一轮时为 undefined）。 */
+	readonly boundary: CachePrefixBoundary | undefined;
 	/** provider 是否上报过缓存活动（会话级，见 StepRow）。 */
 	readonly cacheReported: boolean;
 }): React.JSX.Element {
@@ -429,6 +494,7 @@ function StepDetail({
 			{call.errorMessage !== undefined && (
 				<p className="task-diag-note stat-err">{call.errorMessage}</p>
 			)}
+			{boundary !== undefined && <CachePrefixNote boundary={boundary} />}
 			<p className="stat-hint">该轮真实入模拆分（当时）</p>
 			{snapshot === undefined ? (
 				<p className="task-diag-note">该轮没有请求快照（无组装来源或旧台账）。</p>
@@ -491,6 +557,7 @@ function StepBlock({
 	stepKey,
 	run,
 	snapshots,
+	breaks,
 	cacheReported,
 	expanded,
 	onToggle,
@@ -499,11 +566,14 @@ function StepBlock({
 	readonly stepKey: string;
 	readonly run: LedgerRun;
 	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	readonly breaks: ReadonlyMap<string, CachePrefixBoundary>;
 	readonly cacheReported: boolean;
 	readonly expanded: boolean;
 	readonly onToggle: (key: string) => void;
 }): React.JSX.Element {
 	const call = step.call;
+	// 该步的键：快照与缓存断点都用同一个（runId + turnIndex），三处检索不各写一遍。
+	const key = call === undefined ? undefined : snapshotKey(run.runId, call.turnIndex);
 
 	return (
 		<div className="task-diag-step-group">
@@ -521,11 +591,12 @@ function StepBlock({
 					onToggle={() => onToggle(stepKey)}
 				/>
 			)}
-			{expanded && call !== undefined && (
+			{expanded && call !== undefined && key !== undefined && (
 				<StepDetail
 					call={call}
 					cacheReported={cacheReported}
-					snapshot={snapshots.get(snapshotKey(run.runId, call.turnIndex))}
+					snapshot={snapshots.get(key)}
+					boundary={breaks.get(key)}
 				/>
 			)}
 			{step.rest.map((item, index) => (
@@ -604,12 +675,15 @@ function isNormalStop(reason: string): boolean {
 function RunBlock({
 	run,
 	snapshots,
+	breaks,
 	cacheReported,
 	expandedStep,
 	onToggleStep,
 }: {
 	readonly run: LedgerRun;
 	readonly snapshots: ReadonlyMap<string, RequestSnapshotData>;
+	/** 每轮的缓存命中前缀断点（键同 snapshots，见 run-timeline 的 foldCachePrefixBreaks）。 */
+	readonly breaks: ReadonlyMap<string, CachePrefixBoundary>;
 	/** provider 是否上报过缓存活动（会话级，见 StepRow）。 */
 	readonly cacheReported: boolean;
 	readonly expandedStep: string | undefined;
@@ -639,6 +713,7 @@ function RunBlock({
 						stepKey={stepKey}
 						run={run}
 						snapshots={snapshots}
+						breaks={breaks}
 						cacheReported={cacheReported}
 						expanded={expandedStep === stepKey}
 						onToggle={onToggleStep}
@@ -737,6 +812,11 @@ export function TaskDiagnosticsPanel({
 		() => indexRequestSnapshots(ledger?.entries ?? []),
 		[ledger],
 	);
+	/**
+	 * 每轮的缓存命中前缀断点（CACHE6）。与 snapshots 同一个键，单步详情里一对即可取。
+	 * 台账侧配对在 run-timeline，反推算法在 shared（两侧都是纯函数，可单测）。
+	 */
+	const breaks = useMemo(() => foldCachePrefixBreaks(ledger?.entries ?? []), [ledger]);
 	/** 最近一次入模拆分：② 的「当时的上下文组成」数据源（真实计数）。 */
 	const latestSnapshot = useMemo(
 		() => latestRequestSnapshot(ledger?.entries ?? []),
@@ -788,6 +868,7 @@ export function TaskDiagnosticsPanel({
 									key={`${run.runId}-${run.startedAt}-${index}`}
 									run={run}
 									snapshots={snapshots}
+									breaks={breaks}
 									cacheReported={cacheReported}
 									expandedStep={expandedStep}
 									onToggleStep={toggleStep}

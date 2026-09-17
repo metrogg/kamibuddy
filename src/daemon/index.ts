@@ -48,7 +48,7 @@ import {
 	writeMcpConfig,
 } from "../core/mcp-config.ts";
 import { ModelCatalog, parseModelKey } from "../core/model-catalog.ts";
-import { estimateTokens, ObservabilityStore } from "../core/observability.ts";
+import { ObservabilityStore } from "../core/observability.ts";
 import {
 	appendPermissionRule,
 	loadPermissionRules,
@@ -69,18 +69,15 @@ import {
 	statSessionArtifact,
 } from "./session-cwd-reads.ts";
 import {
-	composePromptWithMeta,
 	formatRuntimeContext,
 	requireExpertPersona,
 	resolveSessionExpert,
 	sessionSkillPaths,
-	skillsSectionForMode,
-	toExpertPersona,
 	type PersonalizationSection,
-	type PromptContextOptions,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
-import { DEFAULT_STYLE_ID, loadResources, resolveStyle, toDescriptors } from "../core/resources.ts";
+import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resources.ts";
+import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
 import { importSkill, readInstalledMeta, userSkillsDir } from "../core/skill-install.ts";
 import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
 import { computeSkillsCost } from "../core/skills-cost.ts";
@@ -96,7 +93,6 @@ import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from ".
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
 import { TeamRegistry } from "./team-runtime.ts";
-import type { SystemSegmentStat } from "../shared/observability.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import {
 	readDisplayNames,
@@ -675,91 +671,35 @@ function buildRuntimeContext(cwd: string): string {
 }
 
 /**
- * 组装指定两轴下的系统提示词。用户会话与定时任务 run 会话共用 ——
+ * 系统提示词的**唯一组装入口**。用户会话与定时任务 run 会话共用 ——
  * 提示词是产品身份，两条会话形态必须同一份组装逻辑，不能各写一遍漂移。
  * token 估算随返回值带出，由调用方决定记不记（用户会话要喂上下文成分统计，
  * run 会话没有诊断视图、直接丢弃）。
  *
- * **不含逐轮会变的事实**：运行时间、三层记忆内容、个性化都不进系统提示词
- * （它们每轮都可能变，进提示词就等于每轮断掉 provider 的前缀缓存，spec:
- * stabilize-prompt-prefix）—— 记忆内容与个性化由 buildRuntimeContext 组装、
- * 经 prompt-switch 的 `context` 事件作为消息注入，时间由会话侧 hidden context
- * 的 `current_time` 每轮注入（session-host.ts）。工作目录同样不进提示词：
- * pi 内置的那行 `cwd` 会被 before_agent_start 的整串替换换掉，工作目录的唯一
- * 来源是 hidden context 的 workspace_context。
+ * 组装**本体**（骨架 / 片段 / 模式 / 风格 / 人格 / 技能清单 / 记忆纪律段的段序
+ * 与护栏）在 core/system-prompt-composer.ts —— 这里只把 daemon 侧的三样来源接上
+ * 去（专家库现载 / 已启用技能 / 风格漂移落事件日志），**返回值不得再加工**：
+ * 系统提示词位于整段对话历史之前，多拼一处逐轮可变的事实就等于每轮断掉
+ * provider 的前缀缓存（spec: stabilize-prompt-prefix），而 daemon 这层门禁测试
+ * 看不见（daemon 顶层要 process.parentPort，import 不进来）——所以「能加工的
+ * 只有组装本体」本身就是护栏。
+ *
+ * **组装产物不含逐轮会变的事实**：运行时间、三层记忆内容、个性化都不进系统
+ * 提示词 —— 记忆内容与个性化由 buildRuntimeContext 组装、经 prompt-switch 的
+ * `context` 事件作为消息注入，时间由会话侧 hidden context 的 `current_time`
+ * 每轮注入（session-host.ts）。工作目录同样不进提示词：工作目录的唯一来源是
+ * hidden context 的 workspace_context。
  */
-async function composeSystemPrompt(
-	sceneId: string,
-	interactionId: string,
-	expertId: string | undefined,
-	// prompt-switch 的每轮组装带真实 piContext；resume 的估算补算与 prompt:preview
-	// 一样拿不到（要等 before_agent_start），置空 —— 组装器对缺省的容忍见 composer。
-	piContext?: PromptContextOptions,
-): Promise<{
-	prompt: string;
-	systemTokens: number;
-	skillsTokens: number;
-	/** 分段 provenance（source + 字符数），台账 request_snapshot 的 system 部分。 */
-	segments: readonly SystemSegmentStat[];
-}> {
-	const scene = RESOURCES.scenes.find((s) => s.id === sceneId);
-	const mode = RESOURCES.modes.find((m) => m.id === interactionId);
-	if (scene === undefined || mode === undefined) {
-		throw new Error(`场景或交互模式不存在：${sceneId} / ${interactionId}`);
-	}
-	// 专家与交互模式正交：只按 expertId 是否绑定决定是否解析专家，与模式无关
-	//（选专家不改模式，切模式不清专家）。一轮组装里人格与私有技能目录都要用它，
-	// 只查一次共用（expertId 有值但不在库中在这里响亮抛错，见 resolveSessionExpert）。
-	// 未绑定专家不走这条读路径：专家库加载从紧（坏文件抛错），三模式会话不该被
-	// 一个坏专家包拖垮（短路求值刻意保留）。
-	const expert = expertId === undefined ? undefined : resolveSessionExpert(loadExpertsNow(), expertId);
-	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。技能与 use_skill
-	// 工具走同一个出口（skillSets）：绑定专家时其私有技能既进清单段、也进工具。
-	// 清单段只放**已启用**的（enabledSkills）—— 三处同源的那一份过滤，见 enabledSkills 注释。
-	const skills: SkillDescriptor[] = toSkillDescriptors(enabledSkills(expertId));
-	// 与 pi 的 buildSystemPrompt 对齐：模式白名单里 read / bash / use_skill 一个
-	// 都没有时，不注入技能段（见 core/prompt-composer.ts skillsSectionForMode）
-	// —— 否则会让模型去调用一个并不存在的工具（plan 这类只读配置就是这个坑）。
-	const skillsSection = skillsSectionForMode(mode.tools, skills);
-	/*
-	 * 回复风格每轮现读偏好（同技能清单的「现读」口径：设置页改完下一轮即生效，
-	 * 无需重启）。三态：未配置 = 默认专业 / 空串 = 关闭 / 某 id = 指定。
-	 * 指定 id 不在资源库 = 配置漂移（风格被改名/删除）—— resolveStyle 降级
-	 * 默认风格，这里把漂移记进事件日志：降级可以是体验取舍，但不能无痕。
-	 */
-	const { style, driftedFrom } = resolveStyle(RESOURCES.styles, readPreferences().styleId);
-	if (driftedFrom !== undefined) {
-		eventLog.append({
-			kind: "style_drift",
-			requested: driftedFrom,
-			fallback: style?.id ?? DEFAULT_STYLE_ID,
-		});
-	}
-	// 记忆行为纪律段每轮现读（同技能清单口径）。它定义「怎么写记忆」，会话内稳定；
-	// 记忆**内容**逐轮会变，不进这里（见 buildRuntimeContext）。
-	// 读取失败单份降级为空、不抛错 —— 记忆是增强不是门槛（core/memory.ts 文件头）。
-	const memorySystemBody = loadMemorySystemPrompt(getResourcesDir());
-	const composed = composePromptWithMeta({
-		sceneBody: scene.body,
-		modeBody: mode.body,
-		skillsSection,
-		modeId: interactionId,
-		// 片段库查表：找不到返回 undefined → composer 抛错（不静默留洞上线）。
-		resolveFragment: (name) => RESOURCES.fragments.get(name),
-		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
-		...(memorySystemBody === undefined ? {} : { memorySystemBody }),
-		...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
-		piContext,
-	});
-	return {
-		prompt: composed.text,
-		systemTokens: estimateTokens(composed.text),
-		skillsTokens: estimateTokens(skillsSection),
-		// 分段只取 provenance（source + 字符数）：正文不进桶更不进台账
-		//（request_snapshot 不记正文的口径，见 shared/observability.ts）。
-		segments: composed.segments.map((s) => ({ source: s.source, chars: s.text.length })),
-	};
-}
+const composeSystemPrompt = createSystemPromptComposerFromDefaults({
+	resourcesDir: getResourcesDir(),
+	loadExperts: loadExpertsNow,
+	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
+	enabledSkills: (expertId) => toSkillDescriptors(enabledSkills(expertId)),
+	// 风格配置漂移记进事件日志：降级可以是体验取舍，但不能无痕。
+	onStyleDrift: ({ requested, fallback }) => {
+		eventLog.append({ kind: "style_drift", requested, fallback });
+	},
+});
 
 /* ── 会话 ─────────────────────────────────────────────────────────── */
 
@@ -1014,7 +954,7 @@ const automationScheduler = new AutomationScheduler({
 		// 定时任务 run 会话保持 work+craft 不起专家（spec: rework-expert-orthogonal-and-skills
 		// —— 专家绑定是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
 		compose: async (_cwd, sceneId, interactionId, piContext) =>
-			(await composeSystemPrompt(sceneId, interactionId, undefined, piContext)).prompt,
+			composeSystemPrompt({ sceneId, interactionId, expertId: undefined, piContext }).prompt,
 		// run 会话同样是多轮会话，逐轮可变事实走注入（提示词里不再有它们）——
 		// 注入块按 run 的 cwd 现读记忆与个性化，与用户会话同一个组装函数。
 		composeRuntimeContext: buildRuntimeContext,
@@ -2195,7 +2135,7 @@ async function createHost(
 					expertId: bucket.conversation.state.expertId,
 				}),
 				compose: async (sceneId, interactionId, expertId, piContext) => {
-					const composed = await composeSystemPrompt(sceneId, interactionId, expertId, piContext);
+					const composed = composeSystemPrompt({ sceneId, interactionId, expertId, piContext });
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
@@ -2966,12 +2906,12 @@ async function buildConversationForBucket(
 	 */
 	try {
 		const state = bucket.conversation.state;
-		const composed = await composeSystemPrompt(
-			state.sceneId,
-			state.interactionId,
-			state.expertId,
-			undefined,
-		);
+		const composed = composeSystemPrompt({
+			sceneId: state.sceneId,
+			interactionId: state.interactionId,
+			expertId: state.expertId,
+			piContext: undefined,
+		});
 		bucket.systemPromptTokens = composed.systemTokens;
 		bucket.skillsTokens = composed.skillsTokens;
 		bucket.systemPromptSegments = composed.segments;

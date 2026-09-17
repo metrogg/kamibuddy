@@ -16,7 +16,7 @@
  * 本组件只 import @shared（AGENTS.md §1.3）。
  */
 
-import type { RequestSnapshotData } from "@shared/observability.ts";
+import type { MessageClass, RequestSnapshotData } from "@shared/observability.ts";
 
 /** 分段占条的配色：循环复用上下文成分条的既有五色，不新增色值。 */
 const SEG_PALETTE = [
@@ -27,6 +27,17 @@ const SEG_PALETTE = [
 	"comp-tools",
 ] as const;
 
+/**
+ * 消息类别的中文标签。快照拆分表与缓存断点结论（任务诊断面板的单步详情）
+ * 共用这一份 —— 同一个概念在两处出现两种说法，比用词不准更难看。
+ */
+export const MESSAGE_CLASS_LABELS: Record<MessageClass, string> = {
+	user: "用户消息",
+	assistant: "助手回复",
+	toolResult: "工具结果",
+	other: "其他",
+};
+
 export function SnapshotBreakdown({
 	snapshot,
 }: {
@@ -36,10 +47,10 @@ export function SnapshotBreakdown({
 	const segTotal = segs.reduce((sum, s) => sum + s.chars, 0);
 	const msg = snapshot.messages;
 	const msgParts = [
-		{ key: "user", label: "用户消息", stat: msg.user },
-		{ key: "assistant", label: "助手回复", stat: msg.assistant },
-		{ key: "toolResult", label: "工具结果", stat: msg.toolResult },
-		{ key: "other", label: "其他", stat: msg.other },
+		{ key: "user", label: MESSAGE_CLASS_LABELS.user, stat: msg.user },
+		{ key: "assistant", label: MESSAGE_CLASS_LABELS.assistant, stat: msg.assistant },
+		{ key: "toolResult", label: MESSAGE_CLASS_LABELS.toolResult, stat: msg.toolResult },
+		{ key: "other", label: MESSAGE_CLASS_LABELS.other, stat: msg.other },
 	];
 	const msgTotal = msgParts.reduce((sum, p) => sum + p.stat.chars, 0);
 
