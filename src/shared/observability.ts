@@ -464,15 +464,40 @@ export function contentFingerprint(text: string): number {
 }
 
 /**
- * 「每请求现算、不落会话」的瞬态注入消息的自定义类型（pi CustomMessage.customType）。
+ * 逐轮可变事实（记忆内容 + 个性化）注入消息的自定义类型，由
+ * extensions/prompt-switch.ts 的 `context` 事件注入。
  *
- * 由 extensions/prompt-switch.ts 的 `context` 事件注入（记忆内容 + 个性化），
- * 追加在消息数组末尾、下一个请求里就不在了。定义在这里而不是扩展里的原因：
- * request_snapshot 的逐条清单（core/session-host.ts）也要靠它把这类幽灵条目标成
- * 瞬态（`MessageRef.transient`），而 core 不许 import extensions（AGENTS.md §1），
+ * 定义在这里而不是扩展里的原因：request_snapshot 的逐条清单
+ * （core/session-host.ts）也要靠它把这类幽灵条目标成瞬态
+ * （`MessageRef.transient`），而 core 不许 import extensions（AGENTS.md §1），
  * 常量放 shared 才是唯一实现处（防重复，AGENTS.md §4）。
  */
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "kamibuddy-runtime-context";
+
+/**
+ * hidden context（F5）注入消息的自定义类型，由 core/session-host.ts 的
+ * `installHiddenContext`（pi transformContext 钩子）注入。
+ *
+ * 与 runtime context 同住一个文件、同一个机制：两者都是「每请求现算、不落会话、
+ * 追加在消息数组末尾」的瞬态注入项，按 customType 归到下面同一组里判定。
+ */
+export const HIDDEN_CONTEXT_CUSTOM_TYPE = "kamibuddy-hidden-context";
+
+/**
+ * 「每请求现算、不落会话」的瞬态注入项的全部 customType（唯一实现处）。
+ *
+ * 为什么是一组而不是一个：瞬态与否是**注入机制**的属性，而这个机制已经有两个
+ * 使用者（runtime context 与 hidden context）。让判定点逐个认 customType，加第三个
+ * 注入通道时就会漏标 —— 漏标的后果是缓存断点归因每轮误报一次（见
+ * shared/cache-prefix.ts 的 dropTransient），且不会响亮失败。
+ *
+ * 消费方 core/session-host.ts 的 buildMessageRefs 用这个集合**整体**判定，
+ * 不在这里之外的任何地方再写一遍 customType 字面量（防重复，AGENTS.md §4）。
+ */
+export const TRANSIENT_INJECTION_CUSTOM_TYPES: readonly string[] = [
+	RUNTIME_CONTEXT_CUSTOM_TYPE,
+	HIDDEN_CONTEXT_CUSTOM_TYPE,
+];
 
 /** 系统提示词一个分段的 provenance（source 来自 prompt-composer 的 PromptSegmentSource）。 */
 export interface SystemSegmentStat {
@@ -526,8 +551,9 @@ export interface MessageRef {
 	 */
 	readonly fp: number;
 	/**
-	 * 这一条是「每请求现算、不落会话」的瞬态注入项（`RUNTIME_CONTEXT_CUSTOM_TYPE`，
-	 * 由 extensions/prompt-switch.ts 的 `context` 事件追加在消息数组末尾）。
+	 * 这一条是「每请求现算、不落会话」的瞬态注入项
+	 * （`TRANSIENT_INJECTION_CUSTOM_TYPES`：`kamibuddy-runtime-context` 与
+	 * `kamibuddy-hidden-context` 两条，都由各自注入点追加在消息数组末尾）。
 	 *
 	 * 有了它，缓存断点归因（shared/cache-prefix.ts）才认得出「上一轮尾部有、这一轮
 	 * 没了」的幽灵条目是**有意设计**，不把它当成断点原因（否则每轮都会误报一次）。
@@ -560,8 +586,10 @@ export interface RequestSnapshotData {
 	};
 	/**
 	 * hidden context（F5）注入块的字符数。快照在**注入之后**记录（钩子包装
-	 * 顺序见 session-host），所以这部分字符已含在最后一条 user 消息的计数里
-	 * —— 这个字段把它拆出来亮明，面板的成分视图据此单列一行。
+	 * 顺序见 session-host），这部分字符落在那条瞬态注入消息上，因而计入
+	 * `messages.other`（**不是** user）—— 这个字段把它单独亮明，面板的成分
+	 * 视图据此单列一行。
+	 *
 	 * 缺席 = 该次调用没有注入（run 已清账后的压缩调用等）。
 	 */
 	readonly hiddenContextChars?: number;

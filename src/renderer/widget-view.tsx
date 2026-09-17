@@ -195,29 +195,42 @@ export function clampWidgetHeight(height: number): number {
 }
 
 /*
- * iframe 内文档的设计 token（与 visualizer 指南色板协调的一套语义变量）：
- * 文本三档 / 描边 / 两级表面 / 强调色 + 图表九色系。
- * 明暗两态：:root[data-theme] 由宿主 theme 消息驱动（宿主消息优先），
- * prefers-color-scheme 媒体查询是兜底一路（下载的 .html 独立打开时靠它）。
+ * iframe 内文档的设计 token。
  *
- * 为什么这里是「字面值」而不是 var(--text)：这份字符串经 srcDoc 注入到独立文档，
+ * **名字必须是指南承诺的那一套**（`--bg` / `--text` / `--border` …，见
+ * resources/visualizer/core.md 的变量表）：它们是宿主 tokens.css 里的同名 token，
+ * 模型严格按指南写 `var(--text)` 时必须解析得到。
+ *
+ * 2026-09-17 修的坑：此前这里只定义了 `--kw-*`，指南承诺的名字一个都没有 ——
+ * 模型写 `var(--text)` 全部落空，SVG 里 fill 的初值是**黑**，于是整幅图变黑块。
+ * `--kw-*` 现在降为内部别名（滚动条、body 文字色这些本文件自己的样式在用），
+ * 这样两处不用各写一份字面值。
+ *
+ * 为什么仍是「字面值」而不是直接 var(--text)：这份字符串经 srcDoc 注入独立文档，
  * iframe 里的 var() 解析不到宿主的 :root（跨上下文，宿主样式表不生效）。所以只能
- * 复制值——但值 SHALL 与 tokens.css 保持一致，改宿主 token 时这里要同步：
- *   --kw-text ← --text / --kw-text-secondary ← --text-secondary /
- *   --kw-text-dim ← --text-faint / --kw-border ← --border /
- *   --kw-surface ← --bg / --kw-surface-raised ← --bg-raised / --kw-accent ← --accent。
- * 例外：--kw-c1..c9 是 ECharts 图表九色系（生成图表的用色尺度），宿主没有对应 token，
+ * 复制值 —— **值 MUST 与 tokens.css 保持一致**，改宿主 token 时这里同步。
+ * 例外：`--kw-c1..c9` 是 ECharts 图表九色系（生成图表的用色尺度），宿主没有对应 token，
  * 保持原值——它属于「内容侧色板」不是宿主设计尺度。
  */
 const TOKENS_LIGHT = [
 	"color-scheme: light",
-	"--kw-text: #000000",
-	"--kw-text-secondary: rgba(0, 0, 0, 0.5)",
-	"--kw-text-dim: rgba(0, 0, 0, 0.3)",
-	"--kw-border: #e6e6e6",
-	"--kw-surface: #ffffff",
-	"--kw-surface-raised: #f7f7f7",
-	"--kw-accent: #1470b4",
+	// —— 指南承诺、模型可直接用的宿主 token（名与 tokens.css 一致）——
+	"--text: #000000",
+	"--text-secondary: rgba(0, 0, 0, 0.5)",
+	"--text-faint: rgba(0, 0, 0, 0.3)",
+	"--bg: #ffffff",
+	"--bg-raised: #f7f7f7",
+	"--border: #e6e6e6",
+	"--accent: #1470b4",
+	"--radius-md: 10px",
+	// —— 内部别名 ——
+	"--kw-text: var(--text)",
+	"--kw-text-secondary: var(--text-secondary)",
+	"--kw-text-dim: var(--text-faint)",
+	"--kw-border: var(--border)",
+	"--kw-surface: var(--bg)",
+	"--kw-surface-raised: var(--bg-raised)",
+	"--kw-accent: var(--accent)",
 	"--kw-c1: #5470c6",
 	"--kw-c2: #91cc75",
 	"--kw-c3: #fac858",
@@ -231,13 +244,21 @@ const TOKENS_LIGHT = [
 
 const TOKENS_DARK = [
 	"color-scheme: dark",
-	"--kw-text: rgba(255, 255, 255, 0.92)",
-	"--kw-text-secondary: rgba(255, 255, 255, 0.55)",
-	"--kw-text-dim: rgba(255, 255, 255, 0.35)",
-	"--kw-border: rgba(255, 255, 255, 0.12)",
-	"--kw-surface: #1c1c1e",
-	"--kw-surface-raised: #26262a",
-	"--kw-accent: #4c9fe0",
+	"--text: rgba(255, 255, 255, 0.92)",
+	"--text-secondary: rgba(255, 255, 255, 0.55)",
+	"--text-faint: rgba(255, 255, 255, 0.35)",
+	"--bg: #1c1c1e",
+	"--bg-raised: #26262a",
+	"--border: rgba(255, 255, 255, 0.12)",
+	"--accent: #4c9fe0",
+	"--radius-md: 10px",
+	"--kw-text: var(--text)",
+	"--kw-text-secondary: var(--text-secondary)",
+	"--kw-text-dim: var(--text-faint)",
+	"--kw-border: var(--border)",
+	"--kw-surface: var(--bg)",
+	"--kw-surface-raised: var(--bg-raised)",
+	"--kw-accent: var(--accent)",
 	"--kw-c1: #7c96e0",
 	"--kw-c2: #a8d88f",
 	"--kw-c3: #fbd97a",
@@ -248,6 +269,130 @@ const TOKENS_DARK = [
 	"--kw-c8: #b182c8",
 	"--kw-c9: #f096d1",
 ].join(";");
+
+/**
+ * 九色板：类名与 resources/visualizer/colors.md 的色系一一对应。
+ * 亮色值 = 指南速查表；暗色值 = WorkBuddy 调过的那套（深底 + 浅字，
+ * 比「主色叠 18% 透明度」在深色卡片上稳），见文件末的移植说明。
+ */
+const PALETTE_CLASSES = [
+	"blue",
+	"green",
+	"orange",
+	"red",
+	"purple",
+	"teal",
+	"yellow",
+	"pink",
+	"gray",
+] as const;
+
+/** 亮色：bg / border / text / text-sub，取自 colors.md 速查表（text-sub 用主色，浅底上可读）。 */
+const PALETTE_LIGHT: Record<string, string> = {
+	blue: "#eaf1fd/#2f6de0/#1d4296/#2f6de0",
+	green: "#e9f7ef/#1f9d55/#14603a/#1f9d55",
+	orange: "#fdf1e4/#e07b24/#8a4a12/#e07b24",
+	red: "#fcebeb/#d64545/#8f2626/#d64545",
+	purple: "#f0ecfd/#7a5af0/#4b32a8/#7a5af0",
+	teal: "#e6f6f6/#149a97/#0c5f5d/#149a97",
+	yellow: "#fdf6de/#c99a0b/#75600a/#c99a0b",
+	pink: "#fcebf3/#d64f92/#8a2a5c/#d64f92",
+	gray: "#f0f1f3/#8b93a1/#41464e/#6e7683",
+};
+
+/** 暗色：WorkBuddy 的暗色板（顺序相同）。 */
+const PALETTE_DARK: Record<string, string> = {
+	blue: "#042C53/#378ADD/#E6F1FB/#90C4F0",
+	green: "#173404/#639922/#EAF3DE/#A0D060",
+	orange: "#4A1B0C/#D85A30/#FAECE7/#F0A080",
+	red: "#501313/#E24B4A/#FCEBEB/#F09090",
+	purple: "#26215C/#7F77DD/#EEEDFE/#B8B4F5",
+	teal: "#04342C/#1D9E75/#E1F5EE/#7DDDC0",
+	yellow: "#412402/#BA7517/#FAEEDA/#E0A860",
+	pink: "#4B1528/#D4537E/#FBEAF0/#F0A0C0",
+	gray: "#2C2C2A/#888780/#F1EFE8/#B8B6B0",
+};
+
+/** 生成一组色板变量声明：`.c-blue { --node-bg: …; }` … */
+function paletteRules(values: Record<string, string>): string[] {
+	return PALETTE_CLASSES.map((name) => {
+		const [bg, border, text, textSub] = values[name]!.split("/");
+		return (
+			`.c-${name} { --node-bg: ${bg}; --node-border: ${border};` +
+			` --node-text: ${text}; --node-text-sub: ${textSub}; }`
+		);
+	});
+}
+
+/** `.c-blue .box, .c-green .box, …` 这样的选择器串。 */
+function paletteScoped(scope: string): string {
+	return PALETTE_CLASSES.map((name) => `.c-${name} ${scope}`).join(", ");
+}
+
+/**
+ * 预置 class 样式表 —— 指南向模型承诺的「宿主注入样式」（svg-setup.md「预置 class」表）。
+ *
+ * 2026-09-17 修「SVG 全黑」：指南写着「宿主注入样式，直接引用，不要自己重复定义同名类」，
+ * 模型严格照做（`<rect class="box">`，见会话 07-27-14 的实际产出），但这里当时一个类
+ * 都没定义 → `.box` 没有 fill → SVG 的 fill 初值是**黑**，文字 fill 也是黑 →
+ * 整幅图变成黑块（字与底同色，只剩模型自己写的 `stroke="#e07b24"` 那圈细边）。
+ *
+ * 照 WorkBuddy 的实现补齐（一手证据：docs/WorkBuddy-reference/extracted/renderer/
+ * assets/lib-chat-ui-ChIVprRk.js 偏移 5699408 起的 `/* 文本类 *​/` 段）。三处按我们的
+ * 契约有意不抄：
+ *
+ *   1. **不写 `marker-end`**：WorkBuddy 的 `.arr` 硬编码 `url(#arrowhead)`，而我们的指南
+ *      要求每个 widget 自己声明 marker（`arrow` / `arrow-blue`，见 svg-setup 连线段）。
+ *      CSS 优先级高于 presentation attribute，写了会盖掉模型的 `marker-end` 并指向
+ *      不存在的 id → 箭头全丢。
+ *   2. **不写 `rx` / `stroke-width`**：指南让模型按形状自己定圆角（10–24px）与线宽（1–1.5px），
+ *      CSS 一旦写死就会盖掉它们（WorkBuddy 用 `rx: 6` 统一，是它自己的约定）。
+ *      同理 `.box` 只给 fill/stroke —— 颜色是「宿主说了算」的部分，模型该用 `.c-*` 表达语义。
+ *   3. 字号按我们的指南（t 13 / ts 12 / th 14），不抄 WorkBuddy 的 14：模型的文字基线补偿
+ *      （svg-setup「尺寸估算」）是按 13px 算的，两边必须一致。
+ *
+ * 每个值都带兜底（`currentColor` / 字面色）：宿主 token 缺失时退化成「能看」而不是「全黑」。
+ */
+const WIDGET_PRESET_CSS = [
+	// —— 文本类 ——
+	`.t { font-size: 13px; fill: var(--text, currentColor); }`,
+	`.ts { font-size: 12px; fill: var(--text-secondary, currentColor); }`,
+	`.th { font-size: 14px; font-weight: 500; fill: var(--text, currentColor); }`,
+	// —— 容器类：默认中性面，落在 `.c-*` 组里时取该色板 ——
+	`.box, .node { fill: var(--bg-raised, #f5f5f5); stroke: var(--border, #e0e0e0); }`,
+	`.node { cursor: pointer; }`,
+	// —— 线条类 ——
+	`.arr { stroke: var(--text-secondary, #666); stroke-width: 1.5; fill: none; }`,
+	`.leader { stroke: var(--border, #ccc); stroke-width: 0.5; stroke-dasharray: 4 2; fill: none; }`,
+	// —— 色板：亮色默认值 ——
+	...paletteRules(PALETTE_LIGHT),
+	// —— 色板：暗色覆盖（双路触发，与 token 同一策略）——
+	...PALETTE_CLASSES.map((name) => {
+		const [bg, border, text, textSub] = PALETTE_DARK[name]!.split("/");
+		return (
+			`:root[data-theme="dark"] .c-${name} { --node-bg: ${bg}; --node-border: ${border};` +
+			` --node-text: ${text}; --node-text-sub: ${textSub}; }`
+		);
+	}),
+	...PALETTE_CLASSES.map((name) => {
+		const [bg, border, text, textSub] = PALETTE_DARK[name]!.split("/");
+		return (
+			`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .c-${name} {` +
+			` --node-bg: ${bg}; --node-border: ${border}; --node-text: ${text}; --node-text-sub: ${textSub}; } }`
+		);
+	}),
+	// —— 语义类消费色板变量 ——
+	`${paletteScoped(".box")}, ${paletteScoped(".node")} { fill: var(--node-bg); stroke: var(--node-border); }`,
+	`${paletteScoped(".t")}, ${paletteScoped(".th")} { fill: var(--node-text); }`,
+	`${paletteScoped(".ts")} { fill: var(--node-text-sub); }`,
+	/*
+	 * 兜底：模型直接写原生 SVG 元素（没挂语义类）时，按所在色板组上色。
+	 * 只覆盖封闭形状（rect/circle/ellipse）—— path 可能是箭头/线条，统一上色会毁掉连线。
+	 * presentation attribute 的优先级低于 CSS，所以不需要 !important。
+	 */
+	`${paletteScoped("rect")}, ${paletteScoped("circle")}, ${paletteScoped("ellipse")} { fill: var(--node-bg); stroke: var(--node-border); }`,
+	`${paletteScoped("text")} { fill: var(--node-text); }`,
+].join("\n");
 
 const WIDGET_CSS = [
 	"* { box-sizing: border-box; }",
@@ -274,7 +419,9 @@ const WIDGET_CSP =
 const WIDGET_HEAD = [
 	'<meta charset="utf-8">',
 	`<meta http-equiv="Content-Security-Policy" content="${WIDGET_CSP}">`,
-	`<style>${WIDGET_CSS}</style>`,
+	// 宿主样式表与预置 class 表同放一个 <style>：两者都 MUST 先于片段生效
+	//（预置 class 靠 CSS 优先级压过模型写的 presentation attribute）。
+	`<style>${WIDGET_CSS}\n${WIDGET_PRESET_CSS}</style>`,
 ].join("\n");
 
 /*

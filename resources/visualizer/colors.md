@@ -27,5 +27,11 @@
   - **主色**可直接沿用（这组主色在深色底上亮度足够）；
   - **浅底**换成对应主色的低透明度叠底：主色 hex + 约 18% 不透明度（例如蓝 `#2f6de02e`）；
   - **深字**换成同色系浅字（把深字换浅大约三档，例如蓝字用 `#9db9f5`，绿字 `#7fd6a8`，其余同理取"亮而不荧"的一档）。
-- SVG 里兼顾两态的写法：fill/stroke 引用 `currentColor` 或 CSS 变量，再用 `@media (prefers-color-scheme: dark)` 覆盖变量值；HTML 部分优先直接用 core 模块的 `--text` 等宿主变量。
-- canvas（Chart.js）是位图、读不到 CSS 变量，配色必须硬编码 hex——按上表取色，明暗分叉用 JS 的 `matchMedia("(prefers-color-scheme: dark)")` 判断后选色（见 chart 模块）。
+## 用在哪儿
+
+- **SVG widget：颜色走 svg-setup 的色板类**（`.c-blue` 挂在 `<g>` 上），两条都不要自己声明
+  变量、也不要写死 hex —— 明暗两态宿主已按上表配好。本表在你选色系时用（语义对应关系）。
+- **Chart.js（canvas）是位图、读不到 CSS 变量**，配色必须硬编码 hex——按上表取色；明暗分叉用
+  JS 的 `matchMedia("(prefers-color-scheme: dark)")` 判断后选色（见 chart 模块）。
+- 唯一的例外是**连线**：`arr` / `leader` 用 `stroke` + `color` 同色（箭头 marker 填 `currentColor`），
+  颜色取本表的「主色」或灰系。

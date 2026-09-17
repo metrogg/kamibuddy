@@ -25,8 +25,9 @@
  *     （工具定义不在 systemSegments 里）—— 分段逐段一致时只能如实说断点在提示词之前；
  *   - 上一轮台账没有分段指纹（旧台账）时，只有字符数可对照，判不出就说判不出。
  *
- * **瞬态注入项**（`RUNTIME_CONTEXT_CUSTOM_TYPE`，prompt-switch 的 `context` 事件
- * 每请求现算、不落会话的那条）在归因前被剔除，理由见 `dropTransient`。
+ * **瞬态注入项**（`TRANSIENT_INJECTION_CUSTOM_TYPES`：prompt-switch 的 `context`
+ * 事件与 session-host 的 hidden context，两条都每请求现算、不落会话）在归因前
+ * 被剔除，理由见 `dropTransient`。
  *
  * 依赖方向：本文件零运行时依赖（不 import pi、不 import electron），
  * 供 renderer 的诊断面板直接消费（AGENTS.md §1.3：renderer 只 import shared）。
@@ -115,7 +116,7 @@ export type CachePrefixBoundary =
 	| { readonly kind: "unknown"; readonly note: string };
 
 /**
- * 剔除「每请求现算、不落会话」的瞬态注入项（`RUNTIME_CONTEXT_CUSTOM_TYPE`）。
+ * 剔除「每请求现算、不落会话」的瞬态注入项（`TRANSIENT_INJECTION_CUSTOM_TYPES`）。
  *
  * 为什么必须剔除：这类消息按设计追加在消息数组末尾、不在会话文件里，**每一个**
  * 请求都会现算一条新的（id 由 `custom:<timestamp>` 生成，轮轮不同）。让它参与
@@ -125,7 +126,7 @@ export type CachePrefixBoundary =
  *
  * 两种判据，按台账的新旧选：
  *   1. **新台账**（名册里出现过显式标记）：只认 `transient === true`
- *      （写入端按 customType 判定，见 core/session-host.ts 的 buildMessageRefs）。
+ *      （写入端按 customType 集合判定，见 core/session-host.ts 的 buildMessageRefs）。
  *      不掺启发式 —— 没有标记的条目就是真历史，别误伤。
  *   2. **旧台账**（整个名册都没有这个字段）：退到「role 归为 other 的**尾部**条目」
  *      这一可判定条件。瞬态注入项按设计只落在最后一个历史条目之后，所以它在名册

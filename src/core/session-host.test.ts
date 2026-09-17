@@ -1020,7 +1020,7 @@ import type {
 	RunLedgerDataMap,
 	RunLedgerEntryKind,
 } from "../shared/observability.ts";
-import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
+import { HIDDEN_CONTEXT_CUSTOM_TYPE, RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
 import type { RunLedger } from "./run-ledger.ts";
 
 interface LedgerCall<K extends RunLedgerEntryKind = RunLedgerEntryKind> {
@@ -1704,6 +1704,30 @@ describe("request_snapshot 的逐条标识（LOG13）", () => {
 		expect(JSON.stringify(snap)).not.toContain(injected);
 		expect(JSON.stringify(snap)).not.toContain("表格呈现");
 	});
+
+	it("hidden context 注入（第二条瞬态通道）同样按同一集合标 transient", async () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		createLedgerHost(session, () => { }, ledger);
+
+		// 台账判定认的是一组 customType（常量集在 shared/observability.ts）——
+		// 只认 runtime context 那一个的话，hidden context 会在每轮尾部造一个假差异。
+		const { list } = await refsOf(agent, calls, [
+			...CONVERSATION,
+			{
+				role: "custom",
+				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+				content: "工作目录：C:\\test",
+				display: false,
+				timestamp: 600,
+			},
+		]);
+
+		expect(list.at(-1)?.id).toBe("custom:600");
+		expect(list.at(-1)?.role).toBe("other");
+		expect(list.at(-1)?.transient).toBe(true);
+		expect(list.slice(0, -1).every((m) => m.transient === undefined)).toBe(true);
+	});
 });
 
 /* ── 流式 delta 合批（spec: optimize-stream-rendering Task 2）───────────── */
@@ -1895,7 +1919,16 @@ describe("流式 delta 合批（16ms 窗口）", () => {
 });
 
 describe("hidden context（transformContext 注入，F5）", () => {
-	it("prompt 冻结注入块：workspace_context + 专家 + current_time 前置在最后一条 user 消息之前", async () => {
+	/** 两个请求的首条差异下标（-1 = 逐条相同）；用 JSON 表达「逐字节」。 */
+	function firstMessageDifference(a: readonly unknown[], b: readonly unknown[]): number {
+		const shared = Math.min(a.length, b.length);
+		for (let i = 0; i < shared; i += 1) {
+			if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) return i;
+		}
+		return a.length === b.length ? -1 : shared;
+	}
+
+	it("prompt 冻结注入块：workspace_context + 专家 + current_time 作为尾部独立消息追加", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
@@ -1905,22 +1938,91 @@ describe("hidden context（transformContext 注入，F5）", () => {
 
 		const hooked = agent.transformContext;
 		expect(hooked).toBeDefined();
-		const out = (await hooked?.([
+		const original = [
 			{ role: "user", content: "早前的对话", timestamp: 1 },
 			{ role: "assistant", content: "回复", timestamp: 2 },
 			{ role: "user", content: "你好", timestamp: 3 },
-		])) as { role: string; content: string }[];
+		];
+		const out = (await hooked?.([...original])) as {
+			role: string;
+			content: unknown;
+			customType?: string;
+			display?: boolean;
+		}[];
 
-		const last = out[out.length - 1];
-		expect(last?.role).toBe("user");
-		const content = String(last?.content);
-		// 隐藏块前置在用户正文之前；三类段齐全
-		expect(content.indexOf('data-role="user-context"')).toBeLessThan(content.indexOf("你好"));
+		// 形态与 prompt-switch 的 context 注入同构（role/customType/display），
+		// 正文仍是 composeHiddenContext 的产物（两块 system-reminder 不变）。
+		expect(out).toHaveLength(4);
+		const injected = out[3];
+		expect(injected?.role).toBe("custom");
+		expect(injected?.customType).toBe(HIDDEN_CONTEXT_CUSTOM_TYPE);
+		expect(injected?.display).toBe(false);
+		const content = String(injected?.content);
+		expect(content.indexOf('data-role="user-context"')).toBeLessThan(
+			content.indexOf('data-role="additional-data"'),
+		);
 		expect(content).toContain("工作目录：C:\\test");
 		expect(content).toContain("专家：前端开发");
 		expect(content).toContain("<current_time>");
-		// 前面的消息不动（注入只落在最后一条 user 上）
-		expect(out[0]?.content).toBe("早前的对话");
+		// 既有消息逐条原样（注入不改写任何已落盘内容 —— 跨轮缓存命中的前提）
+		expect(out[0]).toBe(original[0]);
+		expect(out[2]?.content).toBe("你好");
+	});
+
+	it("相邻两轮：首条差异落在上一轮尾部那条注入上（上一轮整段仍在命中前缀里）", async () => {
+		// spec 待决策项的回归钉子：早先「贴进最后一条 user 消息」的注入形态下，
+		// 首条差异落在上一轮那条 user 消息上 ⇒ 上一轮整段（user + 助手回复 +
+		// 全部工具结果）在下一轮被全价重付。改回那种形态本用例必红。
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, () => {}, ledger);
+
+		// 第 1 轮：已落盘历史（多轮会话里轮边界处的真实形态），注入追加在其后。
+		const history1 = [
+			{ role: "user", content: "第一问", timestamp: 1 },
+			{ role: "assistant", content: "回答一", timestamp: 2 },
+			{
+				role: "toolResult",
+				toolCallId: "c1",
+				toolName: "read",
+				content: [{ type: "text", text: "文件一" }],
+				isError: false,
+				timestamp: 3,
+			},
+			{ role: "user", content: "第二问", timestamp: 4 },
+		];
+		await host.prompt("第二问");
+		runStarted(host);
+		const turn1 = (await agent.transformContext?.([...history1])) as readonly unknown[];
+		agentEnd(host, false);
+
+		// 第 2 轮：上一步的返回值不落会话，新落盘的是助手回复、工具结果与新一条 user。
+		const history2 = [
+			...history1,
+			{ role: "assistant", content: "回答二", timestamp: 5 },
+			{
+				role: "toolResult",
+				toolCallId: "c2",
+				toolName: "write",
+				content: [{ type: "text", text: "文件二" }],
+				isError: false,
+				timestamp: 6,
+			},
+			{ role: "user", content: "第三问", timestamp: 7 },
+		];
+		await host.prompt("第三问");
+		runStarted(host);
+		const turn2 = (await agent.transformContext?.([...history2])) as readonly unknown[];
+
+		// 上一轮所有已落盘消息在下一轮请求里逐字节不变（且是同一引用）。
+		for (let i = 0; i < history1.length; i += 1) {
+			expect(turn2[i]).toBe(history1[i]);
+			expect(JSON.stringify(turn2[i])).toBe(JSON.stringify(turn1[i]));
+		}
+		// 首条差异 = 上一轮尾部那条注入 ⇒ 命中前缀 = 上一轮最后一条已落盘消息为止。
+		// （「贴进最后一条 user 消息」的旧形态下这里会是 history1.length - 2 —— 红。）
+		expect(firstMessageDifference(turn1, turn2)).toBe(turn1.length - 1);
 	});
 
 	it("agent_end 清账：run 结束后同一钩子不再注入", async () => {
@@ -1936,6 +2038,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		const out = (await agent.transformContext?.([
 			{ role: "user", content: "你好", timestamp: 1 },
 		])) as { role: string; content: string }[];
+		expect(out).toHaveLength(1);
 		expect(out[0]?.content).toBe("你好");
 	});
 
@@ -1959,7 +2062,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		expect(host.peekHiddenContext()).toBe(frozen);
 	});
 
-	it("request_snapshot 带上 hiddenContextChars（注入后记快照，拆出来亮明）", async () => {
+	it("request_snapshot：hiddenContextChars 与注入块同源，且字符数归 other 不并进 user", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger, calls } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
@@ -1970,14 +2073,25 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		await host.prompt("你好");
 		// run 进行中记快照（真实时序：transformContext 发生在 agent_start 之后）
 		runStarted(host);
-		await agent.transformContext?.([{ role: "user", content: "你好", timestamp: 1 }]);
+		const out = (await agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as readonly unknown[];
 
 		const snapshot = calls.find((c) => c.kind === "request_snapshot")?.data as
-			| { hiddenContextChars?: number; messages?: unknown }
+			| {
+					hiddenContextChars?: number;
+					messages?: { user: { count: number; chars: number }; other: { chars: number } };
+					messageList?: readonly { role: string; chars: number }[];
+			  }
 			| undefined;
 		expect(snapshot).toBeDefined();
-		// 注入块字符数 = 注入后 user 消息里多出来的那部分，面板成分视图靠它单列一行
 		expect(snapshot?.hiddenContextChars).toBeGreaterThan(0);
+		// 新形态的自然结果：注入是尾部那条 custom 消息，字符数计入 other 桶，
+		// user 桶只剩用户正文（早先贴着 user 消息时是并进 user 计数的）。
+		expect(snapshot?.messages?.user).toEqual({ count: 1, chars: "你好".length });
+		expect(snapshot?.messages?.other.chars).toBe(snapshot?.hiddenContextChars);
+		expect(snapshot?.messageList?.at(-1)?.role).toBe("other");
+		expect(String((out[1] as { content: unknown }).content)).toBe(host.peekHiddenContext());
 	});
 });
 

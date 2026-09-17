@@ -21,12 +21,41 @@
 | class | 用途 |
 | --- | --- |
 | `t` | 正文文字（13px，主文字色） |
-| `ts` | 辅助小字（弱化色，刻度、注释、来源） |
+| `ts` | 辅助小字（12px，弱化色，刻度、注释、来源） |
 | `th` | 标题文字（14px，字重 500） |
 | `box` | 容器框（圆角、浅底、细描边） |
 | `node` | 流程节点（在 box 基础上带节点语义配色） |
 | `arr` | 连接线与箭头（描边色，`fill: none`） |
-| `leader` | 引导线/标注线（更细更弱） |
+| `leader` | 虚引导线/标注线（更细更弱） |
+
+### 色板类 `.c-<色系>`（语义配色都走这里）
+
+把 `class="c-blue"` 挂在 `<g>`（或节点所在的容器）上，组内的 `box` / `node` / `t` / `th` / `ts`
+自动取该色系的「浅底 + 主色描边 + 深字」；组内**没挂语义类**的 `rect` / `circle` / `ellipse` / `text`
+也一起跟着上色。明暗两态宿主已配好，你不需要管 hex。
+
+| 类名 | 色系与语义 | 类名 | 色系与语义 |
+| --- | --- | --- | --- |
+| `c-blue` | 蓝：默认、主流程 | `c-teal` | 青：辅助支线 |
+| `c-green` | 绿：达成、正常、上升 | `c-yellow` | 黄：预警、待定 |
+| `c-orange` | 橙：进行中、待办 | `c-pink` | 粉：分类强调 |
+| `c-red` | 红：风险、失败、下降 | `c-gray` | 灰：中性、装饰、底座 |
+| `c-purple` | 紫：第三方、外部系统 | | |
+
+```svg
+<g class="c-blue">
+  <rect class="box" x="40" y="60" width="200" height="56" rx="12"/>
+  <text class="th" x="140" y="83" text-anchor="middle">Manager Agent</text>
+  <text class="ts" x="140" y="101" text-anchor="middle">建 Worker、派活、盯进度</text>
+</g>
+```
+
+**两条硬规矩**：
+
+1. **颜色只走色板类**（连线除外：`arr` 用 `stroke` + `color` 同色，见下节）。挂了
+   `box` / `node` / `t` / `th` / `ts` 的元素上写 `fill=` / `stroke=` 会被宿主样式压掉
+   （CSS 优先级高于 presentation attribute）—— 想表达语义就用类，别写属性。
+2. **形状属性（`rx` / `stroke-width`）由你自己写**，宿主不覆盖：圆角 10–24px、线宽 1–1.5px。
 
 ## 连线与箭头
 
