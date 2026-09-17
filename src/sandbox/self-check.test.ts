@@ -24,6 +24,7 @@ function outcome(patch: {
 		stderr: "",
 		exitCode: 1,
 		timedOut: false,
+		aborted: false,
 		...patch,
 	};
 }

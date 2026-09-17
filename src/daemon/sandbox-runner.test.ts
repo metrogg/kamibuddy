@@ -34,7 +34,7 @@ function settings(sandbox: SandboxMode): PermissionSettings {
 
 /** 成功的执行结果（形状与真实 CommandOutcome 一致）。 */
 function ok(stdout: string): CommandOutcome {
-	return { stdout, stderr: "", exitCode: 0, timedOut: false };
+	return { stdout, stderr: "", exitCode: 0, timedOut: false, aborted: false };
 }
 
 /**
@@ -195,6 +195,56 @@ describe("档位映射", () => {
 		expect(h.recorded.sandboxCalls).toEqual(["first"]);
 		expect(h.recorded.fallbackCalls).toEqual(["second"]);
 	});
+
+	/*
+	 * 下面两条钉的是**中断信号在这两档各自的去处**。
+	 *
+	 * 2026-09-17 pip 现场：用户按了三次停止都停不下来，python 继续烧 CPU、
+	 * 卡片永远停在「执行中」。工具层把 signal 收下了，但这一层没往执行器传 ——
+	 * 而 signal 只有执行器能兑现（沙箱里是关 Job 句柄，直连是 taskkill /T）。
+	 */
+	it("**workspace-write：中断信号透传到沙箱执行器**，且中断不算沙箱故障", async () => {
+		const seen: Array<AbortSignal | undefined> = [];
+		const h = harness({
+			run: async (request: { readonly signal?: AbortSignal }) => {
+				seen.push(request.signal);
+				return { stdout: "", stderr: "", exitCode: null, timedOut: false, aborted: true };
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+		});
+		const controller = new AbortController();
+		const outcome = ran(await run("Start-Sleep 999", 120, undefined, undefined, controller.signal));
+
+		expect(seen).toEqual([controller.signal]);
+		// 中断照实回传：既不当成沙箱故障去拒绝，也不降级重跑
+		//（那会把用户的「停止」变成「再跑一遍」）。
+		expect(outcome.aborted).toBe(true);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+	});
+
+	it("danger-full-access：中断信号同样传给直连执行器", async () => {
+		// 这条路没有沙箱，但 powershell 一样会挂 —— 不传信号就是同一个 bug。
+		const seen: Array<AbortSignal | undefined> = [];
+		const h = harness();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("danger-full-access"),
+			workspaceDir: WORKSPACE,
+			fallback: async (command, _timeoutSeconds, _onProgress, _escalation, signal) => {
+				seen.push(signal);
+				return ok(command);
+			},
+			sandbox: h.facade,
+		});
+		const controller = new AbortController();
+		await run("echo hi", 120, undefined, undefined, controller.signal);
+
+		expect(seen).toEqual([controller.signal]);
+	});
 });
 
 describe("沙箱不可用 → fail-closed 拒绝（对齐 dsh SANDBOX_UNAVAILABLE）", () => {
@@ -334,6 +384,7 @@ describe("沙箱不可用 → fail-closed 拒绝（对齐 dsh SANDBOX_UNAVAILABL
 				stderr: "拒绝访问。",
 				exitCode: 1,
 				timedOut: false,
+				aborted: false,
 			}),
 		});
 		const run = createSandboxedRunner({
@@ -352,7 +403,13 @@ describe("沙箱不可用 → fail-closed 拒绝（对齐 dsh SANDBOX_UNAVAILABL
 
 	it("超时也不拒绝（真实结果）", async () => {
 		const h = harness({
-			run: async () => ({ stdout: "", stderr: "", exitCode: null, timedOut: true }),
+			run: async () => ({
+				stdout: "",
+				stderr: "",
+				exitCode: null,
+				timedOut: true,
+				aborted: false,
+			}),
 		});
 		const run = createSandboxedRunner({
 			getSettings: () => settings("workspace-write"),
@@ -794,7 +851,7 @@ describe("提权申请", () => {
 describe("拒写识别", () => {
 	/** 造一个「被写约束拒了」的执行结果。文本取自真实探针输出。 */
 	function deniedRun(stderr: string): SandboxFacade["run"] {
-		return async () => ({ stdout: "", stderr, exitCode: 1, timedOut: false });
+		return async () => ({ stdout: "", stderr, exitCode: 1, timedOut: false, aborted: false });
 	}
 
 	/*
@@ -898,6 +955,7 @@ describe("拒写识别", () => {
 					stderr: "UnauthorizedAccessException: 我编的",
 					exitCode: 0,
 					timedOut: false,
+					aborted: false,
 				};
 			},
 		});
@@ -951,6 +1009,7 @@ describe("失败一律拒绝（readiness 已不是判据，对齐 dsh）", () =>
 				stderr: "UnauthorizedAccessException",
 				exitCode: 1,
 				timedOut: false,
+				aborted: false,
 			}),
 		});
 		const run = createSandboxedRunner({

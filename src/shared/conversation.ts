@@ -159,13 +159,38 @@ function dropFirstMatch(list: readonly string[], text: string): readonly string[
 	return index === -1 ? undefined : [...list.slice(0, index), ...list.slice(index + 1)];
 }
 
-/** 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。 */
+/**
+ * 就地替换某条 entry；找不到则原样返回（事件乱序时不崩，但也不静默造一条假数据）。
+ *
+ * `match` 决定「同 id 在 entries 里出现多条」时改哪一条：
+ *
+ *   - `"first"`（缺省）：**id 全局唯一**的条用（工具卡的 id 是 provider 生成的
+ *     toolCallId，天然不重；first/last 等价，保持既有语义）。
+ *   - `"last"`：**assistant 消息条目必须用它**。消息 id 是宿主进程内自增计数器
+ *     的产物（core/session-host.ts 的 idSeq），**宿主重建后计数器从 1 重来** ——
+ *     daemon 重启 / resume 的 remountHostInBucket 都会重建宿主，于是同一串
+ *     `assistant-3` 在同一个 entries 数组里对应**多条真实不同的消息**。
+ *     这时只有「最后那条」是本次 `assistant_started` 开的气泡；写成 first 会把
+ *     新消息的正文与 usage 盖进上一代的老条目上，而老条目在数组里的位置属于
+ *     **更早的轮** —— usage 就此跨轮搬家：本轮的窗口被空壳占住（少算），
+ *     更早那轮的窗口里冒出别轮的 usage（多算）。
+ *
+ *     实测（2026-09-17，会话 01a0ae75，6 轮 / 50 步，事件日志里宿主代际切换 4 次，
+ *     id 序列 user-2/assistant-3… 被三代复用）：按 first 替换时，页脚给第 2 轮
+ *     算出 ↑161.0K，而台账该轮 Σbilled = 69.4K（多算 132%）；第 3 轮页脚给 0
+ *     （台账 18.0K，少算整轮）—— 页脚是派生显示，台账才是权威
+ *     （AGENTS.md §1 依赖方向 / shared/observability.ts 文件头）。
+ */
 function replaceEntry(
 	entries: readonly ConversationEntry[],
 	id: string,
 	update: (entry: ConversationEntry) => ConversationEntry,
+	match: "first" | "last" = "first",
 ): readonly ConversationEntry[] {
-	const index = entries.findIndex((e) => e.id === id);
+	const index =
+		match === "last"
+			? entries.findLastIndex((e) => e.id === id)
+			: entries.findIndex((e) => e.id === id);
 	if (index === -1) return entries;
 	const existing = entries[index];
 	if (existing === undefined) return entries;
@@ -209,7 +234,8 @@ function markTurnCancelled(
 	entries: readonly ConversationEntry[],
 	cancelledTurns: readonly MessageId[],
 ): readonly MessageId[] {
-	const lastUser = entries.findLast((e) => e.role === "user");
+	const index = lastUserEntryIndex(entries);
+	const lastUser = index === -1 ? undefined : entries[index];
 	if (lastUser === undefined || cancelledTurns.includes(lastUser.id)) return cancelledTurns;
 	return [...cancelledTurns, lastUser.id];
 }
@@ -223,9 +249,27 @@ function markTurnCancelled(
  */
 const MAX_TURN_TIMINGS = 100;
 
-/** 当前回合 id = 最后一条 user 消息 id（与 renderer 的轮切分 turn-fold.ts 同口径）。 */
-function lastTurnId(entries: readonly ConversationEntry[]): MessageId | undefined {
-	return entries.findLast((e) => e.role === "user")?.id;
+/**
+ * 当前回合的起点下标 = **最后一条 user 消息**的下标；没有 user 消息时为 −1。
+ *
+ * **轮边界的唯一实现处**（2026-09-17 收拢）：它此前在五处各写一遍
+ * （本文件的 lastTurnId / markTurnCancelled、renderer 的 turn-fold
+ * buildTurnViews、turn-metrics foldTurnMetrics、chat-view 的 lastUserEntry 与
+ * metricsAnchorId），五个地方写的都是 `findLast(role === "user")` 的同义改写 ——
+ * 而页脚的「本轮」读数、回合头部的计时、回合折叠的切分全依赖这一条边界，
+ * 任一处漂移都会让同屏两个读数说的是不同的轮（AGENTS.md §4 防重复）。
+ *
+ * 语义：最后一条 user 之后（到下一条 user 之前）为本轮；没有 user 消息时
+ * 整体视作前缀轮（同 buildTurnViews 的最后一段）。
+ */
+export function lastUserEntryIndex(entries: readonly ConversationEntry[]): number {
+	return entries.findLastIndex((e) => e.role === "user");
+}
+
+/** 当前回合 id = 最后一条 user 消息 id（即 lastUserEntryIndex 指的那条）。 */
+export function lastTurnId(entries: readonly ConversationEntry[]): MessageId | undefined {
+	const index = lastUserEntryIndex(entries);
+	return index === -1 ? undefined : entries[index]?.id;
 }
 
 /**
@@ -401,25 +445,33 @@ export function conversationReducer(view: ConversationView, action: Conversation
 		case "assistant_text_delta":
 			return {
 				...view,
-				entries: replaceEntry(view.entries, event.messageId, (entry) =>
-					entry.role === "assistant" ? { ...entry, text: entry.text + event.delta } : entry,
+				entries: replaceEntry(
+					view.entries,
+					event.messageId,
+					(entry) => (entry.role === "assistant" ? { ...entry, text: entry.text + event.delta } : entry),
+					"last",
 				),
 			};
 
 		case "assistant_thinking_delta":
 			return {
 				...view,
-				entries: replaceEntry(view.entries, event.messageId, (entry) =>
-					entry.role === "assistant"
-						? { ...entry, thinking: (entry.thinking ?? "") + event.delta }
-						: entry,
+				entries: replaceEntry(
+					view.entries,
+					event.messageId,
+					(entry) =>
+						entry.role === "assistant"
+							? { ...entry, thinking: (entry.thinking ?? "") + event.delta }
+							: entry,
+					"last",
 				),
 			};
 
 		case "assistant_done": {
 			// 用终态整条覆盖，校正累积增量可能的偏差。
 			const done: AssistantMessage = event.message;
-			const replaced = replaceEntry(view.entries, done.id, () => done);
+			// "last"：id 撞名时只认本次消息自己那条（根因见 replaceEntry 注释）。
+			const replaced = replaceEntry(view.entries, done.id, () => done, "last");
 			// 没找到说明漏了 assistant_started，补进去而不是丢掉内容。
 			return { ...view, entries: replaced === view.entries ? [...view.entries, done] : replaced };
 		}

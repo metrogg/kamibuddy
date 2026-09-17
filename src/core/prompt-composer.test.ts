@@ -51,6 +51,22 @@ describe("槽位替换", () => {
 		// 压平后不应出现三个以上连续换行。
 		expect(out).not.toMatch(/\n{3,}/);
 	});
+
+	it("{{pythonPath}} 按给定值填入，且单独成段（provenance = python-env）", () => {
+		/*
+		 * 这条槽位是为「把托管解释器路径交给模型」开的（spec: 转换调用受控 的
+		 * 2026-09-17 修订）。单独成段的理由与 interaction/skills 同款：
+		 * 排查「哪一段在变」时，观测台账里要能一眼看出是它动了。
+		 */
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			sceneBody: "用这个解释器：{{pythonPath}}。",
+			pythonPath: "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe",
+		});
+		expect(text).toContain("C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe");
+		expect(text).not.toContain("{{pythonPath}}");
+		expect(segments.some((s) => s.source === "python-env")).toBe(true);
+	});
 });
 
 describe("报错路径", () => {
@@ -68,6 +84,18 @@ describe("报错路径", () => {
 		);
 		expect(() => composePrompt({ ...BASE, sceneBody: "模型：{{model}}" })).toThrow(
 			/未支持的槽位/,
+		);
+	});
+
+	it("**用了 {{pythonPath}} 却没给取值 → 抛错，不许替换成空串**", () => {
+		/*
+		 * 「支持的槽位」与「组装方给了值」是两件事：骨架/片段里写了 {{pythonPath}}
+		 * 而调用方没传 pythonPath 时，替换成空串会在提示词里留下
+		 * 「解释器：（空）」—— 模型会拿着一个空路径去试，而且这种故障在
+		 * 观测台账里看不出来（段是有的，只是内容为空）。所以这里响亮抛错。
+		 */
+		expect(() => composePrompt({ ...BASE, sceneBody: "解释器：{{pythonPath}}" })).toThrow(
+			/没有提供取值/,
 		);
 	});
 

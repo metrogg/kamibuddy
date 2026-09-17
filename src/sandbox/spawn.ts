@@ -421,27 +421,35 @@ function readExitCode(api: Win32Bindings, handle: NativePtr): number {
 }
 
 export interface WaitOutcome {
-	/** 超时被杀时为 undefined —— 那时的退出码没有意义。 */
+	/** 超时或被中断被杀时为 undefined —— 那时的退出码没有意义。 */
 	readonly exitCode: number | undefined;
 	readonly timedOut: boolean;
+	/** 被调用方主动中断（用户按「停止」）而杀树，与超时区分开。 */
+	readonly aborted: boolean;
 }
 
 /**
- * 等子进程结束，超时则杀掉整棵树。
+ * 等子进程结束，超时或被中断则杀掉整棵树。
  *
  * 杀法是**关闭 Job 句柄**（kill-on-close）而不是 TerminateProcess：
  * 后者只杀直接子进程，`powershell -Command "node x.js"` 里的 node 会变孤儿。
  * 关 Job 之后管道随即 EOF，调用方的 drainPipe 自然收尾。
+ *
+ * **中断也要走同一条杀法**（2026-09-17 补）：此前只处理超时，用户按「停止」时
+ * 工具一侧已放弃等待、模型收到「No result provided」，而沙箱里的进程**继续跑**
+ * ——现场是 `pip install` 被中断三次，第三次的 python 仍在烧 CPU，聊天卡片
+ * 永远停在「执行中」（run 不结束，连台账都不落盘）。中断与超时同样是「把树收掉」。
  */
 export async function waitForChild(
 	api: Win32Bindings,
 	child: SpawnedChild,
 	timeoutMs: number,
+	signal?: AbortSignal,
 ): Promise<WaitOutcome> {
 	const deadline = Date.now() + timeoutMs;
 	let delay = POLL_START_MS;
 	// Job 句柄只能关一次：句柄值会被系统回收复用，二次关闭可能关掉此刻
-	// 恰好拿到同一数值的别人的句柄。超时路径提前关（为了杀树），
+	// 恰好拿到同一数值的别人的句柄。超时/中断路径提前关（为了杀树），
 	// 正常路径在 finally 里关（为了释放内核对象）—— 用标志区分。
 	let jobClosed = false;
 	const closeJobOnce = (): void => {
@@ -452,12 +460,16 @@ export async function waitForChild(
 	try {
 		for (;;) {
 			if (hasExited(api, child.process)) {
-				return { exitCode: readExitCode(api, child.process), timedOut: false };
+				return { exitCode: readExitCode(api, child.process), timedOut: false, aborted: false };
+			}
+			if (signal?.aborted === true) {
+				closeJobOnce();
+				return { exitCode: undefined, timedOut: false, aborted: true };
 			}
 			if (Date.now() >= deadline) {
 				// 关 Job = 杀整棵树（见函数注释）；随后管道 EOF，drainPipe 自然收尾。
 				closeJobOnce();
-				return { exitCode: undefined, timedOut: true };
+				return { exitCode: undefined, timedOut: true, aborted: false };
 			}
 			delay = Math.min(delay * 2, POLL_MAX_MS);
 			await sleep(delay);

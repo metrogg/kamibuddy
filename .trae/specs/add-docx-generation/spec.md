@@ -93,8 +93,23 @@ design-token 查表 + doc-typeset 模板 + html-review 门禁）适配为 pi 技
 
 ### Requirement: 转换调用受控
 The system SHALL经专用工具 `docx_convert` 调用引擎（daemon spawn venv Python），
-不允许模型经 powershell 自由 shell 直接执行 Python/uv。
+**文档转换这条链路**不允许模型经 powershell 自由 shell 自己拼 Python/uv 命令。
+
+> **2026-09-17 修订（用户拍板）**：原文写的是「不允许模型经 powershell 自由 shell
+> 直接执行 Python/uv」，覆盖范围过宽。按 WorkBuddy 的 `client-info-env` 做法，
+> 托管解释器的**真实路径**现在会随提示词注入
+> （`resources/prompts/fragments/python-env.md` 的 `{{pythonPath}}`，
+> 取值见 daemon 的 `venvPython(docxEnvContext())`），模型**可以**用它跑工作目录里的
+> 脚本。修订的边界是：**转换必须走 docx_convert**（引擎的调用面、参数、产物路径
+> 全在 daemon 手里）；模型自己写脚本用那个解释器是另一回事，不属这条约束。
+> 起因与证据：模型缺库时会去 `pip install`，而它在沙箱里必失败 ——
+> `docs/ARCHITECTURE.md` 已知边界第 8 条。
 
 #### Scenario: 工具白名单
 - **WHEN** 模型发起文档转换
 - **THEN** 只经 docx_convert；权限策略按「写工作区产物文件」档位判定
+
+#### Scenario: 模型自己跑 Python 脚本
+- **WHEN** 模型需要执行自己写的 Python 脚本
+- **THEN** 用提示词里注入的托管解释器路径，产物写工作目录；
+  **不得** `pip install`（沙箱里必失败），缺库时问用户或申请一次提权

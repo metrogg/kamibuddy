@@ -8,10 +8,23 @@
  *   4. 回合边界（上一轮的 assistant 不计入本轮）
  *   5. 页脚 ↑ 的口径 = billedInputTokens（三桶之和，不是「未缓存输入」；
  *      与命中率同分母 —— 这是 2026-09-17 与面板/底栏统一的口径，不会静默改回去）
+ *   6. 跨宿主代际（id 撞名）下页脚 = 台账按 run 聚合 —— 见「多步轮 / 工具调用 /
+ *      宿主重建」那组的说明：这条缺陷出在 reducer 的折叠上，折叠修好页脚才作数
  */
 
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, ConversationEntry, UserMessage } from "@shared/session-events.ts";
+import {
+	conversationReducer,
+	initialConversation,
+	type ConversationView,
+} from "@shared/conversation.ts";
+import type {
+	AssistantMessage,
+	ConversationEntry,
+	SessionEvent,
+	ToolCard,
+	UserMessage,
+} from "@shared/session-events.ts";
 import type { TokenUsage } from "@shared/observability.ts";
 import { foldTurnMetrics } from "./turn-metrics.ts";
 
@@ -170,5 +183,108 @@ describe("回合边界", () => {
 		expect(m.outputTokens).toBe(10);
 		expect(m.cacheReadTokens).toBe(900);
 		expect(m.hitRate).toBeCloseTo(0.9, 10);
+	});
+});
+
+/*
+ * 回归门禁（2026-09-17）：**多步轮 + 工具调用 + 非 usage 条目 + 宿主重建**下，
+ * 页脚读数必须等于「台账按 run 聚合的 Σbilled」。
+ *
+ * 为什么必须走真实 reducer 而不是手搓 entries：这条缺陷出在**折叠**上，不在求和上
+ * —— 消息 id 是宿主进程内自增计数器的产物（core/session-host.ts 的 idSeq），
+ * daemon 重启 / resume remount 会重建宿主、计数器从 1 重来，同一串
+ * `assistant-3` 因此对应多条真实不同的消息。此前 reducer 的 `assistant_done`
+ * 按「同 id 第一条」写入，于是新一代的 usage 被盖进上一代的老条目 —— 老条目的
+ * 位置属于更早的轮，页脚的本轮读数既少算（本轮条目被空壳占住）又多算
+ * （更早轮的窗口里冒出别轮的 usage）。手搓 entries 只能复现「求和」那一半，
+ * 复现不了「usage 被搬到别的轮」这一半。
+ *
+ * 真值口径：台账每个 `message_end` 写一条 llm_call（core/run-ledger.ts），
+ * 与这里的 `assistant_done` 一一对应 —— 所以「台账按 run 聚合」= 同一批
+ * assistant_done 的 usage 按 run 求和（不是另一套算法，同一份事件源）。
+ */
+describe("多步轮 / 工具调用 / 宿主重建：页脚 = 台账按 run 聚合", () => {
+	/** 三桶齐全（此处直接相加，不像 foldTurnMetrics 那样对缺字段做缺席处理）。 */
+	function billed(u: TokenUsage): number {
+		return u.input + u.cacheRead + u.cacheWrite;
+	}
+
+	/** 第 1 代宿主的轮（单步，无工具）。 */
+	const RUN1 = usage({ input: 8_449, output: 580, cacheRead: 3_456, cacheWrite: 0 });
+	/** 第 2 代宿主的三个步（多步轮，两次工具调用）。 */
+	const STEP1 = usage({ input: 5_135, output: 4_714, cacheRead: 64_256, cacheWrite: 0 });
+	const STEP2 = usage({ input: 1_322, output: 296, cacheRead: 12_672, cacheWrite: 0 });
+	const STEP3 = usage({ input: 884, output: 861, cacheRead: 12_160, cacheWrite: 0 });
+
+	function toolCardFixture(id: string, outcome: ToolCard["outcome"]): ToolCard {
+		return {
+			id,
+			role: "tool",
+			toolName: "powershell",
+			label: "运行命令",
+			summary: "npm test",
+			outcome,
+			detail: undefined,
+			at: 30,
+		};
+	}
+
+	/**
+	 * 两代宿主的事件流（id 序列 user-2/assistant-3… 被两代复用，与真实会话
+	 * 01a0ae75 的事件日志同形态）。第 2 代的轮多步、带两次工具调用，并夹了
+	 * 一条无 usage 的 assistant 条目与一条产物条目（非 usage 条目不该影响求和）。
+	 */
+	function replay(): { readonly view: ConversationView; readonly runBilled: readonly number[] } {
+		const events: readonly SessionEvent[] = [
+			// ── 第 1 代宿主：轮 1 ──
+			{ type: "run_started", runId: "run-1" },
+			{ type: "user_message", message: user("user-2") },
+			{ type: "assistant_started", messageId: "assistant-3", at: 2 },
+			{ type: "assistant_done", message: assistant("assistant-3", RUN1) },
+			{ type: "run_finished", runId: "run-1", outcome: "completed" },
+			// ── 宿主重建（daemon 重启 / resume remount）：id 计数器回零 ──
+			{ type: "session_state", state: { ...initialConversation.state, sessionId: "s1" } },
+			// ── 第 2 代宿主：轮 2（3 步 / 2 次工具调用）──
+			{ type: "run_started", runId: "run-1" },
+			{ type: "user_message", message: user("user-2") },
+			{ type: "assistant_started", messageId: "assistant-3", at: 20 },
+			{ type: "assistant_done", message: assistant("assistant-3", STEP1) },
+			{ type: "tool_stream_started", card: toolCardFixture("call_a", undefined) },
+			{ type: "tool_finished", card: toolCardFixture("call_a", "ok") },
+			{ type: "assistant_started", messageId: "assistant-4", at: 21 },
+			{ type: "assistant_done", message: assistant("assistant-4") },
+			{ type: "artifacts_presented", files: [], focusFile: undefined },
+			{ type: "assistant_started", messageId: "assistant-5", at: 22 },
+			{ type: "assistant_done", message: assistant("assistant-5", STEP2) },
+			{ type: "tool_started", card: toolCardFixture("call_b", undefined) },
+			{ type: "tool_finished", card: toolCardFixture("call_b", "ok") },
+			{ type: "assistant_started", messageId: "assistant-6", at: 23 },
+			{ type: "assistant_done", message: assistant("assistant-6", STEP3) },
+			{ type: "run_finished", runId: "run-1", outcome: "completed" },
+		];
+		const view = events.reduce<ConversationView>(
+			(acc, event) => conversationReducer(acc, { type: "event", event }),
+			initialConversation,
+		);
+		return { view, runBilled: [billed(RUN1), billed(STEP1) + billed(STEP2) + billed(STEP3)] };
+	}
+
+	it("本轮 = 台账该 run 的 Σbilled（新一代的 usage 不许写进上一代的老条目）", () => {
+		const { view, runBilled } = replay();
+		const metrics = foldTurnMetrics(view.entries, { startedAt: 1, endedAt: 2 }, 2);
+		expect(metrics.billedInputTokens).toBe(runBilled[1]);
+		expect(metrics.outputTokens).toBe(STEP1.output + STEP2.output + STEP3.output);
+		expect(metrics.cacheReadTokens).toBe(STEP1.cacheRead + STEP2.cacheRead + STEP3.cacheRead);
+	});
+
+	it("更早那轮不被后一代的 usage 污染（反方向的跨轮串账同样拦下）", () => {
+		const { view, runBilled } = replay();
+		// 第 1 轮的窗口 = 第一条 user（含）到第二条 user（不含）之间的那一段；
+		// 按同一 fold 读它，读数必须是第 1 代那条 assistant 自己的 usage。
+		const start = view.entries.findIndex((entry) => entry.role === "user");
+		const nextUser = view.entries.findIndex((entry, index) => index > start && entry.role === "user");
+		const firstTurn = view.entries.slice(start, nextUser);
+		const metrics = foldTurnMetrics(firstTurn, { startedAt: 1, endedAt: 2 }, 2);
+		expect(metrics.billedInputTokens).toBe(runBilled[0]);
 	});
 });

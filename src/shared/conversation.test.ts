@@ -1075,3 +1075,59 @@ describe("压缩态（compaction_started / compaction_finished）", () => {
 		expect(view.compacting).toBeUndefined();
 	});
 });
+
+/*
+ * 同 id 复用（宿主重建后计数器回零）。
+ *
+ * 消息 id 由宿主进程内自增计数器生成（core/session-host.ts 的 idSeq），
+ * daemon 重启 / resume remount 会重建宿主、计数器从 1 重来 —— 于是同一个
+ * entries 数组里会出现多条**真实不同**的消息共用一串 id（user-2 / assistant-3…）。
+ * 这里钉住「后一代的消息只写它自己的条目」：写成同 id 的第一条，会让新一代的
+ * 正文与 usage 盖进上一代的老条目（位置属于更早的轮）—— 页脚的「本轮」读数
+ * 随之跨轮串账（实测见 renderer/turn-metrics.ts 文件头）。
+ */
+describe("同 id 复用（宿主重建后 id 撞名）", () => {
+	/** 两代宿主各发一条 id 相同的助手消息（第二代的 usage 与正文都不同）。 */
+	const firstGen: AssistantMessage = {
+		id: "assistant-3",
+		role: "assistant",
+		text: "第一代回答",
+		usage: { input: 1, output: 1, cacheRead: 1, cacheWrite: 0, totalTokens: 3, cost: 0 },
+		at: 10,
+	};
+	const secondGen: AssistantMessage = {
+		id: "assistant-3",
+		role: "assistant",
+		text: "第二代回答",
+		usage: { input: 2, output: 2, cacheRead: 2, cacheWrite: 0, totalTokens: 6, cost: 0 },
+		at: 20,
+	};
+
+	function twoGenerations(): ConversationView {
+		return apply([
+			{ type: "assistant_started", messageId: "assistant-3", at: 10 },
+			{ type: "assistant_done", message: firstGen },
+			// 宿主重建：同一串 id 由新一代重新使用。
+			{ type: "assistant_started", messageId: "assistant-3", at: 20 },
+			{ type: "assistant_done", message: secondGen },
+		]);
+	}
+
+	it("assistant_done 写进本次消息那条，老条目保留自己的内容与 usage", () => {
+		const view = twoGenerations();
+		expect(view.entries).toHaveLength(2);
+		expect(view.entries[0]).toEqual(firstGen);
+		expect(view.entries[1]).toEqual(secondGen);
+	});
+
+	it("流式增量同样落在本次消息那条（老条目不被继续追加）", () => {
+		const view = apply([
+			{ type: "assistant_started", messageId: "assistant-3", at: 10 },
+			{ type: "assistant_done", message: firstGen },
+			{ type: "assistant_started", messageId: "assistant-3", at: 20 },
+			{ type: "assistant_text_delta", messageId: "assistant-3", delta: "流式" },
+		]);
+		expect(view.entries[0]).toEqual(firstGen);
+		expect(view.entries[1]).toMatchObject({ text: "流式" });
+	});
+});

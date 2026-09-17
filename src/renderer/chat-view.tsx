@@ -8,7 +8,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
-import { removeQueuedMessage, insertQueuedNow } from "@shared/conversation.ts";
+import { lastUserEntryIndex, removeQueuedMessage, insertQueuedNow } from "@shared/conversation.ts";
 import { formatTokenCount } from "@shared/context-usage.ts";
 import { formatSize } from "@shared/format-size.ts";
 import type { ImagePart } from "@shared/image.ts";
@@ -1759,9 +1759,14 @@ export function ChatView({
 		[entries, streaming, conversation.cancelledTurns],
 	);
 	// 最后一个 user 消息：当前回合的分界（回合头部走表的唯一依据）。
+	// 边界取自 shared 的唯一实现处（shared/conversation.ts 的 lastUserEntryIndex），
+	// 不在本文件再写一遍 findLast —— 页脚 fold 与回合切分必须同边界（AGENTS.md §4）。
 	// 反查要扫到「最后一个 user」为止（长会话末尾常是一串工具卡），按 [entries] memo，
 	// 与消息流无关的重渲染（折叠开合、面板交互）不再重扫。
-	const lastUserEntry = useMemo(() => entries.findLast((e) => e.role === "user"), [entries]);
+	const lastUserEntry = useMemo(() => {
+		const index = lastUserEntryIndex(entries);
+		return index === -1 ? undefined : entries[index];
+	}, [entries]);
 	const lastUserId = lastUserEntry?.id;
 	/*
 		用户消息锚点表（序号 + 可回填/可重发的原文，见 branch-target.ts 纯函数）：
@@ -1809,7 +1814,7 @@ export function ChatView({
 		「指标在 A 条、模型名在 B 条」的错配。
 	*/
 	const metricsAnchorId = useMemo(() => {
-		const lastUserIndex = entries.findLastIndex((e) => e.role === "user");
+		const lastUserIndex = lastUserEntryIndex(entries);
 		const lastAssistantIndex = entries.findLastIndex((e) => e.role === "assistant");
 		if (lastAssistantIndex <= lastUserIndex) return undefined;
 		return entries[lastAssistantIndex]?.id;

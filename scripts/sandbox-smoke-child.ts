@@ -242,6 +242,71 @@ async function main(): Promise<void> {
 			ok: killed.timedOut && !grandchildAlive && elapsed < 30_000,
 			detail: `timedOut=${killed.timedOut} 耗时=${elapsed}ms 孙进程仍存活=${grandchildAlive}`,
 		});
+
+		/*
+		 * 中断（用户按「停止」）必须与超时走同一条杀法。
+		 *
+		 * 为什么单独立一条：2026-09-17 的 pip 现场 —— 用户按了三次停止，第三次的
+		 * python 仍在烧 CPU、聊天卡片永远停在「执行中」。根因是**只有超时路径
+		 * 关 Job 句柄**，中断路径让调用方自己放弃等待：进程在沙箱里继续跑，
+		 * 而 execute 的 promise 永不 settle，pi 的 agent loop 就永远卡在那一步
+		 * （它只 await 工具 promise，不与 signal race）。
+		 *
+		 * 断言方式与超时那条**故意不同**：中断路径不能靠「跑到超时」来收尾，
+		 * 所以用 AbortController 在命令真跑起来之后才 abort，且断言耗时远小于
+		 * 那条命令自己的时长（120 秒）—— 否则这条测试对「没接信号」也是绿的。
+		 */
+		const abortPidFile = join(workspace, `smoke-abort-grandchild-${process.pid}.pid`);
+		const abortController = new AbortController();
+		const abortStarted = Date.now();
+		const abortedRun = runSandboxed({
+			command: "powershell.exe",
+			args: [
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				`$p = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru; Set-Content -Path '${abortPidFile}' -Value $p.Id; Start-Sleep 120`,
+			],
+			cwd: workspace,
+			workspaceDir: workspace,
+			writableDirs: [workspace],
+			timeoutMs: 120_000,
+			mode: "workspace-write",
+			signal: abortController.signal,
+		});
+		// 等孙进程的 PID 落盘（证明命令已经真跑起来），再中断 ——
+		// 早于启动就 abort 测到的是「还没跑就中断」，覆盖不到杀树那一段。
+		const abortDeadline = Date.now() + 20_000;
+		while (!existsSync(abortPidFile) && Date.now() < abortDeadline) {
+			await new Promise((r) => setTimeout(r, 100));
+		}
+		abortController.abort();
+		const aborted = await abortedRun;
+		const abortElapsed = Date.now() - abortStarted;
+		let abortGrandchildAlive = false;
+		if (existsSync(abortPidFile)) {
+			const pid = Number(readFileSync(abortPidFile, "utf8").trim());
+			await new Promise((r) => setTimeout(r, 1_000));
+			try {
+				process.kill(pid, 0);
+				abortGrandchildAlive = true;
+			} catch {
+				abortGrandchildAlive = false;
+			}
+			rmSync(abortPidFile, { force: true });
+		}
+		results.push({
+			name: "**中断杀掉整棵进程树（含孙进程）**",
+			ok:
+				aborted.aborted &&
+				!aborted.timedOut &&
+				!abortGrandchildAlive &&
+				existsSync(abortPidFile) === false &&
+				abortElapsed < 30_000,
+			detail:
+				`aborted=${aborted.aborted} timedOut=${aborted.timedOut} ` +
+				`耗时=${abortElapsed}ms 孙进程仍存活=${abortGrandchildAlive}`,
+		});
 	} finally {
 		if (owned !== undefined) rmSync(owned, { recursive: true, force: true });
 		rmSync(outside, { recursive: true, force: true });

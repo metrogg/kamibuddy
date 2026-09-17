@@ -51,6 +51,12 @@ export interface PromptPreviewEnvironment {
 	 * 发消息看到的提示词」静默漂移。undefined = 读取降级，对应段不出现。
 	 */
 	readonly memorySystemBody?: string;
+	/**
+	 * 托管 Python 解释器路径（与 composeSystemPrompt 同源：docxEnvContext + venvPython）。
+	 * **必填**：片段 python-env 里有 `{{pythonPath}}`，缺值组装会抛错 —— 而预览若
+	 * 悄悄用别的路径，用户看到的就不是"此刻发消息会用的那一段"。
+	 */
+	readonly pythonPath: string;
 }
 
 export function buildPromptPreview(
@@ -89,6 +95,7 @@ export function buildPromptPreview(
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(expert === undefined ? {} : { expert }),
 		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
+		pythonPath: env.pythonPath,
 		// piContext 的差异点见文件头注释（差异 1）。
 	});
 
