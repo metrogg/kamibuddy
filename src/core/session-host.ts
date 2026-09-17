@@ -417,6 +417,22 @@ export interface SessionHostOptions {
 	 */
 	readonly getExpertLabel?: () => string | undefined;
 	/**
+	 * 托管 Python 解释器的绝对路径（documents/docx-env.ts 的 venvPython 产物），
+	 * 进 hidden context 的 `python_env` 段。
+	 *
+	 * 为什么是注入值而不是宿主自己算：引擎目录 / homedir / platform 这三元组的知识
+	 * 在 daemon（`docxEnvContext()`），宿主自己拼一份必然与它漂移（AGENTS.md §4）。
+	 *
+	 * 为什么走注入而不是系统提示词：它是**随机器变**的事实（homedir、安装位置、
+	 * `HTML_TO_DOCX_VENV` 任一变化都改字节），进提示词就是「该处之后的整段提示词与
+	 * 整段历史一起在 provider 前缀缓存里失配」（片段 python-env.md 曾用
+	 * `{{pythonPath}}` 拼在骨架里，已按这条删掉 —— 见 core/prompt-composer.ts 文件头）。
+	 *
+	 * 缺省 = 该段不注入（子代理 / 成员会话不接场景骨架、也从没有过这条信息；
+	 * 用户会话与定时任务 run 会话由 daemon 给值）。
+	 */
+	readonly pythonPath?: string;
+	/**
 	 * 当前绑定专家的追加工具白名单（spec: add-team-foundations）。
 	 * 生效工具集 = mode.tools ∪ extraTools（专家只能增不能删）。undefined/空 =
 	 * 不追加。与 getExpertLabel 同款注入口径：专家库是 daemon 的知识，宿主不持有；
@@ -425,7 +441,38 @@ export interface SessionHostOptions {
 	readonly getExpertExtraTools?: () => readonly string[] | undefined;
 }
 
+/**
+ * 宿主代际号（模块级自增，进程内唯一）。
+ *
+ * 为什么 id 必须带代际前缀：`idSeq` 是**宿主实例内**的计数器，而宿主会被重建
+ * （daemon 重启、resume 的 remountHostInBucket、转正失败后的 reopenHost），
+ * 计数器随之从 1 重来 —— 同一串 `assistant-3` / `user-2` 于是对应多条真实不同的
+ * 消息。实测（会话 01a0ae75 的事件日志，宿主代际切换 4 次；多个 id 跨代复用：`run-1` / `user-2` / `assistant-3` 各出现 3 次，另有数个 assistant id 各 2 次）：
+ * `entry.id` 同时是 React key、`turnTimings` 的键、`cancelledTurns` 的元素、
+ * metricsAnchorId（renderer/chat-view.tsx）—— 撞名会让 React 按 key 复用错误的
+ * DOM 节点，也会让「本轮」的计时与 usage 查回别轮的账（2026-09-17 页脚 token
+ * 超计的根因，见 shared/conversation.ts 的 replaceEntry 注释）。
+ *
+ * 范围只需「同一次运行内全局唯一」：daemon 进程重启后，视图里的 entries 全部由
+ * 会话文件重建（core/session-rebuild.ts 用 pi 条目自带的 8 字符 id），上一代的
+ * id 不再存在于任何视图里。所以不需要 UUID —— 保留「可读、可断言」的形态，
+ * 新增一段就是新增一个前缀。
+ */
+let hostGeneration = 0;
+
+/** 取下一个代际号：每个 SessionHost 实例递增一次（同代实例内部计数器互不干扰）。 */
+function nextHostGeneration(): number {
+	hostGeneration += 1;
+	return hostGeneration;
+}
+
 export class SessionHost {
+	/**
+	 * 本实例的代际号，进 id 的第二段（见 nextId）。
+	 * 在字段初始化时取号，构造函数体之前就位 —— 测试里绕过私有构造器直接 new
+	 * 也照样拿到号，不会退化成无前缀的 id。
+	 */
+	private readonly idGeneration = nextHostGeneration();
 	/** 自增 id 计数器。比 UUID 好在可预测、日志可读、测试可断言。 */
 	private idSeq = 0;
 	/** 当前正在流式输出的助手消息 id。message_start 时生成，message_end 时清空。 */
@@ -1058,9 +1105,17 @@ export class SessionHost {
 
 	/* ── 事件翻译 ────────────────────────────────────────────────── */
 
+	/**
+	 * 生成一个条目 id：`<prefix>-g<代际>-<本代序号>`。
+	 *
+	 * 三段缺一不可：prefix 供人读（user / assistant / run）、代际段保证跨宿主重建
+	 * 不撞名（见 hostGeneration 注释）、序号段是本宿主内的顺序。**非整数样字符串**：
+	 * turnTimings 用它作键，而 JS 对象对整数样键会按数值排序（shared/conversation.ts
+	 * 的 recordTurnTiming 依赖插入序来裁剪最旧回合）。
+	 */
 	private nextId(prefix: string): string {
 		this.idSeq += 1;
-		return `${prefix}-${this.idSeq}`;
+		return `${prefix}-g${this.idGeneration}-${this.idSeq}`;
 	}
 
 	private emitState(): void {
@@ -1691,8 +1746,19 @@ export class SessionHost {
 		>,
 	): void {
 		const startedAt = this.turnStartedAt;
-		// turn_start 缺失（理论上不发生，见 turn_start 注释）就不造条目 ——
-		// 编一个 startedAt=endedAt 的假跨度比丢一条更难查。
+		/*
+		 * turn_start 缺失就不造条目 —— 编一个 startedAt=endedAt 的假跨度比丢一条更难查。
+		 *
+		 * **实测澄清（2026-09-17）：这条分支不是「空闲压缩」**。压缩的摘要调用走
+		 * `compact()` → `agent.streamFunction`，根本不进 agent 循环，因而不发
+		 * turn_start / message_start / message_end（实测 `session.compact()` 期间
+		 * 收到的 pi 事件只有 compaction_start 与 compaction_end 两个，streamFunction
+		 * 被调用 1 次；桩掉 streamFunction 即可复现，无网络）。所以压缩既不会写
+		 * llm_call 台账，也不会有 assistant_done 进页脚 —— 页脚与台账在压缩上天然
+		 * 一致，不需要为它补身份（renderer/turn-metrics.test.ts 有防回归断言）。
+		 * 这条分支留着只为「pi 若把某类模型调用挪出循环」这一契约变化：那时宁可
+		 * 少一条 llm_call，也不要一条零跨度的假条目。
+		 */
 		if (startedAt === undefined) return;
 		// 先清态再写：这一轮的窗口已经用掉了，重复到达的 message_end 不会二次结算。
 		this.turnStartedAt = undefined;
@@ -1792,7 +1858,7 @@ export class SessionHost {
 	}
 
 	/**
-	 * 组装本 run 的 hidden context：三个 section（对齐 WorkBuddy 逆向笔记 §6
+	 * 组装本 run 的 hidden context：四个 section（对齐 WorkBuddy 逆向笔记 §6
 	 * 第一批的范围，"first_turn + 变更重发"简化为每 run 重注入 —— 我们的注入
 	 * 不落会话文件，不重注入就等于丢失）：
 	 *
@@ -1803,9 +1869,14 @@ export class SessionHost {
 	 *      （setScene/setExpert 不重组系统提示词）也只有这里跟得上。
 	 *      （子代理/成员会话例外：composeSubagentPrompt 会把同一个 cwd 写进自己的
 	 *      提示词，值同源同为 cwd，不产生两份漂移 —— 见 prompt-composer.ts 文件头。）
-	 *   2. memory_and_skills_reminder（user-context）—— 记忆三层短指针
+	 *   2. python_env（user-context）—— 托管 Python 解释器的绝对路径。
+	 *      **机器事实的唯一来源**：它是随机器变的值，不能再进系统提示词（片段
+	 *      python-env.md 曾用 `{{pythonPath}}` 把它拼进骨架，那就是「换机 / 重建
+	 *      venv 即断前缀」）。缺省（宿主拿到 undefined）整段缺席 —— 子代理/成员
+	 *      会话本来就没有这条信息。
+	 *   3. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
-	 *   3. current_time（additional-data）—— run 冻结时刻，一次性容器。
+	 *   4. current_time（additional-data）—— run 冻结时刻，一次性容器。
 	 *      **时间的唯一来源**：逐轮注入块（prompt-switch 的 `context` 事件）
 	 *      已不带时间，模型看「现在」只靠这一段。
 	 *
@@ -1829,6 +1900,15 @@ export class SessionHost {
 		const sections: HiddenSection[] = [
 			{ tag: "workspace_context", role: "user-context", body: workspaceLines.join("\n") },
 		];
+		// 顺序与片段 python-env.md 的指代一致（它说「`<python_env>` 块里的『Python
+		// 解释器』一行」）：这一行就是模型拿到的解释器绝对路径。
+		if (this.options.pythonPath !== undefined) {
+			sections.push({
+				tag: "python_env",
+				role: "user-context",
+				body: `Python 解释器：${this.options.pythonPath}`,
+			});
+		}
 		const memory = memoryReminder(cwd);
 		if (memory !== undefined) {
 			sections.push({ tag: "memory_and_skills_reminder", role: "user-context", body: memory });

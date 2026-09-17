@@ -18,12 +18,13 @@
  *      必须响亮报错，而不是静默换成默认风格让他对着错的段排查。
  *
  * **预览只覆盖系统提示词**：骨架、片段、模式、风格、人格、技能清单、记忆行为
- * 纪律段。逐轮会变的事实（运行时间 / 三层记忆内容 / 个性化）与工作目录都不在
- * 这里：记忆内容与个性化由 prompt-switch 的 `context` 事件按请求注入，时间
- * （`current_time`）与工作目录（`workspace_context`）由会话侧 hidden context
- * 每轮注入 —— 四者都不进系统提示词（spec: stabilize-prompt-prefix）。
- * 于是预览不再需要 cwd / 记忆内容 / 个性化三个环境输入：留着它们会让预览假装
- * 这些内容还在系统提示词里，与真实组装静默漂移。
+ * 纪律段。三段不在系统提示词里的事实也都不在这里：逐轮会变的三层记忆内容与
+ * 个性化由 prompt-switch 的 `context` 事件按请求注入；随 run 变的当前时间
+ * （`current_time`）、会话级的工作目录（`workspace_context`）与**随机器变的托管
+ * 解释器路径（`python_env`）**由会话侧 hidden context 每轮注入（spec:
+ * stabilize-prompt-prefix）。
+ * 于是预览不再需要 cwd / 记忆内容 / 个性化 / 解释器路径四个环境输入：留着它们
+ * 会让预览假装这些内容还在系统提示词里，与真实组装静默漂移。
  *
  * 专家人格与真实组装同一条路径：request.expertId 有值时按 env.experts 走
  * requireExpertPersona 解析并注入（前部人格段 + 末尾 <current-expert> 钉子段、
@@ -51,12 +52,6 @@ export interface PromptPreviewEnvironment {
 	 * 发消息看到的提示词」静默漂移。undefined = 读取降级，对应段不出现。
 	 */
 	readonly memorySystemBody?: string;
-	/**
-	 * 托管 Python 解释器路径（与 composeSystemPrompt 同源：docxEnvContext + venvPython）。
-	 * **必填**：片段 python-env 里有 `{{pythonPath}}`，缺值组装会抛错 —— 而预览若
-	 * 悄悄用别的路径，用户看到的就不是"此刻发消息会用的那一段"。
-	 */
-	readonly pythonPath: string;
 }
 
 export function buildPromptPreview(
@@ -95,7 +90,6 @@ export function buildPromptPreview(
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(expert === undefined ? {} : { expert }),
 		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
-		pythonPath: env.pythonPath,
 		// piContext 的差异点见文件头注释（差异 1）。
 	});
 

@@ -17,7 +17,19 @@ import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
 import type { ImagePart } from "./image.ts";
 import type { WorktreeInfo } from "./worktree.ts";
 
-/** 一次用户提问到 agent 停止之间的完整过程。 */
+/**
+ * 一次用户提问到 agent 停止之间的完整过程。
+ *
+ * 也是**条目的 run 身份**（UserMessage / AssistantMessage / ToolCard 的
+ * `runId`，可选）：reducer 在 `run_started` 之后追加的每条条目上盖上当时的
+ * runId（shared/conversation.ts 的 activeRunId），页脚的「本轮」读数与指标
+ * 挂点据此按 run 聚合，而不是按「最后一条 user 消息」猜边界 —— steer 会让
+ * 一条 user 消息落在 run 中间，按它猜会把整轮切成两半。
+ *
+ * 可选：恢复路径重建的历史条目（core/session-rebuild.ts）没有 run 身份 ——
+ * 会话文件里没有这个记录，不编一个假的身份出来。ErrorEntry 的 runId 必填，
+ * 它是 run 的终态产物、身份来自 run_error 事件本身。
+ */
 export type RunId = string;
 
 /** 助手消息或工具卡片在 UI 上的稳定标识。 */
@@ -98,6 +110,8 @@ export interface UserMessage {
 	 * 无技能时**不带该字段**，UI 按缺省渲染（口径同 images）。
 	 */
 	readonly skillNames?: readonly string[];
+	/** 所属 run（reducer 盖章，语义见 RunId 注释）。恢复重建的历史条目缺席。 */
+	readonly runId?: RunId;
 }
 
 export interface AssistantMessage {
@@ -113,6 +127,8 @@ export interface AssistantMessage {
 	 */
 	readonly usage?: TokenUsage;
 	readonly at: number;
+	/** 所属 run（reducer 盖章，语义见 RunId 注释）。恢复重建的历史条目缺席。 */
+	readonly runId?: RunId;
 }
 
 /**
@@ -267,6 +283,8 @@ export interface ToolCard {
 	 */
 	readonly summaryTitle?: string;
 	readonly at: number;
+	/** 所属 run（reducer 盖章，语义见 RunId 注释）。恢复重建的历史条目缺席。 */
+	readonly runId?: RunId;
 }
 
 /**
@@ -330,6 +348,13 @@ export interface ArtifactsPresentedEntry {
 	readonly files: readonly PresentedFile[];
 	readonly focusFile: string | undefined;
 	readonly at: number;
+	/**
+	 * 所属 run（语义见 RunId 注释）。**总是缺席**：这类条目只由恢复路径
+	 * （core/session-rebuild.ts 扫落盘 custom 条目）产出，落盘里没有 run 记录；
+	 * 字段在这里是为了让 ConversationEntry 联合的成员形状一致（读 entry.runId
+	 * 时不必窄化角色）。
+	 */
+	readonly runId?: RunId;
 }
 
 /**

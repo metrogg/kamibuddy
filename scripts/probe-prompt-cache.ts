@@ -153,18 +153,21 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	// expertId === undefined 短路，专家库这条读路径不会被走到。
 	loadExperts: () => [],
 	enabledSkills: () => enabledSkillDescriptors(),
-	/*
-	 * 托管 Python 解释器路径（片段 python-env.md 的 {{pythonPath}}）：场景骨架
-	 * （work / code）现在都引用该片段，不给值组装会响亮抛错。取值与 daemon 的
-	 * docxEnvContext() 同一套（resources/docx-engine + homedir + platform），
-	 * 进程内恒定 —— 提示词字节稳定这条不变量不受它影响。
-	 */
-	pythonPath: venvPython(createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform)),
 	// 风格漂移（偏好里存的 id 不在资源库）与 daemon 一致地响亮报出来，不静默。
 	onStyleDrift: (drift) => {
 		console.error(`⚠ 回复风格配置漂移：偏好要的是「${drift.requested}」，资源库没有，回落「${drift.fallback}」`);
 	},
 });
+
+/**
+ * 托管 Python 解释器的绝对路径 —— 与 daemon 的 docxPythonPath 同一套取值
+ * （resources/docx-engine + homedir + platform）。它**不进系统提示词**（随机器变，
+ * 进去就是「换机 / 重建 venv 即断前缀」），而是作为 hidden context 的 `python_env`
+ * 段注入 —— 探针的请求要与出货形态一致，所以这条注入照给。
+ */
+const pythonPath = venvPython(
+	createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform),
+);
 
 const skillCount = enabledSkillDescriptors().length;
 console.log(`工作场景：${SCENE_ID} × ${INTERACTION_ID}，已启用技能 ${skillCount} 个（与出货同一份技能清单）`);
@@ -354,6 +357,9 @@ async function createHost(
 			if (usage !== undefined) recorder.onAssistantDone(event.message.text, usage);
 		},
 		resources,
+		// 与出货同一份 hidden context：解释器路径走注入（python_env 段），
+		// 系统提示词里没有它（见上面 pythonPath 的注释）。
+		pythonPath,
 		// 内存会话：探针不需要落盘历史，也就不必往用户配置目录写会话文件
 		//（写 ~/.kamibuddy/sessions 在受限终端里会被外部沙箱拦成 EPERM，与探针要测的东西无关）。
 		sessionManager: SessionManager.inMemory(cwd),

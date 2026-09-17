@@ -24,8 +24,10 @@
  * 与 agent shell 能力的关系（2026-09-17 修订，见 spec：转换调用受控）：
  * ensure/convert 都是 daemon 进程内受控 spawn（命令与参数全部写死在本文件，
  * 模型只能给 HTML 输入与产物路径），**转换这条链路**仍然不经 agent 的 shell。
- * 但解释器路径本身会随提示词注入（resources/prompts/fragments/python-env.md 的
- * `{{pythonPath}}`），模型可以用它跑自己写的脚本 —— 原因是模型缺库时会去
+ * 但解释器路径本身会交给模型（隐藏注入而非系统提示词 —— 它随机器变，进提示词
+ * 就是「换机即断前缀」，片段 resources/prompts/fragments/python-env.md 只留恒定
+ * 纪律文字；实际取值经 daemon 的 docxPythonPath 进 hidden context 的 python_env
+ * 段），模型可以用它跑自己写的脚本 —— 原因是模型缺库时会去
  * `pip install`，而 pip 在写入沙箱里必定失败（Python 的 tempfile 用 0700 建
  * 受保护 DACL，见 AGENTS.md 引的 docs/ARCHITECTURE.md 已知边界第 8 条）。
  */

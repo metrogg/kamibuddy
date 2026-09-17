@@ -97,9 +97,9 @@ The system SHALL经专用工具 `docx_convert` 调用引擎（daemon spawn venv 
 
 > **2026-09-17 修订（用户拍板）**：原文写的是「不允许模型经 powershell 自由 shell
 > 直接执行 Python/uv」，覆盖范围过宽。按 WorkBuddy 的 `client-info-env` 做法，
-> 托管解释器的**真实路径**现在会随提示词注入
-> （`resources/prompts/fragments/python-env.md` 的 `{{pythonPath}}`，
-> 取值见 daemon 的 `venvPython(docxEnvContext())`），模型**可以**用它跑工作目录里的
+> 托管解释器的**真实路径**现在随每轮注入送达（不在系统提示词里）
+> （hidden context 尾部独立消息的 `<python_env>` 块，
+> 取值见 daemon 的 `docxPythonPath()`），模型**可以**用它跑工作目录里的
 > 脚本。修订的边界是：**转换必须走 docx_convert**（引擎的调用面、参数、产物路径
 > 全在 daemon 手里）；模型自己写脚本用那个解释器是另一回事，不属这条约束。
 > 起因与证据：模型缺库时会去 `pip install`，而它在沙箱里必失败 ——

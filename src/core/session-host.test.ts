@@ -16,6 +16,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { conversationReducer, initialConversation } from "../shared/conversation.ts";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -1140,6 +1141,7 @@ function createLedgerHost(
 	ledger: RunLedger,
 	segments?: readonly { source: string; chars: number }[],
 	expertLabel?: string,
+	pythonPath?: string,
 ): SessionHost {
 	const options: SessionHostOptions = {
 		catalog: {} as unknown as ModelCatalog,
@@ -1153,6 +1155,7 @@ function createLedgerHost(
 		createLedger: () => ledger,
 		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
 		...(expertLabel === undefined ? {} : { getExpertLabel: () => expertLabel }),
+		...(pythonPath === undefined ? {} : { pythonPath }),
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -1236,7 +1239,9 @@ describe("auto_retry / queue_update 转发与台账", () => {
 			finalError: "Request timed out.",
 		});
 		// retry start 归属刚闭合的失败尝试（pi 事件序：agent_end(willRetry) 先于 auto_retry_start）。
-		expect((ledgerRetries[0]?.data as { runId?: string }).runId).toBe("run-1");
+		// run id 形态 = `run-g<宿主代际>-<序号>`（见 session-host 的 hostGeneration）——
+		// 只钉形态不钉具体号：代际号是进程内自增的，跨测试文件的执行顺序会影响它。
+		expect((ledgerRetries[0]?.data as { runId?: string }).runId).toMatch(/^run-g\d+-1$/);
 	});
 
 	it("重试链在台账里：失败尝试的 run 以 error 闭合，不留永不闭合的孤儿 run", () => {
@@ -1334,7 +1339,7 @@ describe("turn 边界 → 台账 llm_call", () => {
 			runId?: string;
 		};
 		expect(data.turnIndex).toBe(0);
-		expect(data.runId).toBe("run-1");
+		expect(data.runId).toMatch(/^run-g\d+-1$/);
 		expect(data.endedAt).toBeGreaterThanOrEqual(data.startedAt);
 		expect(typeof data.ttftMs).toBe("number");
 		expect(data.stopReason).toBe("stop");
@@ -1449,7 +1454,7 @@ describe("turn 边界 → 台账 llm_call", () => {
 			toolName: "grep",
 			summary: "foo",
 			outcome: "ok",
-			runId: "run-1",
+			runId: expect.stringMatching(/^run-g\d+-1$/),
 		});
 		expect(data.endedAt).toBeGreaterThanOrEqual(data.startedAt);
 	});
@@ -1526,6 +1531,14 @@ describe("压缩事件转发（会话流尾部状态行）", () => {
 
 		expect(events.some((e) => e.type === "compaction_finished")).toBe(true);
 		expect(events.some((e) => e.type === "run_finished")).toBe(true);
+		/*
+		 * 压缩全程不发 assistant 事件（2026-09-17 实测）：摘要调用走
+		 * agent.streamFunction，不进 agent 循环 —— 它没有 message_start/message_end，
+		 * 所以既不会有 assistant_done 进页脚，也不会有 llm_call 进台账。
+		 * 这条断言是「页脚 = 台账按 run 聚合」在压缩上的前置事实（renderer 侧的
+		 * 端到端断言见 turn-metrics.test.ts 的「空闲压缩」组）。
+		 */
+		expect(events.some((e) => e.type.startsWith("assistant_"))).toBe(false);
 	});
 
 	it("中断/失败的压缩：compaction_finished 带 aborted / errorMessage，run 落 run_error", () => {
@@ -2040,6 +2053,45 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		expect(out[2]?.content).toBe("你好");
 	});
 
+	it("python_env 段：托管解释器路径经注入送达（随机器变的事实不进系统提示词）", async () => {
+		/*
+		 * 该事实曾以 `{{pythonPath}}` 槽位拼在场景骨架里（系统提示词内部）——
+		 * 它随 homedir / 安装位置 / HTML_TO_DOCX_VENV 变，进提示词就是「重建 venv /
+		 * 换机器即断前缀」。现在它只有一个出口：hidden context 的 `python_env` 段
+		 * （spec: stabilize-prompt-prefix）。这条断言就是「信息没丢」的取证。
+		 */
+		const PYTHON_PATH = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, PYTHON_PATH);
+		await host.prompt("你好");
+
+		const out = (await agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as { role: string; content: unknown }[];
+		const content = String(out[1]?.content);
+		expect(content).toContain("<python_env>");
+		expect(content).toContain(`Python 解释器：${PYTHON_PATH}`);
+		expect(content).toContain("</python_env>");
+		// 与「解释器路径」无关的段不受影响（同一容器里的 workspace_context 仍在）。
+		expect(content).toContain("<workspace_context>");
+
+		// 不注入（子代理 / 成员会话的宿主不给这个值）：整段缺席，不留空壳。
+		// 换一套 session/agent：同一个 agent 上再包一层会让上面那次的注入也出现在
+		// 返回值里（两层 transformContext 包装），断言就测不到「不注入」。
+		const bareSession = createLedgerSession();
+		(bareSession.session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const bare = createLedgerHost(bareSession.session, () => {}, ledger);
+		await bare.prompt("你好");
+		const bareOut = (await bareSession.agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as { role: string; content: unknown }[];
+		const bareContent = String(bareOut[1]?.content);
+		expect(bareContent).toContain("<workspace_context>");
+		expect(bareContent).not.toContain("python_env");
+	});
+
 	it("相邻两轮：首条差异落在上一轮尾部那条注入上（上一轮整段仍在命中前缀里）", async () => {
 		// spec 待决策项的回归钉子：早先「贴进最后一条 user 消息」的注入形态下，
 		// 首条差异落在上一轮那条 user 消息上 ⇒ 上一轮整段（user + 助手回复 +
@@ -2252,5 +2304,83 @@ describe("专家 extraTools 工具面联动（spec: add-team-foundations）", ()
 		});
 		host.setExpert("fin");
 		expect(toolCalls.at(-1)).toEqual(["read"]);
+	});
+});
+
+/* ── id 代际命名空间（2026-09-17）────────────────────────────────────── */
+
+/**
+ * 回归门禁：**跨宿主代际的 id 必须不撞名**。
+ *
+ * 现场（会话 01a0ae75 的事件日志，宿主代际切换 4 次；多个 id 跨代复用：`run-1` /
+ * `user-2` / `assistant-3` 各 3 次，另有数个 assistant id 各 2 次）：daemon 重启 /
+ * resume 的 remountHostInBucket 会重建宿主，而 id 计数器原本是宿主实例内的
+ * （idSeq 从 1 重来），于是同一串 `user-2` / `assistant-3` 对应多条真实不同的消息。
+ * `entry.id` 是 React key（renderer/chat-view.tsx）、也是 turnTimings 的键 ——
+ * 撞名会让 React 复用错误的 DOM 节点，也会让读数查回别轮的账（页脚 token 超计的
+ * 根因）。本组钉两件事：两代生成的 id 不相等；折叠进同一份视图后 key 不重复。
+ */
+describe("id 代际命名空间（跨宿主重建不撞名）", () => {
+	/** 一代宿主跑完一条 user + 一条 assistant（真实 message_start/message_end 形态）。 */
+	function emitTurn(host: SessionHost): void {
+		runStarted(host);
+		translate(host, {
+			type: "message_start",
+			message: { role: "user", content: "你好", timestamp: 1 },
+		} as unknown as AgentSessionEvent);
+		assistantStart(host);
+		assistantEnd(host, "stop", { text: "在" });
+		agentEnd(host, false, []);
+	}
+
+	/** 从事件里按到达顺序取出条目 id（user 消息与助手消息各一条）。 */
+	function emittedIds(events: readonly SessionEvent[]): readonly string[] {
+		const ids: string[] = [];
+		for (const event of events) {
+			if (event.type === "user_message") ids.push(event.message.id);
+			if (event.type === "assistant_started") ids.push(event.messageId);
+		}
+		return ids;
+	}
+
+	/** 一代宿主：事件出口收集到自己的数组。 */
+	function hostOf(events: SessionEvent[]): SessionHost {
+		return createHost(createFakeSession(), (e) => events.push(e));
+	}
+
+	it("两代宿主各自从 1 计数，但生成的 id 不相等（代际段不同）", () => {
+		const first: SessionEvent[] = [];
+		const second: SessionEvent[] = [];
+		emitTurn(hostOf(first));
+		emitTurn(hostOf(second));
+
+		const a = emittedIds(first);
+		const b = emittedIds(second);
+		expect(a).toHaveLength(2);
+		expect(b).toHaveLength(2);
+		// 旧实现这里是 ['user-1','assistant-2'] 两代逐字相同 —— 撞名即由此来。
+		expect(a[0]).not.toBe(b[0]);
+		expect(a[1]).not.toBe(b[1]);
+		// 形态：<角色>-g<代际>-<本代序号>。序号段两代相同（run 先占 1，所以
+		// user=2 / assistant=3），代际段必须不同 —— 这正是「不撞名」的由来。
+		expect(a[0]).toMatch(/^user-g\d+-2$/);
+		expect(a[1]).toMatch(/^assistant-g\d+-3$/);
+		expect(b[0]).toMatch(/^user-g\d+-2$/);
+		expect(b[1]).toMatch(/^assistant-g\d+-3$/);
+	});
+
+	it("两代的事件折叠进同一份视图：React key（entry.id）不重复", () => {
+		const events: SessionEvent[] = [];
+		emitTurn(hostOf(events));
+		// 宿主重建（daemon 重启 / resume remount）：新宿主的计数器从 1 重来。
+		emitTurn(hostOf(events));
+
+		const view = events.reduce(
+			(acc, event) => conversationReducer(acc, { type: "event", event }),
+			initialConversation,
+		);
+		const keys = view.entries.map((entry) => entry.id);
+		expect(keys).toHaveLength(4);
+		expect(new Set(keys).size).toBe(keys.length);
 	});
 });

@@ -14,12 +14,6 @@ import { loadResources, resolveStyle, toDescriptors, type StyleResource } from "
 
 let dir: string;
 
-/**
- * 真实资源的组装需要「托管解释器路径」这个槽位取值（片段 python-env 里的
- * `{{pythonPath}}`）。真实值由 daemon 现取（venvPython），测试里给固定桩。
- */
-const VENV_PY = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
-
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "kami-res-"));
 	// styles/ 基线 fixture（理由见 writeStyle 注释）。
@@ -235,7 +229,6 @@ describe("真实 resources：过程叙述条款两个场景都在", () => {
 				sceneBody: scene.body,
 				modeBody,
 				skillsSection: "",
-				pythonPath: VENV_PY,
 				resolveFragment: (name) => fragments.get(name),
 			});
 			// 片段的代表句（改 narration.md 的标题时这里要同步）
@@ -243,29 +236,42 @@ describe("真实 resources：过程叙述条款两个场景都在", () => {
 		}
 	});
 
-	it("**work 与 code 都引到 python-env，且路径真的填进去了**", () => {
+	it("**work 与 code 都引到 python-env，且片段里不含任何解释器路径**", () => {
 		/*
 		 * 2026-09-17 的 pip 现场留下的契约：模型缺库的第一反应是 pip install，
 		 * 而它在写入沙箱里必失败（docs/ARCHITECTURE.md 已知边界第 8 条）。
-		 * 两个场景都必须把托管解释器的真实路径交给它 —— 漏掉哪个场景，
-		 * 哪个场景就会重演「反复 pip 重试到用户手动停」。
+		 * 两个场景都必须把模型引到托管解释器上 —— 漏掉哪个场景，哪个场景就会
+		 * 重演「反复 pip 重试到用户手动停」。
+		 *
+		 * **路径本身不进这里**（spec: stabilize-prompt-prefix）：它随机器变
+		 * （homedir / 安装位置 / HTML_TO_DOCX_VENV），进系统提示词就是「换机 /
+		 * 重建 venv 即断前缀」。片段只留恒定的纪律文字，真实路径经 daemon 的
+		 * docxPythonPath 走 hidden context 的 python_env 段（正侧断言见
+		 * core/session-host.test.ts）。
 		 */
 		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
 		const { scenes, modes, fragments } = loadResources(realDir);
 		const modeBody = modes.find((m) => m.id === "craft")?.body ?? "";
 		for (const scene of scenes) {
-			const { text, segments } = composePromptWithMeta({
+			const { text } = composePromptWithMeta({
 				sceneBody: scene.body,
 				modeBody,
 				skillsSection: "",
-				pythonPath: VENV_PY,
 				resolveFragment: (name) => fragments.get(name),
 			});
-			expect(text, `${scene.id} 场景没有把托管解释器路径填进去`).toContain(VENV_PY);
+			expect(text, `${scene.id} 场景没有把模型引到托管解释器上`).toContain("托管解释器");
 			expect(text, `${scene.id} 场景没有劝退 pip`).toContain("不要 `pip install`");
-			// 路径那一段有独立 provenance：排查「哪一段在变」时看得见。
-			expect(segments.some((s) => s.source === "python-env")).toBe(true);
+			expect(text, `${scene.id} 场景仍留着解释器路径槽位`).not.toContain("{{pythonPath}}");
 		}
+		/*
+		 * 路径形态只扫**片段自身**而不是整个场景正文：windows-notes / code 骨架的
+		 * 禁区段里有 `D:\work\报告.docx` 这类**与本机无关的通用示例**（任何机器上
+		 * 字节相同），扫全文会误报；而这条纪律要拦的是「片段把随机器变的解释器
+		 * 绝对路径写回来」——它的载体就是本片段。
+		 */
+		const pythonEnv = fragments.get("python-env") ?? "";
+		expect(pythonEnv).toContain("托管解释器");
+		expect(pythonEnv).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\/|python\.exe|\.venv-html-to-docx/);
 	});
 });
 
@@ -411,7 +417,6 @@ describe("真实 resources/ 的回归约束", () => {
 				modeBody: mode.body,
 				skillsSection: "",
 				modeId: mode.id,
-				pythonPath: VENV_PY,
 				resolveFragment: (name) => resources.fragments.get(name),
 			});
 			expect(composed.text, `code × ${mode.id} 不应有残留槽位`).not.toMatch(/\{\{[^{}]*\}\}/);
@@ -429,7 +434,6 @@ describe("真实 resources/ 的回归约束", () => {
 			modeBody: craft?.body ?? "",
 			skillsSection: "",
 			modeId: "craft",
-			pythonPath: VENV_PY,
 			resolveFragment: (name) => resources.fragments.get(name),
 		}).text;
 		for (const section of ["# 交付", "# 个人文件安全", "# 当前模式", "present_files"]) {
