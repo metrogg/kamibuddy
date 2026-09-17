@@ -585,6 +585,41 @@ check(
 	);
 }
 
+/* ── 重试路径：saveBranch=false（2026-09-17 修订：重新生成不抽枝）────── */
+
+{
+	// 重试 = 就地回退 + 立即重发（重发由渲染层做）：daemon 侧只回退，**不抽枝**。
+	// 会话乙此刻有完整两轮（C5 只 fork 过它，母文件未动）—— 回退第 2 轮明知有
+	// 「未来」可存，但 saveBranch=false 时不得产生任何新文件、结果里不得带分支。
+	const filesBefore = jsonlFiles().length;
+	const retry = await invoke<SessionBranchResult>(INVOKE.sessionRestart, [
+		sessionB.file,
+		1,
+		{ saveBranch: false },
+	]);
+	check(
+		"F1 重试（saveBranch:false）返回 ok 且不带 branchPath/branchTitle",
+		retry.ok === true && retry.branchPath === undefined && retry.branchTitle === undefined,
+		`ok=${String(retry.ok)}，${retry.ok ? `branchPath=${String(retry.branchPath)}` : `reason=${retry.reason}`}`,
+	);
+	check(
+		"F2 不产生分支文件，母文件截断为第 1 轮",
+		jsonlFiles().length === filesBefore &&
+			entryIds(sessionB.file).join(",") === [sessionB.t0, sessionB.u1, sessionB.a1].join(","),
+		`文件数 ${filesBefore} → ${jsonlFiles().length}，母条目 = [${entryIds(sessionB.file).join(", ")}]`,
+	);
+	// C5 的 fork 已把「当前会话」切到分支桶 —— 这里必须按 sessionId 显式取乙桶的
+	// 快照，否则拿到的是那个空分支桶的历史（0 条），断言就变成假的。
+	const bSessionId =
+		(await listSessions()).find((session) => resolve(session.path) === resolve(sessionB.file))?.id;
+	const bAfter = await invoke<SessionSnapshot>(INVOKE.snapshot, [bSessionId]);
+	check(
+		"F3 回退后可见历史 = 第 1 轮两条消息（按乙桶 sessionId 显式取）",
+		bAfter.entries.length === 2,
+		`历史 ${bAfter.entries.length} 条，sessionId=${bSessionId ?? "(无)"}`,
+	);
+}
+
 /* ── 分叉点之后没有内容：可执行但不产生分支会话 ───────────────────────── */
 
 {

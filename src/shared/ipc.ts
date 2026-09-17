@@ -902,9 +902,13 @@ export interface InvokeMap {
 	 * 不是条目 id（在线路径两侧 id 不一致，见 INVOKE.sessionRestart 的说明）。
 	 * 返回而非 reject —— 拒绝原因（busy/no-file/no-such-entry/write-failed）
 	 * 是界面文案的分支依据，且失败时保证会话状态不变。
+	 *
+	 * options.saveBranch = false 时不抽枝（旧内容就地丢弃，不产生分支会话）——
+	 * 这是「重试（重新生成）」的路径：竞品语义里 regenerate 与分支是两个功能，
+	 * 重试不该往侧栏塞一条「旧回答」会话（2026-09-17 用户实测反馈）。
 	 */
 	[INVOKE.sessionRestart]: {
-		args: [path: string, userIndex: number];
+		args: [path: string, userIndex: number, options?: { saveBranch?: boolean }];
 		result: SessionBranchResult;
 	};
 	/** 「分支出新会话」：从该锚点消息（用户消息序号）之前派生新会话（母会话不动），返回同上。 */

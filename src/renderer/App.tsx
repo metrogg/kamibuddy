@@ -1128,6 +1128,8 @@ export function App(): React.JSX.Element {
 	 * 结果文案一律在这里出：失败用 daemon 给的中文 message（不再写一份 reason→文案映射），
 	 * 成功说清「后续内容已存为分支会话《标题》」还是「只回退、没有分支」—— spec 明确
 	 * 要求不许静默（没有 branchTitle = 分叉点之后已无内容，不产生分支会话）。
+	 * 例外：重试（saveBranch=false）成功不弹 toast —— 重新生成本身即可见反馈，
+	 * 每次点都闪提示只是噪音（spec 修订 2026-09-17）。
 	 *
 	 * mode="branch" 时 daemon 已把当前会话切到新分支，这里按权威快照跟随切换
 	 *（与 saveToWorkspace / resume 同款收口）。refillText 的填回**必须等切换落地**：
@@ -1135,7 +1137,12 @@ export function App(): React.JSX.Element {
 	 * 文本会被那一次重载清掉。
 	 */
 	const branchFromUserMessage = useCallback(
-		(mode: "restart" | "branch", userIndex: number, refillText: string | undefined): Promise<boolean> => {
+		(
+			mode: "restart" | "branch",
+			userIndex: number,
+			refillText: string | undefined,
+			opts?: { saveBranch?: boolean },
+		): Promise<boolean> => {
 			const path = taskListRef.current?.find((item) => item.current)?.path;
 			if (path === undefined) {
 				showToast("当前会话还没有落盘，暂时不能这样做", "error");
@@ -1143,7 +1150,7 @@ export function App(): React.JSX.Element {
 			}
 			const call =
 				mode === "restart"
-					? window.kami.restartSessionFrom(path, userIndex)
+					? window.kami.restartSessionFrom(path, userIndex, opts)
 					: window.kami.branchSessionFrom(path, userIndex);
 			return call.then(
 				(result) => {
@@ -1151,12 +1158,18 @@ export function App(): React.JSX.Element {
 						showToast(result.message, "error");
 						return false;
 					}
-					showToast(
-						result.branchTitle === undefined
-							? "已回到这一轮之前"
-							: `后续内容已存为分支会话《${result.branchTitle}》`,
-						"success",
-					);
+					/*
+					 * 重试（saveBranch=false）成功不弹 toast：重新生成本身就是可见反馈，
+					 * 每次点一下都闪「已回到这一轮之前」只是噪音（TRAE/ChatGPT 同为静默）。
+					 */
+					if (opts?.saveBranch !== false) {
+						showToast(
+							result.branchTitle === undefined
+								? "已回到这一轮之前"
+								: `后续内容已存为分支会话《${result.branchTitle}》`,
+							"success",
+						);
+					}
 					// 「重新开始」的视图刷新由 daemon 的 history_reset 事件驱动（本文件的
 					// 同名分支按权威快照重指指针），只有分支需要在这里等切换落地。
 					const settled = mode === "branch" ? resyncSnapshot() : Promise.resolve();
@@ -1175,10 +1188,14 @@ export function App(): React.JSX.Element {
 		[resyncSnapshot, showToast],
 	);
 
-	/** 「重新开始」（用户气泡工具条）：回退到该消息之前，并把原文填回输入框（不发送）。 */
+	/**
+	 * 「重新开始」（用户气泡工具条）：回退到该消息之前，并把原文填回输入框（不发送）。
+	 * opts.saveBranch = false 是「重试」的路径（不抽枝、不弹成功 toast），
+	 * 语义差异见 chat-view.tsx 的 retrySubmit。
+	 */
 	const restartFromUserMessage = useCallback(
-		(userIndex: number, refillText?: string): Promise<boolean> =>
-			branchFromUserMessage("restart", userIndex, refillText),
+		(userIndex: number, refillText?: string, opts?: { saveBranch?: boolean }): Promise<boolean> =>
+			branchFromUserMessage("restart", userIndex, refillText, opts),
 		[branchFromUserMessage],
 	);
 
@@ -1273,6 +1290,22 @@ export function App(): React.JSX.Element {
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
 	 * —— 否则用户配完模型回来发现对话没了。
 	 */
+	/*
+	 * 技能页的直达页签：「+」菜单的「技能 / 连接器」入口不再是「待做」占位
+	 * （2026-09-17 接线 —— 页面早已实现，死入口是宣讲演示最先被点到的东西），
+	 * 跳转时带上目标页签；侧栏既有入口不传页签，落回专家首 tab。
+	 */
+	const [skillsTab, setSkillsTab] = useState<"experts" | "skills" | "connectors">("experts");
+	const openSkillsAt = useCallback(
+		(tab: "experts" | "skills" | "connectors") => {
+			setReturnView(view === "chat" ? "chat" : "home");
+			setSkillsTab(tab);
+			setView("skills");
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[view],
+	);
+
 	const openSettings = useCallback(() => {
 		setReturnView(view === "chat" ? "chat" : "home");
 		setView("settings");
@@ -1466,6 +1499,8 @@ export function App(): React.JSX.Element {
 					onError={showToast}
 					onSubmit={submit}
 					onWorkspaceChanged={resyncSnapshot}
+					onOpenSkills={() => openSkillsAt("skills")}
+					onOpenConnectors={() => openSkillsAt("connectors")}
 					onTodo={showTodo}
 				/>
 			)}
@@ -1497,6 +1532,8 @@ export function App(): React.JSX.Element {
 					experts={experts}
 					onSelectExpert={selectExpert}
 					onOpenExperts={() => setView("skills")}
+					onOpenSkills={() => openSkillsAt("skills")}
+					onOpenConnectors={() => openSkillsAt("connectors")}
 					prefill={pendingPrefill}
 					onPrefillConsumed={() => setPendingPrefill(undefined)}
 					onPreviewArtifact={(path) => {
@@ -1546,6 +1583,7 @@ export function App(): React.JSX.Element {
 			{/* 设置页自持滚动与返回按钮，不复用对话页的框架。 */}
 			{view === "skills" && (
 				<SkillsView
+					initialTab={skillsTab}
 					onClose={() => setView(returnView)}
 					onTodo={showTodo}
 					onToast={showToast}

@@ -17,6 +17,12 @@
  * 启停后热应用）。reload 走 pi 的运行时 registerTool（loader.ts 的
  * refreshTools post-bind 是真实刷新），新 server 不必等下个会话。
  *
+ * **注册 ≠ 可见**：pi 把 createAgentSession 的 tools 当作激活名单，扩展工具
+ * 先按名单过滤再进注册表 —— 本扩展不做运行期激活，而是由 session-host 经
+ * handle.registeredToolNames() 把全量名单**构造时**并进 tools（extraActiveTools）。
+ * 缺了这一步的症状：连接器页显示 N 个工具、模型一个都调不到
+ *（2026-09-17 试用前自查发现并修复）。
+ *
  * 参数 schema 直接用 MCP 的原生 JSON Schema，不做 JSON Schema → TypeBox
  * 转换：pi 的 validateToolArguments 对没有 TypeBox Kind 标记的 schema 走原生
  * JSON Schema 分支（pi-ai validation.ts 的 TYPEBOX_KIND 检查 +
@@ -109,6 +115,13 @@ export interface McpClientHandle {
 	/** pi ExtensionFactory，传 SessionHost 的 extensions 数组。 */
 	readonly extension: (pi: ExtensionAPI) => Promise<void>;
 	/**
+	 * 已注册进 pi 的全部 MCP 工具名（mcp__<server>__<tool>，跨 server 全量）。
+	 * session-host 经 extraActiveTools 把它**构造时**并入 tools（激活名单）——
+	 * 扩展工具不在名单里连注册表都进不去，事后激活无效（见 activateMcpTools
+	 * 已移除的历史与 agent-session.js:2117 的过滤点）。
+	 */
+	readonly registeredToolNames: () => readonly string[];
+	/**
 	 * 各 server 的当前运行态（mcpConfigGet 的 servers 列表）。
 	 * 扩展未加载（宿主懒建中）或已 teardown 时为空 —— daemon 按配置推导兜底。
 	 */
@@ -136,16 +149,33 @@ export function createMcpClient(options: McpClientOptions): McpClientHandle {
 	// 扩展加载后才有运行态；teardown 后失效。daemon 的 handler 通过 handle
 	// 触达这里 —— 模块级没有单例状态，多会话各自持有自己的 handle。
 	let runtime: { readonly getServerStates: () => McpServerInfo[]; readonly reload: () => Promise<void> } | undefined;
+	// 已注册的 MCP 工具名（跨 server 全量）。挂在 handle 外层：extension 里注册、
+	// registeredToolNames 给 session-host 的 extraActiveTools 读（初次激活）。
+	const usedToolNames = new Set<string>();
 
 	return {
+		registeredToolNames: (): readonly string[] => [...usedToolNames],
 		extension: async (pi: ExtensionAPI): Promise<void> => {
 			const log = options.log ?? ((message: string) => console.log(`[mcp] ${message}`));
 			const readConfig = options.readConfig ?? readMcpConfig;
 			const connect = options.connect ?? connectMcpServer;
 
 			const servers = new Map<string, ServerState>();
-			const usedToolNames = new Set<string>();
 			let tearingDown = false;
+
+			/*
+			 * 可见性（注册 ≠ 激活）的契约：pi 把 createAgentSession 的 `tools` 当作
+			 * **激活名单**（allowedToolNames，sdk.js:141），_refreshToolRegistry 对
+			 * 扩展工具**先按名单过滤再放行进注册表**（agent-session.js:2117）——
+			 * 名单外的工具连注册表都进不去，事后 setActiveToolsByName 无效。
+			 * 所以「对模型可见」由 session-host 负责：经 handle.registeredToolNames()
+			 * 把全量名单**构造时**并进 tools（见 session-host 的 extraActiveTools）。
+			 * 这里不做任何运行期激活 —— 会话中途新配置的 server（名单快照之外）
+			 * 其工具要下个会话才可见；名单内 server 的启停/重连不受影响。
+			 * MCP 工具对模型可见后的权限语义：权限门按 `mcp__server__tool` 名字
+			 * 逐次审批（permission-policy 的 MCP 分支），与 WorkBuddy 的权限规则
+			 * 语法（mcp__server / mcp__server__tool）同构。
+			 */
 
 			const scheduleReconnect = (state: ServerState): void => {
 				if (tearingDown) return;

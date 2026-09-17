@@ -1953,6 +1953,8 @@ async function createHost(
 		isTempTask: isTempCwd(cwd),
 		sceneId: bucket.conversation.state.sceneId,
 		interactionId: bucket.conversation.state.interactionId,
+		// MCP 工具的初次激活（扩展加载期 action 方法不可用，工厂自己激活不了）。
+		extraActiveTools: () => mcpClient.registeredToolNames(),
 		// 专家绑定与两轴正交，随会话状态一起进宿主（resume/newTask 沿用口径同两轴）。
 		...(bucket.conversation.state.expertId === undefined
 			? {}
@@ -3286,6 +3288,10 @@ async function resolveBranchAnchor(
  * 「重新开始」：把当前会话回退到某条用户消息**之前**并继续，被放弃的后续抽成
  * 一条新会话（内容一点不丢）。
  *
+ * options.saveBranch = false 时跳过抽枝（重试/重新生成的路径）：旧回答就地丢弃，
+ * 不往侧栏塞分支会话 —— regenerate 与分支是两个功能，竞品（TRAE/ChatGPT）的重试
+ * 都不产生新会话（2026-09-17 用户实测反馈，spec 已修订）。
+ *
  * 顺序敏感，每一步的理由：
  *   ① 抽枝（仅当分叉点之后确有内容）：**先写分支文件、再动母文件**。顺序反了就是
  *      数据丢失 —— 母文件已截断而分支没写成，被放弃的那段内容就没有第二份了。
@@ -3297,7 +3303,11 @@ async function resolveBranchAnchor(
  * 为什么母文件要**物理截断**（而不是在内存里 branch）：pi 的叶子位置不落盘，不截断
  * 的话重开时叶子仍指向旧尾部，回退就退回旧历史（spec 的实测修订 2）。
  */
-async function restartSession(path: string, userIndex: number): Promise<SessionBranchResult> {
+async function restartSession(
+	path: string,
+	userIndex: number,
+	options?: { saveBranch?: boolean },
+): Promise<SessionBranchResult> {
 	const target = resolve(path);
 	const bucket = findBucketByFile(target);
 	// 未注册 / 未落盘 = 这条路径没有会话文件。分支只作用于 daemon 已打开的会话
@@ -3313,16 +3323,21 @@ async function restartSession(path: string, userIndex: number): Promise<SessionB
 		const anchor = await resolveBranchAnchor(bucket, userIndex);
 		if (anchor.kind !== "ok") return branchFail(anchor.kind);
 
-		/* ── ① 抽枝（此处失败：母会话一个字节都没动）── */
+		/* ── ① 抽枝（此处失败：母会话一个字节都没动；saveBranch=false 的重试路径整段跳过）── */
 		const leafId = anchor.host.currentLeafId();
 		let branch: { readonly path: string; readonly title: string } | undefined;
 		try {
-			// 「分叉点之后没有内容」不抽枝：抽一条只含前缀的会话只是往侧栏塞噪声
+			// saveBranch=false（重试）：不抽枝，旧内容就地丢弃 —— regenerate 与分支是
+			// 两个功能，竞品的重试都不产生新会话（spec 修订 2026-09-17）。
+			// 「分叉点之后没有内容」也不抽枝：抽一条只含前缀的会话只是往侧栏塞噪声
 			//（spec 的「分叉点之后没有内容」场景：可执行但不产生分支会话）。
-			branch =
-				leafId !== null && decideExtract(anchor.entries, anchor.anchorEntryId)
-					? await materializeBranch(target, bucket.cwd, leafId)
-					: undefined;
+			if (
+				options?.saveBranch !== false &&
+				leafId !== null &&
+				decideExtract(anchor.entries, anchor.anchorEntryId)
+			) {
+				branch = await materializeBranch(target, bucket.cwd, leafId);
+			}
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			eventLog.append({ kind: "ipc_error", channel: INVOKE.sessionRestart, message: detail });
@@ -3850,8 +3865,8 @@ const handlers: Record<string, Handler> = {
 	// 与 prompt / rename / delete / saveToWorkspace 串行（见 restartSession /
 	// forkSession 的顺序注释）。拒绝走返回值而不是 reject（reason 是界面文案的
 	// 分支依据，契约见 shared/ipc.ts 的 SessionBranchResult）。
-	[INVOKE.sessionRestart]: async ([path, userIndex]) =>
-		restartSession(path as string, userIndex as number),
+	[INVOKE.sessionRestart]: async ([path, userIndex, options]) =>
+		restartSession(path as string, userIndex as number, options as { saveBranch?: boolean } | undefined),
 
 	[INVOKE.sessionBranch]: async ([path, userIndex]) =>
 		forkSession(path as string, userIndex as number),
