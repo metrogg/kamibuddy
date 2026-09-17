@@ -2655,7 +2655,39 @@ async function listSessions(): Promise<SessionSummary[]> {
 		if (isSubagentSessionFile(info.path)) continue;
 		visible.push(info);
 	}
-	return visible
+	/*
+	 * 尚未落盘的已注册会话要补进来。
+	 *
+	 * pi 在「会话里还没有助手消息」之前**不写文件**（session-manager.js 的 _persist
+	 * 守卫：首条 assistant 消息到达时才一次性写出全部条目）。而本列表是磁盘扫描
+	 * （SessionManager.listAll），于是新建任务的第一条消息发出后、首响应到达前，
+	 * 这个任务在侧栏**缺席** —— 用户实测「任务已经在跑了，过一会才出现」
+	 * （2026-09-17）。桶里什么都有（路径、cwd、running、首条用户消息），补一条
+	 * 合成摘要即可；文件一落盘，磁盘那条自然接管（同一 path，不会重复）。
+	 */
+	const onDiskPaths = new Set(visible.map((info) => resolve(info.path)));
+	const pending: SessionSummary[] = [];
+	for (const bucket of bucketsById.values()) {
+		const file = bucket.sessionFilePath;
+		if (file === undefined || onDiskPaths.has(resolve(file))) continue;
+		if (isSubagentSessionFile(file)) continue;
+		const firstUser = bucket.conversation.entries.find((entry) => entry.role === "user");
+		pending.push({
+			id: bucket.sessionId,
+			path: file,
+			title: deriveSessionTitle(undefined, firstUser?.text ?? ""),
+			cwd: bucket.cwd,
+			isTempTask: isTempCwd(bucket.cwd),
+			// 没落盘就没有文件时间戳；用桶的最近使用时刻，排序上落在最新（它就是最新的）。
+			createdAt: bucket.lastUsedAt,
+			modifiedAt: bucket.lastUsedAt,
+			messageCount: bucket.conversation.entries.filter((entry) => entry.role === "user" || entry.role === "assistant").length,
+			current: bucket === currentBucket,
+			running: bucket.running,
+			archived: false,
+		});
+	}
+	return [...visible
 		.map((info): SessionSummary => {
 			const bucket = byFile.get(resolve(info.path));
 			return {
@@ -2677,7 +2709,7 @@ async function listSessions(): Promise<SessionSummary[]> {
 				running: bucket?.running ?? false,
 				archived: sessionArchive.isArchived(resolve(info.path)),
 			};
-		})
+		}), ...pending]
 		.sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
