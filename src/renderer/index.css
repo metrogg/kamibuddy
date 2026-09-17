@@ -2323,6 +2323,29 @@ textarea:focus-visible {
 	overflow-y: auto;
 }
 
+/* 气泡里的文档引用 chip（发送时折进文本的 @路径行，渲染时摘出来单独显示）：
+   与输入卡的 .document-ref-chip 同一形态（图标 + 文件名 + 边界），但它是**已发送**的
+   记录、不可移除，所以没有 × 钮；形状走 pill，跟在正文之后另起一行（块级）。 */
+.user-doc-chip {
+	display: flex;
+	width: fit-content;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	border-radius: var(--radius-sm);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	font-size: var(--text-list);
+}
+
+.user-doc-chip-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 260px;
+}
+
 /* 气泡里的技能胶囊：内联在正文流里（WB 同款），所以要自己给一道右间距 ——
    内联元素吃不到 flex 的 gap；只有技能、没有正文时也不留多余空隙（没有空行可撑）。
    胶囊本体的视觉见「技能 chip」段（23 高，贴齐这里的 15px/1.6 正文行）。 */
@@ -3402,18 +3425,10 @@ textarea:focus-visible {
 
 /* ── 产物卡片区（run 结束后，消息流底部） ─────────────────────── */
 
+/* 无外框（对齐 WorkBuddy）：产物卡自带边界、来源行与页脚是裸文本，
+   再套一层容器就是「框里套框」——用户实测反馈过的观感问题。 */
 .artifacts {
-	margin-top: var(--space-1);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--bg);
-	padding: var(--space-3) var(--space-4);
-}
-
-.artifacts-header {
-	color: var(--text-secondary);
-	font-size: var(--text-meta);
-	margin-bottom: var(--space-2);
+	margin-top: var(--space-3);
 }
 
 /* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。 */
@@ -3440,28 +3455,46 @@ textarea:focus-visible {
 	padding-right: 40px;
 }
 
+/* 卡片形态对齐 WorkBuddy 的产物卡：白底 + 1px 边界 + 圆角，
+   左图标 / 中文件名+大小两行 / 右动作钮。此前是无边界的「列表行」，
+   扫读时与正文糊在一起（用户实测反馈）。 */
 .artifact-card {
 	position: relative;
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	width: 100%;
-	padding: var(--space-2) var(--space-3);
-	border-radius: var(--radius-sm);
+	padding: var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg);
 	text-align: left;
 	font-size: var(--text-list);
 }
 
 .artifact-card:hover {
-	background: var(--bg-hover);
+	border-color: var(--text-secondary);
+}
+
+/* 文件名 + 大小两行（WB 同款）：文件名在上、大小小一号灰字在下。 */
+.artifact-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
 }
 
 .artifact-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	flex: 1;
 	min-width: 0;
+}
+
+.artifact-size {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
 }
 
 /* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。
@@ -3489,10 +3522,9 @@ textarea:focus-visible {
 /* 聚合入口：卡区下方两个文字按钮（三级灰 12px、右箭头）。 */
 .artifacts-footer {
 	display: flex;
+	align-items: center;
 	gap: var(--space-5);
 	margin-top: var(--space-3);
-	padding-top: var(--space-3);
-	border-top: 1px solid var(--border);
 }
 
 .artifacts-more {

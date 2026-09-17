@@ -255,6 +255,15 @@ export function Composer({
 		const picked = skill === undefined ? [] : [skill];
 		setDraft("");
 		setSkill(undefined);
+		/*
+		 * 文档引用**提交即清**（不等 IPC 回执）：它的全部内容已经折进下方 text 里
+		 * （foldDocumentRefsIntoText 追加 `@路径` 行），留着只是重复；而挂在 IPC
+		 * 成功回调上时，任何一次回执迟到/丢失都会让 chip 赖在输入区（2026-09-17
+		 * 用户实测：「消息发出去了，输入框还留着这个文件」）。
+		 * 图片仍等回执再清 —— 附件内容是二进制，重挑成本高，失败时该留在输入区。
+		 */
+		img.clearDocumentRefs();
+		// 发送即清掉该 key 的暂存草稿（已发出不再是草稿），并退出历史导航态。
 		// 发送即清掉该 key 的暂存草稿（已发出不再是草稿），并退出历史导航态。
 		if (draftKey !== undefined) saveDraft(draftKey, "");
 		setHistoryNav(undefined);

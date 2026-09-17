@@ -109,6 +109,8 @@ export interface ImageAttachments {
 	 * 折进文本，不随 images 走——它只是路径，不是内容。
 	 */
 	readonly documentRefs: readonly DocumentReference[];
+	/** 只清文档引用（提交即清用；图片仍等回执）。 */
+	readonly clearDocumentRefs: () => void;
 	/** 拖拽悬停高亮（视图把它拼进输入卡容器 的 class）。 */
 	readonly dragOver: boolean;
 	/**
@@ -234,6 +236,14 @@ export function useImageAttachments(onError: (message: string) => void): ImageAt
 		setDocumentRefs([]);
 	}, []);
 
+	/**
+	 * 只清文档引用（图片留着）。composer 的 submit 用它做「提交即清」——
+	 * 理由见该处注释：refs 已折进文本，不该依赖 IPC 回执才消失。
+	 */
+	const clearDocumentRefs = useCallback((): void => {
+		setDocumentRefs([]);
+	}, []);
+
 	/*
 		拖放接线的三个坑（一次写对，两个视图共用）：
 		1. onDragOver 必须 preventDefault，否则浏览器把 drop 当导航，
@@ -274,6 +284,7 @@ export function useImageAttachments(onError: (message: string) => void): ImageAt
 		removeAt,
 		removeDocumentRefAt,
 		clear,
+		clearDocumentRefs,
 	};
 }
 

@@ -28,6 +28,7 @@ import {
 	IconCode,
 	IconCopy,
 	IconDoc,
+	IconDocFile,
 	IconEdit,
 	IconFolder,
 	IconRefresh,
@@ -45,6 +46,8 @@ import { ExpertChip } from "./expert-chip.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ContextUsageRing } from "./context-usage.tsx";
 import { useCopyWithTick } from "./copy-tick.ts";
+import { FileTypeIcon } from "./file-type-icon.tsx";
+import { docBadgeOf } from "@shared/doc-formats.ts";
 import { groupToolBatches } from "./fold-view.ts";
 import type { FoldPlanItem } from "./fold-view.ts";
 import { imageDataUrl } from "./image-attachments.tsx";
@@ -332,6 +335,9 @@ function UserBubble({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [preview]);
 
+	// 文档引用（发送时折叠进文本的 `@绝对路径` 行）从正文里摘出来：气泡里渲染成
+	// 文件 chip，而不是让用户看见一串路径（WorkBuddy 的附件观感）。
+	const docRefs = splitDocumentRefs(text);
 	return (
 		<div className="entry user" data-entry-id={entryId}>
 			<div className="user-bubble">
@@ -351,7 +357,17 @@ function UserBubble({
 						<span className="skill-chip-name">{name}</span>
 					</span>
 				))}
-				{text}
+				{/* 正文与文档引用分开渲染：折进文本的 @路径 行摘出来做文件 chip（见 splitDocumentRefs）。 */}
+				{docRefs.body}
+				{docRefs.paths.map((path) => {
+					const badge = docBadgeOf(path);
+					return (
+						<span key={path} className="user-doc-chip" title={path}>
+							{badge !== undefined ? <IconDocFile badge={badge} size={16} /> : <IconDoc size={16} />}
+							<span className="user-doc-chip-name">{path.split(/[\\/]/).pop()}</span>
+						</span>
+					);
+				})}
 				{images !== undefined && images.length > 0 && (
 					// key 用下标与 AttachmentStrip 同口径：列表项无本地状态，src 是同步解码的 data URL。
 					<div className="user-bubble-images">
@@ -428,6 +444,31 @@ function UserBubble({
 			)}
 		</div>
 	);
+}
+
+/**
+ * 用户气泡的文档引用拆分（显示用，纯函数）：
+ * 发送时 documentRefs 由 foldDocumentRefsIntoText 折成文本末尾的 `@<绝对路径>` 行
+ * （路径是给模型 read_document 读的），但气泡里照原样显示路径很难看 ——
+ * 这里把**末尾连续的**路径行摘出来单独渲染成文件 chip（WorkBuddy 的消息附件观感），
+ * 正文只留用户真正写的话。只认绝对路径形态（盘符 / UNC / 正斜杠根），
+ * 用户手打的普通 @提及 不受影响。
+ */
+function splitDocumentRefs(text: string): { readonly body: string; readonly paths: readonly string[] } {
+	const lines = text.split("\n");
+	const paths: string[] = [];
+	/** 折进文本的文档引用行：`@` + 绝对路径（盘符 / UNC / 正斜杠根）。 */
+	const docLine = /^@((?:[A-Za-z]:[\\/]|\\\\|\/)[^\n]*)$/;
+	while (lines.length > 0) {
+		const last = lines[lines.length - 1] ?? "";
+		const match = docLine.exec(last.trim());
+		if (match === null || match[1] === undefined) break;
+		paths.unshift(match[1]);
+		lines.pop();
+	}
+	// 末尾空行是折叠时留下的分隔，不属于正文。
+	while (lines.length > 0 && (lines[lines.length - 1] ?? "").trim() === "") lines.pop();
+	return { body: lines.join("\n"), paths };
 }
 
 /* ── 助手消息操作条 ──────────────────────────────────────────────── */
@@ -2399,7 +2440,8 @@ export function ChatView({
 				<section className="artifacts">
 					{artifacts.length > 0 && (
 						<>
-							<header className="artifacts-header">产物（{artifacts.length}）</header>
+							{/* 不设「产物（N）」表头（对齐 WorkBuddy）：卡片形态自明，计数由页脚
+							    「查看所有产物 (N)」承担，少一层框感。 */}
 							<div className="artifacts-grid">
 								{artifacts.map((a) => {
 									const isUrl = /^https?:\/\//i.test(a.path);
@@ -2412,9 +2454,11 @@ export function ChatView({
 												title={isUrl ? `${a.path}（外部打开）` : `${a.path}（点击预览）`}
 												onClick={() => onPreviewArtifact(a.path)}
 											>
-												<IconDoc size={16} />
-												<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
-												{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+												<FileTypeIcon name={a.path} size={22} />
+												<span className="artifact-meta">
+													<span className="artifact-name">{a.path.split(/[\\/]/).pop()}</span>
+													{a.size > 0 && <span className="artifact-size">{formatSize(a.size)}</span>}
+												</span>
 											</button>
 											{isHtml && !isUrl && (
 												// button 里不许再嵌 button（非法嵌套交互）：独立成卡片兄弟节点，
