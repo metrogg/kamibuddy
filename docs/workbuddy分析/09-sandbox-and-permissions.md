@@ -339,6 +339,18 @@ AGENTS.md §2 原本写"**一行 shell 都不许碰**"，理由是 pi 在 Window
 > 不再要求用户预装 Python / Git for Windows。这只放宽**文档流水线的受控运行环境**；
 > 本节的「agent 自由 shell 决策 A」不变：`bash` 仍禁、PowerShell 需危险命令检查器。
 
+> **2026-09-17 状态订正**（按「决策记录写完即冻结」的规矩，只改状态、不改上面的结论与理由）：
+> - **决策 A 已落地**：危险命令检查器 = `src/extensions/command-guard.ts`（五类拦截：
+>   动态执行 / 下载执行 / 凭据目录读取 / 递归强制删除 / 系统破坏），
+>   `src/extensions/powershell-tool.ts` 执行前无条件过它；工具已在工具面里
+>   （`src/daemon/index.ts` 主会话、`subagent-runner.ts` 子代理、`automation-runner.ts`
+>   注册的无人值守变体一律拒）。
+> - **决策 B 的状态已变**：Windows 零安装沙箱（受限令牌 + capability SID 写约束）
+>   2026-09-15 落地（`src/sandbox/` + `src/daemon/sandbox-runner.ts`），
+>   「本轮搁置」不再成立；原搁置理由之一「需管理员权限建系统账号」已被证伪
+>   （只复制调用方自己的令牌，不建账号、不需 UAC）。
+> - 现状与已知边界以 `docs/ARCHITECTURE.md` §4.4a/§4.4b 与 `docs/sandbox.md` 为准。
+
 ### 决策 B：OS 沙箱本轮搁置 ✅
 
 **搁置理由是成本与排期，不是"做不到"**（见事实 4：codex 与 dsh 各有一份 Windows 实现）：

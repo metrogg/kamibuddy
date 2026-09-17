@@ -16,6 +16,15 @@ import {
 	type PromptPreviewEnvironment,
 } from "./prompt-preview.ts";
 
+/*
+ * 预热 pi 的惰性装配（业务见 daemon/index.ts 顶部的惰性说明）：被测的
+ * buildPromptPreview → assembleSystemPrompt → 技能段首用时才 `await import("pi")`，
+ * 而本文件没有静态 import 它 —— 不预热的话第一个用例会替整个 vitest worker 付一次
+ * 整包装配（本机实测 2~8s），撞 vitest 默认 5s 的用例超时。顶层 await 发生在
+ * 收集阶段（无超时预算），装好后用例只测逻辑。
+ */
+await import("@earendil-works/pi-coding-agent");
+
 /** 内存 fixtures：LoadedResources 是纯接口，预览逻辑不读盘，无需临时目录。 */
 function makeResources(): LoadedResources {
 	return {
@@ -82,8 +91,8 @@ function makeEnv(overrides: Partial<PromptPreviewEnvironment> = {}): PromptPrevi
 }
 
 describe("分段映射", () => {
-	it("chars 与 totalChars 自洽，分段顺序拼接即完整提示词", () => {
-		const result = buildPromptPreview(
+	it("chars 与 totalChars 自洽，分段顺序拼接即完整提示词", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "professional" },
 			makeEnv(),
@@ -96,12 +105,12 @@ describe("分段映射", () => {
 		expect(result.segments[result.segments.length - 1]?.source).toBe("skills");
 	});
 
-	it("预览只产出系统提示词分段：逐轮可变事实与 cwd 都不在里面", () => {
+	it("预览只产出系统提示词分段：逐轮可变事实与 cwd 都不在里面", async () => {
 		// 记忆内容 / 个性化走 prompt-switch 的 `context` 事件注入，时间与时区行、
 		// 工作目录走会话侧 hidden context（current_time / workspace_context）——
 		// 预览（= 系统提示词）里都不该出现（spec: stabilize-prompt-prefix）。
 		// 末尾那条是旧格式（曾有过的英文时间行）的回归钉子：时间不许以任何形态回来。
-		const result = buildPromptPreview(
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv(),
@@ -114,8 +123,8 @@ describe("分段映射", () => {
 		expect(result.segments.map((s) => s.text).join("")).not.toMatch(/Current time:/);
 	});
 
-	it("片段引用产出 fragment:<名> 段", () => {
-		const result = buildPromptPreview(
+	it("片段引用产出 fragment:<名> 段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "code", modeId: "ask", styleId: "" },
 			makeEnv(),
@@ -126,8 +135,8 @@ describe("分段映射", () => {
 });
 
 describe("styleId 三态", () => {
-	it("指定 id 注入对应风格段", () => {
-		const result = buildPromptPreview(
+	it("指定 id 注入对应风格段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "sarcastic" },
 			makeEnv(),
@@ -135,8 +144,8 @@ describe("styleId 三态", () => {
 		expect(result.segments.some((s) => s.source === "style:sarcastic")).toBe(true);
 	});
 
-	it("空串 = 关闭，无风格段", () => {
-		const result = buildPromptPreview(
+	it("空串 = 关闭，无风格段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv(),
@@ -144,8 +153,8 @@ describe("styleId 三态", () => {
 		expect(result.segments.some((s) => s.source.startsWith("style:"))).toBe(false);
 	});
 
-	it("缺省 = 跟随当前偏好（偏好 sarcastic → style:sarcastic）", () => {
-		const result = buildPromptPreview(
+	it("缺省 = 跟随当前偏好（偏好 sarcastic → style:sarcastic）", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft" },
 			makeEnv({ preferredStyleId: "sarcastic" }),
@@ -153,8 +162,8 @@ describe("styleId 三态", () => {
 		expect(result.segments.some((s) => s.source === "style:sarcastic")).toBe(true);
 	});
 
-	it("缺省且偏好未配置 → 回落默认风格 professional", () => {
-		const result = buildPromptPreview(
+	it("缺省且偏好未配置 → 回落默认风格 professional", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft" },
 			makeEnv({ preferredStyleId: undefined }),
@@ -164,8 +173,8 @@ describe("styleId 三态", () => {
 });
 
 describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则）", () => {
-	it("craft（含 read）注入技能段", () => {
-		const result = buildPromptPreview(
+	it("craft（含 read）注入技能段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv(),
@@ -174,8 +183,8 @@ describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则�
 		expect(skills?.text).toContain("meeting-notes");
 	});
 
-	it("只有 use_skill（无 read/bash）也注入 —— 镜像口径与 skillsSectionForMode 一致", () => {
-		const result = buildPromptPreview(
+	it("只有 use_skill（无 read/bash）也注入 —— 镜像口径与 skillsSectionForMode 一致", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "skill-only", styleId: "" },
 			makeEnv(),
@@ -186,8 +195,8 @@ describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则�
 		expect(skills?.text).toContain("优先调用 use_skill");
 	});
 
-	it("plan（无 read/bash/use_skill）不注入技能段", () => {
-		const result = buildPromptPreview(
+	it("plan（无 read/bash/use_skill）不注入技能段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "plan", styleId: "" },
 			makeEnv(),
@@ -195,8 +204,8 @@ describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则�
 		expect(result.segments.some((s) => s.source === "skills")).toBe(false);
 	});
 
-	it("disable-model-invocation 的技能不进预览技能段（与真实组装同一过滤）", () => {
-		const result = buildPromptPreview(
+	it("disable-model-invocation 的技能不进预览技能段（与真实组装同一过滤）", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv({
@@ -218,8 +227,8 @@ describe("技能段门控（与真实组装同一条 read/bash/use_skill 规则�
 });
 
 describe("专家人格注入（与真实组装同一条路径）", () => {
-	it("传 expertId 注入人格段（前部 expert 段 + 末尾钉子段），风格让位于人格", () => {
-		const result = buildPromptPreview(
+	it("传 expertId 注入人格段（前部 expert 段 + 末尾钉子段），风格让位于人格", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "sarcastic", expertId: "work-report" },
 			makeEnv(),
@@ -232,8 +241,8 @@ describe("专家人格注入（与真实组装同一条路径）", () => {
 		expect(result.segments.some((s) => s.source.startsWith("style:"))).toBe(false);
 	});
 
-	it("缺省 expertId 不注入人格段", () => {
-		const result = buildPromptPreview(
+	it("缺省 expertId 不注入人格段", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv(),
@@ -241,14 +250,14 @@ describe("专家人格注入（与真实组装同一条路径）", () => {
 		expect(result.segments.some((s) => s.source === "expert")).toBe(false);
 	});
 
-	it("expertId 指向不存在的专家 → 响亮报错（预览不做漂移容忍）", () => {
-		expect(() =>
+	it("expertId 指向不存在的专家 → 响亮报错（预览不做漂移容忍）", async () => {
+		await expect(
 			buildPromptPreview(
 				makeResources(),
 				{ sceneId: "work", modeId: "craft", expertId: "ghost" },
 				makeEnv(),
 			),
-		).toThrow(/不在专家库中/);
+		).rejects.toThrow(/不在专家库中/);
 	});
 });
 
@@ -279,8 +288,8 @@ describe("专家私有技能进预览技能段（daemon 需把专家的 skillsDi
 		{ name: "dcf-model-builder", description: "DCF 估值建模", filePath: "/experts/stock-research-report/skills/dcf-model-builder/SKILL.md" },
 	];
 
-	it("绑定专家：技能段含该专家的私有技能（人格段同现）", () => {
-		const result = buildPromptPreview(
+	it("绑定专家：技能段含该专家的私有技能（人格段同现）", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "", expertId: "stock-research-report" },
 			makeEnv({ experts: EXPERT_WITH_SKILLS, skills: SKILLS_WITH_PRIVATE }),
@@ -290,8 +299,8 @@ describe("专家私有技能进预览技能段（daemon 需把专家的 skillsDi
 		expect(result.segments.some((s) => s.source === "expert")).toBe(true);
 	});
 
-	it("未绑定专家：技能段不含私有技能（daemon 只现读全局池）", () => {
-		const result = buildPromptPreview(
+	it("未绑定专家：技能段不含私有技能（daemon 只现读全局池）", async () => {
+		const result = await buildPromptPreview(
 			makeResources(),
 			{ sceneId: "work", modeId: "craft", styleId: "" },
 			makeEnv({ experts: EXPERT_WITH_SKILLS, skills: SKILLS }),
@@ -302,25 +311,25 @@ describe("专家私有技能进预览技能段（daemon 需把专家的 skillsDi
 });
 
 describe("非法输入响亮报错", () => {
-	it("未知场景", () => {
-		expect(() =>
+	it("未知场景", async () => {
+		await expect(
 			buildPromptPreview(makeResources(), { sceneId: "nope", modeId: "craft" }, makeEnv()),
-		).toThrow(/未知场景/);
+		).rejects.toThrow(/未知场景/);
 	});
 
-	it("未知交互模式", () => {
-		expect(() =>
+	it("未知交互模式", async () => {
+		await expect(
 			buildPromptPreview(makeResources(), { sceneId: "work", modeId: "nope" }, makeEnv()),
-		).toThrow(/未知交互模式/);
+		).rejects.toThrow(/未知交互模式/);
 	});
 
-	it("未知回复风格（指定 id 不做漂移容忍）", () => {
-		expect(() =>
+	it("未知回复风格（指定 id 不做漂移容忍）", async () => {
+		await expect(
 			buildPromptPreview(
 				makeResources(),
 				{ sceneId: "work", modeId: "craft", styleId: "nope" },
 				makeEnv(),
 			),
-		).toThrow(/未知回复风格/);
+		).rejects.toThrow(/未知回复风格/);
 	});
 });

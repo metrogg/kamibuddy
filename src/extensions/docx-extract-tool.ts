@@ -16,6 +16,12 @@
  *
  * 环境准备：与正向共用 docx-env 的幂等 ensure（已就绪秒退）；首次冷启动
  * 约 1-3 分钟，描述里如实说明，失败时响亮报错并给可执行建议，不静默返回空 HTML。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: docx_extract 的名称、description（与 read_document 的分工必须写清，
+ * 否则模型会拿错工具）与参数 schema；返回的产物路径（HTML + 图片目录）与摘要 / 错误文案。
+ * Token effect: 定义常驻；返回**不含 HTML 正文**，只有路径与状态 ⇒ 单次结果很小。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

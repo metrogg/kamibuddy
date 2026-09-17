@@ -119,6 +119,52 @@ describe("sealOrphans 中断合成闭合", () => {
 		expect(readEntries("s1")).toHaveLength(2);
 	});
 
+	it("未闭合的压缩补合成闭合 —— 压缩中途被杀不被当成正常历史", () => {
+		const { report } = silentReport();
+		writeFileSync(
+			join(dir, ledgerFileName("s1")),
+			'{"seq":1,"at":1,"kind":"run_start","data":{"runId":"run-1"}}\n' +
+				'{"seq":2,"at":2,"kind":"compaction_start","data":{"lock":"run-1","reason":"threshold"}}\n',
+			"utf8",
+		);
+		new RunLedger(dir, "s1", report);
+
+		const entries = readEntries("s1");
+		// 压缩先闭合、run 后闭合：compaction_start 排在 run 中间，
+		// 写序倒过来投影回放就会把闭合记到错的位置上。
+		expect(entries.map((e) => e.kind)).toEqual([
+			"run_start",
+			"compaction_start",
+			"compaction",
+			"run_end",
+		]);
+		expect(entries.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+		expect(entries[2]?.data).toMatchObject({
+			reason: "threshold",
+			lock: "run-1",
+			aborted: true,
+			interrupted: true,
+		});
+		expect(entries[3]?.data).toMatchObject({ runId: "run-1", reason: "interrupted" });
+	});
+
+	it("已闭合的压缩不补（compaction_start 后有 compaction）", () => {
+		const { report } = silentReport();
+		writeFileSync(
+			join(dir, ledgerFileName("s1")),
+			'{"seq":1,"at":1,"kind":"run_start","data":{"runId":"run-1"}}\n' +
+				'{"seq":2,"at":2,"kind":"compaction_start","data":{"lock":"run-1","reason":"manual"}}\n' +
+				'{"seq":3,"at":3,"kind":"compaction","data":{"reason":"manual","aborted":false,"lock":"run-1"}}\n' +
+				'{"seq":4,"at":4,"kind":"run_end","data":{"runId":"run-1","reason":"completed"}}\n',
+			"utf8",
+		);
+		new RunLedger(dir, "s1", report);
+
+		const entries = readEntries("s1");
+		expect(entries).toHaveLength(4);
+		expect(entries.some((e) => (e.data as { interrupted?: boolean }).interrupted === true)).toBe(false);
+	});
+
 	it("静态 sealOrphans 给冷会话的孤儿 run 补闭合，目录不存在秒退", () => {
 		writeFileSync(
 			join(dir, ledgerFileName("cold")),
@@ -132,6 +178,23 @@ describe("sealOrphans 中断合成闭合", () => {
 		const entries = readEntries("cold");
 		expect(entries).toHaveLength(2);
 		expect(entries[1]).toMatchObject({ seq: 6, kind: "run_end", data: { reason: "interrupted" } });
+		expect(reports).toHaveLength(0);
+	});
+
+	it("静态 sealOrphans 给冷会话的孤儿压缩补闭合（锁未释放的那次）", () => {
+		writeFileSync(
+			join(dir, ledgerFileName("cold2")),
+			'{"seq":1,"at":1,"kind":"run_start","data":{"runId":"run-2"}}\n' +
+				'{"seq":2,"at":2,"kind":"compaction_start","data":{"lock":null,"reason":"manual"}}\n',
+			"utf8",
+		);
+		const reports: string[] = [];
+		RunLedger.sealOrphans(dir, (file, m) => reports.push(`${file}: ${m}`));
+
+		const entries = readEntries("cold2");
+		expect(entries.map((e) => e.kind)).toEqual(["run_start", "compaction_start", "compaction", "run_end"]);
+		expect(entries.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+		expect(entries[2]?.data).toMatchObject({ reason: "manual", lock: null, interrupted: true });
 		expect(reports).toHaveLength(0);
 	});
 });

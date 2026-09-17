@@ -14,6 +14,12 @@
  *
  * 作答形态是与 renderer 的契约：每题单选一个选项，或选「其他」自由补充；
  * 整卡可跳过。跳过与作答的结果文案写给模型看，必须明确告诉它下一步怎么走。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: questionnaire 的名称、description 与 questions 的 schema（1-4 题、每题
+ * 2-6 个非空选项）；返回的作答文本（题面 + 选中项 / 「其他」自由补充），或无人值守时的不可用文案。
+ * Token effect: 定义常驻；返回与题量与选项数成正比；无人值守文案是固定短句（避免模型反复重试）。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀。
  */
 
 import { randomUUID } from "node:crypto";

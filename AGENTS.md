@@ -77,12 +77,21 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
   - 这套 venv 是进程内受控调用，不等于把 `bash` 暴露给 agent 当自由 shell
     工具（agent 的 shell 能力见下一节）。
 - **agent 的 shell 能力另有决策**：`bash` 仍然不用（上面那条理由不变），
-  但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已决定启用**
+  但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已启用**
   （决策记录见 `docs/workbuddy分析/09-sandbox-and-permissions.md` §6 决策 A）。
-  **前置条件：必须先有危险命令检查器**（`iex` / `Invoke-Expression` / `Add-Type` /
-  `-EncodedCommand` / 递归删除 / 下载执行…）。当前**尚未实现，工具面里也还没有
-  powershell** —— 在检查器落地之前不要打开它：没有 OS 沙箱时，一条命令就能绕开
-  权限门的全部路径保护（`type ~\.ssh\id_rsa`）。
+  **前置条件「危险命令检查器」已落地**：`src/extensions/command-guard.ts` 拦五类
+  （动态执行 / 下载执行 / 凭据目录读取 / 递归强制删除 / 系统破坏），
+  `src/extensions/powershell-tool.ts` 每次执行前无条件过它。它**不是沙箱**——
+  base64 重编码、变量拼接、写脚本再执行都能绕过静态文本匹配，所以
+  「读走凭据」（`type ~\.ssh\id_rsa`）这条路至今只有它拦得住：沙箱只约束写，
+  读与网络不受约束，别因为"有沙箱了"就削弱检查器。
+  工具已在工具面里：`src/daemon/index.ts`（主会话）、`src/daemon/subagent-runner.ts`
+  （子代理）、`src/daemon/automation-runner.ts`（定时任务注册无人值守变体，
+  工具层一律拒）；`craft` 白名单与内置 `worker` 角色的工具面都含它
+  （回归断言在 `src/core/agents.test.ts`）。
+  没有独立开关：**可见性**由模式白名单决定（`craft` 含它、`ask` 不含），
+  **能不能跑**由权限预设档位 + 沙箱决定。
+  三层分工、档位映射与已知边界见 `docs/ARCHITECTURE.md` §4.4a/§4.4b 与 `docs/sandbox.md`。
 - 外部命令调用失败必须响亮报错（§7），不许静默降级掩盖"命令不存在"。
   （文档流水线内、受控的转换失败降级 Markdown 是明确设计，不属"静默掩盖"。）
 - 导出器统一签名 `(html, opts) => Promise<Buffer>`，新增格式就是新增一个文件。
@@ -140,13 +149,28 @@ resources/
   Token 唯一真源是 `src/styles/tokens.css`；档位不够用时先改 DESIGN.md 并写明理由，
   不许在组件里加新档。验收细则见 DESIGN.md §9 的 CR 自查清单。
 
-## 八、AI 协作
+## 八、AI 协作与证据纪律
 
 - 一次改动一个关注点，不要顺手重构无关文件。
 - 改 `documents/` 必须同时跑 `npm test`。
-- 声称"完成"之前跑 `npm run typecheck && npm run check:deps`。
 - 不确定 pi 的 API 时读 `开源项目/pi/packages/coding-agent/` 的源码核对，
   不要凭记忆猜——那份 clone 就是留着当参考的。
+- **声称"完成"之前跑 `npm run typecheck && npm run check:deps`**，并在交付里附上
+  实跑结果（命令 + 输出）。没跑过就不算完成，"应该没问题"不是证据。
+- **证据要打真入口路径**：测试走生产的装配入口、真实资源目录、真实会话形态，
+  不另搭只有测试用的旁路——旁路绿 ≠ 线上绿。教训：沙箱上线首测那次回归，
+  正是因为终端测试全绿、真实进程里每条命令都失败。
+- **断言"没碰的东西逐字节不变"**：改动波及的相邻产物（提示词字节、序列化 JSON、
+  台账/事件格式）要有对照断言。"看上去没变"不算证据。
+- **改坏 → 看它变红 → 再回滚**：新增的护栏（测试、门禁脚本、探针）都先人为破坏一次，
+  确认它真会失败；不会变红的护栏只是装饰。
+- **非平凡改动留一份决策记录**（本项目形态：`docs/` 里的「决策 N」小节、
+  `ARCHITECTURE.md` 的决策段、`.trae/specs/*/spec.md`），且**必须含 `## 否决方案`**
+  ——被否掉的路 + 否掉的理由，避免同一个决定被反复推翻。
+  记录**写完即冻结**：后续只改状态（有效 / 被取代 / 作废）与事实性路径，不改结论；
+  结论要变就另写一份并与旧记录互相链接。
+- 提交前人工过一遍上面几条。决策记录自查（先做人工项，脚本化以后再说）：
+  这次是非平凡改动吗？有决策记录吗？记录里有 `## 否决方案` 吗？
 
 ## 九、明确不做（YAGNI）
 

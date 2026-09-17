@@ -31,6 +31,7 @@ import {
 import {
 	canEscalate,
 	isSandboxMode,
+	willAskUser,
 	type PermissionSettings,
 	type SandboxMode,
 	type SandboxUnavailableReason,
@@ -205,10 +206,11 @@ async function resolveEscalation(
 		return blocked("当前会话没有可用的审批通道，无法申请提权。");
 	}
 	/*
-	 * approval === "never" 一律拒，**不弹窗** —— 与 resolveAsk 同一口径：
-	 * 无人值守下「不问」必须等于「不做」，否则这个开关就成了完全敞开的后门。
+	 * 生效审批策略为「不问人」时一律拒，**不弹窗** —— 判据走 shared/permissions
+	 * 的 willAskUser（设置旋钮 × 无人值守合成在一处）：不问必须等于不做，
+	 * 否则这个开关就成了完全敞开的后门。
 	 */
-	if (settings.approval === "never") {
+	if (!willAskUser(settings)) {
 		return blocked(
 			"当前审批策略为「不询问」，需要用户批准的提权会被直接拒绝。请改用工作目录内的路径完成。",
 		);
@@ -542,8 +544,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				});
 				report({ available: true });
 				if (looksDenied(outcome.stderr)) {
-					const canAsk =
-						options.requestEscalation !== undefined && settings.approval !== "never";
+					const canAsk = options.requestEscalation !== undefined && willAskUser(settings);
 					return {
 						...outcome,
 						note: denialNoteFor(mode, canAsk),
@@ -587,14 +588,14 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 			 */
 			if (looksDenied(outcome.stderr)) {
 				/*
-				 * 提权提示只在**真的能提权**时附上：没有审批通道、或审批策略是
-				 * 「不询问」时，让模型去申请等于骗它白烧一轮（那条申请必然被
-				 * resolveEscalation 拒掉）。判据与 resolveEscalation 的前置检查
-				 * 保持一致 —— 两处若分歧，模型就会被指向一条走不通的路。
+				 * 提权提示只在**真的能提权**时附上：没有审批通道、或生效策略是
+				 * 「不问人」时，让模型去申请等于骗它白烧一轮（那条申请必然被
+				 * resolveEscalation 拒掉）。两处用的是**同一个判据**
+				 * （willAskUser —— 生效策略的唯一出处），不会分歧。
 				 */
 				const canAsk =
 					options.requestEscalation !== undefined &&
-					settings.approval !== "never" &&
+					willAskUser(settings) &&
 					canEscalate(mode, "danger-full-access");
 				return { ...outcome, note: denialNoteFor(mode, canAsk) };
 			}

@@ -540,12 +540,12 @@ describe("resolveSessionExpert / toExpertPersona", () => {
 });
 
 describe("formatSkillsSection", () => {
-	it("无技能返回空串（零 token）", () => {
-		expect(formatSkillsSection([])).toBe("");
+	it("无技能返回空串（零 token）", async () => {
+		expect(await formatSkillsSection([])).toBe("");
 	});
 
-	it("委托 pi 的规范格式：含名称、描述与文件路径（模型按需 read 的入口）", () => {
-		const section = formatSkillsSection([
+	it("委托 pi 的规范格式：含名称、描述与文件路径（模型按需 read 的入口）", async () => {
+		const section = await formatSkillsSection([
 			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
 		]);
 		// 断言关键信息存在而不是整段文本：格式归 pi（agentskills.io 规范），升级零改动。
@@ -556,8 +556,8 @@ describe("formatSkillsSection", () => {
 		expect(section).not.toContain("可用技能：");
 	});
 
-	it("清单段含本会话的调用约定一句：优先 use_skill，无该工具时 read + <location>", () => {
-		const section = formatSkillsSection([
+	it("清单段含本会话的调用约定一句：优先 use_skill，无该工具时 read + <location>", async () => {
+		const section = await formatSkillsSection([
 			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
 		]);
 		expect(section).toContain("优先调用 use_skill");
@@ -568,8 +568,8 @@ describe("formatSkillsSection", () => {
 		expect(section.indexOf("</available_skills>")).toBeLessThan(section.indexOf("优先调用 use_skill"));
 	});
 
-	it("disableModelInvocation 的技能不进清单段（pi 的过滤依赖这个字段）", () => {
-		const section = formatSkillsSection([
+	it("disableModelInvocation 的技能不进清单段（pi 的过滤依赖这个字段）", async () => {
+		const section = await formatSkillsSection([
 			{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
 			{
 				name: "typeset",
@@ -582,9 +582,9 @@ describe("formatSkillsSection", () => {
 		expect(section).not.toContain("typeset");
 	});
 
-	it("技能全被 disable-model-invocation 过滤掉 → 空串（不留孤零零的调用约定）", () => {
+	it("技能全被 disable-model-invocation 过滤掉 → 空串（不留孤零零的调用约定）", async () => {
 		expect(
-			formatSkillsSection([
+			await formatSkillsSection([
 				{
 					name: "typeset",
 					description: "内部排版子技能",
@@ -620,17 +620,17 @@ describe("会话技能路径（专家私有技能预加载）", () => {
 		);
 	}
 
-	it("绑定专家：私有技能进清单段；未绑定：不含（全局技能两态都在）", () => {
+	it("绑定专家：私有技能进清单段；未绑定：不含（全局技能两态都在）", async () => {
 		const globalSkillsDir = join(root, "resources-skills");
 		const expertSkillsDir = join(root, "experts", "stock-research-report", "skills");
 		writeSkill(join(globalSkillsDir, "meeting-notes"), "meeting-notes");
 		writeSkill(join(expertSkillsDir, "dcf-model-builder"), "dcf-model-builder");
 
-		const bound = formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir, expertSkillsDir)));
+		const bound = await formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir, expertSkillsDir)));
 		expect(bound).toContain("meeting-notes");
 		expect(bound).toContain("dcf-model-builder");
 
-		const unbound = formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir)));
+		const unbound = await formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir)));
 		expect(unbound).toContain("meeting-notes");
 		expect(unbound).not.toContain("dcf-model-builder");
 	});
@@ -649,20 +649,20 @@ describe("skillsSectionForMode（技能段门控）", () => {
 		{ name: "meeting-notes", description: "整理会议纪要", filePath: "C:\\skills\\meeting-notes\\SKILL.md" },
 	];
 
-	it("白名单含 read / bash → 注入技能段", () => {
-		expect(skillsSectionForMode(["read", "write"], SKILLS)).toContain("meeting-notes");
-		expect(skillsSectionForMode(["bash"], SKILLS)).toContain("meeting-notes");
+	it("白名单含 read / bash → 注入技能段", async () => {
+		expect(await skillsSectionForMode(["read", "write"], SKILLS)).toContain("meeting-notes");
+		expect(await skillsSectionForMode(["bash"], SKILLS)).toContain("meeting-notes");
 	});
 
-	it("白名单只有 use_skill（无 read / bash）→ 也注入（技能加载工具算数）", () => {
+	it("白名单只有 use_skill（无 read / bash）→ 也注入（技能加载工具算数）", async () => {
 		// use_skill 自带「读 SKILL.md」的能力，模型据此能兑现清单里的每个技能名。
-		expect(skillsSectionForMode(["use_skill"], SKILLS)).toContain("meeting-notes");
+		expect(await skillsSectionForMode(["use_skill"], SKILLS)).toContain("meeting-notes");
 	});
 
-	it("白名单 read / bash / use_skill 一个都没有 → 不注入（注入等于留坑）", () => {
-		expect(skillsSectionForMode(["grep", "write"], SKILLS)).toBe("");
+	it("白名单 read / bash / use_skill 一个都没有 → 不注入（注入等于留坑）", async () => {
+		expect(await skillsSectionForMode(["grep", "write"], SKILLS)).toBe("");
 		// 无技能时同样是空串（零 token），两态不靠字面量区分。
-		expect(skillsSectionForMode(["read"], [])).toBe("");
+		expect(await skillsSectionForMode(["read"], [])).toBe("");
 	});
 });
 

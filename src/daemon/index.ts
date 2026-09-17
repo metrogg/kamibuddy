@@ -23,7 +23,15 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { loadSkills, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+/*
+ * pi 的值为什么全部走首用时动态 import（勿改回静态）：pi 整包实测热态 1809ms
+ * （冷态 4.7s），而 daemon 的启动关键路径（post ready 之前）只做 loadResources /
+ * 偏好 / 权限规则这类 ms 级同步读 —— 技能清单、会话文件、模型目录一个都不碰。
+ * 静态 import 会在本模块的模块体**之前**求值，于是 ready 必须等完整包装配完，
+ * 首屏的四个加载文案全被这一个闸门卡住（实测 ready 在 uptime 2562~4029ms）。
+ * 这里只保留 `import type`（编译期擦除，不产生运行时依赖）。
+ */
+import type { SessionInfo, SessionManager } from "@earendil-works/pi-coding-agent";
 import { AutomationStore } from "../core/automation-store.ts";
 import { SessionArchive } from "../core/session-archive.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
@@ -33,6 +41,7 @@ import {
 	getConfigDir,
 	getResourcesDir,
 	getSessionsDir,
+	getSpillsDir,
 	getTempTasksDir,
 } from "../core/config-paths.ts";
 import { EventLog } from "../core/event-log.ts";
@@ -128,7 +137,9 @@ import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import {
 	DEFAULT_PERMISSIONS,
 	isApprovalPolicy,
+	isGranted,
 	isSandboxMode,
+	normalizeApprovalOutcome,
 	presetIdFor,
 	type PermissionInfo,
 	type PermissionRule,
@@ -141,6 +152,7 @@ import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
 import { createMcpClient, type McpClientHandle } from "../extensions/mcp-client.ts";
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
+import { spillExtensionFactory } from "../extensions/spill-hook.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
@@ -448,7 +460,13 @@ type SkillEntry = Omit<SkillInfo, "enabled">;
  * 独立于 SessionHost 的加载（宿主懒建，技能页要在第一次发消息前就能看）。
  * 加载失败不抛：页面不能因为一个坏 SKILL.md 打不开，记日志、列表为空。
  */
-function listSkills(expertSkillsDir?: string): SkillEntry[] {
+async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
+	/*
+	 * pi 首用时才装配（见文件顶的惰性说明）：技能清单只在「打开技能页 / 组装提示词 /
+	 * 调 use_skill」时才需要。**放在 try 之外**：pi 装载失败是基础设施故障，
+	 * 不能与「某个 SKILL.md 坏了」共用同一条「列表为空」的降级路径（AGENTS.md §7）。
+	 */
+	const { loadSkills } = await import("@earendil-works/pi-coding-agent");
 	try {
 		const { skills } = loadSkills({
 			/*
@@ -523,7 +541,7 @@ function loadExpertsNow(): readonly ExpertDefinition[] {
  *
  * 每次现读不缓存：与 listSkills 同一口径，导入新技能后下一次工具调用/下一轮对话即生效。
  */
-function sessionSkills(expertId: string | undefined): SkillEntry[] {
+async function sessionSkills(expertId: string | undefined): Promise<SkillEntry[]> {
 	// expertId 缺失时**短路**：未绑专家的会话不该走专家库读路径（专家库加载从紧，
 	// 坏专家文件抛错——与 composeSystemPrompt 里那次短路同一个理由）。
 	if (expertId === undefined) return listSkills();
@@ -538,12 +556,12 @@ function sessionSkills(expertId: string | undefined): SkillEntry[] {
  * 一次读盘、一份 overrides 同时算出两面：分两次读会出现「读盘 A 时启用、过滤时已被关掉」
  * 的瞬时错位；两次读偏好同理（每轮 compose 都在走这条路径）。
  */
-function skillSets(expertId: string | undefined): {
+async function skillSets(expertId: string | undefined): Promise<{
 	readonly all: readonly SkillInfo[];
 	readonly enabled: readonly SkillInfo[];
-} {
+}> {
 	const overrides = readPreferences().skillOverrides;
-	const all: SkillInfo[] = sessionSkills(expertId).map((skill) => ({
+	const all: SkillInfo[] = (await sessionSkills(expertId)).map((skill) => ({
 		...skill,
 		enabled: isSkillEnabled(skill.name, overrides),
 	}));
@@ -556,8 +574,8 @@ function skillSets(expertId: string | undefined): {
  *
  * 技能页与 `skills:snapshot` **不走这里**（它们要全量，包括被停用的，否则开关没有落点）。
  */
-function enabledSkills(expertId: string | undefined): readonly SkillInfo[] {
-	return skillSets(expertId).enabled;
+async function enabledSkills(expertId: string | undefined): Promise<readonly SkillInfo[]> {
+	return (await skillSets(expertId)).enabled;
 }
 
 /**
@@ -568,8 +586,8 @@ function enabledSkills(expertId: string | undefined): readonly SkillInfo[] {
  * 「这个技能被停用了」，两者给用户的行动项不同（见 extensions/use-skill-tool.ts）。
  * 同源没有被破坏 —— enabled 与 enabledSkills() 出自 skillSets() 的同一次判定。
  */
-function toUseSkills(expertId: string | undefined): UseSkillTarget[] {
-	return skillSets(expertId).all.map((s) => ({
+async function toUseSkills(expertId: string | undefined): Promise<UseSkillTarget[]> {
+	return (await skillSets(expertId)).all.map((s) => ({
 		name: s.name,
 		description: s.description,
 		filePath: s.filePath,
@@ -607,9 +625,9 @@ function toSkillDescriptors(
  * 成本用 computeSkillsCost（= formatSkillsSection + estimateTokens，与真实注入同一份
  * 组装逻辑）对**已启用**技能算 —— 渲染层不另算一套，否则两个数字会慢慢分家。
  */
-function buildSkillsSnapshot(): SkillsSnapshot {
-	const { all, enabled } = skillSets(undefined);
-	const cost = computeSkillsCost(toSkillDescriptors(enabled));
+async function buildSkillsSnapshot(): Promise<SkillsSnapshot> {
+	const { all, enabled } = await skillSets(undefined);
+	const cost = await computeSkillsCost(toSkillDescriptors(enabled));
 	return {
 		skills: all,
 		userSkillsDir: userSkillsDir(),
@@ -697,7 +715,7 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	resourcesDir: getResourcesDir(),
 	loadExperts: loadExpertsNow,
 	// 每轮现读技能清单：导入新技能后下一轮对话即生效，无需重启。
-	enabledSkills: (expertId) => toSkillDescriptors(enabledSkills(expertId)),
+	enabledSkills: async (expertId) => toSkillDescriptors(await enabledSkills(expertId)),
 	// 风格配置漂移记进事件日志：降级可以是体验取舍，但不能无痕。
 	onStyleDrift: ({ requested, fallback }) => {
 		eventLog.append({ kind: "style_drift", requested, fallback });
@@ -966,7 +984,7 @@ const automationScheduler = new AutomationScheduler({
 		// 定时任务 run 会话保持 work+craft 不起专家（spec: rework-expert-orthogonal-and-skills
 		// —— 专家绑定是会话级 UI 状态，无人值守会话没有人格入口），expertId 恒 undefined。
 		compose: async (_cwd, sceneId, interactionId, piContext) =>
-			composeSystemPrompt({ sceneId, interactionId, expertId: undefined, piContext }).prompt,
+			(await composeSystemPrompt({ sceneId, interactionId, expertId: undefined, piContext })).prompt,
 		// run 会话同样是多轮会话，逐轮可变事实走注入（提示词里不再有它们）——
 		// 注入块按 run 的 cwd 现读记忆与个性化，与用户会话同一个组装函数。
 		composeRuntimeContext: buildRuntimeContext,
@@ -987,6 +1005,9 @@ const automationScheduler = new AutomationScheduler({
 		// run 会话恒不绑专家，技能就是全局池 —— 但仍走技能单一出口 skillSets
 		//（与它自己的提示词技能清单段同源，见 skillSets / enabledSkills 注释）。
 		resolveSkills: () => toUseSkills(undefined),
+		// 工具结果落盘失败的上报：run 会话与用户会话同一个 spill 钩子，
+		// 失败口径也必须一致（否则「无人值守下结果丢了」在 event-log 里没有痕迹）。
+		reportSpill: (message) => eventLog.append({ kind: "tool_result_spill_error", message }),
 	}),
 	push: (event) => {
 		post({ kind: "push", channel: PUSH.automationEvent, payload: event });
@@ -1500,9 +1521,10 @@ function requestApproval(
 ): Promise<PermissionResponse> {
 	const id = randomUUID();
 	/*
-	 * 审批请求落审计日志：出了事要能还原「当时问过什么、用户批了什么」。
-	 * 不记 details 全文 —— 路径/命令已随工具卡的 session_event 日志落盘，
-	 * 这里再抄一遍只会让审计日志体积翻倍；id 足够把两边对上。
+	 * asked 半边的审计（dsh 的 approval/asked）。出了事要能还原「当时问过什么、
+	 * 用户批了什么」。不记 details 全文 —— 路径/命令已随工具卡的 session_event
+	 * 日志落盘，这里再抄一遍只会让审计日志体积翻倍；id 足够把两边对上
+	 * （decided 半边见本函数末尾的失败分支与 INVOKE.permissionResponse）。
 	 */
 	eventLog.append({
 		kind: "permission_request",
@@ -1511,13 +1533,31 @@ function requestApproval(
 		risk: request.risk,
 		summary: request.summary,
 	});
-	return new Promise<PermissionResponse>((resolve) => {
+	return new Promise<PermissionResponse>((resolve, reject) => {
 		pendingApprovals.set(id, { toolName: request.toolName, resolve });
-		post({
-			kind: "push",
-			channel: PUSH.permissionRequest,
-			payload: { id, sessionId, ...request },
-		});
+		try {
+			post({
+				kind: "push",
+				channel: PUSH.permissionRequest,
+				payload: { id, sessionId, ...request },
+			});
+		} catch (error) {
+			/*
+			 * 请求根本发不出去 = 这次审批**没有应答者**。按闭集降级为 unavailable
+			 * 并补上 decided 半边（asked/decided 对不能只落一半：事后还原时
+			 * 「问了没人答」与「根本没问」必须分得开），异常照旧抛给调用方 ——
+			 * 权限门按 unavailable 拒绝执行，绝不因为通道坏了就放行。
+			 */
+			pendingApprovals.delete(id);
+			eventLog.append({
+				kind: "permission_response",
+				id,
+				toolName: request.toolName,
+				outcome: "unavailable",
+				error: error instanceof Error ? error.message : String(error),
+			});
+			reject(error);
+		}
 	});
 }
 
@@ -2129,6 +2169,19 @@ async function createHost(
 				},
 			}),
 			/*
+			 * 工具结果 spill（spec: adopt-dsh-disciplines Task 2.1）：**所有会话都装**，
+			 * 紧跟在权限门之后读起来最顺 —— 权限门管「这条调用能不能跑」，
+			 * 本钩子管「跑完的结果回给模型多少」（超限落盘 + 给路径，不再丢信息）。
+			 *
+			 * 落盘目录按会话 cwd 走：模型要用 read/grep 把结果读回去，
+			 * 放配置目录会被文件工具的禁读规则挡住（见 config-paths.getSpillsDir）。
+			 * 失败进 event-log，不炸 run —— 与 run-ledger 的观测纪律同出口。
+			 */
+			spillExtensionFactory({
+				dir: getSpillsDir(cwd),
+				report: (message) => eventLog.append({ kind: "tool_result_spill_error", message }),
+			}),
+			/*
 			 * 项目信任：**所有会话都装**（与权限门同理）。
 			 *
 			 * 理由：项目级资源的加载发生在工具层之前 —— `.pi/extensions` 是
@@ -2172,7 +2225,7 @@ async function createHost(
 					expertId: bucket.conversation.state.expertId,
 				}),
 				compose: async (sceneId, interactionId, expertId, piContext) => {
-					const composed = composeSystemPrompt({ sceneId, interactionId, expertId, piContext });
+					const composed = await composeSystemPrompt({ sceneId, interactionId, expertId, piContext });
 					// 成分统计的 system 部分从这里取——只有这里见过组装完的真身。
 					// 技能段单独记一份：上下文用量明细要把「技能」从系统提示词里拆出来单列。
 					// 记进所属桶：并发会话各组各的提示词，token 估算不互相覆盖。
@@ -2271,7 +2324,13 @@ async function createHost(
 								},
 								sessionId,
 							);
-							return response.decision === "allow";
+							/*
+							 * 与权限门**同一份规范化**地消费闭集：只有 allowed-once 放行，
+							 * 不合契约的应答（未知 decision）归 unavailable，一律按「没批准」
+							 * 处理（这里只需布尔，但判据必须与门同源 —— 两处各判一遍就会
+							 * 出现「门放行、提权拒」这类对不上的组合）。
+							 */
+							return isGranted(normalizeApprovalOutcome(response));
 						} finally {
 							bucket.pendingApprovals -= 1;
 							evictIdleHosts();
@@ -2629,6 +2688,8 @@ function isSubagentSessionFile(filePath: string): boolean {
 }
 
 async function listSessions(): Promise<SessionSummary[]> {
+	// pi 首用时才装配（见文件顶的惰性说明）。
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 	let infos: SessionInfo[];
 	try {
 		infos = await SessionManager.listAll(getSessionsDir());
@@ -2821,7 +2882,8 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	const skippedLines = countSkippedLines(readFileSync(path, "utf8"));
 
 	// open 是同步的（dist 类型：static open(...) : SessionManager），
-	// 文件损坏/不可读在此抛出。
+	// 文件损坏/不可读在此抛出。pi 首用时才装配（见文件顶的惰性说明）。
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 	const manager = SessionManager.open(path, sessionsDir);
 	const header = manager.getHeader();
 	if (header === null) throw new Error("会话文件缺少头部，无法恢复");
@@ -2943,7 +3005,7 @@ async function buildConversationForBucket(
 	 */
 	try {
 		const state = bucket.conversation.state;
-		const composed = composeSystemPrompt({
+		const composed = await composeSystemPrompt({
 			sceneId: state.sceneId,
 			interactionId: state.interactionId,
 			expertId: state.expertId,
@@ -3037,7 +3099,6 @@ async function mountSessionFile(options: {
 	return { bucket, contextUsage: rebuilt.contextUsage };
 }
 
-
 /* ── 请求派发 ─────────────────────────────────────────────────────── */
 
 type Handler = (args: readonly unknown[]) => Promise<unknown>;
@@ -3127,10 +3188,10 @@ async function newTask(targetCwd = ""): Promise<void> {
  * 而侧栏读的是磁盘真相 —— 这种情况由 session-file 的前缀写入器补齐（header 仍由
  * pi 生成，见 createSessionFileFromPrefix 的注释）。
  */
-function extractBranchFile(motherPath: string, entryId: string): string {
-	const branched = createBranchedSessionFile(motherPath, entryId);
+async function extractBranchFile(motherPath: string, entryId: string): Promise<string> {
+	const branched = await createBranchedSessionFile(motherPath, entryId);
 	if (branched !== undefined && existsSync(branched)) return branched;
-	const fallback = createSessionFileFromPrefix(motherPath, entryId);
+	const fallback = await createSessionFileFromPrefix(motherPath, entryId);
 	if (fallback === undefined) throw new Error("分叉点的条目不在会话文件里，无法抽枝");
 	return fallback;
 }
@@ -3169,10 +3230,10 @@ async function materializeBranch(
 ): Promise<{ readonly path: string; readonly title: string }> {
 	const path =
 		entryId === null
-			? createEmptySessionFile(motherCwd, motherPath)
-			: extractBranchFile(motherPath, entryId);
+			? await createEmptySessionFile(motherCwd, motherPath)
+			: await extractBranchFile(motherPath, entryId);
 	const title = await branchTitleFor(motherPath);
-	setSessionName(path, title);
+	await setSessionName(path, title);
 	ensureParentSession(path, motherPath);
 	return { path, title };
 }
@@ -3290,6 +3351,8 @@ async function restartSession(
 				bucket.hostPromise = undefined;
 				return branchFail("no-such-entry");
 			}
+			// pi 首用时才装配（见文件顶的惰性说明）。
+			const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 			const manager = SessionManager.open(target, getSessionsDir());
 			const host = await remountHostInBucket(bucket, manager);
 			const rebuilt = await buildConversationForBucket(bucket, manager, host);
@@ -3357,8 +3420,11 @@ async function forkSession(
 				: anchor.parentId;
 			const branch = await materializeBranch(target, mother.cwd, leaf);
 			const axes = mother.conversation.state;
+			// pi 首用时才装配（见文件顶的惰性说明）。
+			const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+			const branchManager = SessionManager.open(branch.path, getSessionsDir());
 			const { bucket } = await mountSessionFile({
-				manager: SessionManager.open(branch.path, getSessionsDir()),
+				manager: branchManager,
 				cwd: mother.cwd,
 				sceneId: axes.sceneId,
 				interactionId: axes.interactionId,
@@ -3804,6 +3870,8 @@ const handlers: Record<string, Handler> = {
 
 		// 未注册会话：临时 open 写完即弃。实例不持有、不注册到任何地方 ——
 		// 它若日后成为活会话，会经 resume 重新 open，不存在双写者窗口。
+		// pi 首用时才装配（见文件顶的惰性说明）。
+		const { SessionManager } = await import("@earendil-works/pi-coding-agent");
 		SessionManager.open(target, getSessionsDir()).appendSessionInfo(trimmed);
 		pushTaskListChanged();
 	},
@@ -4375,7 +4443,10 @@ const handlers: Record<string, Handler> = {
 			 * （列表同源：同一份 listSkills 结果 + 同一份 overrides + 同一个过滤函数）。
 			 */
 			skills: toSkillDescriptors(
-				filterEnabledSkills(listSkills(expert?.skillsDir), readPreferences().skillOverrides),
+				filterEnabledSkills(
+					await listSkills(expert?.skillsDir),
+					readPreferences().skillOverrides,
+				),
 			),
 			// 预览按请求里的 expertId 解析人格（同一条 requireExpertPersona 路径）。
 			experts,
@@ -4428,7 +4499,7 @@ const handlers: Record<string, Handler> = {
 			// 各写一份过滤就会出现「菜单里有但 use_skill 加载不了」。
 			// 不传专家 id = 与今日行为一致的全局池口径（专家私有技能只在绑定该专家的
 			// 会话里可见，那条差异与本轮的启停过滤无关）。
-			...enabledSkills(undefined)
+			...(await enabledSkills(undefined))
 				.filter((s) => s.userInvocable)
 				.map((s) => ({
 					// 前缀用共享常量（渲染层要按它切出裸技能名去渲染 chip）。
@@ -4578,12 +4649,20 @@ const handlers: Record<string, Handler> = {
 		 */
 		const rule = rememberRuleFromApproval(pending.toolName, answer, [getConfigDir(), ...PROTECTED_DIRS]);
 		if (rule !== undefined) appendRule(rule);
-		// 以用户实际作出选择的位置为准落日志（而非 resolve 包装）：
-		// 审计要的是「用户批了什么」，重复应答与悬空 id 都不算选择。
+		/*
+		 * 以用户实际作出选择的位置为准落 decided 半边（而非 resolve 包装）：
+		 * 审计要的是「用户批了什么」，重复应答与悬空 id 都不算选择。
+		 *
+		 * outcome 记**闭集值**（shared/permissions 的 normalizeApprovalOutcome）：
+		 * 不合契约的应答在这里就落成 unavailable，与权限门的消费是同一份规范化，
+		 * 于是「日志说放行了、门却拒了」这种对不上的情况在结构上不可能出现。
+		 */
+		const outcome = normalizeApprovalOutcome(answer);
 		eventLog.append({
 			kind: "permission_response",
 			id: answer.id,
-			decision: answer.decision,
+			toolName: pending.toolName,
+			outcome,
 			remember: answer.remember === true,
 			// 写回成功的规则前缀一并入档：审计要能还原「这次批准留下了什么持久影响」。
 			...(rule === undefined ? {} : { rulePrefix: rule.prefix }),
@@ -4757,34 +4836,30 @@ process.on("unhandledRejection", (reason) => {
 
 /* ── 启动 ─────────────────────────────────────────────────────────── */
 
-function start(): void {
-	// pi SDK 在模块顶部经 core/model-catalog.ts 静态导入，走到这里时已经加载完成。
-	// Electron 内的 Node-API 兼容性已在 D2 实测确认（ARCHITECTURE.md §4.1），
-	// 原先那段 dlopen 计数探针已移除 —— 静态导入先于模块体执行，钩子挂不上，
-	// 读数恒为 0，留着只会误导人。
-	console.log(
-		`daemon 启动：node ${process.version} on ${process.platform}-${process.arch}`,
-	);
-	console.log(`配置目录：${getConfigDir()}`);
-	eventLog.append({
-		kind: "process",
-		event: "daemon_start",
-		node: process.version,
-		platform: `${process.platform}-${process.arch}`,
-	});
-
-	/*
-	 * pi 的外部二进制（fd / rg）就位检查。
-	 *
-	 * 为什么在启动时做：pi 的 find/grep 工具靠这两个 exe，找不到它就去 GitHub 下 ——
-	 * 国内网络下那条路不通，而且**每次调用白等 10 秒**、失败原因还被 pi 吞掉
-	 * （实测 2026-09-17，详见 core/agent-tools.ts 的文件头）。所以二进制随包带，
-	 * 这里补到 pi 的 bin 目录；命中之后 pi 一次网络都不会发。
-	 *
-	 * 幂等：已就位时零输出（连日志都不写），只有真的补了、或随包资产本身缺失才记一笔。
-	 */
-	{
-		const agentTools = ensureAgentTools();
+/**
+ * pi 的外部二进制（fd / rg）就位检查。
+ *
+ * 为什么必须做：pi 的 find/grep 工具靠这两个 exe，找不到它就去 GitHub 下 ——
+ * 国内网络下那条路不通，而且**每次调用白等 10 秒**、失败原因还被 pi 吞掉
+ * （实测 2026-09-17，详见 core/agent-tools.ts 的文件头）。所以二进制随包带，
+ * 这里补到 pi 的 bin 目录；命中之后 pi 一次网络都不会发。
+ *
+ * 为什么放在 ready **之后** fire-and-forget（原来在 start() 里同步跑）：它需要
+ * pi 的 `getAgentDir()`，而 pi 整包实测热态 1809ms（冷态 4.7s）是启动开销里最大
+ * 的一笔。这两个 exe 只有 pi 的内置 find/grep 用得上，第一次会话才可能碰到 ——
+ * 让首屏（四个加载文案全挂在 ready 这个闸门上）替「可能永远不发生的工具调用」
+ * 买单是纯亏。`getAgentDir()` 只读一个环境变量推导路径，几十毫秒内就跑完，
+ * 远早于任何会话建立。
+ *
+ * 幂等：已就位时零输出（连日志都不写），只有真的补了、或随包资产本身缺失才记一笔。
+ *
+ * 失败口径的变化（有意为之）：原来是 start() 里同步调用，抛错 → 启动失败 → 进程退出。
+ * 现在不能再用「退出」表达 —— daemon 已经 ready、用户可能正在用。改成**响亮记日志**
+ * （stderr + 事件日志），实际后果只落在 find/grep 可用性上，不值得让整个应用不可用。
+ */
+async function prepareAgentTools(): Promise<void> {
+	try {
+		const agentTools = await ensureAgentTools();
 		if (agentTools.installed.length > 0 || agentTools.missing.length > 0) {
 			eventLog.append({
 				kind: "agent_tools",
@@ -4806,7 +4881,29 @@ function start(): void {
 				`已就位 pi 外部二进制：${agentTools.installed.join(", ")} → ${agentTools.targetDir}`,
 			);
 		}
+	} catch (error) {
+		// 不吞：拷贝失败 / pi 装配失败都要在日志里看得见（AGENTS.md §7）。
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`pi 外部二进制就位检查失败（find/grep 可能不可用）：${message}`);
+		eventLog.append({ kind: "agent_tools", error: message });
 	}
+}
+
+function start(): void {
+	// pi 不再在模块顶部静态导入（见文件顶的惰性说明）：走到这里时它**一次都没被装配**，
+	// 而 Electron 内的 Node-API 兼容性已在 D2 实测确认（ARCHITECTURE.md §4.1）。
+	// 原先那段 dlopen 计数探针已移除 —— 静态导入先于模块体执行，钩子挂不上，
+	// 读数恒为 0，留着只会误导人。
+	console.log(
+		`daemon 启动：node ${process.version} on ${process.platform}-${process.arch}`,
+	);
+	console.log(`配置目录：${getConfigDir()}`);
+	eventLog.append({
+		kind: "process",
+		event: "daemon_start",
+		node: process.version,
+		platform: `${process.platform}-${process.arch}`,
+	});
 
 	// 初始默认落点的预览服务（多根池里第一个实例）。默认落点可能是空串（待分配，
 	// 未选工作空间的新任务首次执行时才分配目录）—— 没有目录可服务，跳过；那种 cwd 的
@@ -4867,6 +4964,12 @@ function start(): void {
 	automationScheduler.start();
 
 	post({ kind: "ready" });
+
+	/*
+	 * ready 之后的启动期杂活：都不属于「用户能开始用」的前置条件，一律
+	 * fire-and-forget —— ready 只等启动必需的那几项 ms 级同步读。
+	 */
+	void prepareAgentTools();
 }
 
 try {

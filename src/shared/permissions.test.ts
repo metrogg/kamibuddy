@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	APPROVAL_OUTCOMES,
 	APPROVAL_POLICIES,
 	CUSTOM_PRESET,
 	DEFAULT_PERMISSIONS,
@@ -17,9 +18,12 @@ import {
 	canEscalate,
 	findPreset,
 	isApprovalPolicy,
+	isGranted,
 	isSandboxMode,
+	normalizeApprovalOutcome,
 	presetIdFor,
 	resolveAsk,
+	willAskUser,
 	WIDER_MODES,
 	type SandboxMode,
 } from "./permissions.ts";
@@ -109,6 +113,37 @@ describe("审批策略的语义", () => {
 	it("never → 拒绝（**不是**放行）", () => {
 		// 方向搞反就是个静默后门：无人值守时"不问"必须等于"不做"。
 		expect(resolveAsk("never")).toBe("deny");
+	});
+
+	it("生效策略的唯一判据：无人值守强制不问人", () => {
+		// 两个策略来源（设置旋钮 / 定时任务无人值守）合成在一处 ——
+		// 各调用方只问 willAskUser，不再自己写 `approval === "never"`。
+		expect(willAskUser({ sandbox: "workspace-write", approval: "ask" })).toBe(true);
+		expect(willAskUser({ sandbox: "workspace-write", approval: "ask" }, true)).toBe(false);
+		expect(willAskUser({ sandbox: "workspace-write", approval: "never" })).toBe(false);
+		expect(willAskUser({ sandbox: "danger-full-access", approval: "never" }, true)).toBe(false);
+	});
+});
+
+describe("审批结果的闭集（fail-closed）", () => {
+	it("取值与 dsh 逐字一致，且只有 allowed-once 是放行", () => {
+		// 闭集是调用方只需判一次的保证：多一个中间态，就多一处可能漏判成放行。
+		expect(APPROVAL_OUTCOMES).toEqual(["allowed-once", "rejected", "cancelled", "unavailable"]);
+		expect(APPROVAL_OUTCOMES.filter(isGranted)).toEqual(["allowed-once"]);
+	});
+
+	it("应答缺失 / 不合契约一律 unavailable —— 缺省绝不被读成同意", () => {
+		expect(normalizeApprovalOutcome(undefined)).toBe("unavailable");
+		expect(normalizeApprovalOutcome(null)).toBe("unavailable");
+		expect(normalizeApprovalOutcome("allow")).toBe("unavailable");
+		expect(normalizeApprovalOutcome({})).toBe("unavailable");
+		expect(normalizeApprovalOutcome({ decision: "maybe" })).toBe("unavailable");
+	});
+
+	it("明确的允许 / 拒绝映射到 allowed-once / rejected", () => {
+		expect(normalizeApprovalOutcome({ id: "x", decision: "allow" })).toBe("allowed-once");
+		// 与 unavailable 分开：审计要能还原「用户说不」与「问了没人答」。
+		expect(normalizeApprovalOutcome({ id: "x", decision: "deny" })).toBe("rejected");
 	});
 });
 

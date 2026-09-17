@@ -196,9 +196,9 @@ describe("setSessionParentSession", () => {
 });
 
 describe("createEmptySessionFile", () => {
-	it("立刻写出「只有 header 行」的文件，pi 能打开且来源正确", () => {
+	it("立刻写出「只有 header 行」的文件，pi 能打开且来源正确", async () => {
 		const mother = buildLinearSession();
-		const path = createEmptySessionFile(cwd, mother.file);
+		const path = await createEmptySessionFile(cwd, mother.file);
 
 		expect(existsSync(path)).toBe(true);
 		expect(rawLines(path).length).toBe(1);
@@ -218,25 +218,25 @@ describe("createEmptySessionFile", () => {
 });
 
 describe("setSessionName", () => {
-	it("走 pi 的 appendSessionInfo；已是目标名则不重复追加", () => {
+	it("走 pi 的 appendSessionInfo；已是目标名则不重复追加", async () => {
 		const mother = buildLinearSession();
-		const path = createEmptySessionFile(cwd, mother.file);
+		const path = await createEmptySessionFile(cwd, mother.file);
 
-		setSessionName(path, "母会话 · 分支");
+		await setSessionName(path, "母会话 · 分支");
 		expect(SessionManager.open(path, sessionsDir).getSessionName()).toBe("母会话 · 分支");
 		expect(readSessionFileLines(path).entryLines.length).toBe(1);
 
-		setSessionName(path, "母会话 · 分支");
+		await setSessionName(path, "母会话 · 分支");
 		expect(readSessionFileLines(path).entryLines.length).toBe(1);
 	});
 });
 
 describe("createSessionFileFromPrefix", () => {
-	it("母文件字节不变；新文件可打开且叶子 = 前缀末条", () => {
+	it("母文件字节不变；新文件可打开且叶子 = 前缀末条", async () => {
 		const session = buildLinearSession();
 		const before = readFileSync(session.file, "utf8");
 
-		const path = createSessionFileFromPrefix(session.file, session.a1);
+		const path = await createSessionFileFromPrefix(session.file, session.a1);
 		if (path === undefined) throw new Error("前缀会话未写出");
 
 		expect(readFileSync(session.file, "utf8")).toBe(before);
@@ -245,7 +245,7 @@ describe("createSessionFileFromPrefix", () => {
 		expect(opened.getLeafId()).toBe(session.a1);
 		expect(opened.getEntries().map((entry) => entry.id)).toEqual([session.u1, session.a1]);
 
-		expect(createSessionFileFromPrefix(session.file, "no-such-entry")).toBeUndefined();
+		expect(await createSessionFileFromPrefix(session.file, "no-such-entry")).toBeUndefined();
 	});
 });
 

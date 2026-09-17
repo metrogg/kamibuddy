@@ -1114,7 +1114,7 @@ function createFakeLedger(): { ledger: RunLedger; calls: LedgerCall[]; failures:
 }
 
 /** 带台账与 transformContext 的假会话（agent.transformContext 模拟 pi 的 emitContext 透传）。 */
-function createLedgerSession(): {
+function createLedgerSession(entries: readonly unknown[] = []): {
 	session: unknown;
 	agent: { transformContext?: (m: unknown[], s?: AbortSignal) => Promise<unknown[]> };
 } {
@@ -1131,6 +1131,14 @@ function createLedgerSession(): {
 		thinkingLevel: "off",
 		getAvailableThinkingLevels: () => ["off"],
 		agent,
+		// 压缩遮蔽范围只从条目树的父链读（compactionShadow），所以这里的
+		// sessionManager 是必给的替身；entries 默认空 = 没有压缩条目，
+		// 非压缩用例照常走（不会被读到）。
+		sessionManager: {
+			getEntries: () => entries,
+			getLeafId: () => null,
+			getSessionFile: () => undefined,
+		},
 	};
 	return { session, agent };
 }
@@ -1478,6 +1486,101 @@ describe("turn 边界 → 台账 llm_call", () => {
 			tokensBefore: 12345,
 			aborted: false,
 		});
+	});
+
+	it("压缩的锁成对落账：start 落锁 → compaction 用同一把锁释放，且带遮蔽范围", () => {
+		const { ledger, calls } = createFakeLedger();
+		/*
+		 * 条目树替身：m1/m2 是被遮蔽的历史，c1 是 pi 刚落下的 compaction 条目
+		 * （parentId 指压缩前的叶子）、m3 是保留段的第一条。实现依赖的**唯一**
+		 * 事实就是这条父链，所以替身按真形状给。
+		 */
+		const { session } = createLedgerSession([
+			{
+				id: "m1",
+				parentId: null,
+				type: "message",
+				message: { role: "user", content: "把周报改成三段", timestamp: 1 },
+			},
+			{
+				id: "m2",
+				parentId: "m1",
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: "好的" }], timestamp: 2 },
+			},
+			{
+				id: "c1",
+				parentId: "m2",
+				type: "compaction",
+				summary: "用户在改周报",
+				firstKeptEntryId: "m3",
+				tokensBefore: 12345,
+			},
+			{
+				id: "m3",
+				parentId: "c1",
+				type: "message",
+				message: { role: "user", content: "继续", timestamp: 3 },
+			},
+		]);
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		runStarted(host);
+		translate(host, { type: "compaction_start", reason: "threshold" } as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "compaction_end",
+			reason: "threshold",
+			result: { tokensBefore: 12345, summary: "s", firstKeptEntryId: "m3" },
+			aborted: false,
+			willRetry: true,
+		} as unknown as AgentSessionEvent);
+
+		const start = calls.find((c) => c.kind === "compaction_start")?.data as {
+			lock: string | null;
+			reason: string;
+		};
+		const end = calls.find((c) => c.kind === "compaction")?.data as {
+			lock?: string | null;
+			shadow?: {
+				shadowedRange: { start: string; end: string };
+				shadowedSeqs: readonly string[];
+				shadowedTokenCount: number;
+			};
+		};
+
+		expect(start).toMatchObject({ reason: "threshold", lock: expect.stringMatching(/^run-/) });
+		// 成对判定的两半必须同值：空闲手动压缩会起新 run，释放时现读会拿到新 id。
+		expect(end.lock).toBe(start.lock);
+		// 遮蔽范围 = 父链上的历史（保留段 m3 与摘要条目自己都不在其中）。
+		expect(end.shadow?.shadowedRange).toEqual({ start: "m1", end: "m2" });
+		expect(end.shadow?.shadowedSeqs).toEqual(["m1", "m2"]);
+		expect(end.shadow?.shadowedTokenCount).toBeGreaterThan(0);
+	});
+
+	it("空闲手动压缩：锁是 null（独立尝试），无 result 时不记遮蔽范围", () => {
+		const { ledger, calls } = createFakeLedger();
+		const { session } = createLedgerSession([
+			{ id: "m1", parentId: null, type: "message", message: { role: "user", content: "在吗", timestamp: 1 } },
+		]);
+		const host = createLedgerHost(session, () => { }, ledger);
+
+		// 不先 runStarted：模拟空闲时的手动压缩（pi 的 compact()）。
+		translate(host, { type: "compaction_start", reason: "manual" } as unknown as AgentSessionEvent);
+		translate(host, {
+			type: "compaction_end",
+			reason: "manual",
+			aborted: false,
+			willRetry: false,
+		} as unknown as AgentSessionEvent);
+
+		expect(calls.find((c) => c.kind === "compaction_start")?.data).toEqual({
+			lock: null,
+			reason: "manual",
+		});
+		const end = calls.find((c) => c.kind === "compaction")?.data;
+		expect(end).toMatchObject({ reason: "manual", lock: null, aborted: false });
+		// 压缩没落地（无 result）→ 没有遮蔽范围可记：不编一个空范围。
+		expect(end).not.toHaveProperty("shadow");
 	});
 });
 

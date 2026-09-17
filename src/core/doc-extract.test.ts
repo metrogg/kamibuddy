@@ -33,9 +33,21 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", async (importOriginal) => {
 
 const mockedGetDocument = vi.mocked(getDocument);
 
-/** 造一个 promise 拒绝的 loadingTask：readPdfPages 的打开失败分支只碰 promise 字段。 */
+/**
+ * 造一个 promise 拒绝的 loadingTask：readPdfPages 的打开失败分支只碰 promise 字段。
+ *
+ * promise 必须**惰性**产生（getter 而非字段）：doc-extract 现在先 await pdfjs 与
+ * worker 的动态装配（见 doc-extract.ts 的惰性说明），才走到 `await loadingTask.promise`。
+ * 字段式的 `Promise.reject()` 会在那段装配期间挂着无人处理，被 V8/vitest 报成
+ * unhandledRejection（现象：本文件偶发「Unhandled Errors」）。改成访问时才拒绝，
+ * 就与生产代码接手它的时刻同一个 tick，测试回到「只断言读取失败」这一件事。
+ */
 function rejectingLoadingTask(err: Error): ReturnType<typeof getDocument> {
-	return { promise: Promise.reject(err) } as unknown as ReturnType<typeof getDocument>;
+	return {
+		get promise(): Promise<never> {
+			return Promise.reject(err);
+		},
+	} as unknown as ReturnType<typeof getDocument>;
 }
 
 const FIXTURE_DIR = fileURLToPath(new URL("./test-fixtures/docs", import.meta.url));
@@ -302,13 +314,22 @@ describe("24k 截断", () => {
  * isNodeJS 在 pdf.mjs 加载时算一次，同进程里改 process 已经来不及（模块缓存）。
  */
 describe("Electron 类环境（daemon 的 utilityProcess）下的 pdf 装配", () => {
-	it("伪装 versions.electron / type=utility 后仍能提取正文", () => {
-		const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-		const out = execFileSync(
-			process.execPath,
-			["--import", "tsx", "scripts/probe-pdf-worker.ts", `${FIXTURE_DIR}/cn-text.pdf`],
-			{ cwd: repoRoot, encoding: "utf8" },
-		);
-		expect(out).toContain("OK");
-	});
+	/*
+	 * 显式放宽超时：这条要起**子进程**（node --import tsx + pdfjs/worker 装配，
+	 * 单独跑约 1.5~1.8s），整套 126 个测试文件并行跑时会慢好几倍，默认 5s 会偶发红。
+	 * 超时不是被测行为的一部分，放宽它不影响这条钉子钉的东西。
+	 */
+	it(
+		"伪装 versions.electron / type=utility 后仍能提取正文",
+		() => {
+			const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+			const out = execFileSync(
+				process.execPath,
+				["--import", "tsx", "scripts/probe-pdf-worker.ts", `${FIXTURE_DIR}/cn-text.pdf`],
+				{ cwd: repoRoot, encoding: "utf8" },
+			);
+			expect(out).toContain("OK");
+		},
+		30_000,
+	);
 });

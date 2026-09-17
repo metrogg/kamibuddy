@@ -303,11 +303,11 @@ beforeAll(() => {
 	}));
 	compose = createSystemPromptComposerFromDefaults({
 		...COMPOSER_DEFAULTS,
-		enabledSkills: () => realSkills,
+		enabledSkills: async () => realSkills,
 	});
 	composeWithoutSkills = createSystemPromptComposerFromDefaults({
 		...COMPOSER_DEFAULTS,
-		enabledSkills: () => [],
+		enabledSkills: async () => [],
 	});
 });
 
@@ -367,7 +367,8 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 				const { handler } = mount({
 					axes: { sceneId, interactionId: modeId },
 					compose: async (scene, interaction, expertId, piContext) =>
-						compose({ sceneId: scene, interactionId: interaction, expertId, piContext }).prompt,
+						(await compose({ sceneId: scene, interactionId: interaction, expertId, piContext }))
+							.prompt,
 				});
 
 				vi.setSystemTime(FIRST_TURN_AT);
@@ -401,7 +402,7 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		}
 	}
 
-	it("生产组装入口的产物不含任何时间/日期形态（堵「有人往组装里塞现在几点」的洞）", () => {
+	it("生产组装入口的产物不含任何时间/日期形态（堵「有人往组装里塞现在几点」的洞）", async () => {
 		/*
 		 * 这条是本次补的钉子，针对的洞很具体：组装本体若被人加一句
 		 * `+ formatRunTime(new Date())`（哪怕只到日期粒度），系统提示词就会逐轮
@@ -412,7 +413,7 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		 * 相等」，直接对产物做**形态断言**：任何时间/日期形态都不许出现。
 		 */
 		vi.setSystemTime(FIRST_TURN_AT);
-		const composed = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		const composed = await compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
 		// 非空守卫：空串能通过任何「不含」断言。
 		expect(composed.prompt.length).toBeGreaterThan(1_000);
 		for (const pattern of [/Current time:/, /\d{4}-\d{2}-\d{2}/, /\d{2}:\d{2}/, /\b\d{10,}\b/]) {
@@ -424,7 +425,7 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		}
 	});
 
-	it("生产组装入口的产物不含任何机器相关的绝对路径形态（堵「有人把本机路径塞进提示词」的洞）", () => {
+	it("生产组装入口的产物不含任何机器相关的绝对路径形态（堵「有人把本机路径塞进提示词」的洞）", async () => {
 		/*
 		 * 与上面那条同款、针对同一类事故的另一种载体：**随机器变的事实**。
 		 * 托管 Python 解释器的绝对路径曾以 `{{pythonPath}}` 槽位拼进骨架片段
@@ -447,7 +448,7 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		 * `<location>`，是 pi 的形态、随应用安装位置变 —— 见 composeWithoutSkills 注释）。
 		 */
 		vi.setSystemTime(FIRST_TURN_AT);
-		const composed = composeWithoutSkills({
+		const composed = await composeWithoutSkills({
 			sceneId: "work",
 			interactionId: "craft",
 			expertId: undefined,
@@ -469,14 +470,18 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		// 三个场景 × 三个模式的产物都过一遍（只有 work 之外的骨架漏了路径才是真事故）。
 		for (const sceneId of SCENES) {
 			for (const modeId of MODES) {
-				const other = composeWithoutSkills({ sceneId, interactionId: modeId, expertId: undefined });
+				const other = await composeWithoutSkills({
+					sceneId,
+					interactionId: modeId,
+					expertId: undefined,
+				});
 				expect(other.prompt.length, `${sceneId} × ${modeId} 组装为空`).toBeGreaterThan(1_000);
 				expect(other.prompt, `${sceneId} × ${modeId} 含本机家目录`).not.toContain(homedir());
 			}
 		}
 	});
 
-	it("分段带内容指纹（CACHE6 段级归因的前提）：同输入同指纹、换模式指纹变", () => {
+	it("分段带内容指纹（CACHE6 段级归因的前提）：同输入同指纹、换模式指纹变", async () => {
 		/*
 		 * 缓存断点落在消息列表之前时，「哪一段变了」只能靠相邻两轮的分段指纹 diff
 		 * 指认（shared/cache-prefix.ts）。指纹必须**与消息指纹同一算法**（生产组装
@@ -484,8 +489,8 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		 * 归因会把「没变」说成「变了」。
 		 */
 		vi.setSystemTime(FIRST_TURN_AT);
-		const first = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
-		const second = compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		const first = await compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		const second = await compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
 		expect(first.segments.length).toBeGreaterThan(0);
 		expect(first.segments.every((s) => typeof s.fp === "number")).toBe(true);
 		expect(first.segments.map((s) => [s.source, s.fp])).toEqual(
@@ -493,7 +498,7 @@ describe("同会话系统提示词字节稳定（缓存前缀不变量，Task 5.
 		);
 
 		// 换模式 → 模式段与骨架之后的内容变了 → 该段指纹必须不同（同长度不同内容也认得出）。
-		const ask = compose({ sceneId: "work", interactionId: "ask", expertId: undefined });
+		const ask = await compose({ sceneId: "work", interactionId: "ask", expertId: undefined });
 		const craftMode = first.segments.find((s) => s.source === "mode:craft")?.fp;
 		const askMode = ask.segments.find((s) => s.source === "mode:ask")?.fp;
 		expect(craftMode).toBeDefined();

@@ -13,6 +13,15 @@
  * 为什么不加「不可信输入」标记（web_fetch 在正文前加的那行）：web_fetch 的内容
  * 来自外部站点，可能含提示注入；read_document 读的是用户自己的本地文件，
  * 且区外路径已过权限门询问 —— 风险等级与 read 相同，read 不加，这里也不加。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: read_document 的名称、description（read / read_document 的分工、offset/limit
+ * 在 PDF 是页号而在 Office 是字符位、扫描件与老格式读不了的说明）与参数 schema；返回的提取正文 +
+ * 末尾续读提示，或 DocExtractError 的可行动错误文案。
+ * Token effect: 定义常驻（description 是英文长描述，逐请求都付）；返回正文是工具结果里最大的一项，
+ * 长度按 core/doc-extract.ts 的现行内联上限处理（超限时按结果里的提示继续取回）。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀；同一文档
+ * 重复读会重复付 —— 那是新增消息，不是前缀失配。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

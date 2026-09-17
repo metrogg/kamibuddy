@@ -66,13 +66,19 @@
  */
 
 import { dirname } from "node:path";
-import {
-	createSyntheticSourceInfo,
-	formatSkillsForPrompt,
-	type BuildSystemPromptOptions,
-	type Skill,
-} from "@earendil-works/pi-coding-agent";
+/*
+ * pi 的值为什么走首用时动态 import（勿改回静态）：pi 整包实测热态 1809ms
+ * （冷态 4.7s）。这里只用到两个纯函数（formatSkillsForPrompt /
+ * createSyntheticSourceInfo），而它们的调用点 formatSkillsSection 在
+ * daemon 的启动关键路径（post ready 之前）根本不会跑 —— 启动只做
+ * loadResources / 偏好 / 权限规则这类 ms 级读。静态 import 会在 daemon 的
+ * 模块体之前求值，等于每次启动先白付整包 pi 的钱。类型引用（BuildSystemPromptOptions /
+ * Skill / PiSdk）都是编译期擦除的。
+ */
+import type { BuildSystemPromptOptions, Skill } from "@earendil-works/pi-coding-agent";
 import type { ExpertDefinition } from "./experts.ts";
+
+type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 
 /** 从 pi 的结构化选项里取出上下文组装还需要的那几块。 */
 export type PromptContextOptions = Pick<
@@ -726,9 +732,15 @@ export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string
  * （比如改调用约定）时我们零改动。**只追加一句**本会话的调用约定，而不是自己重写
  * 那套 XML：重写就等于把 pi 的格式抄一份过来，从此两份都要维护。
  */
-export function formatSkillsSection(skills: readonly SkillDescriptor[]): string {
+export async function formatSkillsSection(skills: readonly SkillDescriptor[]): Promise<string> {
 	if (skills.length === 0) return "";
-	const section = formatSkillsForPrompt(skills.map(toPiSkill), "read").trim();
+	const { createSyntheticSourceInfo, formatSkillsForPrompt } = await import(
+		"@earendil-works/pi-coding-agent"
+	);
+	const section = formatSkillsForPrompt(
+		skills.map((skill) => toPiSkill(skill, createSyntheticSourceInfo)),
+		"read",
+	).trim();
 	// 技能全被 disable-model-invocation 过滤掉时 pi 返回空串：保持零 token 口径，
 	// 不留一句孤零零的调用约定（没有清单可指，那句只会让模型去找不存在的技能）。
 	if (section === "") return "";
@@ -760,7 +772,10 @@ const SKILL_INVOCATION_NOTE =
  * sourceInfo 走 pi 公开的 createSyntheticSourceInfo，与它给 path 来源技能造的那份一致；
  * scope/origin 取该函数的缺省值，格式化器不读它），换来的是真实类型。
  */
-function toPiSkill(skill: SkillDescriptor): Skill {
+function toPiSkill(
+	skill: SkillDescriptor,
+	createSyntheticSourceInfo: PiSdk["createSyntheticSourceInfo"],
+): Skill {
 	const baseDir = dirname(skill.filePath);
 	return {
 		name: skill.name,
@@ -797,9 +812,9 @@ export function sessionSkillPaths(globalSkillsDir: string, expertSkillsDir?: str
 export function skillsSectionForMode(
 	modeTools: readonly string[],
 	skills: readonly SkillDescriptor[],
-): string {
+): Promise<string> {
 	const hasSkillLoader = modeTools.some(
 		(t) => t === "read" || t === "bash" || t === "use_skill",
 	);
-	return hasSkillLoader ? formatSkillsSection(skills) : "";
+	return hasSkillLoader ? formatSkillsSection(skills) : Promise.resolve("");
 }

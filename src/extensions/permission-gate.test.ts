@@ -552,6 +552,74 @@ describe("批准写回（rememberPrefix → 规则 → 免问）", () => {
  * powershell 首词写回亦随「门不再审命令」停用（deny 规则仍可手写生效）。
  */
 
+/* ── 审批闭集：应答者异常 ⇒ 拒绝执行（fail-closed，spec: adopt-dsh-disciplines Task 2.3） ── */
+
+describe("审批闭集（fail-closed）", () => {
+	/**
+	 * 只换审批通道的挂载：应答由 answerer 决定（可以缺失、可以抛错、可以给
+	 * 不合契约的值）。断言点全是「应答者那边的异常有没有变成放行」。
+	 */
+	function mountAnswerer(
+		requestApproval: (request: Omit<PermissionRequest, "id" | "sessionId">) => Promise<unknown>,
+	): Handler {
+		let captured: Handler | undefined;
+		const fakePi = {
+			on: (event: string, handler: unknown) => {
+				if (event === "tool_call") captured = handler as Handler;
+			},
+		} as unknown as ExtensionAPI;
+
+		createPermissionGate({
+			paths: { workspaceDir: WORKSPACE, configDir: CONFIG },
+			cwd: WORKSPACE,
+			requestApproval: requestApproval as (
+				request: Omit<PermissionRequest, "id" | "sessionId">,
+			) => Promise<PermissionResponse>,
+		})(fakePi);
+
+		if (captured === undefined) throw new Error("权限门没有注册 tool_call 处理器");
+		return captured;
+	}
+
+	/** 工作区外的写入 = 要询问（medium）。三档异常都作用在这条上。 */
+	const OUTSIDE = join(HOME, "Desktop", "报告.txt");
+
+	it("应答者缺失（拿到 undefined）⇒ 拒绝执行，不放行", async () => {
+		const call = mountAnswerer(async () => undefined);
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("不可用");
+	});
+
+	it("应答者抛错 ⇒ 拒绝执行，且异常原文回给模型（通道坏了要看得见）", async () => {
+		const call = mountAnswerer(async () => {
+			throw new Error("IPC 通道已关闭");
+		});
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("不可用");
+		expect(result?.reason).toContain("IPC 通道已关闭");
+	});
+
+	it("应答不合契约（未知 decision）⇒ 拒绝执行，不放行", async () => {
+		// 版本错配 / 被篡改的渲染进程给一个我们读不懂的档位：缺省是拒绝，
+		// 而不是「不是 deny 就当 allow」（那正是 fail-open 的写法）。
+		const call = mountAnswerer(async () => ({ id: "x", decision: "maybe" }));
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+	});
+
+	it("对照：只有明确允许才放行（allowed-once）", async () => {
+		const call = mountAnswerer(async () => ({ id: "x", decision: "allow" }));
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result).toBeUndefined();
+	});
+});
+
 describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
 
 	it("区外写的中风险询问不带 writeBackPath（写工具的路径规则是 spec 明确不做的部分）", async () => {

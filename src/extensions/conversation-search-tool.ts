@@ -12,6 +12,12 @@
  * 入参边界（query 非空、limit 1-50）只写在 schema 层：pi 的 agent 循环在
  * 执行前按 schema 校验工具入参（pi-ai 的 validateToolArguments），
  * execute 里不再重复校验 —— 重复一套规则只会漂移。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: conversation_search 的名称、description（「检索本机历史会话」）与
+ * query/limit 的 schema；返回的命中列表文本，或「无命中」引导文案。
+ * Token effect: 定义常驻；返回条数由 limit 决定（缺省 20，schema 上限 50），只在被调用那一步新增。
+ * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后，不动既有前缀。
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";

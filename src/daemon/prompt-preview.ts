@@ -54,11 +54,15 @@ export interface PromptPreviewEnvironment {
 	readonly memorySystemBody?: string;
 }
 
-export function buildPromptPreview(
+/**
+ * 为什么是 async：组装本体的技能段要 pi（formatSkillsForPrompt），而 pi 是
+ * 首用时才装配的（见 daemon/index.ts 顶部的惰性说明）——预览不在启动关键路径上。
+ */
+export async function buildPromptPreview(
 	resources: LoadedResources,
 	request: PromptPreviewRequest,
 	env: PromptPreviewEnvironment,
-): PromptPreviewResult {
+): Promise<PromptPreviewResult> {
 	const scene = resources.scenes.find((s) => s.id === request.sceneId);
 	if (scene === undefined) throw new Error(`未知场景：${request.sceneId}`);
 	const mode = resources.modes.find((m) => m.id === request.modeId);
@@ -80,7 +84,7 @@ export function buildPromptPreview(
 	}
 	// request.styleId === "" → style 保持 undefined = 关闭风格注入。
 
-	const assembled = assembleSystemPrompt({
+	const assembled = await assembleSystemPrompt({
 		resources,
 		scene,
 		mode,

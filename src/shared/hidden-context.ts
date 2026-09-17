@@ -47,6 +47,17 @@
  *
  * 依赖方向：本文件零运行时依赖（消息按结构匹配，不 import pi 类型），
  * core 与 shared 的测试都能直接跑。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
+ * What the model sees: 每次模型调用前在请求消息数组**末尾**追加一段
+ * `<system-reminder data-role="user-context|additional-data">` 文本（工作目录 / 托管 Python 路径 /
+ * 记忆与技能提醒 / 当前时间）；模型每轮都读到，界面上不显示（display:false），也不落会话文件。
+ * Token effect: 每次模型调用都付这一段（常量级：段数与各段正文长度都固定在小范围内），
+ * 它不从历史里累积 —— 上一轮的注入副本不出现在下一轮请求里。
+ * KV Cache effect: 落点在**所有已落盘历史之后**且不改写任何既有消息（逐条引用与字节都不变）
+ * ⇒ 它自身逐轮变化不破坏前缀。反例（2026-09-17 实测）：早先贴进最后一条 user 消息内部时，
+ * 差异落在已落盘消息内部，上一轮整段被全价重计费，会话级命中率由本应约 97.1% 掉到 94.6%
+ * （见 docs/提示词前缀缓存契约.md §2 与 docs/可观测性清单.md CACHE8）。
  */
 
 import { HIDDEN_CONTEXT_CUSTOM_TYPE } from "./observability.ts";

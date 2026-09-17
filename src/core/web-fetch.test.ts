@@ -129,16 +129,20 @@ describe("提取与截断", () => {
 		expect(page.markdown).not.toContain("首页");
 		expect(page.markdown).not.toContain("color: red");
 		// 链接保留在正文里（引用来源是模型回答的义务）
-		expect(page.truncated).toBe(false);
+		expect(page.markdown).not.toContain("已截断");
 	});
 
-	it("超 maxChars 截断并注明", async () => {
+	/**
+	 * 截断责任已整体移到工具结果 spill 层（core/spill.ts + extensions/spill-hook.ts）：
+	 * 本层必须**原样**给出完整正文，否则 spill 落盘的是残缺文本（"谁能落盘谁才截断"）。
+	 */
+	it("超长正文原样返回：本层不再截断（截断归 spill 层）", async () => {
+		const long = `<p>${"正".repeat(40_000)}</p>`;
 		const page = await fetchPage("https://example.com/post", {
-			fetchImpl: htmlFetch(SAMPLE_HTML),
-			maxChars: 60,
+			fetchImpl: htmlFetch(`<!DOCTYPE html><html><head><title>长文</title></head><body>${long}</body></html>`),
 		});
-		expect(page.truncated).toBe(true);
-		expect(page.markdown).toContain("已截断");
+		expect(page.markdown.length).toBeGreaterThan(24_000);
+		expect(page.markdown).not.toContain("已截断");
 	});
 
 	/*

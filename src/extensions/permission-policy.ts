@@ -58,7 +58,7 @@ import { canonicalizePath, isPathContained } from "../core/path-containment.ts";
 import {
 	DEFAULT_PERMISSIONS,
 	LOCAL_READ_TOOLS,
-	resolveAsk,
+	willAskUser,
 	type PermissionSettings,
 	type SandboxMode,
 } from "../shared/permissions.ts";
@@ -312,8 +312,10 @@ export function decide(
 	const decision = decideUnderMode(facts, paths, cwd, settings.sandbox, rules);
 
 	// 审批策略只作用在「要问」的结果上 —— allow / deny 都已是终局。
+	// 判据走 shared/permissions 的 willAskUser（生效策略的唯一判据：设置旋钮 ×
+	// 无人值守合成在一处，这里只问「还问人吗」）。
 	if (decision.kind !== "ask") return decision;
-	if (resolveAsk(settings.approval) === "ask") return decision;
+	if (willAskUser(settings)) return decision;
 
 	// never = **确定性拒绝**，不是静默放行（照 dsh 的语义）。
 	// 无人值守时「不问」必须等于「不做」，否则这个开关就成了完全敞开的后门。

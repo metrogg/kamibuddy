@@ -120,7 +120,6 @@ describe("web_fetch", () => {
 					title: "页面标题",
 					url: "https://example.com/p",
 					markdown: "正文内容。",
-					truncated: false,
 				};
 			},
 		});

@@ -14,6 +14,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUseSkillTool, type UseSkillTarget } from "./use-skill-tool.ts";
 
+/*
+ * 预热 pi 的惰性装配（业务见 extensions/use-skill-tool.ts 的惰性说明）：被测工具
+ * 在 execute 里首用时才 `await import("pi")` 取 stripFrontmatter，而本文件只
+ * `import type` 了 pi —— 不预热的话第一个用例会替整个 vitest worker 付一次整包装配
+ * （本机实测 2~8s），撞 vitest 默认 5s 的用例超时。顶层 await 发生在收集阶段
+ * （无超时预算），装好后用例只测逻辑。
+ */
+await import("@earendil-works/pi-coding-agent");
+
 interface FakeToolDef {
 	readonly name: string;
 	readonly label: string;
@@ -27,7 +36,12 @@ interface FakeToolDef {
 	) => Promise<{ content: Array<{ type: "text"; text: string }>; details: unknown }>;
 }
 
-/** 装好扩展，返回按名称索引的工具定义表。 */
+/**
+ * 装好扩展，返回按名称索引的工具定义表。
+ *
+ * 这里把同步的技能快照包成 async：真实注入点（daemon 的 resolveSkills）要读 pi 的
+ * 技能清单、是 Promise ——测试只关心工具怎么用这份清单，所以注入一个同步产出的快照即可。
+ */
 function mount(resolveSkills: () => readonly UseSkillTarget[]): { tools: Map<string, FakeToolDef> } {
 	const tools = new Map<string, FakeToolDef>();
 	const fakePi = {
@@ -35,7 +49,7 @@ function mount(resolveSkills: () => readonly UseSkillTarget[]): { tools: Map<str
 			tools.set(def.name, def);
 		},
 	} as unknown as ExtensionAPI;
-	createUseSkillTool({ resolveSkills })(fakePi);
+	createUseSkillTool({ resolveSkills: async () => resolveSkills() })(fakePi);
 	return { tools };
 }
 

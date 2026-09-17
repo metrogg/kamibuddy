@@ -152,7 +152,7 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	// 探针不绑专家（两轴恒 work/craft、expertId 恒 undefined）：组装器对
 	// expertId === undefined 短路，专家库这条读路径不会被走到。
 	loadExperts: () => [],
-	enabledSkills: () => enabledSkillDescriptors(),
+	enabledSkills: async () => enabledSkillDescriptors(),
 	// 风格漂移（偏好里存的 id 不在资源库）与 daemon 一致地响亮报出来，不静默。
 	onStyleDrift: (drift) => {
 		console.error(`⚠ 回复风格配置漂移：偏好要的是「${drift.requested}」，资源库没有，回落「${drift.fallback}」`);
@@ -319,10 +319,12 @@ function piContextOf(event: BeforeAgentStartEvent): PromptContextOptions {
 
 function createProbeExtension(
 	recorder: SessionRecorder,
-	beforeAgentStart: (event: BeforeAgentStartEvent) => BeforeAgentStartEventResult,
+	beforeAgentStart: (
+		event: BeforeAgentStartEvent,
+	) => BeforeAgentStartEventResult | Promise<BeforeAgentStartEventResult>,
 ): InlineExtension {
 	return (pi: ExtensionAPI): void => {
-		pi.on("before_agent_start", (event) => beforeAgentStart(event));
+		pi.on("before_agent_start", async (event) => beforeAgentStart(event));
 		pi.on("context", (event) => {
 			recorder.onContext(event.messages);
 			return undefined;
@@ -378,14 +380,16 @@ const promptsA: string[] = [];
 
 const hostA = await createHost(
 	recA,
-	createProbeExtension(recA, (event) => {
+	createProbeExtension(recA, async (event) => {
 		if (optionsKeys.length === 0) optionsKeys = Object.keys(event.systemPromptOptions);
-		const prompt = composeSystemPrompt({
-			sceneId: SCENE_ID,
-			interactionId: INTERACTION_ID,
-			expertId: undefined,
-			piContext: piContextOf(event),
-		}).prompt;
+		const prompt = (
+			await composeSystemPrompt({
+				sceneId: SCENE_ID,
+				interactionId: INTERACTION_ID,
+				expertId: undefined,
+				piContext: piContextOf(event),
+			})
+		).prompt;
 		promptsA.push(prompt);
 		return { systemPrompt: prompt };
 	}),
@@ -416,13 +420,15 @@ const promptsB: string[] = [];
 
 const hostB = await createHost(
 	recB,
-	createProbeExtension(recB, (event) => {
-		const prompt = composeSystemPrompt({
-			sceneId: SCENE_ID,
-			interactionId: INTERACTION_ID,
-			expertId: undefined,
-			piContext: piContextOf(event),
-		}).prompt;
+	createProbeExtension(recB, async (event) => {
+		const prompt = (
+			await composeSystemPrompt({
+				sceneId: SCENE_ID,
+				interactionId: INTERACTION_ID,
+				expertId: undefined,
+				piContext: piContextOf(event),
+			})
+		).prompt;
 		const shaped = bState.changed ? `${CHANGE_LINE}\n\n${prompt}` : prompt;
 		promptsB.push(shaped);
 		return { systemPrompt: shaped };
@@ -637,14 +643,16 @@ const promptsCNative: string[] = [];
 
 const hostC = await createHost(
 	recC,
-	createProbeExtension(recC, (event) => {
+	createProbeExtension(recC, async (event) => {
 		promptsCNative.push(
-			composeSystemPrompt({
-				sceneId: SCENE_ID,
-				interactionId: INTERACTION_ID,
-				expertId: undefined,
-				piContext: piContextOf(event),
-			}).prompt,
+			(
+				await composeSystemPrompt({
+					sceneId: SCENE_ID,
+					interactionId: INTERACTION_ID,
+					expertId: undefined,
+					piContext: piContextOf(event),
+				})
+			).prompt,
 		);
 		return { systemPrompt: promptA1 };
 	}),
