@@ -28,7 +28,7 @@
 
 | 项     | 说明                                |
 | ----- | --------------------------------- |
-| 文档生成  | docx / PDF / 报告的生成流水线尚未开工，这是下一步的主要工作 |
+| 文档生成  | HTML → docx 生成已可用（引擎随包、首次转换需联网准备 Python 环境）；PDF / 报告的生成流水线尚未开工 |
 | 打包分发  | Windows 安装包已可用（`npm run dist` → `release/JLC-Work-Setup-*.exe`，用户级免管理员安装）；安装包签名与自动更新未做 |
 | 记忆    | 「以后周报都用这个格式」这类跨会话偏好还记不住           |
 
@@ -60,6 +60,19 @@ npm test               # 单元测试
 npm run smoke:session  # 会话构造冒烟（不联网、不耗额度）
 npm run smoke:sdk      # pi SDK 冒烟
 ```
+
+## 打包（Windows 安装包）
+
+```bash
+npm run dist:dir       # 免安装目录 → release/win-unpacked/（快速验证用）
+npm run dist           # NSIS 安装包 → release/JLC-Work-Setup-<版本>.exe
+```
+
+- 产物在 **`release/`**（已 gitignore）；分发就是把 `.exe` 拷给同事。
+- 版本号取 `package.json` 的 `version`——发新版先改它，安装包文件名与卸载项会跟着变。
+- 首次打包/换机器要联网（下 electron 与 NSIS 工具链，缓存进 `%LOCALAPPDATA%\electron-builder\Cache\`；脚本已自动注入 npmmirror 镜像，已有 `ELECTRON_MIRROR` 环境变量时不覆盖）。`uv.exe` 由 `fetch:uv` 自动拉取并缓存在 `resources/bin/`——**内网机器可直接手工放置该文件**，脚本检测到就跳过下载。
+- 打包机若是企业杀软环境：终态改名偶发 EPERM（脚本自动重试两次）；exe 资源改写已按需关闭（见 `electron-builder.yml` 注释），换正式图标时再评估。
+- 配置见 [electron-builder.yml](electron-builder.yml)，资源布局与已知依赖见 [docs/试用前自查报告.md](docs/试用前自查报告.md) §三。
 
 > **必须用 `npm run dev` / `npm start`，不要直接 `npx electron .`。**
 > Electron 系 IDE（Trae、VS Code、Cursor…）会给集成终端注入 `ELECTRON_RUN_AS_NODE=1`，

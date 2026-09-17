@@ -148,7 +148,7 @@
 ### 3.2 输入框 / 输入卡
 
 - 行内小输入框（重命名、表单）：高 28px 左右，1px `--border`，圆角 sm，padding `--space-2`×`--space-3`；focus 边框改 `--accent` 或依赖全局焦点环，二者取一不叠加。
-- 输入卡（`.composer-card`）：圆角 24px（WB 例外值）、padding 12/16px、阴影走输入卡例外（见 2.7）；focus-within 时边框加深一档。
+- 输入卡（`.composer-card`）：圆角 24px（WB 例外值）、padding 12/16px、���影走输入卡例外（见 2.7）；focus-within 时**阴影加深一档**（`--shadow-input-focus`，WB `cr-input-container--focused` 口径），**边框不动** —— 曾经写成边框加深，点进输入框是一圈黑线（2026-09-17 反馈后改）。
 - 文本域：不可横向拉伸（`resize: none` 或 vertical）；占位文字 `--text-faint`；禁用态底 `--bg-raised` 字 `--text-faint`。
 
 ### 3.3 卡片
@@ -329,7 +329,8 @@
 
 1. **焦点环**：全局 `button/[role=button]/select/input/textarea:focus-visible` 已有
    （2px `--text-secondary` + 2px offset）。新增可交互元素必须被这条覆盖或自证等价；
-   不许 `outline: none` 除非容器级有替代（`:focus-within` 边框/描边）。
+   不许 `outline: none` 除非容器级有替代（`:focus-within` 描边/阴影加深——如输入卡的
+   `--shadow-input-focus`；文本输入框的插入光标本身也是可见指示）。
 2. **图标按钮必须有名字**：`aria-label` 或可见文字，二选一。
 3. **弹层焦点管理**：打开时焦点移入首个可交互元素（危险弹窗默认落「安全」按钮），
    Tab 在弹层内循环，关闭后焦点归还触发元素。审批弹窗是安全闸，这条是硬要求。

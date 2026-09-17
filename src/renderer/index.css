@@ -124,7 +124,7 @@ button {
      落在不可见 input 上无视觉影响；
    - ws-create input:focus 用类+伪类，特异性高于本规则，保留其 --primary 环；
    - composer textarea / questionnaire-other-input 的 outline:none 各有容器级
-     替代（:focus-within 边框/描边），见各自区块；
+     替代（:focus-within 阴影加深 / 描边），见各自区块；
    - rename/save-space 等 input 已有 :focus 边框变色，叠加本环属双保险，不冲突。 */
 button:focus-visible,
 [role="button"]:focus-visible,
@@ -975,6 +975,8 @@ textarea:focus-visible {
 	/* WB 输入容器圆角 24（cr-input-container，对话页同值）；首页被槽覆写为 22。 */
 	border-radius: 24px;
 	box-shadow: var(--shadow-input);
+	/* 聚焦过渡与 WB 同款（cr-input-container 的 transition: box-shadow .15s ease）。 */
+	transition: box-shadow var(--dur-fast) ease;
 	/* WB：容器上 padding 12、编辑区左右 16（cr-input-editor-host padding 0 16）。 */
 	padding: var(--space-4) var(--space-5);
 }
@@ -998,11 +1000,12 @@ textarea:focus-visible {
 }
 
 /* textarea 自身 outline:none 的焦点替代做在卡片上（输入卡是视觉整体，环画在
-   textarea 上会切成内嵌小框）。边框加深与 rename-input 的 :focus 同款语言
-   （同色 --text-secondary = 全局焦点环色，理由见该处注释）；
-   不用 drag-over 的 --primary：那是「拖放目标」的强信号，键盘聚焦是常态。 */
+   textarea 上会切成内嵌小框）。
+   **聚焦只加深阴影、不动边框**——对齐 WorkBuddy 的 cr-input-container--focused
+   （它只换 box-shadow）。曾经把边框换成 --text-secondary（50% 黑），用户点进
+   输入框就是一圈黑线，与竞品观感差得远（2026-09-17 实测反馈后改）。 */
 .composer-card:focus-within {
-	border-color: var(--text-secondary);
+	box-shadow: var(--shadow-input-focus);
 }
 
 .composer-card textarea::placeholder {
