@@ -18,7 +18,7 @@
  *
  * 2. **同会话写操作走 per-session promise 链（enqueue），跨会话不互斥。**
  *    prompt 在链上是「整段 run」——handler await host.prompt() 到 agent 循环
- *    收尾，所以排在后面的 compact / saveToWorkspace 执行时上一个 run 必然
+ *    收尾，所以排在后面的 compact / restartSession 执行时上一个 run 必然
  *    已结束，不存在「旧 run 未停新 run 已起」。
  *    abort 不进链：它是信号不是写操作，排在 prompt 后面会让停止键失效
  *    （run 不停、abort 永远轮不到执行）。abort 直接调宿主 —— pi 的 abort
@@ -43,8 +43,7 @@ export const MAX_IDLE_HOSTS = 5;
 /**
  * 每会话的子代理 spawn 预算**缺省值**（task 工具防失控循环：子代理输出回灌主
  * 代理后，主代理可能据此再委派，没有预算上限就是永动机）。挂在桶上按会话计 ——
- * 开新桶（新建任务 / 恢复历史）即新预算；saveToWorkspace 原地换 cwd
- * 不换桶，预算不复位（同一场对话）。
+ * 开新桶（新建任务 / 恢复历史）即新预算；同一只桶内不复位（同一场对话）。
  * 可配置：preferences.spawnBudget（spec: add-team-foundations 防线参数化），
  * 调用方开桶时现读传入，这里只兜缺省。
  */
@@ -75,7 +74,7 @@ export interface SessionBucket<THost> {
 	sessionFilePath: string | undefined;
 	/** 本会话折叠的 ConversationView（与 renderer 同一份 reducer，事件按桶折叠）。 */
 	conversation: ConversationView;
-	/** 会话工作目录。终身绑定（cwd 在建会话时一次性注入工具集），saveToWorkspace 换绑是唯一的写点。 */
+	/** 会话工作目录。终身绑定（cwd 在建会话时一次性注入工具集），换绑只发生在建宿主之前。 */
 	cwd: string;
 	/**
 	 * 本任务的 worktree 意图（基准分支名）。建宿主时消费**一次**并清空 ——

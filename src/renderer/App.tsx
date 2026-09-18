@@ -1132,7 +1132,7 @@ export function App(): React.JSX.Element {
 	 * 每次点都闪提示只是噪音（spec 修订 2026-09-17）。
 	 *
 	 * mode="branch" 时 daemon 已把当前会话切到新分支，这里按权威快照跟随切换
-	 *（与 saveToWorkspace / resume 同款收口）。refillText 的填回**必须等切换落地**：
+	 *（与 resume 同款收口）。refillText 的填回**必须等切换落地**：
 	 * Composer 的 draftKey 就是 sessionId，切会话会重载该会话的草稿，早一步填进去的
 	 * 文本会被那一次重载清掉。
 	 */
@@ -1283,25 +1283,6 @@ export function App(): React.JSX.Element {
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
-
-	/**
-	 * 临时任务转正：daemon 把任务目录重命名为空间名、重写归组键并以新 cwd 重建当前会话。
-	 * 成功后按 resume 同口径按权威快照换指针（cwd/isTempTask 易位、预览根变了），
-	 * 会话挪组经推送覆盖，这里只补拉 metas（新空间组可能第一次出现）。
-	 *
-	 * 失败不在这里 toast：promise 原样 reject 给对话页的命名弹层，
-	 * 校验错误（重名/非法字符/保留名…）在输入框下原位显示，用户改完重试。
-	 */
-	const saveToWorkspace = useCallback(
-		(name: string): Promise<void> =>
-			window.kami.saveToWorkspace(name).then(() => {
-				resyncSnapshot();
-				refreshGroups();
-				showToast("已保存到工作空间", "success");
-			}),
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[resyncSnapshot, refreshGroups],
-	);
 
 	/**
 	 * 打开设置时记住来路：从对话页进设置，关闭后应回到对话页而不是首页
@@ -1584,7 +1565,6 @@ export function App(): React.JSX.Element {
 					}}
 					onOpenSettings={openSettings}
 					onError={showToast}
-					onSaveToWorkspace={saveToWorkspace}
 					branchAvailable={branchAvailable}
 					onRestartFrom={restartFromUserMessage}
 					onBranchFrom={forkFromUserMessage}

@@ -263,7 +263,7 @@ export interface SandboxRunnerOptions {
 	 *
 	 * 依据的不变式：`bucket.cwd` 的每次改动要么发生在宿主建立之前
 	 * （applyWorkspace 与 newTask 都用 `hostPromise === undefined` 把守，
-	 * 只改 pristine 桶），要么先 dispose 宿主再重建（saveToWorkspace）。
+	 * 只改 pristine 桶），要么先 dispose 宿主再重建（restartSession）。
 	 * 所以活着的宿主看到的 cwd 不会在脚下变。
 	 *
 	 * 反过来说：这里若用 getter 读 bucket.cwd，反而会与权限门的快照可能不一致 ——

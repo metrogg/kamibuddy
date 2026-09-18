@@ -202,9 +202,8 @@ export function worktreeInfoFromCwd(cwd: string): WorktreeInfo | undefined {
  * cwd 是否落在副本根下（任意深度）。
  *
  * 两处消费它，语义都是「这不是用户经营的工作目录」：
- *   - daemon 的归区判定（workspace-model.ts 的 isTaskPrivateCwd）：副本会话归任务区，
- *     且因为 isOwnedSessionDir 为假，「保存到工作空间」走新建目录的回退分支 ——
- *     rename 一份 git worktree 会让仓库里的 worktree 登记表指向不存在的路径；
+ *   - daemon 的归区判定（workspace-model.ts 的 isTaskPrivateCwd）：副本会话归任务区
+ *     （否则会以 `main-a1b2c3d4` 这种目录名在空间区成组）；
  *   - renderer 判断当前会话是否已在副本里（chip 的展示态）。
  *
  * 统一成正斜杠再比：git 回报的路径与 path.join 给的斜杠方向在 Windows 上不一致。

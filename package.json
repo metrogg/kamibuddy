@@ -23,6 +23,7 @@
     "smoke:session-branch": "tsx scripts/smoke-session-branch.ts",
     "smoke:permission": "tsx scripts/smoke-permission-gate.ts",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.ts",
+    "smoke:runtime": "node scripts/smoke-runtime.mjs",
     "smoke:mcp": "tsx scripts/smoke-mcp-connector.ts",
     "smoke:mcp-activation": "tsx scripts/smoke-mcp-activation.ts",
     "smoke:docx": "tsx scripts/smoke-docx.ts",

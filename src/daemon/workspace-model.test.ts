@@ -7,13 +7,13 @@
  *   - 待分配（""）首次执行才落盘时间戳目录；换了工作空间 / 已分配目录则不落盘；
  *   - 归属判定只看形态、不比对生效根（改根后旧任务不漂移 —— 关键回归）；
  *     生效根本身归空间区（cwd = 根只来自用户显式选「默认工作空间」，对齐 WorkBuddy）；
- *   - 转正：独占自动目录整体 rename（产物随目录走），共享临时目录走回退、不被动；
+ *   - 选择器候选：自动目录 / 历史共享临时目录都不进候选；
  *   - reveal 白名单：任务时间戳目录通过，未知绝对路径仍拒。
  *
  * 用真实临时目录跑（与 core/workspace.test.ts 同口径），跑完清理。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,12 +21,10 @@ import { listWorkspaces } from "../core/workspace.ts";
 import {
 	LEGACY_TEMP_TASKS_DIR_NAME,
 	allocatePendingCwd,
-	isOwnedSessionDir,
 	isRevealableCwd,
 	isSelectableWorkspaceDir,
 	isTaskCwd,
 	isTaskPrivateCwd,
-	promoteSessionDir,
 } from "./workspace-model.ts";
 
 const ROOT = "C:\\Users\\wzd\\KamiBuddy";
@@ -129,69 +127,6 @@ describe("allocatePendingCwd（分配时机：首次执行才落盘）", () => {
 		const root = tempRoot();
 		// 新建任务只把 cwd 记为待分配（""），不调用分配 —— 此刻根下应空无一物。
 		expect(readdirSync(root)).toEqual([]);
-	});
-});
-
-describe("isOwnedSessionDir（可整体 rename 的独占目录）", () => {
-	it("自动目录可 rename；历史共享目录 / 普通目录不可", () => {
-		expect(isOwnedSessionDir(join(ROOT, "2026-09-14-17-30-45"))).toBe(true);
-		expect(isOwnedSessionDir(join(ROOT, LEGACY_TEMP_TASKS_DIR_NAME))).toBe(false);
-		expect(isOwnedSessionDir(join(ROOT, "季度汇报"))).toBe(false);
-	});
-});
-
-describe("promoteSessionDir（转正落盘）", () => {
-	it("rename 分支：独占自动目录整体改名，产物随目录迁移", () => {
-		const root = tempRoot();
-		const from = join(root, "2026-09-14-17-30-45");
-		mkdirSync(from);
-		writeFileSync(join(from, "周报.md"), "九月周报正文");
-		mkdirSync(join(from, ".kamibuddy"));
-
-		const target = join(root, "九月周报");
-		promoteSessionDir(from, target);
-
-		expect(existsSync(from)).toBe(false); // 旧目录已改名，不再存在
-		expect(existsSync(target)).toBe(true);
-		expect(readFileSync(join(target, "周报.md"), "utf8")).toBe("九月周报正文");
-		expect(existsSync(join(target, ".kamibuddy"))).toBe(true); // 记忆随目录走
-	});
-
-	it("回退分支：历史共享临时目录不被 rename，产物原地保留", () => {
-		const root = tempRoot();
-		const shared = join(root, LEGACY_TEMP_TASKS_DIR_NAME);
-		mkdirSync(shared);
-		writeFileSync(join(shared, "别人的产物.md"), "不属于本任务");
-
-		const target = join(root, "九月周报");
-		promoteSessionDir(shared, target);
-
-		expect(existsSync(shared)).toBe(true); // 共享目录原地不动
-		expect(readFileSync(join(shared, "别人的产物.md"), "utf8")).toBe("不属于本任务");
-		expect(existsSync(target)).toBe(true); // 退回到「新建命名目录」
-	});
-
-	it("目标已存在即拒，且原目录不被移动", () => {
-		const root = tempRoot();
-		const from = join(root, "2026-09-14-17-30-45");
-		mkdirSync(from);
-		writeFileSync(join(from, "a.md"), "x");
-		const target = join(root, "九月周报");
-		mkdirSync(target);
-
-		expect(() => promoteSessionDir(from, target)).toThrow(/已存在/);
-		expect(existsSync(join(from, "a.md"))).toBe(true);
-		expect(readdirSync(target)).toEqual([]); // 没有被本任务的内容污染
-	});
-
-	it("分配出的目录名就是可 rename 的形态（分配与转正口径一致）", () => {
-		const root = tempRoot();
-		const from = allocatePendingCwd("", root, new Date(2026, 8, 14, 17, 30, 45));
-		const target = join(root, "九月周报");
-		promoteSessionDir(from, target);
-		expect(basename(target)).toBe("九月周报");
-		expect(existsSync(target)).toBe(true);
-		expect(existsSync(from)).toBe(false);
 	});
 });
 

@@ -540,6 +540,42 @@ check(
 	);
 }
 
+/* ── 新建任务在首响应前就应出现在列表里（pi 未落盘 → 列表补合成条目）──── */
+
+{
+	// pi 在「会话里还没有助手消息」之前不写文件（session-manager.js 的 _persist 守卫：
+	// 首条 assistant 到达时才一次性写出）。列表是磁盘扫描，于是新建任务的第一条消息
+	// 发出后、首响应到达前会在侧栏缺席（2026-09-17 用户实测「任务已经在跑了，
+	// 过一会才出现」）。daemon 侧用桶里的信息补一条合成摘要，本节钉住它。
+	await invoke<void>(INVOKE.newTask, []);
+	void invoke<void>(INVOKE.prompt, [{ text: "新建任务的首条消息（应立刻出现在列表）" }]).catch(() => {
+		/* run 的结局不是本用例的断言对象（模型永不应答） */
+	});
+	let running = true;
+	try {
+		await waitUntil(async () => (await listSessions()).some((s) => s.current && s.running), 20_000, "新任务进入流式");
+	} catch {
+		running = false;
+	}
+	const listed = (await listSessions()).find((s) => s.current);
+	check(
+		"H1 首响应前：新任务已在列表里且 running=true，标题取首条用户消息",
+		running && listed !== undefined && listed.title.includes("首条消息"),
+		`current=${String(listed?.title)}，running=${String(listed?.running)}`,
+	);
+	check(
+		"H2 该会话文件此刻确实还没落盘（证明 H1 不是靠落盘才有的）",
+		listed !== undefined && !existsSync(listed.path),
+		`path=${listed?.path ?? "(无)"}，exists=${listed === undefined ? "?" : String(existsSync(listed.path))}`,
+	);
+	await invoke<void>(INVOKE.abort, []);
+	await waitUntil(
+		async () => (await listSessions()).every((s) => !s.current || !s.running),
+		15_000,
+		"run 收尾（aborted）",
+	);
+}
+
 /* ── 拒绝路径 ───────────────────────────────────────────────────────── */
 
 {

@@ -3,17 +3,15 @@
  *
  * 为什么单独一个文件：daemon/index.ts 顶层 `requireParentPort()` 在非 utilityProcess
  * 环境 import 即抛，无法直接单测（conversation-search.ts / prompt-preview.ts /
- * context-usage-detail.ts 是同一抽法）。这里承载「分配 / 归属判定 / 转正 / reveal 校验」
- * 四类规则，供 daemon 接线调用与单测共用同一份实现。
+ * context-usage-detail.ts 是同一抽法）。这里承载「分配 / 归属判定 / 选择器候选 /
+ * reveal 校验」四类规则，供 daemon 接线调用与单测共用同一份实现。
  *
  * 模型（spec: align-per-task-dirs，对齐 WorkBuddy 的 isPlayground 模型）：
  *   - 未选工作空间的新任务，cwd 先记为**待分配**（`""`），首次执行（真正建宿主）时才在
  *     生效根下分配 `<YYYY-MM-DD-HH-mm-ss>` 独立目录；
- *   - 任务区归属只看 cwd 形态，不比对当前生效根；
- *   - 转正 = 把该任务的自动目录整体 rename 成空间名。
+ *   - 任务区归属只看 cwd 形态，不比对当前生效根。
  */
 
-import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { isAutoSessionDirName } from "../shared/workspace.ts";
 import { createSessionDir } from "../core/workspace.ts";
@@ -22,7 +20,7 @@ import { isWorktreePath } from "../core/worktree.ts";
 /**
  * 历史共享临时目录的目录名（`<生效根>/临时任务`）。
  * 新任务不再落这里（退出落点），但它仍是任务区的一种形态 —— 存量会话原地保留、
- * 继续归任务区，所以判定与转正都还要认这个名字。
+ * 继续归任务区，所以判定与选择器过滤都还要认这个名字。
  */
 export const LEGACY_TEMP_TASKS_DIR_NAME = "临时任务";
 
@@ -43,11 +41,8 @@ export function isTaskPrivateCwd(cwd: string, configDir: string): boolean {
 		cwd === join(configDir, "playground") ||
 		/*
 		 * worktree 副本（对齐清单 C22 / L27）：启用副本的会话 cwd 指向
-		 * `<配置目录>/worktrees/<仓库名>/<分支 id>`。归任务区有两个理由：
-		 *   ① 它不是用户经营的工作空间，进空间区会以 `main-a1b2c3d4` 这种目录名成组；
-		 *   ② 更要紧的是 isOwnedSessionDir 因此为假 —— 「保存到工作空间」走**新建目录**的
-		 *      回退分支，而不会去 rename 副本目录。rename 一份 git worktree 会让仓库里的
-		 *      worktree 登记表（.git/worktrees/）指向一个不存在的路径，仓库从此半坏。
+		 * `<配置目录>/worktrees/<仓库名>/<分支 id>`。归任务区的理由是它不是用户
+		 * 经营的工作空间 —— 进空间区会以 `main-a1b2c3d4` 这种目录名成组。
 		 */
 		isWorktreePath(cwd)
 	);
@@ -84,16 +79,6 @@ export function isTaskCwd(cwd: string, configDir: string): boolean {
 }
 
 /**
- * 该 cwd 是否是「本会话独占、可整体 rename」的自动目录。
- * 历史共享临时目录绝不可 rename（别的老任务也在里面，改名会带走别人的产物），
- * 旧 playground 占位目录同理；它们走 promoteSessionDir 的回退分支。
- */
-export function isOwnedSessionDir(cwd: string): boolean {
-	const name = basename(cwd);
-	return isAutoSessionDirName(name) && name !== LEGACY_TEMP_TASKS_DIR_NAME;
-}
-
-/**
  * 该目录可否作为工作空间选择器的候选（workspaceSnapshot 列表的过滤谓词）。
  *
  * 排除两类「不是用户经营的工作空间、只是恰好躺在根下」的目录：
@@ -124,29 +109,6 @@ export function isSelectableWorkspaceDir(dir: string): boolean {
  */
 export function allocatePendingCwd(cwd: string, root: string, now?: Date): string {
 	return cwd === "" ? createSessionDir(root, now) : cwd;
-}
-
-/**
- * 转正落盘：把任务目录改名 / 另建为目标空间目录（调用方保证会话宿主此刻已 dispose）。
- *
- * rename 分支（本会话独占的自动目录）：同根整体改名，产物与 `<cwd>/.kamibuddy/` 记忆
- *   随目录一起走 —— 这是对 WorkBuddy 的改良（它只加显示名、目录仍叫时间戳，时间戳
- *   目录会永久堆积）。跨卷（用户改过默认存储路径，旧目录在新根的另一盘）时 rename
- *   会抛 EXDEV，由调用方响亮报错并恢复宿主。
- * 回退分支（历史共享临时目录里的老会话、生效根本身、别的形态）：**绝不能 rename** ——
- *   共享目录归属多个老任务，改名会带走别人的产物。退回旧的「新建命名目录 + 切 cwd」，
- *   老目录原地保留（spec：历史目录不迁移、不删除）。
- *
- * 目标已存在即拒：静默复用会把本任务产物混进别人的目录里。调用方在 dispose 之前还会
- * 再查一次（早拒、且那时主机毫发无损），这里是 rename 前的兜底（挡校验与改名之间的竞态）。
- */
-export function promoteSessionDir(cwd: string, target: string): void {
-	if (existsSync(target)) throw new Error(`目标目录已存在：${target}`);
-	if (isOwnedSessionDir(cwd)) {
-		renameSync(cwd, target);
-		return;
-	}
-	mkdirSync(target, { recursive: true });
 }
 
 /**

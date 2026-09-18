@@ -125,7 +125,7 @@ button {
    - ws-create input:focus 用类+伪类，特异性高于本规则，保留其 --primary 环；
    - composer textarea / questionnaire-other-input 的 outline:none 各有容器级
      替代（:focus-within 阴影加深 / 描边），见各自区块；
-   - rename/save-space 等 input 已有 :focus 边框变色，叠加本环属双保险，不冲突。 */
+   - rename / ws-create 等 input 已有 :focus 边框变色，叠加本环属双保险，不冲突。 */
 button:focus-visible,
 [role="button"]:focus-visible,
 select:focus-visible,
@@ -1843,12 +1843,14 @@ textarea:focus-visible {
 	align-items: center;
 	gap: var(--space-3);
 	/* 左右内边距分别让出窗口两角：App 层的侧栏开关（左）与面板开关组（右）钉在那里，
-	   行首的返回按钮、行尾的 ModeSwitch 不能滑进它们的点击区。两侧**必须分开写**：
+	   行首的返回按钮与行尾的标题不能滑进它们的点击区。两侧**必须分开写**：
 	   左侧 48 = left 12 + 一个侧栏开关 28 + 呼吸 8（左角只有一个控件，别跟着右侧涨）；
 	   右侧 84 = right 12 + 两个按钮（28×2）+ 组内 gap 8 + 呼吸 8 ——
-	   面板开关从一个变两个（任务诊断，2026-09-15）后 48 不再够：行尾的 ModeSwitch
-	   会被第二个按钮压住。（此前这条写成简写 `padding: var(--space-3) 84px`，
-	   顺手把左侧也从 48 抬到 84，返回按钮凭空右移 36px —— 已改回分写。） */
+	   面板开关从一个变两个（任务诊断，2026-09-15）后 48 不再够，标题会被第二个按钮压住。
+	   （2026-09-17 起行尾不再有 ModeSwitch 与「保存到工作空间」按钮，右侧留位仍按
+	   那组**悬浮在 header 之上**的面板开关算，与本行内容无关。
+	   此前这条写成简写 `padding: var(--space-3) 84px`，顺手把左侧也从 48 抬到 84，
+	   返回按钮凭空右移 36px —— 已改回分写。） */
 	padding: var(--space-3) 84px var(--space-3) 48px;
 	border-bottom: 1px solid var(--border);
 }
@@ -3431,11 +3433,12 @@ textarea:focus-visible {
 	margin-top: var(--space-3);
 }
 
-/* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。 */
+/* 两列网格：单产物时独占一行（WorkBuddy 产物卡布局口径）。
+   间距取 --space-4(12px) 对齐 WB 的 grid gap —— 64px 高的卡配 6px 间距会挤成一坨。 */
 .artifacts-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
-	gap: var(--space-2);
+	gap: var(--space-4);
 }
 
 .artifacts-grid:has(> :only-child) {
@@ -3455,37 +3458,58 @@ textarea:focus-visible {
 	padding-right: 40px;
 }
 
-/* 卡片形态对齐 WorkBuddy 的产物卡：白底 + 1px 边界 + 圆角，
-   左图标 / 中文件名+大小两行 / 右动作钮。此前是无边界的「列表行」，
-   扫读时与正文糊在一起（用户实测反馈）。 */
+/* 卡片形态对齐 WorkBuddy 的 .artifact-slot-panel__card：灰底 + 16 圆角 + 64 高、
+   **无边框**。此前是白底 + 1px 描边，两个毛病（2026-09-17 用户实测反馈）：
+   ① 白卡贴在白页面上只靠描边成形，hover 再把描边加深到 --text-secondary，
+   读起来就是「一圈黑线」；② 比 WB 的灰底卡发白、发扁。
+   hover 只换底色、不动描边（WB 同款：底色深一档，描边全程没有）。 */
 .artifact-card {
 	position: relative;
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	width: 100%;
-	padding: var(--space-3);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--bg);
+	height: 64px;
+	padding: var(--space-3) var(--space-4);
+	border: none;
+	border-radius: var(--radius-lg);
+	background: var(--bg-raised);
 	text-align: left;
-	font-size: var(--text-list);
+	transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .artifact-card:hover {
-	border-color: var(--text-secondary);
+	background: var(--bg-hover);
 }
 
-/* 文件名 + 大小两行（WB 同款）：文件名在上、大小小一号灰字在下。 */
+/*
+ * 焦点环画在卡片**之内**（offset 取负）：全局那条 button:focus-visible 是
+ * `offset: +2px` 的中性灰环，落在卡片上正是「外面一圈黑线」——与输入框那次的
+ * 病根同源（拿 --text-secondary 当环色，见 tokens.css 的 --shadow-input-focus 注）。
+ * WorkBuddy 的做法可证：整卡的主操作按钮用 `outline-offset: -2px` 把环收进卡片里
+ *（.artifact-slot-panel__card-main:focus-visible），色取品牌焦点色。
+ * 我们取 --accent（「可点标识」色）——整张卡就是那个可点目标，它比中性灰更像
+ * 「选中」，也不像报错。
+ */
+.artifact-card:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* 文件名 + 大小两行（WB 同款）：15/600 的标题在上、13 号灰字在下。
+   行高用两行自己的（WB 是 25/21px），不再另加 gap —— 两行行高已给足间距，
+   再加 gap 会把两行文字在 64px 卡里顶得过高。 */
 .artifact-meta {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
 	min-width: 0;
 	flex: 1;
 }
 
 .artifact-name {
+	font-size: var(--text-emphasis);
+	font-weight: 600;
+	line-height: 1.5;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -3494,7 +3518,8 @@ textarea:focus-visible {
 
 .artifact-size {
 	color: var(--text-secondary);
-	font-size: var(--text-meta);
+	font-size: var(--text-list);
+	line-height: 1.5;
 }
 
 /* HTML 卡的 🌐 预览按钮：右上角小图标，点击开面板不触发整卡。
@@ -4990,7 +5015,7 @@ textarea:focus-visible {
 
 /* ── 设置模态卡（WorkBuddy 式：左 nav + 右内容）────────────────── */
 /* 定高：nav 切换分组时卡片高度不随内容抖动。白底用 var(--bg)，与既有
-   全部模态卡（permission-card / save-space / auto-form）同一口径。 */
+   全部模态卡（permission-card / auto-form）同一口径。 */
 .settings-card {
 	position: relative;
 	display: flex;
@@ -5890,37 +5915,8 @@ textarea:focus-visible {
 	flex: 0 0 auto;
 }
 
-/* ── 交互模式切换（对话页右上角）─────────────────────────────── */
+/* ── 模式菜单项的文字版式（「＋ → 模式」子菜单）───────────── */
 
-.mode-menu {
-	top: calc(100% + 4px);
-	right: 0;
-	z-index: var(--z-panel);
-	min-width: 220px;
-	padding: var(--space-1);
-	/* 空间连续性：挂在触发按钮（.menu-zone 内的「模式」）下方、右对齐
-	   （top: calc(100% + 4px) + right: 0）→ 从按钮右上角生长。 */
-	transform-origin: top right;
-}
-
-.mode-menu-item {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding: var(--space-2) var(--space-3);
-	border-radius: var(--radius-sm);
-	text-align: left;
-}
-
-.mode-menu-item:hover {
-	background: var(--bg-hover);
-}
-
-.mode-menu-item.active {
-	background: var(--bg-raised);
-}
-
-.mode-menu-label,
 .plus-menu-mode-label {
 	display: flex;
 	align-items: center;
@@ -5930,7 +5926,6 @@ textarea:focus-visible {
 }
 
 /* 未实现的模式仍然列出（对齐 WorkBuddy 的能力面），用标签说明状态。 */
-.mode-menu-tag,
 .plus-menu-mode-tag {
 	padding: 0 var(--space-1);
 	border-radius: 4px;
@@ -5940,34 +5935,51 @@ textarea:focus-visible {
 	font-weight: 400;
 }
 
-/* 「专家」项的子菜单：与 .plus-menu-sub 同构但方向镜像 —— mode-menu 贴在
-   对话页头部右缘展开，子菜单向右飞会溢出窗口被裁掉，只能向左飞；
-   顶边与「专家」行对齐、向下生长（主菜单向下展开，与 plus-menu 的向上相反）。 */
-.mode-menu-sub-zone {
-	position: relative;
+/* ── composer-bar 当前模式 chip ─────────────────────────────────── */
+
+/* 只在非默认档（问答 / 计划）出现 —— 模式是**会话级持久**状态，进了只读档而界面不
+   标出来，用户会以为工具集丢了。craft 是默认档也是常态，组件直接不渲染（WorkBuddy
+   的 mode-chip 同款口径：`currentMode === "craft"` 返回 null）。
+   骨架与 .expert-chip 同一尺寸语言（32px 高、999 圆角、透明底），两者常同排出现，
+   不同一套就会看着像两种控件。 */
+.mode-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	height: 32px;
+	padding: 0 var(--space-2) 0 var(--space-3);
+	border-radius: var(--radius-full);
+	font-size: var(--text-list);
+	color: var(--text-secondary);
+	white-space: nowrap;
 }
 
-.mode-menu-sub {
-	right: calc(100% + 4px);
-	top: -4px;
-	z-index: var(--z-panel);
-	min-width: 220px;
-	padding: var(--space-1);
-	/* 空间连续性：父菜单在它右侧（right: calc(100% + 4px)）、顶边与「专家」行对齐
-	   （top: -4px）并向下生长 → 从贴着父菜单的右上角生长，不是 left。
-	   （spec/task 把本类与 .plus-menu-sub 并列写成「向右飞出 → left center」，
-	   但本类方向镜像：上面的注释已写明「向右飞会溢出窗口被裁掉，只能向左飞」。）
-	   另：本类当前无 TSX 引用（grep 全仓只有本文件），属历史遗留选择器，
-	   保留是为了万一恢复「模式 ▸ 专家」子菜单时行为一致。 */
-	animation: pop-layer-in var(--dur-base) var(--ease-out);
-	transform-origin: right top;
+.mode-chip:hover,
+.mode-chip:focus-within {
+	background: var(--bg-hover);
+	color: var(--text);
 }
 
-/* 子菜单项要给 ✓ 留位（主菜单项没有 ✓，版式不动）。原 30px 不在间距档：
-   就近向上取 --space-7(32)；取 --space-6(24) 会让文字贴上 ✓（right:8 + 16px 图标）。 */
-.mode-menu-sub .mode-menu-item {
-	position: relative;
-	padding-right: var(--space-7);
+/* × 与 .expert-chip-close 不同：这里**常驻可见**，不走 hover 才现。
+   模式是限制能力的状态，「怎么退出」是 chip 存在的主要理由，藏起来就白留这个入口；
+   常驻还顺带绕开了 hover 才现那条路的键盘死角（display:none 的按钮进不了 Tab 序列，
+   focus-within 也就永远点不亮）。 */
+.mode-chip-clear {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	border-radius: var(--radius-full);
+	font-size: var(--text-meta);
+	line-height: 1;
+	color: var(--text-secondary);
+}
+
+.mode-chip-clear:hover {
+	background: var(--bg-raised);
+	color: var(--text);
 }
 
 /* ── composer-bar 当前专家 chip ─────────────────────────────────── */
@@ -6342,12 +6354,10 @@ textarea:focus-visible {
 	margin-top: var(--space-1);
 }
 
-.mode-menu-item.active .mode-menu-tag,
 .plus-menu-mode-item.active .plus-menu-mode-tag {
 	background: var(--bg);
 }
 
-.mode-menu-desc,
 .plus-menu-mode-desc {
 	/* 副行一句话（模式说明 / 专家 displayDescription）：12px 次要色单行截断。
 	   长句折行会把双行菜单项撑成三行；截断后完整文本走按钮 title tooltip。
@@ -6524,53 +6534,12 @@ textarea:focus-visible {
 	margin-top: var(--space-1);
 }
 
-/* ── 保存到工作空间（命名弹层） ─────────────────────────────────── */
-
-/* 卡片骨架与权限弹窗同尺寸语言（modal-backdrop 共享），内容更简单所以更窄。 */
-.save-space-card {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	width: 100%;
-	max-width: 400px;
-	padding: var(--space-5) var(--space-5);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-lg);
-	/* 入场：条件挂载（父层按开关渲染整个弹层组件）→ 走 animation 不走 transition。 */
-	animation: pop-layer-in var(--dur-base) var(--ease-out);
-	/* 空间连续性：居中模态（.modal-backdrop 用 flex 居中）→ 从自身中心生长。 */
-	transform-origin: center;
-}
+/* ── 表单弹层标题 / 操作行（automations、connectors 复用）───────── */
 
 .save-space-title {
 	margin: 0;
 	font-size: var(--text-emphasis);
 	font-weight: 600;
-}
-
-.save-space-desc {
-	margin: 0;
-	color: var(--text-secondary);
-	font-size: var(--text-meta);
-	line-height: 1.6;
-}
-
-.save-space-input {
-	display: block;
-	width: 100%;
-	padding: var(--space-2) var(--space-3);
-	font-size: var(--text-body);
-	color: var(--text);
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	outline: none;
-}
-
-.save-space-input:focus {
-	border-color: var(--primary);
 }
 
 /* 操作行与 .permission-actions 逐字相同，规则以选择器并集合并在权限弹窗一节。 */
@@ -6625,8 +6594,7 @@ textarea:focus-visible {
 }
 
 .model-menu-check,
-.plus-menu-mode-check,
-.mode-menu-check {
+.plus-menu-mode-check {
 	position: absolute;
 	right: 8px;
 	top: 50%;
@@ -6760,8 +6728,7 @@ textarea:focus-visible {
 	background: var(--bg-hover);
 }
 
-.plus-menu-caret,
-.mode-menu-caret {
+.plus-menu-caret {
 	margin-left: auto;
 	color: var(--text-secondary);
 }
@@ -6792,7 +6759,7 @@ textarea:focus-visible {
 	transform-origin: left center;
 }
 
-/* 模式项两行布局（label + description），版式参照头部的 .mode-menu-item。 */
+/* 模式项两行布局（label + description）。 */
 .plus-menu-mode-item {
 	position: relative;
 	display: flex;
@@ -6813,7 +6780,7 @@ textarea:focus-visible {
 	background: var(--bg-raised);
 }
 
-/* label / tag / desc / check 与 .mode-menu-*、.model-menu-check 逐字相同，
+/* label / tag / desc / check 与 .model-menu-check 逐字相同，
    规则以选择器并集合并在各自首个定义处，此处不再重复。 */
 
 /*
@@ -7657,7 +7624,7 @@ textarea:focus-visible {
 	min-width: 0;
 }
 
-/* 表单弹层：骨架复用 modal-backdrop；卡片比 save-space 宽（字段多），
+/* 表单弹层：骨架复用 modal-backdrop；卡片比 permission-card 宽（字段多），
    其余（圆角/阴影/内边距）保持同一尺寸语言。
    连接器（MCP）的添加表单与 JSON 编辑器同一卡片语言，选择器并集共用。 */
 .auto-form-card,
@@ -8710,7 +8677,6 @@ textarea:focus-visible {
 .ws-item:active:not(:disabled),
 .ws-action:active:not(:disabled),
 .settings-nav-item:active,
-.mode-menu-item:active,
 .model-menu-item:active,
 .model-menu-level-item:active,
 .permission-menu-item:active,
@@ -8748,12 +8714,11 @@ textarea:focus-visible {
 
 /* ── 禁用态视觉补齐 ────────────────────────────────────────────────────────
  * 对着 `disabled={` 的调用点逐个核过，此前「属性已置灰、视觉毫无变化」的类：
- *   .bar-btn（pdf 翻页/缩放、「外部打开」、转正按钮）——图标按钮，§3.1 用 opacity .4；
+ *   .bar-btn（pdf 翻页/缩放、「外部打开」等）——图标按钮，§3.1 用 opacity .4；
  *   .ws-item / .ws-action（workspace-picker 切换/创建中整列禁点）——列表行，§3.4 用 .5；
  *   .provider-select-trigger（表单数据未到时禁点）——控件，.5；
  *   .composer-card textarea（daemon 未连上时整张输入卡禁用）——此前禁用态与可用态
- *     完全一样，只有 placeholder 还在 --text-secondary；按 §3.2 降到 --text-faint；
- *   .save-space-input（保存中禁编辑）——输入框按 §3.2：底 --bg-raised + 字 --text-secondary。
+ *     完全一样，只有 placeholder 还在 --text-secondary；按 §3.2 降到 --text-faint。
  * 已有禁用样式的类不在这里重复（核过，共 11 处）：.mini-btn / .primary-btn / .send-btn /
  * .tool-head / .mcp-switch input / .questionnaire-pager-btn / .questionnaire-option /
  * .questionnaire-icon-btn / .field input / .profile-textarea / .widget-action。
@@ -8781,12 +8746,6 @@ textarea:focus-visible {
 
 .composer-card textarea:disabled::placeholder {
 	color: var(--text-faint);
-}
-
-.save-space-input:disabled {
-	background: var(--bg-raised);
-	color: var(--text-secondary);
-	cursor: default;
 }
 
 /* ── 嵌套滚动容器的滚动链 ──────────────────────────────────────────────────

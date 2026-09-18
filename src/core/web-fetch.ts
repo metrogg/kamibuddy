@@ -168,9 +168,29 @@ export async function fetchPage(
 		import("turndown"),
 	]);
 	const { document } = parseHTML(rawText);
+	const finalName = finalUrl.url.hostname;
+
+	/*
+	 * 解析不出任何元素时必须在这里挡住：空响应体、纯注释、无标签的纯文本，
+	 * linkedom 给的 document.documentElement 是 **null**，而它的 `document.head`
+	 * getter 是 `const { firstElementChild } = documentElement` —— 直接解构 null。
+	 * Readability 在 parse() 里就会碰 head，我们下面取 `document.body` 的兜底分支
+	 * 同样会（body getter 先取 head）—— 两处都会把
+	 * `Cannot destructure property 'firstElementChild' of 'documentElement' as it is null.`
+	 * 原样抛到模型和用户面前：那句话既看不出哪里错，也指不出该换什么 URL。
+	 *
+	 * 真实来路（2026-09-17 实踩）：公司网络里被代理拦下的站点常回一个 200 + 空体，
+	 * Content-Type 仍是 text/html —— 协议、内网、状态码、内容类型四道校验全都放行，
+	 * 到这一步才炸。所以这不是「不可能发生的输入」，是这条链上的常态输入之一。
+	 */
+	if (document.documentElement === null) {
+		throw new Error(
+			`未能从 ${finalName === "" ? "该页面" : finalName} 提取到内容（响应体是空的，或没有可解析的 HTML）`,
+		);
+	}
+
 	const reader = new Readability(document);
 	const article = reader.parse();
-	const finalName = finalUrl.url.hostname;
 
 	const turndown = new TurndownService({
 		headingStyle: "atx",
