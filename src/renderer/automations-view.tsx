@@ -181,7 +181,21 @@ export function AutomationsView({
 
 	const load = useCallback(async (): Promise<void> => {
 		try {
-			setTasks(await window.kami.listAutomations());
+			/*
+			 * 内置任务（当前只有「记忆整理」）不进本页：它是无人值守的后台家务，
+			 * 不是用户的定时任务，只在「设置 → 记忆与进化」里可见可管（WorkBuddy
+			 * 同款 IA —— 内置蒸馏任务同样不出现在定时任务页）。
+			 *
+			 * 过滤放在**加载处**而不是渲染处：放在渲染处时，若库里只剩内置任务，
+			 * tasks.length 非 0 就会跳过空态分支，用户看到一片空白而不是「还没有
+			 * 定时任务」的引导。
+			 *
+			 * 只过滤本页的视图数据，库与 IPC 通道都保留全量 —— automation_list
+			 * 工具、内置任务的启停对账（preferences.memoryEnabled）仍读全量，
+			 * 不受这里影响。
+			 */
+			const all = await window.kami.listAutomations();
+			setTasks(all.filter((task) => task.builtin !== true));
 			setError(undefined);
 		} catch (e) {
 			setError(errorText(e));
@@ -483,11 +497,6 @@ function AutomationRow({
 						<span className="auto-row-name" title={task.prompt}>
 							{task.name}
 						</span>
-						{task.builtin === true && (
-							<span className="auto-badge" title="系统内置任务，由设置页的记忆开关管辖">
-								内置
-							</span>
-						)}
 						{task.status === "paused" && <span className="auto-badge">已暂停</span>}
 						{task.status === "missed" && (
 							<span className="auto-badge auto-badge-missed">已错过</span>
@@ -517,8 +526,7 @@ function AutomationRow({
 					<button
 						type="button"
 						className="mini-btn"
-						disabled={busy || task.builtin === true}
-						title={task.builtin === true ? "内置任务由系统维护，不可编辑" : undefined}
+						disabled={busy}
 						onClick={onEdit}
 					>
 						编辑
@@ -526,8 +534,7 @@ function AutomationRow({
 					<button
 						type="button"
 						className="mini-btn danger"
-						disabled={busy || task.builtin === true}
-						title={task.builtin === true ? "内置任务不可删除，可在设置里停用" : undefined}
+						disabled={busy}
 						onClick={onDelete}
 					>
 						删除

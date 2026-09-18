@@ -39,7 +39,7 @@ import { TaskDiagnosticsPanel } from "./task-diagnostics-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
-import { SettingsView } from "./settings/settings-view.tsx";
+import { SettingsView, type SettingsPage } from "./settings/settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
 import { StatsView } from "./stats-view.tsx";
@@ -127,6 +127,11 @@ export function App(): React.JSX.Element {
 	const [view, setView] = useState<View>("home");
 	/** 关闭设置页后要回到的视图。见下方 openSettings 的理由。 */
 	const [returnView, setReturnView] = useState<"home" | "chat">("home");
+	/**
+	 * 设置页的深链目标（本次打开要落在哪一页）。undefined = 落「通用」。
+	 * 由 openSettings(page) 写入、关闭时清空 —— 见 SettingsView 的 initialPage 注释。
+	 */
+	const [settingsPage, setSettingsPage] = useState<SettingsPage | undefined>(undefined);
 	const [lastError, setLastError] = useState<string | undefined>(undefined);
 	const [toasts, setToasts] = useState<readonly ToastMessage[]>([]);
 	/**
@@ -1305,8 +1310,10 @@ export function App(): React.JSX.Element {
 		[view],
 	);
 
-	const openSettings = useCallback(() => {
+	const openSettings = useCallback((page?: SettingsPage) => {
 		setReturnView(view === "chat" ? "chat" : "home");
+		// 深链目标随本次打开一起记：关掉设置时清空，下次不带目标地打开仍落「通用」。
+		setSettingsPage(page);
 		setView("settings");
 	}, [view]);
 
@@ -1600,7 +1607,16 @@ export function App(): React.JSX.Element {
 				/>
 			)}
 			{view === "settings" && (
-				<SettingsView onClose={() => setView(returnView)} onOpenDiagnostics={openDiagnostics} />
+				<SettingsView
+					initialPage={settingsPage}
+					onClose={() => {
+						// 清掉深链目标：设置是复用同一个 view 状态机打开的，不清会让
+						// 后面任何一次普通「打开设置」都莫名落在「模型」页。
+						setSettingsPage(undefined);
+						setView(returnView);
+					}}
+					onOpenDiagnostics={openDiagnostics}
+				/>
 			)}
 			{view === "diagnostics" && (
 				<DiagnosticsView onClose={() => setView(returnView)} />

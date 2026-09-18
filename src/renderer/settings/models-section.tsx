@@ -27,6 +27,7 @@ import type {
 import { validateCustomModel, validateCustomProvider } from "@shared/settings.ts";
 import { IconCheck, IconChevronDown, IconClose, IconEdit, IconKey, IconPlus, IconRefresh, IconTrash } from "../icons.tsx";
 import { EmptyState, ErrorState } from "../state-views.tsx";
+import { SelectField } from "./select-field.tsx";
 import { useModalFocus } from "../use-modal-focus.ts";
 
 /** 凭据来源 → 用户能看懂的说明。 */
@@ -179,17 +180,37 @@ const CONTEXT_WINDOW_CHIPS = [
 	{ label: "1M", value: 1_048_576 },
 ] as const;
 
+/** 输出的快捷档位。取值往上调（去掉 8k、补 128k）：写长文档与长报告时 8k 常不够，
+ *  截断表现为「模型写到一半停了」，用户很难联想到是这个值。 */
 const MAX_TOKENS_CHIPS = [
-	{ label: "8k", value: 8_192 },
 	{ label: "16k", value: 16_384 },
 	{ label: "32k", value: 32_768 },
 	{ label: "64k", value: 65_536 },
+	{ label: "128k", value: 131_072 },
 ] as const;
 
+/**
+ * 接口协议选项（下拉）。
+ *
+ * **有意只有两项**：Google Generative AI 已从界面去掉（2026-09-18 用户决策，
+ * 「几乎没人用」）。协议类型 `CustomApi` 仍保留该取值 —— 它只影响**读侧收窄**，
+ * 去掉会让存量的 google 自建条目在回填时被静默改写成 OpenAI 兼容
+ *（下次保存就把用户的配置改坏了）。界面不给选项 = 新条目选不到，存量条目不受伤。
+ *
+ * hint 走 title（下拉项内放不下两行）：留着是因为「基址填到哪一层」是
+ * 自定义服务商最常填错的一处，而填错的报错发生在真正请求时。
+ */
 const API_OPTIONS = [
-	{ value: "openai-completions", label: "OpenAI 兼容", hint: "多数国产网关、Ollama、vLLM" },
-	{ value: "anthropic-messages", label: "Anthropic Messages", hint: "Claude 官方或代理；基址填到端点根（SDK 自动拼 /v1/messages）" },
-	{ value: "google-generative-ai", label: "Google Generative AI", hint: "Gemini / AI Studio" },
+	{
+		value: "openai-completions",
+		label: "OpenAI 兼容",
+		hint: "多数国产网关、Ollama、vLLM；基址填到 /v1 那一层",
+	},
+	{
+		value: "anthropic-messages",
+		label: "Anthropic Messages",
+		hint: "Claude 官方或代理；基址填到端点根（SDK 自动拼 /v1/messages）",
+	},
 ] as const;
 
 interface CustomFormProps {
@@ -206,6 +227,8 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 	const [apiKey, setApiKey] = useState("");
 	/** 提交过一次后才显示校验错误，避免刚打开就满屏红字。 */
 	const [submitted, setSubmitted] = useState(false);
+	/** 「测试」的结果：留在表单内就地展示（与模型卡片的 ProbeState 同一口径）。 */
+	const [draftProbe, setDraftProbe] = useState<ProbeState>({ kind: "idle" });
 
 	const validation = validateCustomProvider(form);
 	const errorOf = (field: string): string | undefined => (submitted ? validation.errors[field] : undefined);
@@ -229,6 +252,38 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 			models: form.models.map((m) => ({ ...m, id: m.id.trim(), name: m.name.trim() === "" ? m.id.trim() : m.name })),
 		};
 		onSave(normalized, apiKey.trim() === "" ? undefined : apiKey.trim());
+	};
+
+	/**
+	 * 表单内测试：拿**当前表单值**发一个最小请求（走 testDraftModel，不查已保存目录）。
+	 *
+	 * 只测第一个模型行：这一行就是用户刚填的那个，多行时逐个测属于「批量验证」，
+	 * 不是这个按钮的用途（保存后到模型卡片上逐个测）。
+	 * 地址 / 模型 ID 为空时不发请求 —— daemon 也会拒，但本地先拦能省一次往返，
+	 * 且错因就地可见（按钮此时也是 disabled）。
+	 */
+	const testDraft = (): void => {
+		const modelId = form.models[0]?.id.trim() ?? "";
+		setDraftProbe({ kind: "running" });
+		void window.kami
+			.testDraftModel(
+				{
+					providerId: form.id,
+					api: form.api,
+					baseUrl: form.baseUrl,
+					...(form.authHeader === true ? { authHeader: true } : {}),
+				},
+				modelId,
+				apiKey,
+			)
+			.then((result) => setDraftProbe({ kind: "done", result }))
+			.catch((e: unknown) =>
+				// daemon 用返回值表达业务失败；走到 catch 说明 IPC 层本身断了。
+				setDraftProbe({
+					kind: "done",
+					result: { ok: false, error: e instanceof Error ? e.message : String(e) },
+				}),
+			);
 	};
 
 	return (
@@ -271,47 +326,35 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 
 			<div className="field">
 				<span className="field-label">接口协议</span>
-				<div className="api-options">
-					{API_OPTIONS.map((option) => (
-						<button
-							key={option.value}
-							type="button"
-							className={`api-option${form.api === option.value ? " active" : ""}`}
-							onClick={() => patch({ api: option.value })}
-						>
-							<span>{option.label}</span>
-							<span className="field-hint">{option.hint}</span>
-						</button>
-					))}
-				</div>
+				{/* 改用通用下拉（select-field.tsx），不再用三张卡片：卡片占竖向空间大，
+				    而这个字段多数用户一辈子不改一次。选项的 hint 走 title。 */}
+				<SelectField
+					ariaLabel="接口协议"
+					value={form.api}
+					options={API_OPTIONS.map((option) => ({
+						value: option.value,
+						label: option.label,
+					}))}
+					onChange={(value) => patch({ api: value as CustomProviderInput["api"] })}
+				/>
+				<span className="field-hint">
+					{API_OPTIONS.find((option) => option.value === form.api)?.hint ??
+						"该协议不在界面上，保留原值不动；改动会按所选协议重写"}
+				</span>
 			</div>
 
-			{form.api === "openai-completions" && (
-				<div className="field">
-					<span className="field-label">兼容性</span>
-					{/* 本地与自建服务常不认这两个参数，不关掉会直接 400。 */}
-					<label className="check">
-						<input
-							type="checkbox"
-							checked={form.compat?.supportsDeveloperRole === false}
-							onChange={(e) =>
-								patch({ compat: { ...form.compat, supportsDeveloperRole: e.target.checked ? false : undefined } })
-							}
-						/>
-						不支持 developer 角色（Ollama、vLLM 等常需勾选）
-					</label>
-					<label className="check">
-						<input
-							type="checkbox"
-							checked={form.compat?.supportsReasoningEffort === false}
-							onChange={(e) =>
-								patch({ compat: { ...form.compat, supportsReasoningEffort: e.target.checked ? false : undefined } })
-							}
-						/>
-						不支持 reasoning_effort 参数
-					</label>
-				</div>
-			)}
+			{/* API Key 紧跟协议：它比「模型」更常改（换网关、换 key），放最上面少滚动。 */}
+			<label className="field">
+				<span className="field-label">API Key</span>
+				<input
+					type="password"
+					value={apiKey}
+					autoComplete="off"
+					placeholder={isEdit ? "留空表示不修改已保存的 Key" : "本地服务可留空"}
+					onChange={(e) => setApiKey(e.target.value)}
+				/>
+				<span className="field-hint">保存到本机凭据文件，不写进配置文件</span>
+			</label>
 
 			{form.api === "anthropic-messages" && (
 				<div className="field">
@@ -442,19 +485,34 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 				{errorOf("models") !== undefined && <span className="field-error">{errorOf("models")}</span>}
 			</div>
 
-			<label className="field">
-				<span className="field-label">API Key</span>
-				<input
-					type="password"
-					value={apiKey}
-					autoComplete="off"
-					placeholder={isEdit ? "留空表示不修改已保存的 Key" : "本地服务可留空"}
-					onChange={(e) => setApiKey(e.target.value)}
-				/>
-				<span className="field-hint">保存到本机凭据文件，不写进配置文件</span>
-			</label>
-
 			<div className="form-actions">
+				{/*
+				 * 底部操作行：测试在最左，取消/保存靠最右（bar-spacer 撑开）。
+				 * 目的是**填完就试** —— 不必先保存、再回列表找模型卡片点测试。
+				 *（表单里填的 baseUrl / 模型 id 在保存前不在目录里，所以走
+				 * testDraftModel 而不是卡片用的 testModel，见该通道的注释。）
+				 * 结果就地显示在按钮右侧，与模型卡片同一展示口径：出错现场响亮，
+				 * 不弹全局 banner。
+				 */}
+				<button
+					type="button"
+					className="mini-btn"
+					disabled={busy || draftProbe.kind === "running" || !form.models[0]?.id.trim()}
+					title="用表单当前值发一个最小请求，测试地址 / Key / 模型 ID 是否可用"
+					onClick={testDraft}
+				>
+					{draftProbe.kind === "running" ? "测试中…" : "测试"}
+				</button>
+				{draftProbe.kind === "done" && (
+					<span className={`model-card-probe ${draftProbe.result.ok ? "ok" : "err"}`}>
+						{draftProbe.result.ok
+							? `✓ 连通正常${draftProbe.result.latencyMs === undefined ? "" : ` · ${draftProbe.result.latencyMs}ms`}${
+									draftProbe.result.error === undefined ? "" : `（${draftProbe.result.error}）`
+								}`
+							: `✗ ${draftProbe.result.error ?? "测试失败"}`}
+					</span>
+				)}
+				<span className="bar-spacer" />
 				<button type="button" className="mini-btn" onClick={onCancel}>
 					取消
 				</button>

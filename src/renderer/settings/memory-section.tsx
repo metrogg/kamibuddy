@@ -3,8 +3,9 @@
  * + 长期记忆记录（MEMORY.md 查看/编辑，spec: rework-settings-layout Task 4）。
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { BUILTIN_MEMORY_TASK_ID } from "@shared/automation.ts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { BUILTIN_MEMORY_TASK_ID, type AutomationRun } from "@shared/automation.ts";
+import { formatMessageTime } from "@shared/message-time.ts";
 import { EmptyState, ErrorState, LoadingState } from "../state-views.tsx";
 
 /* ── 记忆 ──────────────────────────────────────────────────── */
@@ -30,6 +31,16 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 	const [confirmReset, setConfirmReset] = useState(false);
 	/** 「立即整理」运行中：蒸馏是异步模型调用（约几十秒），不能按 IPC 返回就算完。 */
 	const [distilling, setDistilling] = useState(false);
+	/**
+	 * 内置任务最近一次运行（含失败原因）。
+	 *
+	 * 为什么要在这里显示：内置任务已从「自动化」页移出（见 automations-view 的
+	 * 列表过滤）—— 它是后台家务，只在设置里可见。移出之后本页必须自己给出
+	 * 「它到底跑没跑成」的答案，否则失败会彻底无声（App 层对内置信事件
+	 * 有意不 toast，spec: add-memory-system）。数据复用 automationList 通道
+	 * 现读，不新开 IPC（AGENTS.md §4 防重复）。
+	 */
+	const [lastRun, setLastRun] = useState<AutomationRun | undefined>(undefined);
 
 	/*
 	 * 抽成可调用函数：错误态的重试要能真的重拉（原来只在 useEffect 里跑一次）。
@@ -38,13 +49,22 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 	 */
 	const load = useCallback(async (): Promise<void> => {
 		try {
-			const [memory, result] = await Promise.all([
+			const [memory, result, automations] = await Promise.all([
 				window.kami.getMemoryEnabled(),
 				window.kami.getProfile(),
+				window.kami.listAutomations(),
 			]);
 			setEnabled(memory.enabled);
 			setProfile(result.content);
 			setSavedProfile(result.content);
+			// runs 的追加顺序是运行顺序，但排序口径不该由本页承担 —— 直接取
+			// finishedAt 最大的一条，与记录本身的字段对齐。
+			const task = automations.find((item) => item.id === BUILTIN_MEMORY_TASK_ID);
+			setLastRun(
+				task?.runs.length === undefined || task.runs.length === 0
+					? undefined
+					: task.runs.reduce((a, b) => (b.finishedAt > a.finishedAt ? b : a)),
+			);
 			setLoaded(true);
 			setError(undefined);
 		} catch (e) {
@@ -56,25 +76,26 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 		void load();
 	}, [load]);
 
-	// 蒸馏完成的精确信号是 runFinished（taskId 匹配内置任务）：成功后重拉画像。
+	// 蒸馏完成的精确信号是 runFinished（taskId 匹配内置任务）：整体重拉 ——
+	// 画像与「上次整理」状态行都要跟着更新。
 	useEffect(() => {
 		if (!distilling) return;
 		return window.kami.onAutomationEvent((event) => {
 			if (event.kind !== "runFinished" || event.taskId !== BUILTIN_MEMORY_TASK_ID) return;
 			setDistilling(false);
-			if (!event.success) {
-				setError("记忆整理运行失败，可到「自动化」页查看运行记录");
-				return;
-			}
-			void window.kami
-				.getProfile()
-				.then((result) => {
-					setProfile(result.content);
-					setSavedProfile(result.content);
-				})
-				.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+			void load();
 		});
-	}, [distilling]);
+	}, [distilling, load]);
+
+	/** 「上次整理」状态行的文案（时间 + 结果 + 失败原因）。 */
+	const lastRunLabel = useMemo((): string | undefined => {
+		if (lastRun === undefined) return undefined;
+		const when = formatMessageTime(lastRun.finishedAt, Date.now());
+		if (lastRun.success) return `上次整理 ${when} · 成功`;
+		return lastRun.error === undefined
+			? `上次整理 ${when} · 失败`
+			: `上次整理 ${when} · 失败：${lastRun.error}`;
+	}, [lastRun]);
 
 	const distillNow = (): void => {
 		setDistilling(true);
@@ -180,6 +201,13 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 					<p className="settings-foot">
 						开启后，内置任务「记忆整理」每晚从你的对话中整理背景信息写入下面的画像；停用即暂停该任务。
 					</p>
+					{/* 运行结果行：内置任务不在「自动化」页露面，它的成败只能在这里读到
+					    （失败原因来自运行记录的 error 字段）。没有运行过就不占位。 */}
+					{lastRunLabel !== undefined && (
+						<p className="settings-foot" title={lastRun?.error}>
+							{lastRunLabel}
+						</p>
+					)}
 
 					<div className="profile-block">
 						<div className="profile-block-head">

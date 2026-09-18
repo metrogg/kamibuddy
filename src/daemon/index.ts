@@ -11,12 +11,9 @@
 
 import { randomUUID } from "node:crypto";
 import {
-	closeSync,
 	existsSync,
 	mkdirSync,
-	openSync,
 	readFileSync,
-	readSync,
 	renameSync,
 	statSync,
 	writeFileSync,
@@ -35,11 +32,13 @@ import type { SessionInfo, SessionManager } from "@earendil-works/pi-coding-agen
 import { AutomationStore } from "../core/automation-store.ts";
 import { SessionArchive } from "../core/session-archive.ts";
 import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
+import { ensureBuiltinProviders } from "../core/builtin-providers.ts";
 import {
 	getAppDir,
 	getAuthPath,
 	getBuiltinSkillDirs,
 	getConfigDir,
+	getModelsPath,
 	getResourcesDir,
 	getSessionsDir,
 	getSpillsDir,
@@ -283,6 +282,7 @@ import { readUsageStats } from "./usage-stats.ts";
 import { createAutomationRunExecutor } from "./automation-runner.ts";
 import { AutomationScheduler } from "./automation-scheduler.ts";
 import { createSubagentRunner } from "./subagent-runner.ts";
+import { isInternalSessionFile } from "./session-visibility.ts";
 
 /* ── 与父进程的通道 ───────────────────────────────────────────────── */
 
@@ -1094,11 +1094,8 @@ function saveAutomation(input: AutomationSaveInput): AutomationTask {
 	if (scheduleError !== undefined) throw new Error(scheduleError);
 	const cwd = input.cwd.trim();
 	if (cwd === "") throw new Error("工作目录不能为空");
-	// 任务 cwd 就是运行时权限门的放行边界，与工作空间同规则把关（配置目录/应用目录拒）。
-	const cwdError = validateWorkspacePath(cwd, {
-		configDir: getConfigDir(),
-		appDir: getAppDir(),
-	});
+	// 与工作空间同一条判定（绝对路径 + 存在时要是可访问的目录；无目录黑名单）。
+	const cwdError = validateWorkspacePath(cwd);
 	if (cwdError !== undefined) throw new Error(cwdError);
 
 	const now = Date.now();
@@ -2679,17 +2676,15 @@ async function createHost(
  * 其 run 不受切换影响（WorkBuddy 同模型）。空串表示「临时任务」，即**待分配** ——
  * 不预设目录，首次执行时才分配独立时间戳目录（spec: align-per-task-dirs）。
  *
- * 安全前提：工作空间内的写操作会被权限门直接放行，所以「设为哪个目录」
- * 必须先过 validateWorkspacePath（配置目录 / 应用目录一律拒，见 core/workspace.ts）。
+ * 安全前提：与其余两个入口同一条判定（绝对路径 + 存在时要是可访问的目录）。
+ * 用户选哪个目录就是哪个目录 —— 不做目录黑名单（密钥保护在 permission-policy
+ * 阶段 1，按路径判定、与 cwd 无关；理由见 core/workspace.ts 文件头）。
  * 待分配（空串）不是真实目录，不过校验；生效根下的自动目录是自家构造，也不经这里。
  */
 async function applyWorkspace(dir: string): Promise<string> {
 	// 空串 = 临时任务 = 待分配：不建目录、不起预览（没有目录可服务）。真目录才校验 + 建 + 起服务。
 	if (dir !== "") {
-		const error = validateWorkspacePath(dir, {
-			configDir: getConfigDir(),
-			appDir: getAppDir(),
-		});
+		const error = validateWorkspacePath(dir);
 		if (error !== undefined) throw new Error(error);
 		mkdirSync(dir, { recursive: true });
 
@@ -2739,75 +2734,9 @@ function isEnoent(error: unknown): boolean {
 	);
 }
 
-/* ── 子代理会话过滤（spec: add-team-foundations） ────────────────────
-   markSubagentRun 写的 subagent_run custom 条目此前唯一消费方是 usage-stats，
-   列表链路没接 —— 子代理会话混进侧栏是现行 bug。团队成员会话（后续批次）
-   会进一步放大它，所以在列表读取层过滤，UI 无感。 */
-
-/** 子代理/成员会话的溯源条目类型（写入点：session-host 的 mark*Run 系列）。 */
-const CHILD_SESSION_CUSTOM_TYPES = new Set(["subagent_run", "team_member"]);
-
-/**
- * 头部扫描窗口。标记在会话建立后、任何 message 之前写入（markSubagentRun
- * 紧跟 SessionHost.create，pi 只追加条目从不重写文件），所以首条 message
- * 之前必然扫到或不复存在——64KB 只是个宽松上界，不为 correctness 服务。
- */
-const SUBAGENT_HEAD_BYTES = 64 * 1024;
-
-/** (path, mtimeMs, size) → 判定缓存：列表刷新期间反复扫大文件是纯浪费。 */
-const subagentFileMemo = new Map<string, boolean>();
-
-/**
- * 会话文件是否子代理 run（头部扫描）。文件读不到/解析失败按非子代理处理：
- * 判定失败不该让会话从列表里消失（那是比混入更难排查的丢数据观感）。
- */
-function isSubagentSessionFile(filePath: string): boolean {
-	let mtimeMs = 0;
-	let size = 0;
-	try {
-		const stats = statSync(filePath);
-		mtimeMs = stats.mtimeMs;
-		size = stats.size;
-	} catch {
-		return false;
-	}
-	const memoKey = `${filePath}\u0000${mtimeMs}\u0000${size}`;
-	const memoed = subagentFileMemo.get(memoKey);
-	if (memoed !== undefined) return memoed;
-
-	let result = false;
-	const fd = openSync(filePath, "r");
-	try {
-		const buffer = Buffer.alloc(Math.min(SUBAGENT_HEAD_BYTES, size));
-		const bytes = readSync(fd, buffer, 0, buffer.length, 0);
-		for (const line of buffer.toString("utf8", 0, bytes).split("\n")) {
-			if (line.trim() === "") continue;
-			let entry: unknown;
-			try {
-				entry = JSON.parse(line);
-			} catch {
-				continue; // 半行（窗口截断）/坏行跳过
-			}
-			if (typeof entry !== "object" || entry === null) continue;
-			const record = entry as { type?: unknown; customType?: unknown };
-			if (record.type === "custom") {
-				if (typeof record.customType === "string" && CHILD_SESSION_CUSTOM_TYPES.has(record.customType)) {
-					result = true;
-					break;
-				}
-				continue; // 其他 custom 条目（如 artifacts_presented）不判定，继续扫
-			}
-			// 首条 message 之后标记不可能再出现（写入时序不变量），短路。
-			if (record.type === "message") break;
-		}
-	} finally {
-		closeSync(fd);
-	}
-	// 防长尾膨胀：同一批文件只留有限份判定，超限整表清空（全量重扫代价可接受）。
-	if (subagentFileMemo.size > 4096) subagentFileMemo.clear();
-	subagentFileMemo.set(memoKey, result);
-	return result;
-}
+/* ── 内部会话过滤（spec: add-team-foundations / 记忆整理分离） ─────────
+   判定逻辑在 session-visibility.ts（可单测；本文件顶层 requireParentPort()
+   在非 utilityProcess 环境 import 即抛，同 workspace-model.ts 的抽法）。 */
 
 async function listSessions(): Promise<SessionSummary[]> {
 	// pi 首用时才装配（见文件顶的惰性说明）。
@@ -2829,10 +2758,18 @@ async function listSessions(): Promise<SessionSummary[]> {
 			byFile.set(resolve(bucket.sessionFilePath), bucket);
 		}
 	}
+	/*
+	 * 内部会话过滤的 builtin 集合现读自动化库：内置任务的 id 会随用户停用/删除
+	 * 内置任务而变，不能在模块加载时快照一次。库很小（本地 JSON），逐次列表读
+	 * 的代价可忽略；过滤谓词本身对头部扫描结果有缓存，不重复读会话文件。
+	 */
+	const builtinTaskIds = new Set(
+		automationStore.list().filter((task) => task.builtin === true).map((task) => task.id),
+	);
 	const visible: SessionInfo[] = [];
 	for (const info of infos) {
-		// 子代理会话是 task 工具的隔离子会话，不进侧栏（spec: add-team-foundations）。
-		if (isSubagentSessionFile(info.path)) continue;
+		// 子代理会话与内置任务的运行会话都不进侧栏（见 isInternalSessionFile 头注释）。
+		if (isInternalSessionFile(info.path, builtinTaskIds)) continue;
 		visible.push(info);
 	}
 	/*
@@ -2850,7 +2787,7 @@ async function listSessions(): Promise<SessionSummary[]> {
 	for (const bucket of bucketsById.values()) {
 		const file = bucket.sessionFilePath;
 		if (file === undefined || onDiskPaths.has(resolve(file))) continue;
-		if (isSubagentSessionFile(file)) continue;
+		if (isInternalSessionFile(file, builtinTaskIds)) continue;
 		const firstUser = bucket.conversation.entries.find((entry) => entry.role === "user");
 		pending.push({
 			id: bucket.sessionId,
@@ -3014,18 +2951,18 @@ async function resumeSessionOnce(path: string): Promise<void> {
 	//   - 旧 playground 占位目录（playground 时代的技术 cwd）→ 迁移到共享临时目录。
 	//     占位目录里本就不可能有产物（当时不注册文件工具），映射只改归类、不丢数据；
 	//     会话文件 header 不改写 —— 下次 resume 仍走这条映射，判定收在 isTempCwd 一处。
-	//   - 其余按工作空间校验同一套规则把关（会话本身没问题但目录不合法时拒，
-	//     如指向配置目录的旧会话）。目录可能已被用户删掉，补建与新建会话同口径
+	//   - 其余按工作空间同一条判定（绝对路径 + 存在时要是可访问的目录）。
+	//     **不做目录黑名单**：历史 cwd 是既成事实，用「能不能被选作工作空间」去审它
+	//     会把合法会话判成打不开（2026-09-18 前的症状：配置目录禁令一旦加上，
+	//     所有 cwd 指向配置目录的旧会话永久不可打开，而那条禁令并非安全边界 ——
+	//     见 core/workspace.ts 文件头）。目录可能已被用户删掉，补建与新建会话同口径
 	//     —— mkdir 幂等且不碰任何会话状态，可安全提前。
 	let nextCwd: string;
 	if (header.cwd === join(getConfigDir(), "playground")) {
 		nextCwd = tempTasksDir();
 		mkdirSync(nextCwd, { recursive: true });
 	} else {
-		const wsError = validateWorkspacePath(header.cwd, {
-			configDir: getConfigDir(),
-			appDir: getAppDir(),
-		});
+		const wsError = validateWorkspacePath(header.cwd);
 		if (wsError !== undefined) throw new Error(`会话的工作目录不可用：${wsError}`);
 		mkdirSync(header.cwd, { recursive: true });
 		nextCwd = header.cwd;
@@ -4479,6 +4416,51 @@ const handlers: Record<string, Handler> = {
 		}
 	},
 
+	/*
+	 * 表单内测试（自定义服务商表单的「测试」按钮）。
+	 *
+	 * 与上面 testModel 的关键差别：**不查已保存的目录**。表单里刚填的
+	 * baseUrl / 模型 id 在保存前不在目录里，走 testModel 只会得到
+	 * 「目录里找不到该模型」——而这条通道存在的意义正是「填完就试」。
+	 * 因此探测目标完全由入参构造，只借用 probeModel 这一份协议实现（不另写一份）。
+	 *
+	 * 凭据优先取表单里刚敲的那个：用户点测试往往正是因为「怀疑刚才那把 key
+	 * 不对」，此时读已存的反而测的不是他想测的东西。表单留空才回落到已存凭据，
+	 * 好让「编辑既有服务商、只改 baseUrl」不必重打密钥。
+	 */
+	[INVOKE.testDraftModel]: async ([draft, modelId, apiKey]): Promise<ModelProbeResult> => {
+		const form = draft as {
+			providerId: string;
+			api: string;
+			baseUrl: string;
+			authHeader?: boolean;
+		};
+		const target = (modelId as string).trim();
+		if (form.baseUrl.trim() === "") return { ok: false, error: "请先填写接口地址" };
+		if (target === "") return { ok: false, error: "请先填写模型 ID" };
+
+		const typed = (apiKey as string | undefined)?.trim();
+		const key =
+			typed === undefined || typed === ""
+				? readApiKey(getAuthPath(), form.providerId)
+				: typed;
+
+		try {
+			return await withHardTimeout(
+				probeModel({
+					api: form.api,
+					baseUrl: form.baseUrl,
+					modelId: target,
+					apiKey: key,
+					authHeader: form.authHeader === true,
+				}),
+				15_000,
+			);
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	},
+
 	/* ── 权限设置 ───────────────────────────────────────────────────── */
 
 	[INVOKE.getPermissions]: async (): Promise<PermissionInfo> =>
@@ -5221,6 +5203,27 @@ function start(): void {
 		pushAutomationChanged();
 	}
 	automationScheduler.start();
+
+	/*
+	 * 预装服务商（公司中转）：让同事机器一装上就能选到它，不必手填标识 / 地址 /
+	 * 协议 / 认证头（见 core/builtin-providers.ts 的规则 1~3：只补不存在的、
+	 * 不含凭据、模型留空）。**放在 ready 之前** —— 它决定「设置 → 模型」第一眼
+	 * 看到什么，放到 ready 之后的杂活里会让首次打开设置偶发看不到它。
+	 *
+	 * 与上面 automationStore.load() 的响亮抛错**有意不同**：automations.json
+	 * 只由我们写、坏了是我们的事；models.json 是 pi 文档教用户手编的文件，
+	 * 一份手编坏的它不该让整个 daemon 起不来（界面会永久卡在「正在启动」，
+	 * 而设置页本来就会把解析错误显示出来 —— snapshot.error）。所以这里
+	 * 捕获、记事件日志、继续启动：**不静默，但不致命**。
+	 */
+	try {
+		ensureBuiltinProviders(getModelsPath());
+	} catch (error) {
+		eventLog.append({
+			kind: "builtin_provider_error",
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
 
 	post({ kind: "ready" });
 

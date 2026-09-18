@@ -19,6 +19,8 @@ import type { ComposerHandle } from "./composer.tsx";
 import { ExpertChip } from "./expert-chip.tsx";
 import { casesForChip, casesForScene, chipsForScene, itemsForChip, page } from "./home-presets.ts";
 import { ModelMenu } from "./model-menu.tsx";
+import { ModelGuide } from "./model-guide.tsx";
+import type { SettingsPage } from "./settings/settings-view.tsx";
 import { ModeChip } from "./mode-chip.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
 import { PlusMenu } from "./plus-menu.tsx";
@@ -86,7 +88,7 @@ interface HomeViewProps {
 	readonly prefill?: string;
 	readonly onPrefillConsumed: () => void;
 	readonly onSceneChange: (sceneId: string) => void;
-	readonly onOpenSettings: () => void;
+	readonly onOpenSettings: (page?: SettingsPage) => void;
 	/** 主页就地操作（切模型等）失败时的提示出口。 */
 	readonly onError: (message: string) => void;
 	/**
@@ -359,6 +361,13 @@ export function HomeView({
 					)}
 
 					<div className="composer-zone">
+						{/*
+						「还不能开始对话」引导条：输入卡**上方**、常驻。
+						判据与文案见 model-guide.tsx 的文件头 —— 一句话：它把
+						model-menu 里那句「还没有可用模型」从收起的菜单提到了首屏。
+						就位时不渲染（返回 null），所以配好模型后它自然消失。
+					*/}
+						<ModelGuide modelId={modelId} onOpenSettings={onOpenSettings} />
 						{/*
 						渐变槽（composer-slot）是首页专属：白卡 + 工作空间/权限 chips 都
 						坐在上面（WorkBuddy input-slot 机制），对话页输入卡没有槽。

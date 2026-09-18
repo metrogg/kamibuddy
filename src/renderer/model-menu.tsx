@@ -141,7 +141,7 @@ export function ModelMenu({
 		<div className="menu-zone">
 			<button
 				type="button"
-				className="bar-btn bar-btn-text"
+				className="bar-btn bar-btn-text model-chip"
 				title={modelId ?? "尚未选择模型"}
 				aria-haspopup="menu"
 				aria-expanded={open}
