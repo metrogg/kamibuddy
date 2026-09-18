@@ -53,6 +53,7 @@ import {
 	type RequestSnapshotData,
 	type RunEndReason,
 	type SessionStatCard,
+	type TokenUsage,
 	type ToolCallData,
 } from "@shared/observability.ts";
 import { isStreamingEvent } from "@shared/session-events.ts";
@@ -639,6 +640,34 @@ function StepBlock({
 	);
 }
 
+/**
+ * 一步的 token 读数：`↑ 上下文总量 · 新增 未命中输入 · ↓ 模型输出`。
+ *
+ * **为什么要把「新增」摆出来**（2026-09-18）：面板原来只给 ↑ 与 ↓，而缓存命中
+ * 掉下来时（比如 94%）用户没法从这一行看出原因 —— ↑ 是总量、↓ 只是模型自己的
+ * 输出，**工具返回的正文**既不在 ↑ 里也不在 ↓ 里，被整个藏住了。于是"新增"看起来
+ * 是凭空冒出来的，94% 读起来像"缓存漏了 6%"。
+ *
+ * 实际关系是 `命中率 = 1 − 新增 ÷ 上下文`，而新增 = 上一步的输出 + 本步工具返回。
+ * 摆出这个数，那一行就自解释：`↑194.4K 新增 11.0K` 就是 94%。实测一条 30 步会话
+ * 命中 93.8%，逐轮拆开是 90.9% 的真实新增内容 + 0 次前缀分家（见 shared 的
+ * `SessionStatCard.cacheMissedTokens` 注释里同一件事的另一半）。
+ *
+ * `billedInputTokens` 是 prompt 侧三桶之和（已缓存 + 新增 + 缓存写入），与 ↑ 的
+ * 既有口径同一处实现；`usage.input` 就是其中的未命中输入（dsh 叫
+ * `uncachedInputTokens`）。纯函数，只做格式化，方便钉住读数构成。
+ */
+export function stepTokenReading(usage: TokenUsage): string {
+	return `↑${formatTokenCount(billedInputTokens(usage))} 新增 ${formatTokenCount(usage.input)} ↓${formatTokenCount(usage.output)}`;
+}
+
+/**
+ * 步行的 token 读数悬停说明。三个符号各是什么必须写全 —— 单看数字分不出
+ * 「↑ 是总量」还是「↑ 是本次输入」。
+ */
+const STEP_TOKEN_TITLE =
+	"↑ 本步上下文总量（已缓存 + 新增）· 新增 未命中缓存的输入（上一步之后新加进来的：它的输出 + 工具返回）· ↓ 模型输出";
+
 /** 一步（模型调用）的可点开行：耗时 / tokens / TTFT / 速度 / 缓存，一行看齐。 */
 function StepRow({
 	data,
@@ -676,9 +705,8 @@ function StepRow({
 			<span className="task-diag-step-name">模型 #{data.turnIndex + 1}</span>
 			<span className="task-diag-num">{formatSpan(data.endedAt - data.startedAt)}</span>
 			{usage !== undefined && (
-				<span className="task-diag-num">
-					↑{formatTokenCount(billedInputTokens(usage))} ↓
-					{formatTokenCount(usage.output)}
+				<span className="task-diag-num" title={STEP_TOKEN_TITLE}>
+					{stepTokenReading(usage)}
 				</span>
 			)}
 			{data.ttftMs !== undefined && (

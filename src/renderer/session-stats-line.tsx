@@ -63,6 +63,27 @@ export function sessionStatsGroups(stats: SessionStatCard): string[] {
 			// 长会话里缓存效率的细微变化（提示词缓存是否被打破）就读不出来了。
 			groups.push(`缓存命中 ${(stats.cacheHitRate * 100).toFixed(1)}%`);
 		}
+		/*
+		 * 缓存浪费（2026-09-18 加）：命中率读不出缓存机制的故障 —— 它等于
+		 * 「1 − 本步新增 ÷ 当前上下文」，而本步新增是这一步真正读进来的新内容
+		 * （上一步的输出 + 工具返回），跟缓存好不好无关。实测一条 30 步会话
+		 * 命中 93.8%，逐轮拆开是 90.9% 的真实新增 + 0 次前缀分家。
+		 * 这个数才是警报：非零就只可能是提示词被改 / 注入快照每轮重发 /
+		 * 工具集变化 / 换模型 / 空闲超时（口径见 shared 的字段注释）。
+		 *
+		 * **健康时显示 0 而不是整组消失**（与上面「没有数据的组整组消失」不冲突：
+		 * 那条管的是**没有数据**，这里是**有数据且值为 0**）—— 告警读数若在正常时
+		 * 隐藏，就分不出「一切正常」与「这项没接上」。
+		 *
+		 * 门控用 cacheReported 而不是「有计费」：服务商从不上报缓存活动时
+		 * 这个数恒为 0，而 0 在那里读起来是「没有浪费」，实际是「无从得知」
+		 * —— 同 cacheHitRate 留空而不是显示 0% 的既有判定。
+		 */
+		if (stats.cacheReported) {
+			groups.push(
+				`缓存浪费 ${formatTokenCount(stats.cacheMissedTokens)} tok · ${stats.cacheMissCount} 次`,
+			);
+		}
 		groups.push(
 			`输入 ${formatTokenCount(billed)} tok · 输出 ${formatTokenCount(stats.usage.output)} tok`,
 		);

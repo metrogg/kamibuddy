@@ -25,6 +25,8 @@ function card(overrides: Partial<SessionStatCard> = {}): SessionStatCard {
 		usage: emptyUsage(),
 		cacheHitRate: undefined,
 		cacheReported: true,
+		cacheMissedTokens: 0,
+		cacheMissCount: 0,
 		lastActiveAt: 0,
 		...overrides,
 	};
