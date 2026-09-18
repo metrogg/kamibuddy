@@ -82,7 +82,7 @@ import {
 import type { TurnFoldMap, TurnView } from "./turn-fold.ts";
 import { SessionStatsLine } from "./session-stats-line.tsx";
 import { foldTurnMetrics } from "./turn-metrics.ts";
-import { TurnRail } from "./turn-rail.tsx";
+import { TurnNav } from "./turn-nav.tsx";
 import type { ThinkingFoldOverride } from "./thinking-fold.ts";
 import { FAILED_ICON, toolIconOf } from "./tool-icon-registry.ts";
 import { WidgetView } from "./widget-view.tsx";
@@ -289,7 +289,9 @@ function UserBubble({
 	onRestart,
 	onBranch,
 }: {
-	/** 刻度轨（TurnRail）的测量锚点：data-entry-id 落在根 div 上。 */
+	/** 数据条目 id：落在根 div 上（data-entry-id），供发送吸顶时按 entry 定位
+	    （decideScrollAction 的 align-top）。刻度轨改标轮后走轮容器自己的
+	    data-turn-key，不再消费它。 */
 	readonly entryId: string;
 	readonly text: string;
 	readonly at: number;
@@ -1825,14 +1827,14 @@ export function ChatView({
 		每次 entries 变化的滚动动作由 decideScrollAction 纯函数决定（决策表见
 		send-anchor.ts）：本会话新发送的回显上屏 → 吸顶；否则跟随中贴底 /
 		上翻中不动（既有语义）。贴底用 scrollHeight 而非 scrollIntoView，
-		避免流式增量时抖动；吸顶用 scrollIntoView block:"start"（与 TurnRail
+		避免流式增量时抖动；吸顶用 scrollIntoView block:"start"（与 TurnNav
 		跳转同口径）。anchor-space 的 min-height 让吸顶位置与贴底位置在内容
 		不足一屏时收敛 —— 吸顶后跟随接管不会二次跳动（WorkBuddy 同款数学，
 		见 send-anchor.ts 头注）。
 		调度时机用 useLayoutEffect 而非 useEffect：这里写 scrollTop 是「补偿布局」，
 		必须在内容变高的那一帧**绘制之前**落地。IPC 推来的流式 delta 走的不是离散输入
 		事件，被动效果可能排在绘制之后冲刷 —— 那一帧「内容已长高、scrollTop 还是旧值」，
-		底部会先空出一截、下一帧再跳回来。同仓 turn-rail.tsx 的测量也是这个口径。
+		底部会先空出一截、下一帧再跳回来。同仓 turn-nav.tsx 的测量也是这个口径。
 		（只改调度时机：判据与三个分支逻辑一字未动。）
 	*/
 	useLayoutEffect(() => {
@@ -2385,7 +2387,12 @@ export function ChatView({
 						const turnId = view.turnId;
 						const userEntry = view.userEntry;
 						return (
-							<div key={view.key} className={anchored ? "turn-group anchor-space" : "turn-group"}>
+							<div
+							key={view.key}
+							className={anchored ? "turn-group anchor-space" : "turn-group"}
+							// 刻度轨的测量锚点（TurnNav 按它取每轮顶端的滚动坐标）。
+							data-turn-key={view.key}
+						>
 								{userEntry !== undefined && (
 									<UserBubble
 										entryId={userEntry.id}
@@ -2434,7 +2441,8 @@ export function ChatView({
 				会让它变成后代包含块，刻度轨会短暂错位。scrollRef 与 entries
 				都是现成的，零新状态源。
 			*/}
-				<TurnRail entries={entries} scrollRef={scrollRef} />
+				{/* 传 useMemo 过的 turnViews：TurnNav 是 memo 组件，引用不稳就白memo。 */}
+				<TurnNav views={turnViews} scrollRef={scrollRef} />
 				{/*
 				底部渐隐（对标 WorkBuddy __bottom-mask）：渐变叠加层钉在
 				stream-wrap 视口底部，不随内容滚动。与「回到底部」共用同一可见

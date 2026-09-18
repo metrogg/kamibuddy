@@ -52,6 +52,35 @@ export function collapseAllTurnFolds(map: TurnFoldMap): TurnFoldMap {
 
 /* ── 轮切分 ──────────────────────────────────────────────────── */
 
+/**
+ * 刻度轨悬停卡的两行预览（turn-nav.tsx 用，dsh TurnNavigationItem 的
+ * prompt/response 同款）。
+ *
+ * 为什么在这里算而不是让刻度轨自己再扫一遍 entries：轮切分只许有一套
+ * （AGENTS.md §4）——刻度轨若自己按 user 消息切一遍，它和轮折叠就会在下一次
+ * 口径调整时各说各话。这里本来就在遍历本轮内容，顺手取是零成本。
+ *
+ * 两段都**截断到定长**：不只是为了省内存 —— 刻度轨每个流式 delta 都会重建
+ * items，不设上限时字符串每帧都在变，下游 memo 永远命中不了；截断后超出上限的
+ * 内容不再改变字符串，长会话里的重渲染收敛。展示侧的折行截断仍由 CSS 的
+ * -webkit-line-clamp 负责，这里只做「前缀」。
+ */
+export interface TurnPreview {
+	/** 开启本轮的 user 消息正文。 */
+	readonly prompt: string;
+	/** 本轮最后一条 assistant 正文；本轮还没回复（或只跑了工具）时为空串。 */
+	readonly response: string;
+}
+
+/** 预览截断长度：够铺满悬停卡的一行 / 三行，再多也显示不出来。 */
+const PREVIEW_PROMPT_CHARS = 120;
+const PREVIEW_RESPONSE_CHARS = 240;
+
+function clipPreview(text: string, max: number): string {
+	const trimmed = text.trim();
+	return trimmed.length <= max ? trimmed : trimmed.slice(0, max);
+}
+
 export interface TurnView {
 	/** 稳定 key：开启本轮的 user 消息 id；首个 user 之前的前缀轮用固定串。 */
 	readonly key: string;
@@ -79,6 +108,8 @@ export interface TurnView {
 	readonly plan: FoldPlan;
 	/** 被取消的轮：轮末补「用户已取消」指示行（在折叠区外）。 */
 	readonly cancelled: boolean;
+	/** 刻度轨悬停预览的两行正文。 */
+	readonly preview: TurnPreview;
 }
 
 export interface TurnViewOptions {
@@ -139,6 +170,13 @@ export function buildTurnViews(
 				state === "streaming" ? undefined : content.findLast((e) => e.role === "assistant")?.id,
 			plan: buildFoldPlan(content, state),
 			cancelled: user !== undefined && cancelledTurns.includes(user.id),
+			preview: {
+				prompt: clipPreview(user?.text ?? "", PREVIEW_PROMPT_CHARS),
+				response: clipPreview(
+					content.findLast((e) => e.role === "assistant")?.text ?? "",
+					PREVIEW_RESPONSE_CHARS,
+				),
+			},
 		});
 	};
 
