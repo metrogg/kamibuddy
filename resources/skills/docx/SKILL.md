@@ -31,7 +31,7 @@ description: "专业 Word 文档（.docx）创作与交付助手。生成需要�
 
 1. **禁止跳过 orchestrator 直接动手** — 无论任务多简单（哪怕只是"写个 200 字通知"），都必须先走 orchestrator 的 Stage 0 入口判断。
 2. **禁止在 thinking 中自行判断"这个任务简单，不需要走流程"** — 简单/复杂由 orchestrator 内部的入口判别决定，不是你决定。
-3. **禁止用 powershell 跑 python 做 HTML→DOCX 转换** — 转换只许调 `docx_convert` 工具（daemon 托管 venv 的受控通道，环境自动准备）。
+3. **禁止用 powershell 跑 python 做 HTML→DOCX 转换** — 转换只许调 `docx_convert` 工具（daemon 托管 venv 的受控通道；Python 运行时按需安装、不会自动下载，未安装时按工具返回的引导请用户到「设置 → 内置运行时」点安装）。
 4. **禁止"先调一下工具看看再说"** — 任何试探性调用都违反流程。
 
 ### 正确的执行顺序（唯一合法路径）

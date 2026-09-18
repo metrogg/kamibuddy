@@ -1,9 +1,18 @@
 /**
- * 拉取 node 运行时载荷到 `resources/runtimes/payload/node/<version>/`，随安装包分发。
+ * 拉取 node 运行时载荷到 `resources/runtimes/payload/node/<version>/`。
  *
- * 为什么随包（而不是让用户机器首次使用时下载）：spec 的「随包分发三个运行时」；
- * 载荷在构建期就核过校验和，用户侧离线可用、首次使用不等下载。
- * 代价是安装包变大（解包后 ≈95 MB，实测值见 resources/runtimes/README.md）。
+ * ⚠️ **它已不是默认构建路径**（2026-09-18 设计变更，用户决定：三运行时**纯按需联网下载**）。
+ *   - 默认 `npm run dist` / `dist:dir` **不再**调本脚本；`electron-builder.yml` 的
+ *     extraResources 也用 `!runtimes/payload/**` 把载荷排除在安装包之外；
+ *   - 运行期的取件在 `src/core/runtimes/artifact.ts` + `download.ts`（用户点「安装」才下，
+ *     sha256 校验不过不许进位），本脚本与它**没有代码共享**；
+ *   - 保留本脚本是为了**将来**的企业预置 / 离线包（spec 里「私有化/无外网」那条至今
+ *     没有拍板）。诚实说明：`resources/runtimes/payload/<id>/<version>/` 现在**没有任何
+ *     运行期代码读它** —— 运行期的离线出路是把**发行物**（不是解包结果）放到下载缓存
+ *     那个路径上（`<configDir>/runtimes/.cache/node/<version>/<artifact>`，
+ *     安装失败的错误文案里会把这个路径原样打出来）。真要恢复「随包分发」，
+ *     需要把 extraResources 的排除项摘掉、把 fetch:node 加回 dist 链，**并且**
+ *     给运行期补一条「读载荷」的取件分支 —— 那是另一次设计决定，不是改一行配置。
  *
  * 幂等与内网四条路（照 `scripts/fetch-uv.mjs` 的既有形态）：
  *   1. 载荷目录已完整（`node.exe` + `LICENSE` 都在）→ 幂等跳过；

@@ -68,7 +68,7 @@ export function classifyEnsureError(
 	return new DocxExtractError(
 		"env-not-ready",
 		`docx 提取环境未就绪（${failed.phase}）：${failed.error}\n` +
-			"请如实告知用户环境准备失败的原因，不要反复重试（每次都会重跑安装）。" +
+			"请如实告知用户环境未就绪的原因，不要反复重试（Python 运行时按需安装，不会自动下载）。" +
 			"需要继续原任务时，可改用 read_document 读取该文档的文本内容。",
 	);
 }

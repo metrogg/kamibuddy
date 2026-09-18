@@ -66,7 +66,7 @@ export interface RuntimeEnvLayout {
 /**
  * 每个运行时的环境布局 —— 这是**唯一一份**「哪个目录进 PATH」的声明：
  * 安装期的探针也从这里取（gitbash 的探针必须自带同一份注入，理由见
- * bundled-payload.ts 文件头），于是「探针验的」与「实际注入的」不可能分叉。
+ * payload-probe.ts 文件头），于是「探针验的」与「实际注入的」不可能分叉。
  *
  * `Record<RuntimeId, ...>` 是全覆盖的：加一个运行时**必须**在这里表态（哪怕表态
  * 是「不注入」，像 python 那样），不允许因为漏登记而静默地什么都不注入。
@@ -111,8 +111,8 @@ export function pathKeyOf(env: Readonly<Record<string, string | undefined>>): st
  * 把若干目录前置到 baseEnv 的 PATH 上，返回新的 PATH 值。
  *
  * 安装期探针与运行期注入共用这一份拼法：探针若自带另一份 PATH，就会出现
- * 「探针验过、注入后却不是同一回事」的分叉（gitbash 的探针正是靠它才验到**随包那份** git，
- * 见 bundled-payload.ts 文件头）。
+ * 「探针验过、注入后却不是同一回事」的分叉（gitbash 的探针正是靠它才验到**我们装的那份** git，
+ * 见 payload-probe.ts 文件头）。
  */
 export function prependPath(
 	env: Readonly<Record<string, string | undefined>>,

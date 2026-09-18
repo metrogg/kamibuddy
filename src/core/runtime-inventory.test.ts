@@ -3,7 +3,7 @@
  * （shared/runtimes.ts）的回归钉子。spec: add-managed-runtimes 阶段 3 / 5。
  *
  * 钉住四条：
- *   1. **开关只有一个读点**，且缺省全开（不新增开关时行为与既有「运行时自动准备」一致）；
+ *   1. **开关只有一个读点**，且缺省全开（不设开关时与既有「启用态」一致；开关只管是否注入，与装没装无关）；
  *   2. **禁用 ⇒ 不给路径**（清单这一层就不出 activeDir / executable 两格，
  *      渲染层再挡一道 —— 见下）；
  *   3. **「已被用户禁用」与「未就绪（找不到）」是两句不同的话**（spec 的验收点：
@@ -61,7 +61,7 @@ function pythonEntry(inventory: RuntimeInventory): RuntimeInventory["items"][num
 }
 
 describe("开关状态的唯一读点", () => {
-	it("缺省：总开关开、逐项开（不新增开关时行为与既有「自动准备」一致）", () => {
+	it("缺省：总开关开、逐项开（不设开关时与既有「启用态」一致）", () => {
 		const state = readRuntimeSwitch();
 		expect(state.master).toBe(true);
 		expect(state.items).toEqual({});
@@ -100,12 +100,14 @@ describe("开关状态的唯一读点", () => {
 });
 
 describe("清单判据（磁盘事实，不 spawn）", () => {
-	it("全新机器：python 未就绪（尚未准备），但仍是启用态（路径按既有契约照给）", () => {
+	it("全新机器：python 未安装（不会自动下载），但仍是启用态（路径按既有契约照给）", () => {
 		const entry = pythonEntry(collectRuntimeInventory(overrides()));
 		expect(entry.status.kind).toBe("missing");
 		expect(entry.version).toBe("3.12");
 		expect(entry.purpose).not.toBe("");
-		// 未就绪 ≠ 禁用：未就绪仍给落点（片段 python-env.md 教的正是「先确认那个文件存在」）。
+		// 「未安装」也把体积量级摆出来（设置页「安装」按钮旁要用它，用户点之前就知道要下多少）。
+		expect(entry.downloadSizeHint).not.toBe("");
+		// 未安装 ≠ 禁用：落点仍给（片段 python-env.md 教的正是「先确认那个文件存在」）。
 		expect(entry.activeDir).toBeDefined();
 		expect(entry.executable).toBeDefined();
 	});
@@ -190,7 +192,7 @@ describe("运行时注入的生产判据（SubTask 2.1.3）", () => {
 });
 
 describe("模型可见文案（shared/runtimes.ts）", () => {
-	/** 手搓清单：一条就绪（带路径）、一条被禁用、一条未就绪。 */
+	/** 手搓清单：一条就绪（带路径）、一条被禁用、一条未安装。 */
 	function inventoryFixture(): RuntimeInventory {
 		return {
 			master: true,
@@ -202,6 +204,7 @@ describe("模型可见文案（shared/runtimes.ts）", () => {
 					version: "3.12",
 					enabled: true,
 					status: { kind: "ready" },
+					downloadSizeHint: "下载约 40–100 MB，解压后约 100 MB",
 					activeDir: "C:\\cfg\\runtimes\\python\\3.12\\venv",
 					executable: "C:\\cfg\\runtimes\\python\\3.12\\venv\\Scripts\\python.exe",
 					executableLabel: "Python 解释器",
@@ -213,6 +216,7 @@ describe("模型可见文案（shared/runtimes.ts）", () => {
 					version: "22",
 					enabled: false,
 					status: { kind: "disabled" },
+					downloadSizeHint: "下载约 34 MB，解压后约 95 MB",
 					// 故意留一份路径：渲染层必须按 status 挡掉它（第二道防线）。
 					activeDir: "C:\\cfg\\runtimes\\node\\22",
 					executable: "C:\\cfg\\runtimes\\node\\22\\node.exe",
@@ -224,22 +228,23 @@ describe("模型可见文案（shared/runtimes.ts）", () => {
 					version: "2.47",
 					enabled: true,
 					status: { kind: "missing" },
+					downloadSizeHint: "下载约 56 MB，解压后约 389 MB",
 				},
 			],
 		};
 	}
 
-	it("逐项给出 id / 版本 / 状态 / 用途；禁用与未就绪是两句不同的话", () => {
+	it("逐项给出 id / 版本 / 状态 / 用途；禁用与未安装是两句不同的话", () => {
 		const text = renderRuntimeEnvSection(inventoryFixture());
 		expect(text).toContain("python 3.12 · 就绪 · 文档转换（docx 引擎的解释器）");
 		expect(text).toContain("node 22 · 已被用户禁用 · 运行 JavaScript / Node 脚本");
-		expect(text).toContain("gitbash 2.47 · 未就绪（尚未准备） · 提供 bash 与常用 unix 工具");
+		expect(text).toContain("gitbash 2.47 · 未安装 · 提供 bash 与常用 unix 工具");
 		expect(text).toContain("该运行时已被用户禁用：不要调用它");
-		expect(text).toContain("该运行时尚未准备好：首次使用会自动准备");
-		// 两句指引互不串台：禁用项不说「正在准备」，未就绪项不说「已被禁用」。
+		expect(text).toContain("该运行时尚未安装（不会自动下载）");
+		// 两句指引互不串台：禁用项不说「尚未安装」，未安装项不说「已被禁用」。
 		const disabledLine = text.split("\n").find((line) => line.includes("node 22"))!;
 		const missingLine = text.split("\n").find((line) => line.includes("gitbash"))!;
-		expect(disabledLine).not.toContain("尚未准备");
+		expect(disabledLine).not.toContain("尚未安装");
 		expect(missingLine).not.toContain("已被用户禁用");
 	});
 

@@ -33,6 +33,13 @@
  * （或清空时先补留痕再删文件），三处的结论就会不一致，而症状只是「导出的和面板
  * 看到的不一样」，没有任何测试会变红。
  *
+ * 【2026-09-18 扩三】设计变更「运行时从随包载荷改为**纯按需联网下载**」：新增
+ * `src/core/runtimes/download.ts`（下载与校验的纪律）与 `artifact.ts`（取件三道门），
+ * 旧的 `bundled-payload.ts`（随包载荷复制）删除、其探测部分收敛为 `payload-probe.ts`。
+ * 这三处的共同关系是「校验不过不许进位 + 未安装时 ensure 不下载」，症状是
+ * 「装好了但一跑就崩」或「用户没点安装却下了几百 MB」—— 都是只在真实用户机器上
+ * 才暴露、单测不钉就没人拦得住的类型。
+ *
  * 与 `scripts/check-model-experience.ts` 的分工：那个管「模型看到什么」，这个管
  * 「模块之间的哪个关系不许分叉」。两者都不替代测试 —— 表里 `observation` 指的就是
  * 那条关系现在由哪个测试钉着；改动让断言失效时，登记表也会在评审里被看见。
@@ -59,8 +66,8 @@ const SCOPE: readonly { readonly dir: string; readonly file: RegExp; readonly wh
 	{ dir: "src/core/runtimes", file: /^diagnostics\.ts$/, why: "托管运行时（诊断报告的现场口径）" },
 	{
 		dir: "src/core/runtimes",
-		file: /^(bundled-payload|node|gitbash|injection)\.ts$/,
-		why: "托管运行时（随包载荷型运行时的安装形状与注入落点；spec 阶段 2）",
+		file: /^(artifact|download|payload-probe|node|gitbash|injection)\.ts$/,
+		why: "托管运行时（取件/下载/探测/注入：纯按需安装的形状与校验口径）",
 	},
 	{ dir: "src/core", file: /^audit-log\.ts$/, why: "审计记录（三类来源同构、查询截断与清空留痕）" },
 	// 阶段 3 / 5：开关状态与模型可见清单各一处判据（设置页那一行与模型注入不许分叉）。
@@ -183,9 +190,9 @@ const INVARIANTS: readonly InvariantEntry[] = [
 		concern: "托管运行时",
 		module: "src/core/runtimes/registry.ts",
 		relationship:
-			"安装只写 `<root>/<id>/<version>` 这一处落点，且 current 只在进位 + 只读复验通过后写；三条 ensure 路径（覆盖口/旧路径就地、托管实例就地修复、首次原子安装）不得各自解释落点",
+			"**ensure 只探不装**（未安装 ⇒ not-installed，绝不下载/安装；唯一自愈是「已完整进位、只差 current」时补指针，纯文件操作），**install/reset 才联网**（覆盖口是唯一就地安装的例外；旧路径走「装进托管根」）；安装只写 `<root>/<id>/<version>` 这一处落点，且 current 只在进位 + 只读复验通过后写",
 		observation:
-			"src/core/runtimes/python.test.ts（全新安装 / 崩溃点 / 重置 / 覆盖口就地四组）",
+			"src/core/runtimes/python.test.ts（全新安装 / 崩溃点 / 重置 / 覆盖口就地 / 未安装时 ensure 零 spawn 五组）+ node.test.ts 与 gitbash.test.ts 的「纯按需的门」各一组",
 	},
 	{
 		concern: "托管运行时",
@@ -203,25 +210,43 @@ const INVARIANTS: readonly InvariantEntry[] = [
 	},
 	{
 		concern: "托管运行时",
-		module: "src/core/runtimes/bundled-payload.ts",
+		module: "src/core/runtimes/download.ts",
 		relationship:
-			"随包载荷型运行时的相位顺序不可换：**先探针、探针不过才复制**（先复制会让每次幂等 ensure 重拷几百 MB，而它挂在模型每次调用前的准备路径上），且载荷缺席/不完整只在「真要复制」时才判（懒校验）—— 否则「实例好好的、只是随包载荷被删了」会被误报成未就绪。复制用 robocopy 位掩码退出码（≤7 即成功），不是「必须等于 0」",
+			"字节先写 `<发行物>.part`、**校验通过才**改名成发行物：sha256 / 体积不符必须丢掉暂存并抛校验类错误（kind=sha256|size），目标文件不许出现；取消保留 `.part`（续传点）但绝不当成功；续传时已有字节**也要进 sha256**（否则续传就成了绕过整包校验的后门），且续传结果对不上时必须从零重下一次、重试照样全量校验",
 		observation:
-			"src/core/runtimes/node.test.ts（幂等只探针一次 / 就位即修复 / 载荷缺席响亮失败 / 载荷不完整点名缺文件）+ gitbash.test.ts 同形两组",
+			"src/core/runtimes/download.test.ts（校验失败不许进位 / 体积下限 / 取消留续传点 / 中断可续 / 服务端忽略 Range / 续传 sha 不符重下 六组）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/artifact.ts",
+		relationship:
+			"取件的三道门顺序不可换且都**不得静默放行**：① 官方校验文件交叉核对（取不到只记 warning，取到却不一致即中止且**不下载**）② 发行物 sha256（镜像只是传输通道）③ 解包后必备文件（含许可文本）。任一不过都不得进位 —— 由 registry 在 catch 里清掉暂存目录保住这一点",
+		observation:
+			"src/core/runtimes/node.test.ts（官方校验文件不一致 ⇒ 未下载即中止 / 体积异常 / sha256 不符三例）+ gitbash.test.ts（下载校验不过 ⇒ 不进位）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/payload-probe.ts",
+		relationship:
+			"必备文件（含许可文本）判在 `initial()`（缺了既不 spawn 也不假装成功）、探针只跑一次；gitbash 的探针 PATH 注入必须与注入层 `RUNTIME_ENV_LAYOUT.gitbash` **同一份**（实测不注入时 `bash -c \"git --version\"` 读到的是机器上另一个 git，那样的探针验的不是我们装的那一份）",
+		observation:
+			"src/core/runtimes/node.test.ts 的「四态」一组 + gitbash.test.ts 的「探针自带注入」与「四态」两组",
 	},
 	{
 		concern: "托管运行时",
 		module: "src/core/runtimes/node.ts",
 		relationship:
-			"许可文本必须留在载荷必备文件里（MIT 义务的机械化断言），且**三者同源**：描述符 version、载荷目录名、探针解析出的版本串（`vX.Y.Z`）—— 改版本只改一处而漏改另一处时，安装或复验必须变红而不是静默装错版本",
-		observation: "src/core/runtimes/node.test.ts 的「合规义务被钉住」「版本串解析」「进位后复验不过」三组",
+			"许可文本必须留在实例必备文件里（MIT 义务的机械化断言），且**三者同源**：描述符 version、发行物文件名、探针解析出的版本串（`vX.Y.Z`）—— 改版本只改一处而漏改另一处时，安装或复验必须变红而不是静默装错版本；三道 sha256 门（整包 / 官方校验文件 / 解包后的 node.exe）任一不过都不许进位",
+		observation:
+			"src/core/runtimes/node.test.ts 的「合规义务被钉住」「版本串解析」「解包后 node.exe 复验」「sha256 不符」四组",
 	},
 	{
 		concern: "托管运行时",
 		module: "src/core/runtimes/gitbash.ts",
 		relationship:
-			"探针的 PATH 注入必须与注入层 `RUNTIME_ENV_LAYOUT.gitbash` **同一份**（实测不注入时 `bash -c \"git --version\"` 读到的是机器上另一个 git，那样的探针验的不是随包载荷）；上游版本串 `2.55.0.windows.N` ↔ 我们钉的 `2.55.0.N` 的归一化只有这一处",
-		observation: "src/core/runtimes/gitbash.test.ts 的「探针自带注入」两组与「版本串归一化」一组",
+			"运行期解包**只用发行物自带的 SFX 解包器**（不引入 7-Zip 依赖、解包发生在整包 sha256 通过之后），且解包后必须把 GPLv2 §3 的对应源码获取方式拷进实例根（义务随二进制走）；上游版本串 `2.55.0.windows.N` ↔ 我们钉的 `2.55.0.N` 的归一化只有这一处",
+		observation:
+			"src/core/runtimes/gitbash.test.ts 的「运行期解包」三组与「版本串归一化」一组",
 	},
 	{
 		concern: "托管运行时",

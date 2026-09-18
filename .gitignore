@@ -55,6 +55,9 @@ temp/
 # uv.exe 是 fetch:uv 的拉取产物（或运维手工放置），不入库
 resources/bin/
 
-# 托管运行时的随包载荷（fetch:node / fetch:gitbash 的拉取与解包产物，几百 MB），不入库；
-# 构建安装包时它必须在位（extraResources 从磁盘收集，与 gitignore 无关）。
+# 托管运行时的构建期载荷与下载缓存（fetch:node / fetch:gitbash 的产物，几百 MB），不入库。
+# 2026-09-18 起这两个脚本**已不在默认构建链上**（运行时改为纯按需联网下载），
+# payload/ 也不再进安装包（electron-builder.yml 的 extraResources 排除）；
+# 保留忽略规则是为了将来企业预置/离线包还要用这两个脚本时不会误提交。
 resources/runtimes/payload/
+resources/runtimes/.cache/

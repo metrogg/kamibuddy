@@ -2165,7 +2165,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		 * 的 `python_env` 段（spec: stabilize-prompt-prefix + add-managed-runtimes 阶段 5）。
 		 *
 		 * 条目级断言（spec Task 5.1 的验收）：清单逐项给出 id / 版本 / 状态 / 用途；
-		 * 「已被用户禁用」与「尚未准备」在模型看到的信息里**可区分**；被禁用的项
+		 * 「已被用户禁用」与「未安装」在模型看到的信息里**可区分**；被禁用的项
 		 * **不出现路径**（spec: 关闭某个运行时 ⇒ 路径不注入）。
 		 */
 		const PYTHON_PATH = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
@@ -2179,6 +2179,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 					version: "3.12",
 					enabled: true,
 					status: { kind: "ready" },
+					downloadSizeHint: "下载约 40–100 MB，解压后约 100 MB",
 					activeDir: "C:\\cfg\\runtimes\\python\\3.12\\venv",
 					executable: PYTHON_PATH,
 					executableLabel: "Python 解释器",
@@ -2190,6 +2191,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 					version: "22",
 					enabled: false,
 					status: { kind: "disabled" },
+					downloadSizeHint: "下载约 34 MB，解压后约 95 MB",
 				},
 				{
 					id: "gitbash",
@@ -2198,6 +2200,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 					version: "2.47",
 					enabled: true,
 					status: { kind: "missing", detail: "尚无可用实例" },
+					downloadSizeHint: "下载约 56 MB，解压后约 389 MB",
 				},
 			],
 		};
@@ -2219,9 +2222,9 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		expect(content).toContain("node 22 · 已被用户禁用");
 		expect(content).toContain("已被用户禁用：不要调用它");
 		expect(content).not.toContain("C:\\cfg\\runtimes\\node");
-		// 未就绪：与「被禁用」不同的一句话（后者说的是用户关掉了它）
-		expect(content).toContain("gitbash 2.47 · 未就绪（尚未准备）");
-		expect(content).toContain("该运行时尚未准备好：首次使用会自动准备");
+		// 未安装：与「被禁用」不同的一句话（后者说的是用户关掉了它）
+		expect(content).toContain("gitbash 2.47 · 未安装");
+		expect(content).toContain("该运行时尚未安装（不会自动下载）");
 		expect(content).toContain("</python_env>");
 		// 与「运行时清单」无关的段不受影响（同一容器里的 workspace_context 仍在）。
 		expect(content).toContain("<workspace_context>");
@@ -2252,6 +2255,7 @@ describe("hidden context（transformContext 注入，F5）", () => {
 					version: "3.12",
 					enabled: true,
 					status: { kind: "disabled" },
+					downloadSizeHint: "下载约 40–100 MB，解压后约 100 MB",
 				},
 			],
 		};

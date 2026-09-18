@@ -18,7 +18,7 @@ import type { AuditCategory, AuditExportResult, AuditQueryResult } from "./audit
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot, RunLedgerEntry } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { RuntimeDiagnosticsText, RuntimeInventory } from "./runtimes.ts";
+import type { RuntimeDiagnosticsText, RuntimeInstallProgress, RuntimeInventory } from "./runtimes.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type {
@@ -465,9 +465,9 @@ export const INVOKE = {
 	globalShortcutStatus: "app:global-shortcut-status",
 	/**
 	 * 查询 docx 引擎 venv 的四态状态（诊断页状态行）。
-	 * 只探测不安装 —— 诊断页不该有环境副作用；安装是 docx_convert 首次调用
-	 * 与 daemon 预热的事（core/runtimes/python.ts 的 ensurePythonRuntime，
-	 * 探测/安装/发布都走托管运行时内核）。
+	 * 只探测不安装 —— 诊断页不该有环境副作用；安装是**用户在设置页点「安装/重置」**的事
+	 *（core/runtimes/python.ts 的 installPythonRuntime；探测与安装/发布都走托管运行时内核）。
+	 * 转换前的 ensurePythonRuntime 从 2026-09-18 起也只探不装（纯按需，不自动下载）。
 	 */
 	docxEnvStatus: "diagnostics:docx-env-status",
 
@@ -506,6 +506,14 @@ export const INVOKE = {
 	setRuntimeEnabled: "runtimes:set-enabled",
 	/** 单个运行时的可复制诊断报告 + 落盘日志路径（按需 spawn 的深度探测）。 */
 	runtimeDiagnostics: "runtimes:diagnostics",
+	/**
+	 * 按需安装一个尚未安装的运行时（阶段 7：三运行时纯按需，**没有任何静默自动下载**）。
+	 * 需联网、按体积量级下载；进度经 PUSH.runtimeInstallProgress 推送，可中途取消。
+	 * 返回更新后的完整清单；失败 reject（原因带相位与底层错误，供界面给可执行原因）。
+	 */
+	runtimeInstall: "runtimes:install",
+	/** 取消进行中的安装（下一次推进前生效，见 core/runtime-inventory.ts 的取消语义）。 */
+	runtimeCancelInstall: "runtimes:cancel-install",
 	/** 重置并重新安装（内核的幂等链路，需联网、可能几分钟）。返回更新后的完整清单。 */
 	runtimeReset: "runtimes:reset",
 
@@ -558,6 +566,12 @@ export const PUSH = {
 	daemonDown: "daemon:down",
 	/** 定时任务事件（数据变更 / 一次运行结束），payload 为 AutomationEvent。 */
 	automationEvent: "automation:event",
+	/**
+	 * 托管运行时安装进度（payload 为 RuntimeInstallProgress）。
+	 * 安装跑在 daemon、可能持续几分钟；进度走推送而非 invoke 返回值，
+	 * 于是用户切走设置页再切回来仍能看到「正在安装」，终态也由推送触发回读清单。
+	 */
+	runtimeInstallProgress: "runtimes:install-progress",
 } as const;
 
 /* ────────────────────────────────────────────────────────────────
@@ -1041,6 +1055,10 @@ export interface InvokeMap {
 	/** 逐运行时开关；`enabled=false` 即写入显式的「已禁用」标记。 */
 	[INVOKE.setRuntimeEnabled]: { args: [id: string, enabled: boolean]; result: RuntimeInventory };
 	[INVOKE.runtimeDiagnostics]: { args: [id: string]; result: RuntimeDiagnosticsText };
+	/** 按需安装（需联网）；失败 reject（原因带相位与底层错误）—— 用户主动点的安装不许静默失败。 */
+	[INVOKE.runtimeInstall]: { args: [id: string]; result: RuntimeInventory };
+	/** 取消进行中的安装。无进行中的安装时是空操作（不报错）。 */
+	[INVOKE.runtimeCancelInstall]: { args: [id: string]; result: void };
 	/** 失败时 reject（原因带相位与底层错误）—— 用户主动点的修复不许静默失败。 */
 	[INVOKE.runtimeReset]: { args: [id: string]; result: RuntimeInventory };
 
@@ -1066,6 +1084,7 @@ export interface PushMap {
 	[PUSH.daemonReady]: void;
 	[PUSH.daemonDown]: { readonly reason: string };
 	[PUSH.automationEvent]: AutomationEvent;
+	[PUSH.runtimeInstallProgress]: RuntimeInstallProgress;
 }
 
 /* ────────────────────────────────────────────────────────────────

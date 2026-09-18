@@ -217,20 +217,19 @@ import type { QueuedMessages } from "../shared/session-events.ts";
 import { defaultSpawn } from "../documents/docx-env.ts";
 import {
 	defaultPythonRuntimeOptions,
-	ensurePythonRuntime,
 	inspectPythonRuntime,
 	type RuntimeOptions,
 } from "../core/runtimes/python.ts";
 import {
 	collectRuntimeDiagnosticsText,
 	collectRuntimeInventory,
-	isRuntimeEnabled,
+	installManagedRuntime,
 	planRuntimeShellInjection,
 	resetManagedRuntime,
 	writeRuntimeEnabled,
 	writeRuntimeMaster,
 } from "../core/runtime-inventory.ts";
-import type { RuntimeInventory } from "../shared/runtimes.ts";
+import type { RuntimeInstallProgress, RuntimeInventory } from "../shared/runtimes.ts";
 import {
 	isWebSearchProviderId,
 	type ModelProbeResult,
@@ -3506,6 +3505,13 @@ async function forkSession(
 	});
 }
 
+/**
+ * 进行中的运行时安装（每个 id 一个取消信号）。按需安装要联网下载几分钟，
+ * 用户点「取消」时 daemon 需要在**下一次推进前**让它停下 —— 这就是唯一落点。
+ * 放在 daemon（不放 core）：它是进程级生命周期，且终态只有 daemon 能推给 renderer。
+ */
+const runtimeInstalls = new Map<string, AbortController>();
+
 const handlers: Record<string, Handler> = {
 	// 返回折叠后的真实历史。ConversationView 与 SessionSnapshot 结构一致。
 	// sessionId 缺省 = 当前会话；指定 id 时按注册表查桶 —— 未注册
@@ -3743,6 +3749,49 @@ const handlers: Record<string, Handler> = {
 	// 与清单的浅判据分工见 core/runtime-inventory.ts 文件头。
 	[INVOKE.runtimeDiagnostics]: async ([id]) =>
 		collectRuntimeDiagnosticsText(id as string, defaultSpawn),
+
+	/*
+	 * 按需安装（阶段 7：三运行时纯按需，没有任何静默自动下载）。安装要联网下载
+	 * 几十到几百 MB，所以进度走 PUSH（用户切走设置页再切回来仍看得到），
+	 * 取消走 runtimeInstalls 里那个 AbortSignal。失败**响亮 reject**：界面据此给
+	 * 可执行原因，并同时落一条审计（与重置失败同口径）。
+	 */
+	[INVOKE.runtimeInstall]: async ([id]): Promise<RuntimeInventory> => {
+		const runtimeId = id as string;
+		if (runtimeInstalls.has(runtimeId)) throw new Error(`「${runtimeId}」的安装已在进行中`);
+		const controller = new AbortController();
+		runtimeInstalls.set(runtimeId, controller);
+		const pushProgress = (progress: RuntimeInstallProgress): void => {
+			post({ kind: "push", channel: PUSH.runtimeInstallProgress, payload: progress });
+		};
+		pushProgress({ id: runtimeId, kind: "running", message: "正在下载并安装…需联网。" });
+		try {
+			const inventory = await installManagedRuntime(runtimeId, defaultSpawn, controller.signal, {}, pushProgress);
+			pushProgress({ id: runtimeId, kind: "done", message: "安装完成。" });
+			return inventory;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			// 取消是用户的动作，不是失败：不写审计、终态标 cancelled（界面据此静默收尾）。
+			if (controller.signal.aborted) {
+				pushProgress({ id: runtimeId, kind: "cancelled", message });
+				throw error;
+			}
+			pushProgress({ id: runtimeId, kind: "failed", message });
+			writeAuditRecord({
+				category: "runtime",
+				outcome: "failed",
+				detail: clipAuditDetail(`安装运行时「${runtimeId}」失败：${message}`),
+			});
+			throw error;
+		} finally {
+			runtimeInstalls.delete(runtimeId);
+		}
+	},
+
+	/** 取消进行中的安装（在**下一次推进前**生效，见 core/runtime-inventory.ts 的取消语义）。 */
+	[INVOKE.runtimeCancelInstall]: async ([id]): Promise<void> => {
+		runtimeInstalls.get(id as string)?.abort();
+	},
 
 	// 重置走内核的幂等链路（清残留 → 安装 → 校验 → 进位 → 发布）。失败 reject，
 	// 原因带相位与底层错误 —— 用户主动点的修复不许静默失败。
@@ -5072,56 +5121,17 @@ function start(): void {
 	}
 
 	/*
-	 * docx 引擎 venv 后台预热（对标 WorkBuddy 的 SessionStart hook：
-	 * 会话开始就不阻塞地跑 setup-html-to-docx.sh，首次冷启动不卡会话）。
-	 * fire-and-forget：不阻塞 ready（首装要联网拉 Python，可能几分钟）；
-	 * 失败静默记事件日志 —— 转换前的幂等 ensure 才是兜底（docx_convert 工具层），
-	 * 预热只是省首次等待，它的失败不该惊动用户。
+	 * docx 引擎运行时**不做启动预热**（2026-09-18 变更，原 SessionStart 式预热已删）。
 	 *
-	 * 开关门（spec: add-managed-runtimes）：用户在设置页关掉 python（总开关或逐项）
-	 * 就**不预热** —— 他说过不要这个运行时，启动时替他联网拉一份是背着用户做事。
-	 * 注意门只管预热这一条：docx_convert / docx_extract 工具层仍会按需 ensure
-	 * （那是内置功能自己的运行时依赖，不随模型侧的可见性开关走），
-	 * 关闭的影响面是「不注入路径 + 不预热」，不是「功能失效」。
+	 * 为什么删：三个运行时改成**纯按需**（用户到「设置 → 内置运行时」点「安装」才联网），
+	 * 而预热挂在 daemon 启动这种用户没点任何东西的时刻 —— 它一跑就等于静默自动下载
+	 * 几十到几百 MB。用户的取舍是「安装包不能臃肿」，但同样明确过「不做任何静默自动
+	 * 下载/安装」；两条一起守的办法就是**启动时什么都不装**。
+	 *
+	 * 代价（如实记下）：首次用 docx 生成/提取前，用户要先在设置页装一次 Python 运行时。
+	 * 环境未就绪时工具层会拿到 not-installed 并把「请用户去安装」如实交给模型/用户
+	 * （core/runtimes/registry.ts 的 notInstalledMessage），不静默降级。
 	 */
-	if (isRuntimeEnabled("python")) void ensurePythonRuntime(pythonRuntimeOptions(), defaultSpawn)
-		.then((result) => {
-			if (result.status === "ready") {
-				eventLog.append({ kind: "docx_env_warmup", outcome: "ready" });
-			} else {
-				eventLog.append({
-					kind: "docx_env_warmup",
-					outcome: "failed",
-					phase: result.phase,
-					error: result.error,
-				});
-				/*
-				 * 启动预热失败也进审计中心（「运行时」一类）。为什么预热这条也要记：
-				 * 它失败意味着这台机器上 docx 生成/提取**当下就不可用**，而事件日志
-				 * 是排障现场、用户看不到 —— 审计中心才是用户能自己看到「环境没装好」的地方。
-				 * 与工具层的写入点是同一份结构、同一个写入函数（core/audit-log）。
-				 */
-				writeAuditRecord({
-					category: "runtime",
-					outcome: "failed",
-					detail: clipAuditDetail(`docx 运行时启动预热失败（${result.phase}）：${result.error}`),
-				});
-			}
-		})
-		.catch((error: unknown) => {
-			// ensure 自身抛出（状态机 bug / spawn 异常逃逸）：同口径记日志，不放任成 unhandledRejection。
-			const message = error instanceof Error ? error.message : String(error);
-			eventLog.append({
-				kind: "docx_env_warmup",
-				outcome: "error",
-				message,
-			});
-			writeAuditRecord({
-				category: "runtime",
-				outcome: "failed",
-				detail: clipAuditDetail(`docx 运行时启动预热异常：${message}`),
-			});
-		});
 
 	// 模型目录是懒加载的（见 getCatalog）：models.json 坏了应当在打开设置页时报错，
 	// 而不是让 daemon 起不来、界面永久卡在「正在启动」。

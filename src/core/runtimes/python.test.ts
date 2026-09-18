@@ -1,17 +1,19 @@
 /**
  * Python 运行时（托管根下的实例）的装配链路测试。
  *
- * 这是「真入口 + 真磁盘」那一档：走生产的 `ensurePythonRuntime` / `resetPythonRuntime`
- * / `pythonRuntimeDiagnostics`（即 daemon 预热与 docx 工具用的同一个入口），托管根与
- * 家目录都落在临时目录里，spawn 用形态匹配的假实现（不真装 Python）。
- * 相位表本身的覆盖在 documents/docx-env.test.ts。
+ * 这是「真入口 + 真磁盘」那一档：走生产的 `installPythonRuntime` / `resetPythonRuntime` /
+ * `ensurePythonRuntime` / `pythonRuntimeDiagnostics`（即设置页「安装/重置/诊断」与
+ * 转换前探测用的同一批入口），托管根与家目录都落在临时目录里，spawn 用形态匹配的假实现
+ * （不真装 Python）。相位表本身的覆盖在 documents/docx-env.test.ts。
  *
- * 本文件的重点是三条不可退让的性质：
- *   1. **原子性**：安装落在 `.staging-*` 里，进位之后才写 manifest，**最后**写 current；
+ * 2026-09-18 变更（三运行时纯按需）后 `ensurePythonRuntime` **只探不装**，
+ * 所以「装」这件事在用例里一律走 `installPythonRuntime`；本文件的重点是四条不可退让的性质：
+ *   1. **纯按需**：未安装时 ensure 零 spawn（不下载、不安装）；
+ *   2. **原子性**：安装落在 `.staging-*` 里，进位之后才写 manifest，**最后**写 current；
  *      任何中途状态读侧都不判就绪（用例直接手工制造三个崩溃点）。
- *   2. **唯一真源**：override > managed > legacy 的优先级只有一处判据，两条路径并存时
+ *   3. **唯一真源**：override > managed > legacy 的优先级只有一处判据，两条路径并存时
  *      以 managed 为准（迁移期最容易分叉的地方）。
- *   3. **既有语义不变**：四态分类与 env-not-ready 的归因、文案一律照旧。
+ *   4. **既有语义不变**：四态分类与 env-not-ready 的归因、文案一律照旧。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -36,6 +38,7 @@ import {
 	createPythonRuntime,
 	defaultPythonRuntimeOptions,
 	ensurePythonRuntime,
+	installPythonRuntime,
 	inspectPythonRuntime,
 	pythonRuntimeDiagnostics,
 	resetPythonRuntime,
@@ -169,7 +172,7 @@ describe("全新机器：装进托管根", () => {
 	it("装到 .staging-* → 进位 → 写 manifest → 最后写 current；落在托管根的版本目录", async () => {
 		const options = optionsFor("fresh");
 		const { calls, spawn } = freshInstallScenario();
-		const ensured = await ensurePythonRuntime(options, spawn);
+		const ensured = await installPythonRuntime(options, spawn);
 
 		expect(ensured).toEqual({
 			status: "ready",
@@ -209,7 +212,7 @@ describe("全新机器：装进托管根", () => {
 			],
 			[isEngineSmoke, ok()],
 		]);
-		const ensured = await ensurePythonRuntime(options, spawn);
+		const ensured = await installPythonRuntime(options, spawn);
 
 		expect(ensured.status).toBe("failed");
 		if (ensured.status !== "failed") throw new Error("unreachable");
@@ -222,17 +225,33 @@ describe("全新机器：装进托管根", () => {
 		expect(readManifest(INSTANCE(options))).toBeUndefined();
 	});
 
-	it("幂等：已发布且就绪时再 ensure 只做探测（不重建、不重装）", async () => {
+	it("幂等：已发布且就绪时再 ensure 只做探测（不重建、不重装、不联网）", async () => {
 		const options = optionsFor("idempotent");
 		const first = readyScenario();
-		await ensurePythonRuntime(options, first.spawn);
+		await installPythonRuntime(options, first.spawn);
 		const second = readyScenario();
 		const again = await ensurePythonRuntime(options, second.spawn);
 
 		expect(again.status).toBe("ready");
+		// 安装动作一个都不许出现（uv 都不该被问：ensure 是只读探测）。
 		expect(second.calls.some(isCreateVenv)).toBe(false);
 		expect(second.calls.some(isInstallDeps)).toBe(false);
-		expect(second.calls).toHaveLength(5);
+		expect(second.calls.some(isUvVersion)).toBe(false);
+		expect(ready(again).venvDir).toBe(VENV(options));
+	});
+
+	it("**纯按需**：未安装时 ensure 零 spawn（不下载、不安装），相位 not-installed", async () => {
+		const options = optionsFor("not-installed");
+		const { calls, spawn } = readyScenario();
+
+		const failed = await ensurePythonRuntime(options, spawn);
+
+		expect(failed.status).toBe("failed");
+		if (failed.status !== "failed") throw new Error("unreachable");
+		expect(failed.phase).toBe("not-installed");
+		expect(failed.error).toContain("设置");
+		expect(calls).toEqual([]);
+		expect(readCurrent(options.root, PYTHON_RUNTIME_ID)).toBeUndefined();
 	});
 });
 
@@ -251,9 +270,9 @@ describe("崩溃点：不会留下「看起来就绪」的状态", () => {
 		expect(crashed.staging).toEqual([`.staging-${PYTHON_RUNTIME_VERSION}-boom`]);
 		expect(crashed.nextSteps.join("\n")).toContain("半成品");
 
-		// 续跑：不需要用户手删目录，再 ensure 一次即可。
+		// 续跑：不需要用户手删目录，再点一次安装（或走安装链路）即可。
 		const retry = readyScenario();
-		const ensured = await ensurePythonRuntime(options, retry.spawn);
+		const ensured = await installPythonRuntime(options, retry.spawn);
 		expect(ensured.status).toBe("ready");
 		expect(listStaging(options.root, PYTHON_RUNTIME_ID)).toEqual([]);
 		expect(readCurrent(options.root, PYTHON_RUNTIME_ID)).toBe(PYTHON_RUNTIME_VERSION);
@@ -331,7 +350,7 @@ describe("回滚：只切 current 指针", () => {
 /* ── 唯一真源：override > managed > legacy ──────────────────────── */
 
 describe("落点优先级（唯一真源）", () => {
-	it("只有旧路径 → 复用 legacy（不迁入、不删、不写 current）", async () => {
+	it("只有旧路径 → 探测就地作用于它（不迁入、不删、不写 current）；安装才装进托管根", async () => {
 		const options = optionsFor("legacy-only");
 		const legacy = join(options.homeDir, ".venv-html-to-docx");
 		mkdirSync(legacy, { recursive: true });
@@ -341,13 +360,18 @@ describe("落点优先级（唯一真源）", () => {
 		expect(resolution.activeDir).toBe(legacy);
 		expect(resolution.detail).toContain("未迁入托管根");
 
-		const { spawn } = readyScenario();
-		const ensured = await ensurePythonRuntime(options, spawn);
-		expect(ensured.status).toBe("ready");
-		expect(ready(ensured).venvDir).toBe(legacy);
-		expect(existsSync(legacy)).toBe(true);
-		// 复用 = 就地 ensure：不写指针（旧路径不受托管根管辖）。
+		// 探测（转换前的 ensure）：就地探，不动用户的目录、不写指针。
+		const probed = await ensurePythonRuntime(options, readyScenario().spawn);
+		expect(probed.status).toBe("ready");
+		expect(ready(probed).venvDir).toBe(legacy);
 		expect(readCurrent(options.root, PYTHON_RUNTIME_ID)).toBeUndefined();
+
+		// 安装：装进托管根（「显式迁入」的语义），旧目录原样保留。
+		const installed = await installPythonRuntime(options, readyScenario().spawn);
+		expect(installed.status).toBe("ready");
+		expect(ready(installed).venvDir).toBe(VENV(options));
+		expect(existsSync(legacy)).toBe(true);
+		expect(readCurrent(options.root, PYTHON_RUNTIME_ID)).toBe(PYTHON_RUNTIME_VERSION);
 	});
 
 	it("旧路径与托管实例并存 → 以托管根 current 为准（唯一真源）", () => {
@@ -375,11 +399,11 @@ describe("落点优先级（唯一真源）", () => {
 		expect(resolution.managed).toBe(false);
 	});
 
-	it("覆盖口生效时，ensure 就地作用于它、托管根完全不参与", async () => {
+	it("覆盖口生效时，安装就地作用于它、托管根完全不参与", async () => {
 		const opsVenv = join(TMP, "ops-ensure", "venv");
 		const options = optionsFor("override-ensure", { env: { [VENV_OVERRIDE_ENV]: opsVenv } });
 		const { spawn } = readyScenario();
-		const ensured = await ensurePythonRuntime(options, spawn);
+		const ensured = await installPythonRuntime(options, spawn);
 
 		expect(ensured.status).toBe("ready");
 		expect(ready(ensured).venvDir).toBe(opsVenv);
@@ -509,7 +533,8 @@ describe("既有语义保留（迁移不得改行为）", () => {
 	it("uv 缺失仍是 env-not-ready + probe-uv 归因（错误分类一字不改）", async () => {
 		const options = optionsFor("uv-missing");
 		const { spawn } = scripted([[isUvVersion, notFound()]]);
-		const failed = await ensurePythonRuntime(options, spawn);
+		// 装的时候才会碰到 uv（ensure 只探不装，不会再走到这里）。
+		const failed = await installPythonRuntime(options, spawn);
 
 		expect(failed.status).toBe("failed");
 		if (failed.status !== "failed") throw new Error("unreachable");

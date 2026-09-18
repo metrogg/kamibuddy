@@ -114,7 +114,7 @@ description: |
 
 ## docx_convert 转换
 
-**唯一合法转换通道：`docx_convert` 工具**（daemon 托管 venv Python 跑引擎的受控通道；环境未就绪时它会自动准备）。**禁止用 `powershell` 跑 python/uv 做转换。**
+**唯一合法转换通道：`docx_convert` 工具**（daemon 托管 venv Python 跑引擎的受控通道；Python 运行时按需安装、不会自动下载，未安装时按工具返回的引导请用户到「设置 → 内置运行时」点安装）。**禁止用 `powershell` 跑 python/uv 做转换。**
 
 ```
 docx_convert({

@@ -11,16 +11,16 @@
  * WorkBuddy 链路里模型直接 bash 调 venv python，我们没有 bash 那条路，
  * 这是平台约束不是合规约束（spec.md「What Changes」）。
  *
- * 环境准备：每次转换前幂等 ensure（已就绪秒退），daemon 启动时的后台预热
- * 只是省首次等待，这里的 ensure 才是兜底 —— 与 WB「每次转换前重跑 setup
- * 脚本」同语义。解释器来自**托管运行时**（core/runtimes/python.ts：托管根
+ * 环境准备（2026-09-18 阶段 7 改口径）：Python 运行时**纯按需** —— 不会自动下载，
+ * 未安装时 ensure 会如实返回失败，本工具据此报出「到设置 → 内置运行时点安装」的引导。
+ * 解释器来自**托管运行时**（core/runtimes/python.ts：托管根
  * `<configDir>/runtimes/python/<version>/` + current 指针，兼容 HTML_TO_DOCX_VENV
  * 覆盖口与既有 ~/.venv-html-to-docx 的复用），本文件不自己拼 venv 路径。
  * 环境装不上（无外网等）如实报错并建议 Markdown 降级交付，
  * 不静默吞（spec Scenario: 无外网/安装失败时返回明确降级）。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: docx_convert 的名称、description（含首次冷启动 1-3 分钟的如实说明）与
+ * What the model sees: docx_convert 的名称、description（含「Python 环境按需安装、不会自动下载」的如实说明）与
  * 参数 schema；成功时返回一条 JSON 文本（docx_path / warnings / 下一步提示），失败时报错文案
  * 可能附带引擎给的 Markdown 降级内容（上限 FALLBACK_MESSAGE_CAP = 16k 字符，超出截断并标注）。
  * Token effect: 定义常驻；成功返回很短（路径 + 警告）；**失败路径可能一次带上万字符**的降级正文
@@ -78,7 +78,7 @@ export function createDocxConvertTool(options: DocxConvertToolOptions) {
 			description:
 				"把 HTML 文件转换为 Word .docx 文档。输入是已经写好的 HTML 文件（文档排版流程的产物），" +
 				"输出 .docx。可选页面参数：A4/Letter/A3、纵向/横向、页边距（厘米）。" +
-				"首次使用会自动准备 Python 环境（需联网，约 1-3 分钟）。" +
+				"Python 环境按需安装、不会自动下载：尚未安装时本工具会返回原因与「到设置 → 内置运行时点安装」的引导。" +
 				"环境不可用或转换失败时会返回原因，转换失败可能附带 Markdown 降级内容 —— 应保存为 .md 交付并说明原因。",
 			promptSnippet:
 				"docx_convert: 把排版好的 HTML 转成 .docx（htmlPath → outputPath），成功后用 present_files 交付",
@@ -111,7 +111,8 @@ export function createDocxConvertTool(options: DocxConvertToolOptions) {
 					platform: options.platform ?? process.platform,
 				});
 				const ensure = options.ensure ?? ensurePythonRuntime;
-				// 幂等 ensure：已就绪秒退；装不上抛 env-not-ready（带阶段归因与联网/镜像引导）。
+				// 幂等**探测**（2026-09-18 起只探不装）：已就绪秒退；未安装 / 不可用抛
+				// env-not-ready，文案里带「请用户到设置页点安装」——运行时纯按需，绝不自动下载。
 				const env = await ensure(runtimeOptions, defaultSpawn);
 				if (env.status !== "ready") {
 					options.onAudit?.({

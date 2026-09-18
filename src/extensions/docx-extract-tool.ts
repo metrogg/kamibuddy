@@ -14,9 +14,10 @@
  * documents/docx-extract.ts，模型只能给输入 .docx 与产物路径），不经 agent 的
  * powershell 自由 shell —— 与 docx_convert 同档：受控 spawn、不经 powershell。
  *
- * 环境准备：与正向共用同一个**托管运行时**（core/runtimes/python.ts：托管根
- * `<configDir>/runtimes/python/<version>/` + current 指针）的幂等 ensure（已就绪
- * 秒退）；首次冷启动约 1-3 分钟，描述里如实说明，失败时响亮报错并给可执行建议，
+ * 环境准备（2026-09-18 阶段 7 改口径）：与正向共用同一个**托管运行时**
+ * （core/runtimes/python.ts：托管根 `<configDir>/runtimes/python/<version>/` +
+ * current 指针）的幂等 ensure（已就绪秒退）；Python 运行时**纯按需** —— 不会自动下载，
+ * 未安装时 ensure 会如实返回失败，本工具据此报「到设置 → 内置运行时点安装」的引导，
  * 不静默返回空 HTML。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
@@ -85,7 +86,7 @@ export function createDocxExtractTool(options: DocxExtractToolOptions) {
 				"（read_document 给文本，本工具给 HTML 文件）。" +
 				"输出是**语义化近似**，不是 1:1 还原：页码、页眉页脚、分节、浮动对象、域代码、图表无法复原，" +
 				"结果里的 not_restorable 字段列出该文档实际命中的不可复原项。" +
-				"首次使用会自动准备 Python 环境（需联网，约 1-3 分钟）。" +
+				"Python 环境按需安装、不会自动下载：尚未安装时会返回原因与「到设置 → 内置运行时点安装」的引导。" +
 				"提取失败或环境不可用时会返回原因与处理建议。",
 			promptSnippet:
 				"docx_extract: 把一份 .docx 提取成 HTML + 图片（docxPath → outputPath），用来复用原文档版式；只读文字用 read_document",
@@ -109,7 +110,8 @@ export function createDocxExtractTool(options: DocxExtractToolOptions) {
 					platform: options.platform ?? process.platform,
 				});
 				const ensure = options.ensure ?? ensurePythonRuntime;
-				// 幂等 ensure：已就绪秒退；装不上抛 env-not-ready（带阶段归因与联网/镜像引导）。
+				// 幂等**探测**（2026-09-18 起只探不装）：已就绪秒退；未安装 / 不可用抛
+				// env-not-ready，文案里带「请用户到设置页点安装」——运行时纯按需，绝不自动下载。
 				const env = await ensure(runtimeOptions, defaultSpawn);
 				if (env.status !== "ready") {
 					options.onAudit?.({

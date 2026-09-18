@@ -1,18 +1,18 @@
 /**
- * 拉取并**构建期解包** gitbash 运行时载荷到
- * `resources/runtimes/payload/gitbash/<version>/`，随安装包分发。
+ * 拉取并**构建期解包** gitbash 运行时载荷到 `resources/runtimes/payload/gitbash/<version>/`。
  *
- * ── 为什么解包只能在构建期做（这是本脚本存在的理由，也是本轮最要紧的取舍）──
- * 上游发行物 `PortableGit-<ver>-64-bit.7z.exe` 是 **7z 自解压**，而仓库现有 jszip 解不了 7z。
- * 三条路各自的代价：
- *   1. 运行期解包 ⇒ 得把 7z 解压器塞进产物。7-Zip 是 **LGPL + unRAR 限制**，
- *      随产物分发即把限制带进我们的分发物（unRAR 那条还与我们无关却要一起背）。
- *   2. 换发行物（MinGit 是 zip）⇒ **MinGit 不含 bash.exe**（官方称 non-interactive 分发），
- *      拿它当 gitbash 运行时就是名不副实。详见 docs/运行时来源与许可.md。
- *   3. **构建期解包、随包分发解包结果**（本脚本）⇒ 7-Zip 只在构建机上出现一次、
- *      **不进产物**；产物里只有解包后的普通文件树，运行期只做「复制 + 探针」。
- * 选 3。代价是安装包变大（解包后实测 9584 文件 / 389.1 MB），换来的是离线可用、
- * 首次使用不等下载、以及 7-Zip 的许可不落到我们的分发物上。
+ * ⚠️ **它已不是默认构建路径**（2026-09-18 设计变更，用户决定：三运行时**纯按需联网下载**）。
+ *   - 默认 `npm run dist` / `dist:dir` **不再**调本脚本；`electron-builder.yml` 的
+ *     extraResources 也用 `!runtimes/payload/**` / `!runtimes/.cache/**` 把载荷与缓存
+ *     排除在安装包之外（否则安装包又是几百 MB）；
+ *   - 运行期的取件与解包在 `src/core/runtimes/gitbash.ts` + `artifact.ts` + `download.ts`：
+ *     先下发行物并核 sha256，通过后**调用发行物自带的 SFX 解包器**（`-y -o<dir>`，
+ *     阶段 2 在本机实测可用，9584 文件 / 33 s）—— 7-Zip 仍然只出现在构建机上（或压根不用），
+ *     产物里没有任何 7z 依赖。本脚本与那条链路**没有代码共享**（这里是构建期解包整棵树）；
+ *   - 保留本脚本是为了**将来**的企业预置 / 离线包（spec 里「私有化/无外网」那条至今没拍板）。
+ *     诚实说明：`resources/runtimes/payload/` 现在**没有运行期代码读它**；运行期的离线出路
+ *     是把**发行物**放到下载缓存那一路（`<configDir>/runtimes/.cache/gitbash/<version>/<artifact>`，
+ *     安装失败的错误文案会把该路径原样打出来）。恢复「随包分发」需要另一次设计决定。
  *
  * 解包器两条路，都不进产物：优先 `KAMIBUDDY_7Z` 指定的 / PATH 上的 7z 家族 CLI，
  * 退回**发行物自带的 SFX 解包器**（`<artifact> -y -o<dir>`，本机实测可用，33s 解完）。
@@ -23,8 +23,8 @@
  *
  * 合规：解包结果里**不得删任何许可文本**（根 `LICENSE.txt` + `mingw64/share/licenses/**`）；
  * 本脚本额外把 `resources/runtimes/gitbash/CORRESPONDING-SOURCE.md`（GPLv2 §3 的源码获取
- * 方式，我们自己写的书面说明）拷进载荷根，让义务**随二进制一起走**（安装时整树复制，
- * 于是托管根里那份也带着它）。
+ * 方式，我们自己写的书面说明）拷进载荷根。运行期的同一条义务由
+ * `src/core/runtimes/gitbash.ts` 的 `extractPortableGit` 履行（解包后拷进实例根）。
  *
  * 用法：npm run fetch:gitbash [-- --force]
  */

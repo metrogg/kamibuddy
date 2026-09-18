@@ -27,6 +27,7 @@
 
 import type {
 	RuntimeDiagnosticsText,
+	RuntimeInstallProgress,
 	RuntimeInventory,
 	RuntimeInventoryEntry,
 	RuntimeStatus,
@@ -34,6 +35,7 @@ import type {
 import { readPreferences, writePreferences, type RuntimePrefs } from "./preferences.ts";
 import {
 	RUNTIME_REGISTRY,
+	installRuntime,
 	resetRuntime,
 	type RuntimeDescriptor,
 	type RuntimeOptions,
@@ -47,7 +49,7 @@ import {
 } from "./runtimes/diagnostics.ts";
 import type { SpawnFn } from "../documents/docx-env.ts";
 
-/** 开关状态：总开关 + 逐项（缺省全开 —— 既有行为是「运行时自动准备」，不加开关也照样）。 */
+/** 开关状态：总开关 + 逐项（缺省全开 —— 用户显式关掉某项才留 `false` 标记）。 */
 export interface RuntimeSwitchState {
 	readonly master: boolean;
 	/** 逐项开关的**显式标记**：`false` = 用户关掉了它（缺键 = 从没关过）。 */
@@ -96,6 +98,8 @@ function writeRuntimeSwitch(next: RuntimePrefs): void {
  */
 interface RuntimePresentation {
 	readonly purpose: string;
+	/** 「按需安装」要下载的量级（阶段 7）。数值全部来自 `resources/runtimes/README.md` 的实测。 */
+	readonly downloadSizeHint: string;
 	readonly executableLabel?: string;
 	readonly executableOf?: (activeDir: string, platform: string) => string;
 }
@@ -103,11 +107,19 @@ interface RuntimePresentation {
 const RUNTIME_PRESENTATION: Readonly<Record<string, RuntimePresentation>> = {
 	python: {
 		purpose: "文档转换（docx 引擎的解释器）",
+		// uv.exe（≈17 MB）+ CPython 独立发行版（≈22 MB）+ wheel 依赖（数十 MB，未实测）。
+		downloadSizeHint: "下载约 40–100 MB，解压后约 100 MB",
 		executableLabel: "Python 解释器",
 		executableOf: (activeDir, platform) => pythonExecutable(activeDir, platform),
 	},
-	node: { purpose: "运行 JavaScript / Node 脚本与前端构建工具" },
-	gitbash: { purpose: "提供 bash 与常用 unix 命令行工具" },
+	node: {
+		purpose: "运行 JavaScript / Node 脚本与前端构建工具",
+		downloadSizeHint: "下载约 34 MB，解压后约 95 MB",
+	},
+	gitbash: {
+		purpose: "提供 bash 与常用 unix 命令行工具",
+		downloadSizeHint: "下载约 56 MB，解压后约 389 MB",
+	},
 };
 
 /**
@@ -141,6 +153,8 @@ export function runtimeDescriptorOf(
  *   - 关掉了 → disabled（这就是「显式已禁用标记」的读取侧）；
  *   - resolve 的落点来源不是 pending（托管实例 / 覆盖口 / 复用的旧路径）→ ready；
  *   - 尚无落点：有落盘失败记录 → failed（detail 写清相位与原因），否则 missing。
+ * 阶段 7 起没有任何静默自动下载，所以 missing 对用户就是「未安装」（文案见 shared/runtimes.ts），
+ * 界面据此给「安装」入口 —— 这里只判事实，不触发任何下载。
  * missing **不带 detail**：落点已经由清单的「目录」一行给出，再补一句「尚无可用实例」
  * 只是把同一件事说两遍（状态文本会因此出现两层括号）。
  */
@@ -165,6 +179,7 @@ function entryOf(descriptor: RuntimeDescriptor, state: RuntimeSwitchState): Runt
 		version: descriptor.version,
 		enabled,
 		status: classify(descriptor, state.master && enabled),
+		downloadSizeHint: presentation?.downloadSizeHint ?? "体积未登记",
 	};
 	// 禁用 ⇒ 路径不注入（形状上就没有这两格，渲染层写不出来）。
 	if (!(state.master && enabled)) return base;
@@ -267,4 +282,66 @@ export async function resetManagedRuntime(
 		throw new Error(`重置「${descriptor.label}」失败（相位 ${outcome.phase}）：${outcome.error}`);
 	}
 	return collectRuntimeInventory(overrides);
+}
+
+/**
+ * 「按需安装」= 内核的原子安装链路（暂存 → 取件（下载+校验+解包）→ 进位 → 复验 → manifest → current）。
+ *
+ * 与「重置并重新安装」的分工：重置是**用户显式点的一次修复**，会先删掉既有实例
+ * （`resetRuntime`）；安装只用在**尚未安装**时（落点已是 pending），走到
+ * `installRuntime` 就够 —— 它本身就幂等（已完整进位则只补指针，不重新下载）。
+ *
+ * `signal` 是用户点「取消」的落点：**下载阶段会被真正中断**（HTTP 请求 abort，
+ * 已下字节留在 `.part` 里做续传点），并抛 `AbortError`；推进到 spawn 之后（uv 装配 /
+ * 7z 自解压）的相变只在下一次推进前被拦下 —— 诚实边界：`SpawnFn` 没有 kill 原语，
+ * 正在跑的那条子进程不会被中途杀掉。中断留下的半成品由下次安装的 `clearLeftovers`
+ * 清掉（内核已保证），`.part` 则省掉下次重下。
+ *
+ * `onProgress` 是进度出口（daemon 接成 `PUSH.runtimeInstallProgress`）：
+ * 只报 running 档，终态（done / failed / cancelled）由调用方下结论 ——
+ * 内核不该替调用方判断「这次算不算成功」。
+ */
+export async function installManagedRuntime(
+	id: string,
+	spawn: SpawnFn,
+	signal?: AbortSignal,
+	overrides: RuntimeInventoryOverrides = {},
+	onProgress?: (progress: RuntimeInstallProgress) => void,
+): Promise<RuntimeInventory> {
+	const descriptor = runtimeDescriptorOf(id, overrides);
+	// 已有可用落点（覆盖口 / 复用旧路径 / 已进位实例）就没有要装的东西 ——
+	// 尤其不能对「覆盖口」动手（那个目录不是我们的，同 resetRuntime 的例外）。
+	if (descriptor.resolve().source !== "pending") return collectRuntimeInventory(overrides);
+	const guarded: SpawnFn =
+		signal === undefined
+			? spawn
+			: async (request) => {
+					if (signal.aborted) throw runtimeInstallAbort(descriptor.label);
+					return spawn(request);
+				};
+	const outcome = await installRuntime(descriptor, guarded, {
+		...(signal === undefined ? {} : { signal }),
+		...(onProgress === undefined
+			? {}
+			: {
+					onProgress: (update) =>
+						onProgress({
+							id,
+							kind: "running",
+							message: update.message,
+							...(update.percent === undefined ? {} : { percent: update.percent }),
+						}),
+				}),
+	});
+	if (outcome.status === "failed") {
+		throw new Error(`安装「${descriptor.label}」失败（相位 ${outcome.phase}）：${outcome.error}`);
+	}
+	return collectRuntimeInventory(overrides);
+}
+
+/** 取消信号：错在用户而不是环境，daemon 据此把它与安装失败分开上报（不写审计）。 */
+function runtimeInstallAbort(label: string): Error {
+	const error = new Error(`已取消「${label}」的安装`);
+	error.name = "AbortError";
+	return error;
 }

@@ -165,6 +165,8 @@ const bridge: KamiBridge = {
 	setRuntimeMaster: (enabled) => ipcRenderer.invoke(INVOKE.setRuntimeMaster, enabled),
 	setRuntimeEnabled: (id, enabled) => ipcRenderer.invoke(INVOKE.setRuntimeEnabled, id, enabled),
 	runtimeDiagnostics: (id) => ipcRenderer.invoke(INVOKE.runtimeDiagnostics, id),
+	runtimeInstall: (id) => ipcRenderer.invoke(INVOKE.runtimeInstall, id),
+	runtimeCancelInstall: (id) => ipcRenderer.invoke(INVOKE.runtimeCancelInstall, id),
 	runtimeReset: (id) => ipcRenderer.invoke(INVOKE.runtimeReset, id),
 
 	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
@@ -183,6 +185,8 @@ const bridge: KamiBridge = {
 	onDaemonReady: (listener) => subscribe(PUSH.daemonReady, () => listener()),
 	onDaemonDown: (listener) => subscribe(PUSH.daemonDown, listener),
 	onAutomationEvent: (listener) => subscribe(PUSH.automationEvent, listener),
+	onRuntimeInstallProgress: (listener) =>
+		subscribe(PUSH.runtimeInstallProgress, listener),
 };
 
 contextBridge.exposeInMainWorld("kami", bridge);

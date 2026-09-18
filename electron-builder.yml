@@ -27,10 +27,20 @@ extraResources:
   # resources/ 整体物理化 → <安装>/resources/resources/。
   # KAMIBUDDY_RESOURCES_DIR 指向这里；bin/uv.exe（fetch:uv 拉取）一并随包，
   # main 把该目录前置进 daemon 的 PATH——docx-env 的「裸 uv」候选直接命中。
+  #
+  # **运行时不再随包**（2026-09-18 设计变更）：三个托管运行时改为纯按需联网下载
+  #（用户在「设置 → 内置运行时」点安装才下），所以
+  #   - `resources/runtimes/payload/**`（构建期 fetch:node / fetch:gitbash 的几百 MB
+  #     载荷）必须**排除**，否则安装包又会臃肿回 ≈484 MB；
+  #   - `resources/runtimes/.cache/**` 是构建期脚本的下载缓存（可能上百 MB），同样排除。
+  # 保留的只有文字资产：README.md、`gitbash/CORRESPONDING-SOURCE.md`（GPLv2 §3 的义务载体，
+  # 安装时由 gitbash 运行时的解包步骤拷进实例根）。
   - from: resources
     to: resources
     filter:
       - "**/*"
+      - "!runtimes/payload/**"
+      - "!runtimes/.cache/**"
 win:
   # exe 文件名必须 ASCII：rcedit（写版本/图标资源的原生工具）对中文路径不兼容
   # （实测 UNKNOWN open 错误）；安装目录与快捷方式仍按 productName 显示中文。

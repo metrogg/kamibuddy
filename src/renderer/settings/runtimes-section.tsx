@@ -1,26 +1,35 @@
 /**
- * 设置「内置运行时」一级分区（spec: add-managed-runtimes Task 3.1）。
+ * 设置「内置运行时」一级分区（spec: add-managed-runtimes Task 3.1 / 阶段 7）。
  *
  * 形态照 WorkBuddy 的 RuntimeToolsCard（security-center-panel__runtime-card）：
  * 分区头一行总开关，下面逐运行时一行（名称 / 版本 / 状态 / 用途）+ 行内开关 +
- * 「诊断」「重置并重新安装」。**总开关关闭 ⇒ 子项整行压暗且开关不可点**，
+ * 「诊断」与一个随状态而变的主动作。**总开关关闭 ⇒ 子项整行压暗且开关不可点**，
  * 但逐项开关的**原值保留**（重新打开总开关后回到用户上次的选择）——
  * WorkBuddy 的 effectiveEnabled = 总开关 && 子开关 就是这个语义。
+ *
+ * ── 阶段 7：三个运行时改成「纯按需下载」（没有任何静默自动下载）──
+ * 每项默认态是**未安装**（不是「正在准备 / 将会自动准备」），主动作随之而变：
+ *   - 未安装（missing）→ 「安装」：标题与 meta 行先摆出**体积量级 + 需联网**，
+ *     用户点之前就知道要下多少；
+ *   - 安装失败（failed）→ 「重试安装」；
+ *   - 就绪（ready）→ 「重置并重新安装」（保留，= 重新下载安装；带一次确认）。
+ * 安装期间这一行换成「转圈 + 进度文案 + 取消」；失败原因由**清单的 status.detail**
+ * （内核落盘的失败相位 + 底层错误）与错误条共同给出，都是可执行的。
  *
  * 数据只有一个来源：daemon 的 runtimesSnapshot（core/runtime-inventory.ts 的
  * collectRuntimeInventory）。本页不做任何二次判断 —— 状态文案经
  * shared/runtimes.ts 的 runtimeStatusText 渲染，与模型侧 `python_env` 段同一句
- * （「已被用户禁用」不可能在这里显示成「找不到」）。
+ * （「已被用户禁用」不可能在这里显示成「找不到」，未安装也不可能显示成「自动准备」）。
  *
  * 本页只 import @shared（AGENTS.md §1.3），一个 pi 概念都不认识。
  */
 
-import { useCallback, useEffect, useState } from "react";
-import type { RuntimeDiagnosticsText, RuntimeInventory } from "@shared/runtimes.ts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { RuntimeDiagnosticsText, RuntimeInstallProgress, RuntimeInventory } from "@shared/runtimes.ts";
 import { runtimeStatusText } from "@shared/runtimes.ts";
 import { useCopyWithTick } from "../copy-tick.ts";
 import { IconCheck, IconCopy, IconFolder } from "../icons.tsx";
-import { ErrorState, LoadingState } from "../state-views.tsx";
+import { ErrorState, LoadingState, Spinner } from "../state-views.tsx";
 
 function errorText(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
@@ -51,7 +60,7 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 	const [inventory, setInventory] = useState<RuntimeInventory | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	/**
-	 * 本分区自己的忙态：重置要「清残留 → 联网下载 → 校验 → 进位」，可能几分钟。
+	 * 本分区自己的忙态：安装 / 重置要「联网下载 → 校验 → 安装」，可能几分钟。
 	 * 不把这几分钟塞进全卡的 busy（那会让用户以为整张设置卡都卡住了）。
 	 */
 	const [localBusy, setLocalBusy] = useState(false);
@@ -63,6 +72,16 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 	const [confirmingResetId, setConfirmingResetId] = useState<string | undefined>(undefined);
 	/** 正在重置的运行时 id（重置要联网，可能几分钟 —— 必须给一句显式进度文案）。 */
 	const [resettingId, setResettingId] = useState<string | undefined>(undefined);
+	/**
+	 * 安装进度（推送驱动，所以用户切走设置页再切回来仍能看到「正在安装」；
+	 * 同一时刻只可能有一个安装：按钮在忙态下禁用，daemon 也按 id 拒绝重入）。
+	 */
+	const [installProgress, setInstallProgress] = useState<RuntimeInstallProgress | undefined>(undefined);
+	/**
+	 * 已点过「取消」的 id：安装的 invoke 会以 AbortError reject —— 那是用户自己的动作，
+	 * 不是失败，不能弹成错误。
+	 */
+	const cancelRequested = useRef<Record<string, boolean>>({});
 
 	const load = useCallback(async (): Promise<void> => {
 		try {
@@ -77,7 +96,19 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 		void load();
 	}, [load]);
 
+	// 进度推送：running 更新这一行的进度文案；终态（done/failed/cancelled）后
+	// 回读清单 —— 状态与失败原因是磁盘事实，不靠这条推送自己拼。
+	useEffect(
+		() =>
+			window.kami.onRuntimeInstallProgress((update) => {
+				setInstallProgress(update);
+				if (update.kind !== "running") void load();
+			}),
+		[load],
+	);
+
 	const disabled = busy || localBusy;
+	const installingId = installProgress?.kind === "running" ? installProgress.id : undefined;
 
 	/** 三个写操作的共同包装：忙态 → 调用 → 用返回值替换清单（daemon 已重采集）。 */
 	const run = useCallback((action: () => Promise<RuntimeInventory>): void => {
@@ -88,6 +119,38 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 			.catch((e: unknown) => setError(errorText(e)))
 			.finally(() => setLocalBusy(false));
 	}, []);
+
+	/**
+	 * 安装单独一条链路（不走 run）：它要几分钟，期间必须在行内留下显式进度文案，
+	 * 否则只剩一堆禁用控件，用户分不清「在装」还是「卡死了」。
+	 */
+	const install = (id: string): void => {
+		setReport(undefined);
+		setError(undefined);
+		setInstallProgress({ id, kind: "running", message: "正在下载并安装…需联网。" });
+		setLocalBusy(true);
+		window.kami
+			.runtimeInstall(id)
+			.then(setInventory)
+			.catch((e: unknown) => {
+				// 用户主动取消 ⇒ AbortError 不是失败；状态由清单回读（仍是「未安装」）。
+				if (cancelRequested.current[id] === true) return;
+				setError(errorText(e));
+			})
+			.finally(() => {
+				delete cancelRequested.current[id];
+				setInstallProgress(undefined);
+				setLocalBusy(false);
+				void load();
+			});
+	};
+
+	const cancelInstall = (id: string): void => {
+		cancelRequested.current[id] = true;
+		window.kami
+			.runtimeCancelInstall(id)
+			.catch((e: unknown) => setError(errorText(e)));
+	};
 
 	const diagnose = (id: string): void => {
 		setDiagnosingId(id);
@@ -159,6 +222,9 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 							// 总开关关 ⇒ 整行压暗、开关不可点；逐项原值保留（见文件头）。
 							const rowOff = !inventory.master;
 							const confirming = confirmingResetId === item.id;
+							// 「未安装 / 安装失败」都在点之前先告诉用户要下多少（体积量级 + 需联网）。
+							const needsInstall =
+								item.status.kind === "missing" || item.status.kind === "failed";
 							return (
 								<div key={item.id} className={`provider-row${rowOff ? " runtime-row-off" : ""}`}>
 									<div className="provider-main">
@@ -166,11 +232,27 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 										<span className="provider-name">{item.label}</span>
 										<span className="provider-tag">{item.version}</span>
 										<span className="bar-spacer" />
-										{resettingId === item.id ? (
-											<span className="stat-hint">重置中…需联网，约 1-3 分钟。</span>
+										{installingId === item.id ? (
+											<>
+												<Spinner />
+												<span className="stat-hint">
+													{installProgress?.message ?? "正在安装…"}
+												</span>
+												<button
+													type="button"
+													className="mini-btn"
+													onClick={() => cancelInstall(item.id)}
+												>
+													取消
+												</button>
+											</>
+										) : resettingId === item.id ? (
+											<span className="stat-hint">重置中…需联网下载。</span>
 										) : confirming ? (
 											<>
-												<span className="stat-hint">确认重置？需联网，约 1-3 分钟。</span>
+												<span className="stat-hint">
+													确认重置并重新下载？需联网，{item.downloadSizeHint}。
+												</span>
 												<button
 													type="button"
 													className="mini-btn danger"
@@ -202,15 +284,37 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 												>
 													{diagnosingId === item.id ? "诊断中…" : "诊断"}
 												</button>
-												<button
-													type="button"
-													className="mini-btn"
-													disabled={disabled || rowOff}
-													title="清掉这一版并重新安装（下载 → 校验 → 安装 → 重载）"
-													onClick={() => setConfirmingResetId(item.id)}
-												>
-													重置并重新安装
-												</button>
+												{item.status.kind === "missing" ? (
+													<button
+														type="button"
+														className="mini-btn"
+														disabled={disabled || rowOff}
+														title={`按需安装，需要联网下载：${item.downloadSizeHint}`}
+														onClick={() => install(item.id)}
+													>
+														安装
+													</button>
+												) : item.status.kind === "failed" ? (
+													<button
+														type="button"
+														className="mini-btn"
+														disabled={disabled || rowOff}
+														title={`重试安装，需要联网下载：${item.downloadSizeHint}`}
+														onClick={() => install(item.id)}
+													>
+														重试安装
+													</button>
+												) : (
+													<button
+														type="button"
+														className="mini-btn"
+														disabled={disabled || rowOff}
+														title="清掉这一版并重新下载安装（下载 → 校验 → 安装 → 重载）"
+														onClick={() => setConfirmingResetId(item.id)}
+													>
+														重置并重新安装
+													</button>
+												)}
 											</>
 										)}
 										<label
@@ -233,6 +337,7 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 									</div>
 									<p className="runtime-meta">
 										{runtimeStatusText(item.status)} · {item.purpose}
+										{needsInstall ? ` · 安装需联网：${item.downloadSizeHint}` : ""}
 									</p>
 								</div>
 							);
@@ -265,9 +370,9 @@ export function RuntimesSection({ busy }: RuntimesSectionProps): React.JSX.Eleme
 					)}
 
 					<p className="settings-foot">
-						关掉某项后，它的路径不再注入模型可见上下文（模型会被告知「已被用户禁用」而不是「找不到」），
-						启动时也不再替你准备它；文档生成等内置功能在首次使用时仍会按需准备自己需要的运行时。
-						开关立即生效，无需重启。
+						关掉某项后，它的路径不再注入模型可见上下文（模型会被告知「已被用户禁用」而不是「找不到」）。
+						三个运行时都是「纯按需」：不会自动下载，只有你点「安装」才会联网 —— 文档生成等内置功能
+						在需要时会明确告诉你去安装，不会静默联网。开关立即生效，无需重启。
 					</p>
 				</>
 			)}

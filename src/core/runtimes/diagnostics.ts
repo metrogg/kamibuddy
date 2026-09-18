@@ -23,10 +23,15 @@ import { runtimeHome, listInstances, listStaging, readCurrent } from "../runtime
 import type { SpawnFn } from "../../documents/docx-env.ts";
 import type { RuntimeDescriptor, RuntimeInspectResult, RuntimeSource } from "./registry.ts";
 
-/** 落盘日志的一条记录。`outcome` 让「最近一次失败」能机械地挑出来。 */
+/**
+ * 落盘日志的一条记录。`outcome` 让「最近一次失败」能机械地挑出来。
+ * 2026-09-18 加 `warning`：按需下载里有些实情不致命但必须留痕（如「官方校验文件没取到，
+ * 本次仅按代码内固定 sha256 校验」）；把它记成 `failed` 会让一次成功的安装在界面上
+ * 显示成「安装失败」——`readLastRuntimeFailure` 只认 `failed`，这条区分是刻意的。
+ */
 export interface RuntimeLogEvent {
 	readonly kind: "runtime_install" | "runtime_reset" | "runtime_ensure" | "runtime_rollback";
-	readonly outcome: "installed" | "started" | "published" | "failed";
+	readonly outcome: "installed" | "started" | "published" | "warning" | "failed";
 	readonly phase?: string;
 	readonly error?: string;
 	readonly source?: RuntimeSource;
@@ -106,11 +111,11 @@ export interface RuntimeDiagnosticsReport {
 function describeStatus(report: Pick<RuntimeDiagnosticsReport, "status" | "version">): string {
 	switch (report.status.kind) {
 		case "missing":
-			return "未就绪：可执行环境不存在（没装好，或目录被删/被杀软隔离）";
+			return "未就绪：可执行环境不存在（没装，或目录被删/被杀软隔离）";
 		case "wrong-version":
 			return `未就绪：版本不符（当前 ${report.status.version}，需要 ${report.version}）`;
 		case "deps-missing":
-			return `未就绪：缺依赖 ${report.status.module}（下次转换前会自动补装）`;
+			return `未就绪：缺依赖 ${report.status.module}`;
 		case "ready":
 			return "就绪";
 	}
@@ -130,7 +135,7 @@ function nextStepsFor(report: Omit<RuntimeDiagnosticsReport, "nextSteps">): read
 	if (report.currentVersion === undefined && report.instances.some((instance) => instance.complete)) {
 		steps.push(
 			"托管根里有一份完整实例但没发布（current 缺席，通常是安装正好中断在最后一步）：" +
-				"下次转换前的幂等 ensure 会直接把它发布，不必重新安装。",
+				"下次探测（转换前 / 打开设置页）会直接补上指针，不必重新下载。",
 		);
 	}
 	if (report.currentVersion !== undefined && !report.instances.some((instance) => instance.complete)) {
@@ -141,11 +146,14 @@ function nextStepsFor(report: Omit<RuntimeDiagnosticsReport, "nextSteps">): read
 			steps.push("环境就绪，无需操作。");
 			break;
 		case "deps-missing":
-			steps.push("下次转换前会自动补装缺失依赖；若反复失败，点「重置并重新安装」。");
+			steps.push("点「重置并重新安装」重建这一份环境（需联网）——缺依赖不会自动补装。");
 			break;
 		case "wrong-version":
 		case "missing":
-			steps.push("点「重置并重新安装」重建环境（需联网，约 1-3 分钟）。");
+			steps.push(
+				"点「安装」（已装过则点「重置并重新安装」）重建环境：需联网下载，" +
+					"体积见设置页「内置运行时」那一行的提示 —— 运行时不随包分发，也**不会**自动下载。",
+			);
 			break;
 	}
 	if (report.resolutionSource === "legacy") {

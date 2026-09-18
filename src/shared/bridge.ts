@@ -40,7 +40,7 @@ import type {
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
-import type { RuntimeDiagnosticsText, RuntimeInventory } from "./runtimes.ts";
+import type { RuntimeDiagnosticsText, RuntimeInstallProgress, RuntimeInventory } from "./runtimes.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { WorktreeBranchList } from "./worktree.ts";
 import type {
@@ -361,8 +361,19 @@ export interface KamiBridge {
 	readonly setRuntimeEnabled: (id: string, enabled: boolean) => Promise<RuntimeInventory>;
 	/** 该运行时的可复制诊断报告 + 落盘日志路径（按需 spawn 的深度探测）。 */
 	readonly runtimeDiagnostics: (id: string) => Promise<RuntimeDiagnosticsText>;
+	/**
+	 * 按需安装（阶段 7：三运行时纯按需，没有任何静默自动下载）。
+	 * 需联网下载；进度经 onRuntimeInstallProgress 推送；失败 reject（相位 + 底层原因）。
+	 */
+	readonly runtimeInstall: (id: string) => Promise<RuntimeInventory>;
+	/** 取消进行中的安装；没有进行中的安装时是空操作。 */
+	readonly runtimeCancelInstall: (id: string) => Promise<void>;
 	/** 重置并重新安装（幂等链路，需联网）；失败 reject，原因为相位 + 底层错误。 */
 	readonly runtimeReset: (id: string) => Promise<RuntimeInventory>;
+	/** 安装进度推送（running / done / failed / cancelled）；终态到达时调用方回读清单。 */
+	readonly onRuntimeInstallProgress: (
+		listener: (progress: RuntimeInstallProgress) => void,
+	) => Unsubscribe;
 
 	/* ── 审计中心（spec: add-managed-runtimes 阶段 4） ─────────────── */
 

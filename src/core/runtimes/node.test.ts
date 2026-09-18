@@ -1,48 +1,58 @@
 /**
- * node 运行时（随包载荷型）的装配链路测试。
+ * node 运行时的装配链路测试（2026-09-18：取件从「随包载荷复制」改成**按需联网下载**）。
  *
- * 走**生产的组装入口**：内核的 `ensureRuntime` / `resetRuntime` / `inspectRuntime` /
- * `collectRuntimeDiagnostics`（即 daemon 首次使用与设置页「诊断/重置」用的同一批入口）
- * 配 `createNodeRuntime`，托管根与 resources 根都落在临时目录，spawn 是**形态匹配的假件**
- * —— 但假件的 robocopy 支做真实的目录复制、探针支按真实磁盘事实回答，于是
- * 「复制 → 进位 → 复验」这条链在真磁盘上被完整跑过（不另搭测试旁路）。
+ * 走**生产的组装入口**：`ensureRuntime` / `installRuntime` / `resetRuntime` /
+ * `inspectRuntime` / `collectRuntimeDiagnostics`（即转换前探测与设置页「安装/诊断/重置」
+ * 用的同一批入口）配 `createNodeRuntime`；托管根与 resources 根都落在临时目录，
+ * **HTTP 打开器是注入的假件（不联网）**，spawn 是形态匹配的假件。
  *
- * 本文件钉四条不可退让的性质：
- *   1. **原子性与顺序**：安装落在 `.staging-*`，进位后复验，manifest 在复验之后，
- *      current 最后写；任何中途失败都不发布（崩溃续跑零成本）。
- *   2. **幂等**：已就位的实例再 ensure 只探针一次 —— 绝不重新复制 95 MB 载荷
- *      （它挂在模型每次调用前的准备路径上）。
- *   3. **就位即修复**：实例文件被删坏时，一次 ensure 就地修好（与 venv 同语义）。
- *   4. **合规义务被机械钉住**：许可文本是载荷必备文件，缺了即响亮失败（不得删）。
+ * 本文件钉五条不可退让的性质：
+ *   1. **未安装时 ensure 不下载、不安装**（零 spawn、零 HTTP、缓存目录都不出现）——
+ *      这是「纯按需、没有静默自动下载」这条用户决定的门；
+ *   2. **校验不过不进位**（sha256 / 体积不符 ⇒ 暂存清掉、无 manifest、无 current）；
+ *   3. **取消不留半成品**（暂存清掉，但 `.part` 保留作续传点）；
+ *   4. **解包后的 node.exe 再验一次 sha256**（第三道门）与 zip 顶层目录剥离；
+ *   5. **合规义务被机械钉住**（许可文本在必备文件里，缺了不许进位）。
  */
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import JSZip from "jszip";
 import type { SpawnFn, SpawnOutcome, SpawnRequest } from "../../documents/docx-env.ts";
 import {
+	downloadCacheDir,
 	instanceDir,
 	listStaging,
+	promoteStaging,
 	readCurrent,
 	readManifest,
 	stagingDir,
-	promoteStaging,
+	writeCurrent,
 	writeManifest,
 } from "../runtime-store.ts";
 import {
 	ensureRuntime,
+	installRuntime,
 	inspectRuntime,
 	resetRuntime,
+	ACQUIRE_PHASE,
+	CANCELLED_PHASE,
+	NOT_INSTALLED_PHASE,
 	type RuntimeEnsureOutcome,
 } from "./registry.ts";
+import { partFileFor, type HttpOpener, type HttpResponse } from "./download.ts";
 import { collectRuntimeDiagnostics } from "./diagnostics.ts";
 import { defaultPythonRuntimeOptions } from "./python.ts";
-import { createGitbashRuntime } from "./gitbash.ts";
 import {
 	createNodeRuntime,
-	nodePayloadDir,
+	extractNodeZip,
+	nodeArtifactUrls,
 	parseNodeVersion,
+	NODE_ARTIFACT,
+	NODE_ARTIFACT_SHA256,
 	NODE_REQUIRED_FILES,
 	NODE_RUNTIME_ID,
 	NODE_RUNTIME_VERSION,
@@ -54,14 +64,7 @@ afterAll(() => {
 });
 
 let seq = 0;
-/**
- * 每个用例一套独立的资源根 + 托管根 + 家目录。
- *
- * 装配参数借既有那一处拼法 `defaultPythonRuntimeOptions`：形状是内核契约
- * （root / homeDir / platform / engineDir），三个运行时同形，名字带 python 是历史。
- * 随包载荷的根经 `KAMIBUDDY_RESOURCES_DIR` 指到临时目录（与 `getResourcesDir()` 的
- * 同名覆盖口同意同义）。
- */
+/** 每个用例一套独立的资源根 + 托管根 + 家目录（不靠执行顺序、不互相污染）。 */
 function optionsFor(name: string) {
 	seq += 1;
 	const base = join(TMP, `${name}-${seq}`);
@@ -76,36 +79,73 @@ function optionsFor(name: string) {
 	});
 }
 
-/** 造一份「构建期已就绪」的 node 随包载荷（真磁盘，内容物只有文件存在性是有意义的）。 */
-function makeNodePayload(options: ReturnType<typeof optionsFor>): string {
-	const dir = nodePayloadDir(options);
-	mkdirSync(dir, { recursive: true });
-	for (const file of NODE_REQUIRED_FILES) writeFileSync(join(dir, file), file);
-	return dir;
-}
+type Options = ReturnType<typeof optionsFor>;
+const INSTANCE = (options: Options): string => instanceDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION);
+const CACHE = (options: Options): string => downloadCacheDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION);
+const ARTIFACT = (options: Options): string => join(CACHE(options), NODE_ARTIFACT);
 
-/* ── 假 spawn：robocopy 真复制、探针按真实磁盘事实回答 ─────────────── */
+/* ── 假 spawn（探针按真实磁盘事实回答；本路径不再有复制动作）────────── */
 
-const isRobocopy = (req: SpawnRequest): boolean => req.command.endsWith("Robocopy.exe");
-const ok = (outcome: Partial<SpawnOutcome> = {}): SpawnOutcome => ({ code: 0, stdout: "", stderr: "", ...outcome });
-const notFound = (): SpawnOutcome => ({ code: null, stdout: "", stderr: "", error: "spawn ENOENT" });
-
-function payloadSpawn(
+function probeSpawn(
 	answer: (req: SpawnRequest) => SpawnOutcome = (req) =>
-		existsSync(req.command) ? ok({ stdout: `v${NODE_RUNTIME_VERSION}\n` }) : notFound(),
+		existsSync(req.command) ? { code: 0, stdout: `v${NODE_RUNTIME_VERSION}\n`, stderr: "" } : { code: 1, stdout: "", stderr: "not found" },
 ): { calls: SpawnRequest[]; spawn: SpawnFn } {
 	const calls: SpawnRequest[] = [];
 	const spawn: SpawnFn = (req) => {
 		calls.push(req);
-		if (isRobocopy(req)) {
-			const [from, to] = req.args;
-			if (from === undefined || to === undefined) throw new Error("robocopy 请求缺路径");
-			cpSync(from, to, { recursive: true });
-			return Promise.resolve(ok());
-		}
 		return Promise.resolve(answer(req));
 	};
 	return { calls, spawn };
+}
+
+/**
+ * 官方 `SHASUMS256.txt` 的实测内容（**字面量**，不是从常量拼出来的：这样改错常量时
+ * 「官方值 vs 固定值」这条交叉核对会红，而不是两边一起被改对）。
+ */
+const OFFICIAL_SHASUMS = [
+	"1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97  node-v22.23.2-win-x64.zip",
+	"0d0f5e39f9f3d9587bc19f73eab3c2c9c4903fd02d6dbf9c853dd81b3d95fad4  win-x64/node.exe",
+	"",
+].join("\n");
+
+function textResponse(text: string): HttpResponse {
+	return {
+		status: 200,
+		contentLength: Buffer.byteLength(text),
+		body: {
+			async *[Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+				yield Buffer.from(text, "utf8");
+			},
+		},
+	};
+}
+
+/**
+ * 假 HTTP：`SHASUMS256.txt` 回官方校验文件，其余 URL 吐一段字节
+ * （内容与官方发行物无关，sha256 必然对不上 —— 正好用来验「校验不过不进位」）。
+ */
+function nodeOpener(
+	body: Uint8Array,
+	options: { readonly onChunk?: (index: number) => void; readonly chunkSize?: number } = {},
+	shasums: string = OFFICIAL_SHASUMS,
+): HttpOpener {
+	const chunkSize = options.chunkSize ?? Math.max(1, body.length);
+	return async (request): Promise<HttpResponse> => {
+		if (request.url.endsWith("SHASUMS256.txt")) return textResponse(shasums);
+		const from = request.rangeStart;
+		const self = {
+			async *[Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+				let index = 0;
+				for (let offset = from; offset < body.length; offset += chunkSize) {
+					if (request.signal?.aborted === true) throw new Error("模拟的请求被取消");
+					options.onChunk?.(index);
+					index += 1;
+					yield body.subarray(offset, Math.min(offset + chunkSize, body.length));
+				}
+			},
+		};
+		return { status: from > 0 ? 206 : 200, contentLength: body.length - from, body: self };
+	};
 }
 
 function ready(outcome: RuntimeEnsureOutcome): Extract<RuntimeEnsureOutcome, { status: "ready" }> {
@@ -113,114 +153,50 @@ function ready(outcome: RuntimeEnsureOutcome): Extract<RuntimeEnsureOutcome, { s
 	return outcome;
 }
 
-const INSTANCE = (options: ReturnType<typeof optionsFor>): string =>
-	instanceDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION);
-
-describe("全新机器：装进托管根", () => {
-	it("先探针（落空）→ 复制进 .staging-* → 进位 → 复验 → manifest → 最后 current", async () => {
-		const options = optionsFor("fresh");
-		makeNodePayload(options);
-		const { calls, spawn } = payloadSpawn();
-		const outcome = ready(await ensureRuntime(createNodeRuntime(options), spawn));
-
-		expect(outcome.activeDir).toBe(INSTANCE(options));
-		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBe(NODE_RUNTIME_VERSION);
-		expect(listStaging(options.root, NODE_RUNTIME_ID)).toEqual([]);
-		expect(readManifest(INSTANCE(options))?.version).toBe(NODE_RUNTIME_VERSION);
-
-		// 复制落在暂存目录里（改名进位前的实证）。
-		expect(calls.find(isRobocopy)?.args[1]).toContain(".staging-");
-		// 进位后复验真的发生了：探针在**最终路径**上又跑过一次。
-		expect(calls.filter((call) => call.command === join(INSTANCE(options), "node.exe"))).not.toHaveLength(0);
-		// 许可文本随实例一起就位（合规义务：随包分发必须附许可文本，且不得删）。
-		expect(existsSync(join(INSTANCE(options), "LICENSE"))).toBe(true);
+/** 手工造一份「已进位」的实例（诊断/探测这类只读路径用它当输入）。 */
+function makeCompleteInstance(options: Options): string {
+	const dir = INSTANCE(options);
+	mkdirSync(dir, { recursive: true });
+	for (const file of NODE_REQUIRED_FILES) writeFileSync(join(dir, file), file);
+	writeManifest(dir, {
+		id: NODE_RUNTIME_ID,
+		version: NODE_RUNTIME_VERSION,
+		source: "测试来源",
+		installedAt: "2026-09-18T00:00:00.000Z",
+		status: "installed",
 	});
+	return dir;
+}
 
-	it("载荷缺席：响亮失败，点名路径与构建命令，不写 current（不改走联网下载）", async () => {
-		const options = optionsFor("no-payload");
-		const { calls, spawn } = payloadSpawn();
+describe("纯按需的门：未安装时 ensure 不下载、不安装", () => {
+	it("落点 pending ⇒ 返回 not-installed；零 spawn、零 HTTP、缓存目录都不出现", async () => {
+		const options = optionsFor("ensure-no-download");
+		const { calls, spawn } = probeSpawn();
+
 		const outcome = await ensureRuntime(createNodeRuntime(options), spawn);
 
 		expect(outcome.status).toBe("failed");
 		if (outcome.status !== "failed") throw new Error("unreachable");
-		expect(outcome.phase).toBe("payload-missing");
-		expect(outcome.error).toContain(nodePayloadDir(options));
-		expect(outcome.error).toContain("npm run fetch:node");
-		expect(calls.some(isRobocopy)).toBe(false); // 缺载荷时不做无意义的复制尝试
+		expect(outcome.phase).toBe(NOT_INSTALLED_PHASE);
+		// 文案必须可执行：告诉用户去哪儿点安装，并明说不会自动下载。
+		expect(outcome.error).toContain("设置");
+		expect(outcome.error).toContain("不会");
+		// 零副作用：没探针、没下载、托管根里连缓存目录都没建。
+		expect(calls).toEqual([]);
+		expect(existsSync(CACHE(options))).toBe(false);
 		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBeUndefined();
 	});
 
-	it("载荷不完整（缺许可文本）：相位指名到缺的那一个文件", async () => {
-		const options = optionsFor("incomplete");
-		mkdirSync(nodePayloadDir(options), { recursive: true });
-		writeFileSync(join(nodePayloadDir(options), "node.exe"), "node.exe"); // 只有可执行本体
+	it("「未安装」不写失败日志 ⇒ 清单状态是 missing（未安装）而不是 failed（安装失败）", async () => {
+		const options = optionsFor("ensure-no-log");
+		await ensureRuntime(createNodeRuntime(options), probeSpawn().spawn);
 
-		const outcome = await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-		expect(outcome.status).toBe("failed");
-		if (outcome.status !== "failed") throw new Error("unreachable");
-		expect(outcome.phase).toBe("payload-incomplete");
-		expect(outcome.error).toContain("LICENSE");
+		const report = await collectRuntimeDiagnostics(createNodeRuntime(options), probeSpawn().spawn);
+		expect(report.lastFailure).toBeUndefined();
 	});
 
-	it("幂等：已就位时再 ensure 只探针一次（不复制、不重装）", async () => {
-		const options = optionsFor("idempotent");
-		makeNodePayload(options);
-		await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-
-		const second = payloadSpawn();
-		const again = await ensureRuntime(createNodeRuntime(options), second.spawn);
-		expect(again.status).toBe("ready");
-		expect(second.calls.some(isRobocopy)).toBe(false);
-		expect(second.calls).toHaveLength(1); // 只有一次探针
-	});
-
-	it("就位即修复：实例文件被删坏时，一次 ensure 就地修好（不重新下载、不换落点）", async () => {
-		const options = optionsFor("repair");
-		makeNodePayload(options);
-		await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-		rmSync(join(INSTANCE(options), "node.exe"), { force: true });
-
-		const repaired = payloadSpawn();
-		const outcome = ready(await ensureRuntime(createNodeRuntime(options), repaired.spawn));
-		expect(outcome.activeDir).toBe(INSTANCE(options));
-		expect(existsSync(join(INSTANCE(options), "node.exe"))).toBe(true);
-		// 就地修复：复制目标是**实例目录本身**，不是暂存目录（托管实例不换位）。
-		expect(repaired.calls.find(isRobocopy)?.args[1]).toBe(INSTANCE(options));
-	});
-});
-
-describe("失败与崩溃点：不会留下「看起来就绪」的状态", () => {
-	it("进位后复验不过（版本不符）→ 不发布：current 与 manifest 都不写", async () => {
-		const options = optionsFor("verify-fail");
-		makeNodePayload(options);
-		// 暂存里探针报对版本；**进位后的最终路径**上报另一个版本（模拟改包后不可用）。
-		const { spawn } = payloadSpawn((req) => {
-			if (!existsSync(req.command)) return notFound();
-			return req.command.includes(".staging-")
-				? ok({ stdout: `v${NODE_RUNTIME_VERSION}\n` })
-				: ok({ stdout: "v22.19.0\n" });
-		});
-		const outcome = await ensureRuntime(createNodeRuntime(options), spawn);
-
-		expect(outcome.status).toBe("failed");
-		if (outcome.status !== "failed") throw new Error("unreachable");
-		expect(outcome.phase).toBe("verify-promoted");
-		expect(outcome.error).toContain("复验不通过");
-		// 顺序铁律：复验没过 ⇒ 既不写 current、也不写完成标记（实例已在位但不算数）。
-		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBeUndefined();
-		expect(readManifest(INSTANCE(options))).toBeUndefined();
-
-		// 「已进位但未发布」的现场仍可诊断，且能指名到具体事实（版本不符带实际版本）。
-		const report = await collectRuntimeDiagnostics(
-			createNodeRuntime(options),
-			payloadSpawn((req) => (existsSync(req.command) ? ok({ stdout: "v22.19.0\n" }) : notFound())).spawn,
-		);
-		expect(report.status).toEqual({ kind: "wrong-version", version: "22.19.0" });
-		expect(report.currentVersion).toBeUndefined();
-	});
-
-	it("崩在写 current 之前（已进位、已有 manifest）→ 未就绪，但下次 ensure 零成本续跑", async () => {
-		const options = optionsFor("crash-current");
+	it("已完整进位、只差 current ⇒ 零成本补指针（不 spawn、不下载）", async () => {
+		const options = optionsFor("resume-pointer");
 		const staging = stagingDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION, "boom");
 		mkdirSync(staging, { recursive: true });
 		const promoted = promoteStaging(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION, staging);
@@ -228,58 +204,184 @@ describe("失败与崩溃点：不会留下「看起来就绪」的状态", () =
 			id: NODE_RUNTIME_ID,
 			version: NODE_RUNTIME_VERSION,
 			source: "测试来源",
-			installedAt: "2026-09-17T00:00:00.000Z",
+			installedAt: "2026-09-18T00:00:00.000Z",
 			status: "installed",
 		});
-
 		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBeUndefined();
-		const report = await collectRuntimeDiagnostics(createNodeRuntime(options), payloadSpawn().spawn);
-		expect(report.nextSteps.join("\n")).toContain("没发布");
 
-		const resume = payloadSpawn();
-		const outcome = ready(await ensureRuntime(createNodeRuntime(options), resume.spawn));
+		const { calls, spawn } = probeSpawn();
+		const outcome = ready(await ensureRuntime(createNodeRuntime(options), spawn));
+
 		expect(outcome.activeDir).toBe(INSTANCE(options));
-		expect(resume.calls).toEqual([]); // 一次 spawn 都不需要
+		expect(calls).toEqual([]);
 		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBe(NODE_RUNTIME_VERSION);
+		expect(existsSync(CACHE(options))).toBe(false);
+	});
+});
+
+describe("校验不过不许进位", () => {
+	it("体积异常（小字节）⇒ 相位 acquire-artifact，暂存/实例/current 都不留", async () => {
+		const options = optionsFor("too-small");
+		const outcome = await installRuntime(createNodeRuntime(options), probeSpawn().spawn, {
+			opener: nodeOpener(Buffer.alloc(1024, 1)),
+		});
+
+		expect(outcome.status).toBe("failed");
+		if (outcome.status !== "failed") throw new Error("unreachable");
+		expect(outcome.phase).toBe(ACQUIRE_PHASE);
+		expect(outcome.error).toContain("下限");
+		assertNothingPromoted(options);
 	});
 
-	it("半成品残留（.staging-*）能被诊断指名，且重置会清掉", async () => {
-		const options = optionsFor("stale-staging");
-		makeNodePayload(options);
-		mkdirSync(stagingDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION, "stale"), { recursive: true });
+	it("官方校验文件与代码内固定值不一致 ⇒ 立刻中止（不下载可疑产物）", async () => {
+		const options = optionsFor("shasums-mismatch");
+		let downloaded = false;
+		const opener: HttpOpener = async (request) => {
+			if (request.url.endsWith("SHASUMS256.txt")) {
+				return textResponse("0000000000000000000000000000000000000000000000000000000000000000  node-v22.23.2-win-x64.zip\n");
+			}
+			downloaded = true;
+			return nodeOpener(Buffer.alloc(1024, 1))(request);
+		};
 
-		const report = await collectRuntimeDiagnostics(createNodeRuntime(options), payloadSpawn().spawn);
-		expect(report.staging).toEqual([`.staging-${NODE_RUNTIME_VERSION}-stale`]);
-		expect(report.nextSteps.join("\n")).toContain("半成品");
+		const outcome = await installRuntime(createNodeRuntime(options), probeSpawn().spawn, { opener });
 
-		await resetRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-		expect(listStaging(options.root, NODE_RUNTIME_ID)).toEqual([]);
-		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBe(NODE_RUNTIME_VERSION);
+		expect(outcome.status).toBe("failed");
+		if (outcome.status !== "failed") throw new Error("unreachable");
+		expect(outcome.error).toContain("与代码内固定值不一致");
+		expect(downloaded).toBe(false);
+		assertNothingPromoted(options);
+	});
+
+	it("sha256 不符 ⇒ 响亮报错、暂存清掉、`.part` 也删掉（不留半成品）", async () => {
+		const options = optionsFor("sha-mismatch");
+		// 体积过门（≥ 30 MiB 下限）但内容与官方发行物无关 ⇒ 只可能栽在 sha256 上。
+		const outcome = await installRuntime(createNodeRuntime(options), probeSpawn().spawn, {
+			opener: nodeOpener(Buffer.alloc(31 * 1024 * 1024, 5), { chunkSize: 4 * 1024 * 1024 }),
+		});
+
+		expect(outcome.status).toBe("failed");
+		if (outcome.status !== "failed") throw new Error("unreachable");
+		expect(outcome.phase).toBe(ACQUIRE_PHASE);
+		expect(outcome.error).toContain("SHA256");
+		expect(outcome.error).toContain("未**解包");
+		assertNothingPromoted(options);
+		expect(existsSync(partFileFor(ARTIFACT(options)))).toBe(false);
+	});
+
+	it("下载中途断网 ⇒ 暂存清掉、`.part` 保留（用户再点一次就从同一个源接着下）", async () => {
+		const options = optionsFor("io-error");
+		const outcome = await installRuntime(createNodeRuntime(options), probeSpawn().spawn, {
+			// 每个候选都在第一块之后断掉：最后一轮失败时不该把续传点也清掉。
+			opener: nodeOpener(Buffer.alloc(1024, 9), {
+				chunkSize: 256,
+				onChunk: (index) => {
+					if (index === 1) throw new Error("模拟的连接中断");
+				},
+			}),
+		});
+
+		expect(outcome.status).toBe("failed");
+		if (outcome.status !== "failed") throw new Error("unreachable");
+		expect(outcome.phase).toBe(ACQUIRE_PHASE);
+		assertNothingPromoted(options);
+		expect(statSync(partFileFor(ARTIFACT(options))).size).toBe(256);
+	});
+
+	it("取消（下载中途）⇒ 相位 cancelled、暂存清掉，但 `.part` 留作续传点", async () => {
+		const options = optionsFor("cancel");
+		const controller = new AbortController();
+		const outcome = await installRuntime(createNodeRuntime(options), probeSpawn().spawn, {
+			signal: controller.signal,
+			opener: nodeOpener(Buffer.alloc(31 * 1024 * 1024, 7), {
+				chunkSize: 1024 * 1024,
+				onChunk: (index) => (index === 1 ? controller.abort() : undefined),
+			}),
+		});
+
+		expect(outcome.status).toBe("failed");
+		if (outcome.status !== "failed") throw new Error("unreachable");
+		expect(outcome.phase).toBe(CANCELLED_PHASE);
+		assertNothingPromoted(options);
+		// 续传点：已收到的字节留着（用户再点一次安装就不必从头下）。
+		expect(existsSync(partFileFor(ARTIFACT(options)))).toBe(true);
+	});
+});
+
+describe("解包：zip 顶层目录剥离 + node.exe 单独复验", () => {
+	async function writeZip(file: string, entries: Record<string, string>): Promise<void> {
+		const zip = new JSZip();
+		for (const [name, content] of Object.entries(entries)) zip.file(name, content);
+		writeFileSync(file, await zip.generateAsync({ type: "nodebuffer" }));
+	}
+
+	it("缺 <顶层目录>/node.exe ⇒ 响亮报错（不像官方包）", async () => {
+		const dir = join(TMP, "zip-no-exe");
+		mkdirSync(dir, { recursive: true });
+		const zipFile = join(dir, "bad.zip");
+		await writeZip(zipFile, { "node-v22.23.2-win-x64/README.md": "x" });
+
+		await expect(extractNodeZip(zipFile, join(dir, "out"))).rejects.toThrow(/不像官方 node 发行包/);
+	});
+
+	it("剥离顶层目录后文件落在实例根；node.exe 的 sha256 由第三道门把关", async () => {
+		const dir = join(TMP, "zip-extract");
+		mkdirSync(dir, { recursive: true });
+		const zipFile = join(dir, "fake.zip");
+		await writeZip(zipFile, {
+			"node-v22.23.2-win-x64/node.exe": "fake-node",
+			"node-v22.23.2-win-x64/LICENSE": "MIT",
+			"node-v22.23.2-win-x64/npm.cmd": "@echo off",
+		});
+		const out = join(dir, "out");
+
+		// 真入口（第二参数缺省 = 官方固定 sha256）必须响亮失败：这不是官方那份 node.exe。
+		await expect(extractNodeZip(zipFile, out)).rejects.toThrow(/node\.exe sha256 不符/);
+
+		// 顶层目录确实被剥掉（否则这三条路径都不存在）——用假件的 sha 断言剥离行为本身。
+		const fakeSha = createHash("sha256").update(Buffer.from("fake-node")).digest("hex");
+		const out2 = join(dir, "out2");
+		await extractNodeZip(zipFile, out2, fakeSha);
+		expect(readFileSync(join(out2, "node.exe"), "utf8")).toBe("fake-node");
+		expect(readFileSync(join(out2, "LICENSE"), "utf8")).toBe("MIT");
+		expect(existsSync(join(out2, "npm.cmd"))).toBe(true);
+		expect(existsSync(join(out2, "node-v22.23.2-win-x64"))).toBe(false);
 	});
 });
 
 describe("重置与诊断", () => {
-	it("重置仅凭一个动作修好环境（清掉旧实例 + 重新装 + 发布）", async () => {
+	it("重置：清掉旧实例、重新下载安装、发布 current", async () => {
 		const options = optionsFor("reset");
-		makeNodePayload(options);
-		await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-		rmSync(join(INSTANCE(options), "node.exe"), { force: true }); // 坏掉：探针会落空
+		makeCompleteInstance(options);
+		writeCurrent(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION);
+		mkdirSync(stagingDir(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION, "stale"), { recursive: true });
 
-		const reset = ready(await resetRuntime(createNodeRuntime(options), payloadSpawn().spawn));
-		expect(reset.activeDir).toBe(INSTANCE(options));
-		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBe(NODE_RUNTIME_VERSION);
-		expect(existsSync(join(INSTANCE(options), "node.exe"))).toBe(true);
+		// 重置会真的重新取件：假 HTTP 的字节校验不过 ⇒ 响亮失败、且不留半成品。
+		const outcome = await resetRuntime(createNodeRuntime(options), probeSpawn().spawn, {
+			opener: nodeOpener(Buffer.alloc(1024, 3)),
+		});
+		expect(outcome.status).toBe("failed");
+		expect(listStaging(options.root, NODE_RUNTIME_ID)).toEqual([]);
+		// 旧实例已被清掉（重置的语义就是「清干净 + 重装」）。
+		expect(readManifest(INSTANCE(options))).toBeUndefined();
 	});
 
-	it("四态：就绪 / 缺文件指名 / 版本不符带实际版本", async () => {
+	it("四态：就绪 / 缺文件指名到具体文件 / 版本不符带实际版本", async () => {
 		const options = optionsFor("inspect");
-		makeNodePayload(options);
-		await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
+		makeCompleteInstance(options);
+		writeCurrent(options.root, NODE_RUNTIME_ID, NODE_RUNTIME_VERSION);
 		const descriptor = createNodeRuntime(options);
-		expect(await inspectRuntime(descriptor, payloadSpawn().spawn)).toEqual({ kind: "ready" });
+
+		expect(await inspectRuntime(descriptor, probeSpawn().spawn)).toEqual({ kind: "ready" });
+		expect(
+			await inspectRuntime(
+				descriptor,
+				probeSpawn(() => ({ code: 0, stdout: "v22.19.0\n", stderr: "" })).spawn,
+			),
+		).toEqual({ kind: "wrong-version", version: "22.19.0" });
 
 		rmSync(join(INSTANCE(options), "LICENSE"), { force: true });
-		expect(await inspectRuntime(descriptor, payloadSpawn().spawn)).toEqual({
+		expect(await inspectRuntime(descriptor, probeSpawn().spawn)).toEqual({
 			kind: "deps-missing",
 			module: "LICENSE",
 		});
@@ -287,8 +389,7 @@ describe("重置与诊断", () => {
 
 	it("诊断报告写清来源与落点，日志落在该运行时的目录下", async () => {
 		const options = optionsFor("diagnostics");
-		makeNodePayload(options);
-		const report = await collectRuntimeDiagnostics(createNodeRuntime(options), payloadSpawn().spawn);
+		const report = await collectRuntimeDiagnostics(createNodeRuntime(options), probeSpawn().spawn);
 		expect(report.id).toBe(NODE_RUNTIME_ID);
 		expect(report.version).toBe(NODE_RUNTIME_VERSION);
 		expect(report.source).toContain("nodejs.org");
@@ -296,36 +397,37 @@ describe("重置与诊断", () => {
 	});
 });
 
-describe("三个运行时互不影响", () => {
-	it("gitbash 载荷缺席时 node 照样装好（各写各的 manifest 与 current）", async () => {
-		const options = optionsFor("isolation");
-		makeNodePayload(options); // gitbash 的载荷故意不造
-
-		const nodeOutcome = await ensureRuntime(createNodeRuntime(options), payloadSpawn().spawn);
-		expect(nodeOutcome.status).toBe("ready");
-
-		const gitbashOutcome = await ensureRuntime(createGitbashRuntime(options), payloadSpawn().spawn);
-		expect(gitbashOutcome.status).toBe("failed");
-		if (gitbashOutcome.status !== "failed") throw new Error("unreachable");
-		expect(gitbashOutcome.phase).toBe("payload-missing");
-
-		expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBe(NODE_RUNTIME_VERSION);
-		expect(readCurrent(options.root, "gitbash")).toBeUndefined();
+describe("来源与版本的机械断言", () => {
+	it("候选地址：环境变量覆盖口在前，其次官方源，最后镜像", () => {
+		const options = optionsFor("urls");
+		const override = { ...options, env: { ...options.env, KAMIBUDDY_NODE_URL: "https://intranet.test/node.zip" } };
+		const urls = nodeArtifactUrls(override);
+		expect(urls[0]).toBe("https://intranet.test/node.zip");
+		expect(urls[1]).toContain("nodejs.org");
+		expect(urls[2]).toContain("npmmirror");
+		expect(nodeArtifactUrls(options)).toHaveLength(2);
 	});
-});
 
-describe("版本串解析（探针的事实来源）", () => {
-	it("接受官方形态 v<major>.<minor>.<patch>（含行尾换行），其余一律 undefined", () => {
-		expect(parseNodeVersion(ok({ stdout: "v22.23.2\n" }))).toBe("22.23.2");
-		expect(parseNodeVersion(ok({ stdout: "22.23.2" }))).toBeUndefined();
-		expect(parseNodeVersion(ok({ stdout: "v22.23" }))).toBeUndefined();
-		expect(parseNodeVersion(ok({ stdout: "" }))).toBeUndefined();
-	});
-});
-
-describe("合规义务被钉住", () => {
-	it("许可文本在必备文件清单里 —— 删掉它这条断言就红（义务不许退化成注释）", () => {
+	it("合规义务被钉住：许可文本在必备文件里（删掉它这条断言就红）", () => {
 		expect(NODE_REQUIRED_FILES).toContain("LICENSE");
 		expect(NODE_REQUIRED_FILES).toContain("node.exe");
 	});
+
+	it("钉死的发行物 sha256 是 64 位十六进制（防手抄错）", () => {
+		expect(NODE_ARTIFACT_SHA256).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("版本串解析（探针的事实来源）", () => {
+		expect(parseNodeVersion({ code: 0, stdout: "v22.23.2\n", stderr: "" })).toBe("22.23.2");
+		expect(parseNodeVersion({ code: 0, stdout: "22.23.2", stderr: "" })).toBeUndefined();
+		expect(parseNodeVersion({ code: 0, stdout: "v22.23", stderr: "" })).toBeUndefined();
+		expect(parseNodeVersion({ code: null, stdout: "", stderr: "", error: "ENOENT" })).toBeUndefined();
+	});
 });
+
+/** 断言「什么都没进位」：没有暂存残留、没有实例、没有完成标记、没有 current。 */
+function assertNothingPromoted(options: Options): void {
+	expect(listStaging(options.root, NODE_RUNTIME_ID)).toEqual([]);
+	expect(existsSync(INSTANCE(options))).toBe(false);
+	expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBeUndefined();
+}

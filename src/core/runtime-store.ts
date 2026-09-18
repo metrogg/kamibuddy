@@ -88,6 +88,17 @@ export function stagingDir(root: string, id: string, version: string, nonce: str
 	return join(runtimeHome(root, id), `${STAGING_PREFIX}${version}-${nonce}`);
 }
 
+/**
+ * 下载缓存目录：`<root>/.cache/<id>/<version>/`（纯按需下载的发行物与 `.part` 落在这里）。
+ *
+ * 为什么不放在 `<root>/<id>/` 下：`listInstances` 把 `<root>/<id>/` 的每个子目录都当成
+ * 一个版本实例，缓存塞进去就会让诊断里多出一个叫 `.cache` 的「版本」。放在托管根的
+ * 另一棵子树下，实例列举与诊断口径一个字都不用改。
+ */
+export function downloadCacheDir(root: string, id: string, version: string): string {
+	return join(root, ".cache", id, version);
+}
+
 /** 版本指针文件：`<root>/<id>/current`。 */
 export function currentPointer(root: string, id: string): string {
 	return join(runtimeHome(root, id), CURRENT_POINTER_NAME);

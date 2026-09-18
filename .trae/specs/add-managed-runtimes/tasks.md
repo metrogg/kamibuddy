@@ -37,6 +37,9 @@
 
 - [x] Task 2.1: `node` 与 `gitbash` 的拉取/安装/校验/探测接入同一内核
   - [x] SubTask 2.1.1: 拉取脚本（照 `scripts/fetch-*.mjs` 既有模式），校验 SHA256，落托管根
+    - **口径更新（2026-09-18，阶段 7）**：默认获取方式已不是构建期 `fetch-*.mjs`，而是**运行期按需下载**
+      （`src/core/runtimes/artifact.ts` + `download.ts`，node/gitbash 描述符的 `acquire`）；`fetch-*.mjs`
+      保留但已不在默认构建链（见 Task 7.6）。SHA256 校验与「落托管根」两条不变。
   - [x] SubTask 2.1.2: 各自的探测判据（版本、可执行性、关键文件存在）
   - [x] SubTask 2.1.3: 注入与**不注入**：启用时注入运行时路径与托管目录环境变量；禁用时明确不注入
   - **验证**：三个运行时都能装、能探测、能诊断、能重置；任一个损坏不影响另两个
@@ -83,17 +86,72 @@
   - **验证**：文档所述与代码事实一致；「是否开放 bash 工具面」明确标注为另行决策
   - 核实证据：`AGENTS.md §2`（「`bash` 仍然不用」标为作废、三运行时托管根布局、`resources/runtimes/README.md` 与 `docs/运行时来源与许可.md` 指引、「是否把 `bash` 开放成模型的自由 shell 工具」明确写为另行决策且未做）；`docs/ARCHITECTURE.md:142/149/194/434`、`docs/sandbox.md:69-71/260` 同步。**注意**：`AGENTS.md §2` 中「随包提供运行时只让它在**路径上找得到**（注入层）」这句与代码事实不符（见 Task 7.1），已单独记入修复任务，不改文档（本轮不授权改 `AGENTS.md`）。
 
+## 阶段 7：改为「纯按需下载」（2026-09-18 用户决策）
+
+> **口径变更**：本 spec 原定「随包分发三个运行时」，阶段 0–2 按此落地。用户 2026-09-18 决定
+> **三个运行时全部纯按需**：默认都不下载、不安装，只有用户在「设置 → 内置运行时」点「安装」
+> 才联网；**任何静默自动下载都不允许**（含启动预热与首次使用的隐式安装）。理由：安装包不能
+> 臃肿（原随包载荷 ≈484 MB = node 解包 94.9 MB + gitbash 解包 389.1 MB）。
+> 撤销随包口径的具体实现（`scripts/fetch-*.mjs` 的随包载荷、`resources/runtimes/payload/**`、
+> electron-builder 载荷挂钩、`src/core/runtimes/bundled-payload.ts`）**已由实现轮落地、并在
+> 2026-09-18 收口轮复验**（见 Task 7.6）。
+>
+> **编号说明**：`Task 7.1 / 7.2` 已被上一轮「验证轮追加的修复任务」占用（记录写完即冻结），
+> 故本阶段的 SubTask 从 **7.3** 起编号。
+
+- [x] Task 7.3: **模型可见文案订正**：把「首次使用会自动准备（需联网，约 1-3 分钟）」改为「未安装 —— 需用户到设置页点安装」，并让「被禁用 / 未安装 / 安装失败」三者在模型看到的信息里可区分、各给唯一一条下一步
+  - [x] SubTask 7.3.1: `src/shared/runtimes.ts`：`RUNTIME_STATUS_LABELS`（missing→「未安装」、failed→「安装失败」）、`runtimeStatusHint` 三态、`renderRuntimeEnvSection` 抬头、文件头契约三段同步
+  - [x] SubTask 7.3.2: `resources/prompts/fragments/python-env.md` 的状态分支改写；保留「不要 pip install / npm install、缺能力就问用户」纪律原文
+  - [x] SubTask 7.3.3: 其余模型可见文案（工具描述 `docx_convert` / `docx_extract`、`resources/skills/docx/**`、`documents/docx-extract.ts` 的 env-not-ready 文案）一并订正
+  - **验证**：`npm run check:model-experience` 通过；`session-host.test.ts` 与 `runtime-inventory.test.ts` 的条目级断言改为「未安装」；禁用项不含「尚未安装」、未安装项不含「已被用户禁用」
+  - 核实证据：`shared/runtimes.ts`（标签 :97-102、指引 :128-140、抬头 :161）；`check:model-experience` 19/19 通过（2026-09-18 实跑）；`runtime-inventory.test.ts` / `session-host.test.ts` 6 文件 133 条全绿
+
+- [x] Task 7.4: **安装 IPC 契约与接线**（进度 / 取消）
+  - [x] SubTask 7.4.1: `src/shared/ipc.ts` 追加 `INVOKE.runtimeInstall` / `INVOKE.runtimeCancelInstall` / `PUSH.runtimeInstallProgress` 与 `RuntimeInstallProgress` payload（通道名仍只有这一处真源）
+  - [x] SubTask 7.4.2: `shared/bridge.ts` + `preload/index.ts` 绑定（renderer 不出现通道名字面量）
+  - [x] SubTask 7.4.3: `src/core/runtime-inventory.ts` 新增 `installManagedRuntime`（只在落点 pending 时走内核原子安装；`AbortSignal` 在每次推进前检查）
+  - [x] SubTask 7.4.4: `src/daemon/index.ts` 追加两个 handler：进度推送 + 取消（失败写审计；取消不算失败、不写审计）
+  - **验证**：取消在「下一次推进前」生效；失败 reject 带相位与底层错误
+  - 核实证据：`ipc.ts`（:508-517 / :570-575 / :1058-1065 / :1088）、`bridge.ts`、`preload/index.ts:167-169/:186-188`、`runtime-inventory.ts` 的 `installManagedRuntime`、`daemon/index.ts` 的 `runtimeInstalls` 与两个 handler。**已知边界（如实记）**：正在跑的那条子进程（如几百 MB 复制）不会被中途 kill —— 真 kill 需内核提供可取消的 spawn 原语
+
+- [x] Task 7.5: **设置页「未安装」态与「安装」入口**
+  - [x] SubTask 7.5.1: 每项默认「未安装」；点之前摆出体积量级 + 需联网（`downloadSizeHint` 由 `core/runtime-inventory.ts` 的展示表给，数值来自 `resources/runtimes/README.md` 实测）
+  - [x] SubTask 7.5.2: 主动作随状态而变（未安装→「安装」、失败→「重试安装」、就绪→「重置并重新安装」），「诊断」常驻
+  - [x] SubTask 7.5.3: 安装期间行内进度（转圈 + 文案）+「取消」；失败给可执行原因（清单 status.detail + 错误条）
+  - [x] SubTask 7.5.4: 视觉一律走既有 token/既有类（不新增硬编码值）
+  - **验证**：`check:tokens` 通过；关闭总开关时子项置灰且不可点（原语义保留）
+  - 核实证据：`src/renderer/settings/runtimes-section.tsx`（安装入口 :287-306、进度/取消 :235-248、`downloadSizeHint` 展示 :340）；`npm run check:tokens` = ✓ 通过（2026-09-18 实跑）
+
+- [x] Task 7.6: **内核侧按需下载实现**（`src/core/runtimes/**` 的下载/校验/解包，node / gitbash 也要有运行期下载链路；撤掉随包载荷与 electron-builder 挂钩）
+  - **状态：已落地（2026-09-18 收口轮实测）**。`bundled-payload.ts` 已删；取件三件套落地为
+    `artifact.ts`（下载 → 三处校验 → 解包）+ `download.ts`（HTTP / `.part` 续传 / sha256，**校验不过不许进位**）
+    + `payload-probe.ts`（原探测部分）；`node` / `gitbash` 描述符各有 `acquire`（`node.ts:223` / `gitbash.ts:258`），
+    `installRuntime` 调它取件；`electron-builder.yml` 排除 `runtimes/payload/**` 与 `runtimes/.cache/**`；
+    `scripts/fetch-{node,gitbash}.mjs` 已不在默认构建链（`package.json` 的 `dist*` 只调 `fetch:uv`）。
+  - **实测证据**：`npm run check` 退出码 0（`check:invariants` 现为 25 个在范围模块，含新增的
+    `artifact` / `download` / `payload-probe` 三条登记）；`npx vitest run src/core/runtimes` → 8 文件 106 条全绿
+    （含 `download.test.ts` 12 条「校验失败不许进位 / 续传 / 体积下限」、`node`/`gitbash` 的「纯按需的门」）；
+    「未安装时 ensure 零 spawn 不下载」与「sha256 不符不许进位」两条护栏各做过「改坏 → 看红 → 还原」实证（4 条 / 2 条红）。
+  - **仍未证（不拿测试顶替）**：未跑真实打包（无随包载荷的安装包）与真实联网下载，故「点安装 → 联网下载 →
+    校验收位 → 就位」这条**端到端**未实测（与 checklist 同一「未确认」，那条保持不勾）。
+
+- [x] Task 7.7: **spec 三份记录口径改写**（本文件 + `spec.md` + `checklist.md`）
+  - 核实证据：`spec.md`（What Changes 的按需口径、ADDED Requirement「按需安装（无静默下载）」、MODIFIED「环境准备前提」、被改变的原有设计表新增一行、否决方案新增「否决随包 484 MB 载荷」）；`checklist.md` 新增阶段 7 复核清单、旧「随包」checkpoint 标注「已由阶段 7 取代」而不删历史勾选
+
 ## Task Dependencies
 
 - **阶段 0 阻断全部**：`gitbash` 若无合规可分发方案，必须先改 spec
 - 阶段 1 阻断阶段 2/3/5（内核是它们的地基）
 - 阶段 4 与 1/2/3 独立，可并行
 - 阶段 6 在最后（要等事实定型）
+- **阶段 7 取代阶段 0/2 的「随包载荷」口径**：`gitbash` 的构建期 7z 解包与 node 的随包分发作废（阶段 0 的许可/来源结论仍留档，因为运行期下载仍要核 sha256 与许可文本）
+- **阶段 7 两半均已落地**：UI / 文案 / IPC 契约（7.3–7.5、7.7）与内核侧运行期下载链路（7.6）都已就位
+  （2026-09-18 收口轮复验）；未做的只剩**端到端真机验证**（真打包 + 真联网下载）
 - 与既有在途工作流（`src/renderer/widget-view.tsx`、`resources/visualizer/*`、`scripts/design-tokens-allowlist.json`）文件不得冲突；不回滚任何人的改动
 
 ## 本批不做（记录以免反复提）
 
-私有化/无外网镜像（`UV_INDEX_URL` / `UV_PYTHON_INSTALL_MIRROR` 由谁设）；**是否把 `bash` 开放成模型自由 shell 工具**（权限面变更，单独一轮）；运行时的自动更新策略（只做手动重置/重装）。
+私有化/无外网镜像（`UV_INDEX_URL` / `UV_PYTHON_INSTALL_MIRROR` / node、gitbash 的离线包）—— 阶段 7 改按需后它已是**离线部署的硬前置**（不预置就装不上任何运行时），但**本轮仍未拍板**；**是否把 `bash` 开放成模型自由 shell 工具**（权限面变更，单独一轮）；运行时的自动更新策略（只做手动安装/重置）。
 
 ## 验证轮追加的修复任务（2026-09-17 独立验证）
 

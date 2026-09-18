@@ -43,10 +43,13 @@ import { bindRuntimeMachine, type RuntimeMachine } from "./machine.ts";
 import { collectRuntimeDiagnostics } from "./diagnostics.ts";
 import {
 	ensureRuntime,
+	installRuntime,
 	inspectRuntime,
 	resetRuntime,
 	rollbackRuntime,
+	type InstallContext,
 	type RuntimeDescriptor,
+	type RuntimeEnsureOutcome,
 	type RuntimeOptions,
 	type RuntimeResolution,
 } from "./registry.ts";
@@ -190,12 +193,8 @@ export function pythonExecutable(venvDir: string, platform: string): string {
 	return venvPythonPath(venvDir, platform);
 }
 
-/**
- * 幂等 ensure（转换前调用 / 启动预热调用）。产出与迁入前逐字同形（EnsureResult）：
- * 工具层的错误分类（classifyEnsureError）与 daemon 的事件日志都不用改。
- */
-export async function ensurePythonRuntime(options: RuntimeOptions, spawn: SpawnFn): Promise<EnsureResult> {
-	const outcome = await ensureRuntime(createPythonRuntime(options), spawn);
+/** 内核产出 → EnsureResult（工具层与 daemon 事件日志用的既有形状，逐字不变）。 */
+function toEnsureResult(outcome: RuntimeEnsureOutcome, options: RuntimeOptions): EnsureResult {
 	if (outcome.status === "failed") return { status: "failed", phase: outcome.phase, error: outcome.error };
 	return {
 		status: "ready",
@@ -205,19 +204,45 @@ export async function ensurePythonRuntime(options: RuntimeOptions, spawn: SpawnF
 }
 
 /**
+ * 幂等**探测**（转换前调用 / 会话开始调用）。2026-09-18 起**只探不装**：
+ *
+ *   纯按需（用户决定）：三个运行时默认都不下载、不安装，用户到「设置 → 内置运行时」
+ *   点「安装」才联网。而本条路径挂在「每次转换前」这种自动路径上 —— 一旦它能装，
+ *   静默自动下载就会发生在用户没点任何按钮的时候（流量、失败、半成品都归他），
+ *   比随包分发更糟。所以未装就如实报 not-installed，让工具层把「请用户去安装」
+ *   交给模型/用户；已装但不可用就报 not-ready（点重置）。
+ *   产出与迁入前逐字同形（EnsureResult）：工具层的错误分类（classifyEnsureError）
+ *   与 daemon 的事件日志都不用改。
+ */
+export async function ensurePythonRuntime(options: RuntimeOptions, spawn: SpawnFn): Promise<EnsureResult> {
+	return toEnsureResult(await ensureRuntime(createPythonRuntime(options), spawn), options);
+}
+
+/**
+ * 按需安装（设置页「安装」按钮 / 内核 installRuntime）。
+ * = 暂存目录 → 取件（uv 联网拉 CPython 与 wheel）→ 校验 → 进位 → 复验 → 发布 current。
+ * python 没有 `descriptor.acquire`：它的取件由 uv 在状态机里做（那条链路本来就是 http）。
+ */
+export async function installPythonRuntime(
+	options: RuntimeOptions,
+	spawn: SpawnFn,
+	context: InstallContext = {},
+): Promise<EnsureResult> {
+	return toEnsureResult(await installRuntime(createPythonRuntime(options), spawn, context), options);
+}
+
+/**
  * 重置并重新安装（「诊断」旁边的那个按钮）。
  * = 清掉托管根下的这一版 → 走「安装（uv/网络）→ 校验（九相位冒烟）→ 进位 → 发布 current」。
- * 「重载工具」这一步不需要额外动作：docx_convert / docx_extract 每次转换前都幂等 ensure，
+ * 「重载工具」这一步不需要额外动作：docx_convert / docx_extract 每次转换前都幂等探测，
  * 本函数返回即代表下一次转换会用上新环境（见 tools 的文件头）。
  */
-export async function resetPythonRuntime(options: RuntimeOptions, spawn: SpawnFn): Promise<EnsureResult> {
-	const outcome = await resetRuntime(createPythonRuntime(options), spawn);
-	if (outcome.status === "failed") return { status: "failed", phase: outcome.phase, error: outcome.error };
-	return {
-		status: "ready",
-		python: pythonExecutable(outcome.activeDir, options.platform),
-		venvDir: outcome.activeDir,
-	};
+export async function resetPythonRuntime(
+	options: RuntimeOptions,
+	spawn: SpawnFn,
+	context: InstallContext = {},
+): Promise<EnsureResult> {
+	return toEnsureResult(await resetRuntime(createPythonRuntime(options), spawn, context), options);
 }
 
 /** 回滚到某一版（只切 current 指针，不重新下载）。版本未完整进位会响亮报错。 */
