@@ -17,7 +17,9 @@ import { GeneralSection } from "./general-section.tsx";
 import { PersonalizationSection } from "./personalization-section.tsx";
 import { MemoryEvolutionSection } from "./memory-section.tsx";
 import { ModelsSection } from "./models-section.tsx";
+import { RuntimesSection } from "./runtimes-section.tsx";
 import { DataManagementSection } from "./data-management-section.tsx";
+import { AuditSection } from "./audit-section.tsx";
 import { PromptPreviewSection } from "./prompt-section.tsx";
 import { AboutSection } from "./about-section.tsx";
 
@@ -27,7 +29,9 @@ const NAV_ITEMS = [
 	{ id: "personalization", label: "个性化" },
 	{ id: "memory", label: "记忆与进化" },
 	{ id: "models", label: "模型" },
+	{ id: "runtimes", label: "内置运行时" },
 	{ id: "data", label: "数据管理" },
+	{ id: "audit", label: "审计中心" },
 	{ id: "prompt", label: "提示词预览" },
 	{ id: "about", label: "关于" },
 ] as const;
@@ -159,7 +163,9 @@ export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps):
 						) : (
 							<ModelsSection snapshot={snapshot} busy={busy} run={run} />
 						))}
+					{page === "runtimes" && <RuntimesSection busy={busy} />}
 					{page === "data" && <DataManagementSection />}
+				{page === "audit" && <AuditSection />}
 				{page === "prompt" && <PromptPreviewSection />}
 					{page === "about" && (
 						<AboutSection configDir={snapshot?.configDir} onOpenDiagnostics={onOpenDiagnostics} />

@@ -160,6 +160,18 @@ export function getSpillsDir(cwd: string): string {
 }
 
 /**
+ * 托管运行时根：`<configDir>/runtimes/`。
+ *
+ * 这里只回答「根在哪」，不管布局与磁盘协议（版本化实例、manifest、current 指针的
+ * 读写与原子进位规则全在 core/runtime-store.ts）。分开的理由：本文件是纯路径推导层
+ * （AGENTS.md §1 里被广泛 import 的那一层），而托管运行时的写入顺序本身就是不变量，
+ * 混进来会让「路径」与「协议」一起改。
+ */
+export function getRuntimesDir(): string {
+	return join(getConfigDir(), "runtimes");
+}
+
+/**
  * 历史共享临时目录：`<工作空间根>/临时任务`。
  *
  * 退役为历史目录：新任务已改为每任务独立时间戳目录（见 spec: align-per-task-dirs），

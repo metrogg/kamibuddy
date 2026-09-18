@@ -1,17 +1,22 @@
 /**
- * docx 托管环境状态机的测试。
+ * docx 托管环境状态机（九相位）的纯函数测试。
  *
  * 机制照抄 WB setup-html-to-docx.sh，测试即「逐步对照」的护栏：
  * 每个用例对应脚本里的一段（uv 探测 → python 3.12 → venv → 依赖冒烟补装 → 引擎冒烟）。
  * spawn 全部 fake，不真装 Python —— documents/ 不许 import pi/electron 的理由
  * 就是这一层要能脱离宿主单测（AGENTS.md §1）。
+ *
+ * 驱动说明：本文件用下面的 `drivePhases` 直接跑 `nextStep` / `reduce`（纯函数逐相位），
+ * 所以 venv 路径可以钉成确定值、逐条断言「这一步会 spawn 什么」。**生产驱动**是
+ * core/runtimes/machine.ts 的 driveRuntimeMachine（由 core/runtimes/registry.ts 调用），
+ * 端到端（真实入口 + 托管根 + 假 spawn）的覆盖在 core/runtimes/python.test.ts ——
+ * 两处分工：这里管「相位表对不对」，那边管「装配链路通不通」。
  */
 
 import { join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	createEnvContext,
-	ensureDocxEnv,
 	initialEnvState,
 	inspectVenv,
 	nextStep,
@@ -19,7 +24,9 @@ import {
 	reduce,
 	uvCandidates,
 	venvPython,
+	venvPythonPath,
 	type EnvContext,
+	type EnvState,
 	type SpawnFn,
 	type SpawnOutcome,
 	type SpawnRequest,
@@ -27,8 +34,10 @@ import {
 
 const HOME = resolve(sep, "users", "foo");
 const ENGINE = resolve(sep, "app", "resources", "docx-engine");
+/** 注入的 venv 落点（生产由 core/runtimes/python.ts 的 resolvePythonVenv 给出）。 */
+const VENV = resolve(sep, "config", "runtimes", "python", "3.12", "venv");
 /** 平台注入 win32：Windows 布局（Scripts/python.exe）是目标平台，钉死它。 */
-const CTX: EnvContext = createEnvContext(ENGINE, HOME, "win32");
+const CTX: EnvContext = createEnvContext(ENGINE, HOME, "win32", VENV);
 
 const VENV_PY = venvPython(CTX);
 const UV_LOCAL = join(HOME, ".local", "bin", "uv.exe");
@@ -88,14 +97,38 @@ function allReady(): ReturnType<typeof scripted> {
 	]);
 }
 
+/** 逐相位跑完状态机（纯函数驱动；生产驱动见文件头说明）。 */
+async function drivePhases(ctx: EnvContext, spawnFn: SpawnFn): Promise<EnvState> {
+	let state: EnvState = initialEnvState();
+	for (let step = 0; step < 40; step += 1) {
+		const request = nextStep(state, ctx);
+		if (request === null) break;
+		state = reduce(state, await spawnFn(request), ctx);
+	}
+	return state;
+}
+
 describe("路径布局（Windows）", () => {
 	it("venv 解释器是 Scripts/python.exe（不是 posix 的 bin/python）", () => {
-		expect(VENV_PY).toBe(join(HOME, ".venv-html-to-docx", "Scripts", "python.exe"));
+		expect(VENV_PY).toBe(join(VENV, "Scripts", "python.exe"));
 	});
 
 	it("posix 布局是 bin/python", () => {
-		const posix = venvPython(createEnvContext(ENGINE, HOME, "linux"));
-		expect(posix).toBe(join(HOME, ".venv-html-to-docx", "bin", "python"));
+		expect(venvPythonPath(VENV, "linux")).toBe(join(VENV, "bin", "python"));
+	});
+
+	it("venv 落点是注入值：本层不再读 HTML_TO_DOCX_VENV（判据已收归托管运行时）", () => {
+		const previous = process.env["HTML_TO_DOCX_VENV"];
+		process.env["HTML_TO_DOCX_VENV"] = resolve(sep, "elsewhere", "venv");
+		try {
+			// 环境变量再怎么设，本层的取值都只来自 ctx.venvDir（唯一真源在 core/runtimes/python.ts）。
+			expect(venvPython(createEnvContext(ENGINE, HOME, "win32", VENV))).toBe(
+				join(VENV, "Scripts", "python.exe"),
+			);
+		} finally {
+			if (previous === undefined) delete process.env["HTML_TO_DOCX_VENV"];
+			else process.env["HTML_TO_DOCX_VENV"] = previous;
+		}
 	});
 
 	it("uv 候选顺序：PATH（裸 uv）→ ~/.local/bin/uv.exe", () => {
@@ -111,29 +144,24 @@ describe("parsePythonVersion", () => {
 	});
 });
 
-describe("ensure 状态机迁移", () => {
+describe("ensure 状态机迁移（九相位）", () => {
 	it("全部就绪：5 次探测秒退，不触发任何安装", async () => {
 		const { calls, spawn } = allReady();
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result).toEqual({
-			status: "ready",
-			python: VENV_PY,
-			venvDir: join(HOME, ".venv-html-to-docx"),
-		});
+		expect(state.phase).toBe("ready");
 		expect(calls).toHaveLength(5);
 		expect(calls.every((c) => !isPythonInstall(c) && !isCreateVenv(c) && !isInstallDeps(c))).toBe(true);
 	});
 
 	it("PATH 与 ~/.local/bin 都没有 uv → failed，错误带安装引导", async () => {
 		const { calls, spawn } = scripted([[isUvVersion, notFound()]]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("failed");
-		if (result.status !== "failed") throw new Error("unreachable");
-		expect(result.phase).toBe("probe-uv");
-		expect(result.error).toContain("uv");
-		expect(result.error).toContain(".local");
+		expect(state.phase).toBe("failed");
+		expect(state.failedAt).toBe("probe-uv");
+		expect(state.error).toContain("uv");
+		expect(state.error).toContain(".local");
 		// 两个候选各试一次，不多不少。
 		expect(calls).toHaveLength(2);
 	});
@@ -147,9 +175,9 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("ready");
+		expect(state.phase).toBe("ready");
 		const uvCalls = calls.filter((c) => isPythonFind(c) || isCreateVenv(c) || isInstallDeps(c));
 		expect(uvCalls.length).toBeGreaterThan(0);
 		expect(uvCalls.every((c) => c.command === UV_LOCAL)).toBe(true);
@@ -164,9 +192,9 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("ready");
+		expect(state.phase).toBe("ready");
 		const install = calls.find(isPythonInstall);
 		expect(install?.args).toEqual(["python", "install", "3.12"]);
 	});
@@ -177,12 +205,11 @@ describe("ensure 状态机迁移", () => {
 			[isPythonFind, { code: 1, stdout: "", stderr: "" }],
 			[isPythonInstall, { code: 1, stdout: "", stderr: "network unreachable" }],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("failed");
-		if (result.status !== "failed") throw new Error("unreachable");
-		expect(result.phase).toBe("install-python");
-		expect(result.error).toContain("UV_PYTHON_INSTALL_MIRROR");
+		expect(state.phase).toBe("failed");
+		expect(state.failedAt).toBe("install-python");
+		expect(state.error).toContain("UV_PYTHON_INSTALL_MIRROR");
 	});
 
 	it("venv 不存在（解释器起不来）→ --clear 重建", async () => {
@@ -194,17 +221,11 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("ready");
+		expect(state.phase).toBe("ready");
 		const create = calls.find(isCreateVenv);
-		expect(create?.args).toEqual([
-			"venv",
-			"--python",
-			"3.12",
-			"--clear",
-			join(HOME, ".venv-html-to-docx"),
-		]);
+		expect(create?.args).toEqual(["venv", "--python", "3.12", "--clear", VENV]);
 	});
 
 	it("venv 版本不符（3.11）→ 重建（WB 的 rm -rf + uv venv 对应 --clear）", async () => {
@@ -216,9 +237,9 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("ready");
+		expect(state.phase).toBe("ready");
 		expect(calls.some(isCreateVenv)).toBe(true);
 	});
 
@@ -241,9 +262,9 @@ describe("ensure 状态机迁移", () => {
 			[isInstallDeps, ok()],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("ready");
+		expect(state.phase).toBe("ready");
 		expect(probeCount).toBe(2);
 		const install = calls.find(isInstallDeps);
 		// 固化 --only-binary=:all: 的理由：lxml 无 wheel 时源码编译必败（WB 踩坑）。
@@ -267,12 +288,11 @@ describe("ensure 状态机迁移", () => {
 			[isInstallDeps, ok()],
 			[isEngineSmoke, ok()],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("failed");
-		if (result.status !== "failed") throw new Error("unreachable");
-		expect(result.phase).toBe("smoke-deps");
-		expect(result.error).toContain("PIL");
+		expect(state.phase).toBe("failed");
+		expect(state.failedAt).toBe("smoke-deps");
+		expect(state.error).toContain("PIL");
 		// 只装一轮：install-deps 恰好出现一次。
 		expect(calls.filter(isInstallDeps)).toHaveLength(1);
 	});
@@ -285,12 +305,11 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": "httpx"}' })],
 			[isInstallDeps, { code: 1, stdout: "", stderr: "connection refused" }],
 		]);
-		const result = await ensureDocxEnv(CTX, spawn);
+		const state = await drivePhases(CTX, spawn);
 
-		expect(result.status).toBe("failed");
-		if (result.status !== "failed") throw new Error("unreachable");
-		expect(result.phase).toBe("install-deps");
-		expect(result.error).toContain("UV_INDEX_URL");
+		expect(state.phase).toBe("failed");
+		expect(state.failedAt).toBe("install-deps");
+		expect(state.error).toContain("UV_INDEX_URL");
 	});
 
 	it("引擎冒烟：PYTHONPATH 指向引擎目录；失败 → failed 归因 smoke-engine", async () => {
@@ -301,12 +320,11 @@ describe("ensure 状态机迁移", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 			[isEngineSmoke, { code: 1, stdout: "", stderr: "ModuleNotFoundError: html_to_docx" }],
 		]);
-		const result = await ensureDocxEnv(CTX, failing.spawn);
+		const state = await drivePhases(CTX, failing.spawn);
 
-		expect(result.status).toBe("failed");
-		if (result.status !== "failed") throw new Error("unreachable");
-		expect(result.phase).toBe("smoke-engine");
-		expect(result.error).toContain("html_to_docx");
+		expect(state.phase).toBe("failed");
+		expect(state.failedAt).toBe("smoke-engine");
+		expect(state.error).toContain("html_to_docx");
 
 		const smoke = failing.calls.find(isEngineSmoke);
 		expect(smoke?.env?.["PYTHONPATH"]).toBe(ENGINE);

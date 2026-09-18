@@ -14,8 +14,10 @@
  * documents/docx-extract.ts，模型只能给输入 .docx 与产物路径），不经 agent 的
  * powershell 自由 shell —— 与 docx_convert 同档：受控 spawn、不经 powershell。
  *
- * 环境准备：与正向共用 docx-env 的幂等 ensure（已就绪秒退）；首次冷启动
- * 约 1-3 分钟，描述里如实说明，失败时响亮报错并给可执行建议，不静默返回空 HTML。
+ * 环境准备：与正向共用同一个**托管运行时**（core/runtimes/python.ts：托管根
+ * `<configDir>/runtimes/python/<version>/` + current 指针）的幂等 ensure（已就绪
+ * 秒退）；首次冷启动约 1-3 分钟，描述里如实说明，失败时响亮报错并给可执行建议，
+ * 不静默返回空 HTML。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
  * What the model sees: docx_extract 的名称、description（与 read_document 的分工必须写清，
@@ -35,14 +37,13 @@ import {
 	type ExtractSuccess,
 	type RunFn,
 } from "../documents/docx-extract.ts";
+import { defaultSpawn, type EnsureResult, type SpawnFn } from "../documents/docx-env.ts";
 import {
-	createEnvContext,
-	defaultSpawn,
-	ensureDocxEnv,
-	type EnvContext,
-	type EnsureResult,
-	type SpawnFn,
-} from "../documents/docx-env.ts";
+	defaultPythonRuntimeOptions,
+	ensurePythonRuntime,
+	type RuntimeOptions,
+} from "../core/runtimes/python.ts";
+import { clipAuditDetail, type AuditSink } from "../shared/audit.ts";
 
 export interface DocxExtractToolOptions {
 	/** 引擎目录（resources/docx-engine）。 */
@@ -51,9 +52,16 @@ export interface DocxExtractToolOptions {
 	/** 缺省 process.platform；测试注入。 */
 	readonly platform?: string;
 	/** 测试注入（状态机全分支在 documents 层已测，这里只测接缝）。 */
-	readonly ensure?: (ctx: EnvContext, spawn: SpawnFn) => Promise<EnsureResult>;
+	readonly ensure?: (options: RuntimeOptions, spawn: SpawnFn) => Promise<EnsureResult>;
 	/** 测试注入。 */
 	readonly extract?: (req: ExtractRequest, run: RunFn) => Promise<ExtractSuccess>;
+	/**
+	 * 审计写入通道 —— 运行时一类的写入点之一（spec: add-managed-runtimes 阶段 4）：
+	 * 环境装不上是用户真会遇到的那种「运行时失败」，只记启动预热的话，
+	 * 「预热时好好的、用着用着环境没了」这条路径在审计里就是空白。
+	 * 注入而非直接写盘：本文件的单测会跑 ensure 失败分支（污染真实配置目录）。
+	 */
+	readonly onAudit?: AuditSink;
 }
 
 /** 失败时把引擎已发出的警告一并带出的上限：够模型如实转述，又不糊满上下文。 */
@@ -95,15 +103,22 @@ export function createDocxExtractTool(options: DocxExtractToolOptions) {
 				),
 			}),
 			async execute(_toolCallId, params) {
-				const ctx = createEnvContext(
-					options.engineDir,
-					options.homeDir,
-					options.platform ?? process.platform,
-				);
-				const ensure = options.ensure ?? ensureDocxEnv;
+				const runtimeOptions = defaultPythonRuntimeOptions({
+					engineDir: options.engineDir,
+					homeDir: options.homeDir,
+					platform: options.platform ?? process.platform,
+				});
+				const ensure = options.ensure ?? ensurePythonRuntime;
 				// 幂等 ensure：已就绪秒退；装不上抛 env-not-ready（带阶段归因与联网/镜像引导）。
-				const env = await ensure(ctx, defaultSpawn);
-				if (env.status !== "ready") throw classifyEnsureError(env);
+				const env = await ensure(runtimeOptions, defaultSpawn);
+				if (env.status !== "ready") {
+					options.onAudit?.({
+						category: "runtime",
+						outcome: "failed",
+						detail: clipAuditDetail(`docx 提取运行时未就绪（${env.phase}）：${env.error}`),
+					});
+					throw classifyEnsureError(env);
+				}
 
 				const extract = options.extract ?? extractDocxToHtml;
 				try {

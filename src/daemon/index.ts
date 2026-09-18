@@ -45,7 +45,20 @@ import {
 	getSpillsDir,
 	getTempTasksDir,
 } from "../core/config-paths.ts";
+import {
+	clearAuditRecords,
+	exportAuditRecords,
+	readAuditRecords,
+	writeAuditRecord,
+} from "../core/audit-log.ts";
 import { EventLog } from "../core/event-log.ts";
+import {
+	AUDIT_PANEL_LIMIT,
+	clipAuditDetail,
+	isAuditCategory,
+	type AuditCategory,
+	type AuditQueryResult,
+} from "../shared/audit.ts";
 import { optionalBoolean, parseFrontmatter, type ParsedDocument } from "../core/frontmatter.ts";
 import { ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
 import { loadAgents } from "../core/agents.ts";
@@ -204,14 +217,23 @@ import {
 import { nextRunAfter, validateSchedule } from "../shared/automation.ts";
 import type { AutomationTask } from "../shared/automation.ts";
 import type { QueuedMessages } from "../shared/session-events.ts";
+import { defaultSpawn } from "../documents/docx-env.ts";
 import {
-	createEnvContext,
-	defaultSpawn,
-	ensureDocxEnv,
-	inspectVenv,
-	venvPython,
-	type EnvContext,
-} from "../documents/docx-env.ts";
+	defaultPythonRuntimeOptions,
+	ensurePythonRuntime,
+	inspectPythonRuntime,
+	type RuntimeOptions,
+} from "../core/runtimes/python.ts";
+import {
+	collectRuntimeDiagnosticsText,
+	collectRuntimeInventory,
+	isRuntimeEnabled,
+	planRuntimeShellInjection,
+	resetManagedRuntime,
+	writeRuntimeEnabled,
+	writeRuntimeMaster,
+} from "../core/runtime-inventory.ts";
+import type { RuntimeInventory } from "../shared/runtimes.ts";
 import {
 	isWebSearchProviderId,
 	type ModelProbeResult,
@@ -710,9 +732,9 @@ function buildRuntimeContext(cwd: string): string {
  * 每轮注入（session-host.ts）。工作目录同样不进提示词：工作目录的唯一来源是
  * hidden context 的 workspace_context。
  *
- * **随机器变的事实同样不在这里**：托管 Python 解释器的绝对路径（venv 重建 /
- * 换机器 / 换安装位置都会改字节）由会话侧 hidden context 的 `python_env` 段送达
- * —— 见 SessionHost.create 的 `pythonPath` 入参与其注释。
+ * **随机器变的事实同样不在这里**：托管运行时的清单与状态（venv 重建 / 换机器 /
+ * 换安装位置 / 用户切开关都会改字节）由会话侧 hidden context 的 `python_env` 段送达
+ * —— 见 SessionHost.create 的 `getRuntimeInventory` 入参与其注释。
  */
 const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	resourcesDir: getResourcesDir(),
@@ -767,20 +789,37 @@ function tempTasksDir(): string {
 }
 
 /**
- * docx 引擎环境上下文（ensure / 预热 / 诊断探测共用同一个三元组）。
- * 现算不缓存：KAMIBUDDY_RESOURCES_DIR 等 env 覆盖在测试与多环境下可换。
+ * docx 引擎 Python 运行时的装配四元组（托管根 / 家目录 / 平台 / 引擎目录）。
+ * 现算不缓存：KAMIBUDDY_CONFIG_DIR、KAMIBUDDY_RESOURCES_DIR 等 env 覆盖在测试与
+ * 多环境下可换。拼法只有 core/runtimes/python.ts 一处（防重复）。
  */
-function docxEnvContext(): EnvContext {
-	return createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform);
+function pythonRuntimeOptions(): RuntimeOptions {
+	return defaultPythonRuntimeOptions();
 }
 
 /**
- * 托管 venv 的解释器绝对路径 —— hidden context 的 `python_env` 段与 run 会话
- * 共用的唯一取值处（venvPython 是纯函数，但「引擎目录怎么拼」这项知识只该有一份，
- * 免得用户会话与 run 会话悄悄给模型两个不同的路径）。
+ * 托管运行时清单 → 会话 hidden context 的 `python_env` 段（模型侧可见性，
+ * spec: add-managed-runtimes 阶段 5）。**函数形态**：宿主按会话建一次，取函数
+ * 才能让设置页的开关切换在下一次 run 的注入里立即生效（无需重启会话）。
+ *
+ * 清单的判据只有一处（core/runtime-inventory.ts）：开关读同一份偏好、
+ * 状态看同一份磁盘事实 —— 「被用户禁用」与「找不到」在那里就已区分。
  */
-function docxPythonPath(): string {
-	return venvPython(docxEnvContext());
+function runtimeInventoryForSession(): RuntimeInventory {
+	return collectRuntimeInventory();
+}
+
+/**
+ * 模型 shell 的环境补丁（SubTask 2.1.3）：启用且就绪的运行时 → PATH 前置目录 +
+ * `KAMIBUDDY_*` 变量。判据在核心侧一处（`planRuntimeShellInjection`，读的是
+ * 设置页同一份开关与各描述符的落点），本函数只把它交给执行器。
+ *
+ * **函数形态**：执行器每次执行现算，设置页改开关后下一次命令即生效
+ * （与 `runtimeInventoryForSession` 同一条理由）。补丁只进**子进程**环境
+ * —— 沙箱路径与降级直连 spawn 都从这里取，daemon 自己的 `process.env` 不变。
+ */
+function runtimeShellEnv(): Readonly<Record<string, string>> {
+	return planRuntimeShellInjection().env;
 }
 
 /**
@@ -996,10 +1035,10 @@ const automationScheduler = new AutomationScheduler({
 		// 不在热路径上（与 activePermissions 的模块级缓存不同 —— 那个每次
 		// 工具调用都要读）。用户在设置页改完，下一次 run 即刻生效。
 		getThinkingLevel: () => readPreferences().thinkingLevel,
-		// 托管解释器路径 → run 会话 hidden context 的 python_env 段。run 会话的
+		// 托管运行时清单 → run 会话 hidden context 的 python_env 段。run 会话的
 		// 提示词同样是 work 骨架（含 python-env 片段），模型需要这条才知道该用
-		// 哪个解释器（值与用户会话同一处取值：docxPythonPath）。
-		pythonPath: docxPythonPath(),
+		// 哪个解释器（值与用户会话同一处取值：collectRuntimeInventory）。
+		getRuntimeInventory: runtimeInventoryForSession,
 		protectedDirs: PROTECTED_DIRS,
 		isTempCwd,
 		isOwnWorkspace: (dir) =>
@@ -2110,22 +2149,24 @@ async function createHost(
 			}
 		},
 		/*
-		 * 托管 Python 解释器的绝对路径 → hidden context 的 python_env 段。
-		 * 照 WorkBuddy 的 client-info-env 做法（把托管运行时路径交给模型），但
-		 * 位置从系统提示词挪到了注入块（spec: stabilize-prompt-prefix）：
+		 * 托管运行时清单 + 状态 → hidden context 的 python_env 段（spec:
+		 * add-managed-runtimes 阶段 5）。照 WorkBuddy 的 client-info-env 做法
+		 * （把托管运行时交给模型），但位置从系统提示词挪到了注入块
+		 * （spec: stabilize-prompt-prefix）：
 		 *
 		 * 为什么必须让模型知道：它拿系统 Python 写脚本时，缺库的第一反应就是
 		 * `pip install` —— 而那在沙箱里**必定失败**（2026-09-17 现场，见
 		 * docs/ARCHITECTURE.md 已知边界第 8 条）。给出真实路径，Python 任务才会
-		 * 落在我们受控且已备依赖的环境上。
+		 * 落在我们受控且已备依赖的环境上。运行时清单还负责把「被用户禁用」
+		 * 与「未就绪」分开告知（不许静默降级成「找不到」）。
 		 *
 		 * 为什么不能在系统提示词里：它随机器变（homedir / 安装位置 /
 		 * HTML_TO_DOCX_VENV），而系统提示词位于整段对话历史之前 —— venv 一重建、
 		 * 一换机器、私有化部署换个安装位置，该处之后的整段提示词与整段历史一起
-		 * 在 provider 前缀缓存里失配。`venvPython` 是纯函数，这里每建宿主现算一次，
-		 * 与会话内字节稳定不冲突（注入块在历史之后）。
+		 * 在 provider 前缀缓存里失配。清单是纯读磁盘的函数，每建宿主给的是**取值
+		 * 函数**（每次 run 现读），与会话内字节稳定不冲突（注入块在历史之后）。
 		 */
-		pythonPath: docxPythonPath(),
+		getRuntimeInventory: runtimeInventoryForSession,
 		...(sessionManager === undefined ? {} : { sessionManager }),
 		...(initialThinkingLevel !== undefined ? { thinkingLevel: initialThinkingLevel } : {}),
 		// 扩展由 daemon 组装：core/ 不许 import extensions/
@@ -2290,13 +2331,27 @@ async function createHost(
 			 * 检查器的 credential-access 拦得住（spec: add-windows-acl-sandbox）。
 			 */
 			powershellExtensionFactory({
+				/*
+				 * 检查器拦下的命令进审计中心（spec: add-managed-runtimes 阶段 4 的
+				 * 「命令安全」一类）。审计写入点在本层注入：工具层不认识审计目录，
+				 * 且它自己的单测不该在真实配置目录里落文件。
+				 */
+				onAudit: writeAuditRecord,
 				runner: createSandboxedRunner({
 					getSettings: () => activePermissions,
 					// 快照与权限门同口径：cwd 在宿主存活期间不会变（见 sandbox-runner 注释）。
 					workspaceDir: cwd,
 					// 降级路径就是今天在跑的那条 spawn，不另写一遍。
 					fallback: runCommand,
+					/*
+					 * 运行时注入补丁（SubTask 2.1.3）：启用且就绪的托管运行时进
+					 * 模型 shell 子进程的 PATH（沙箱与降级两条路径共用这一份）。
+					 * 每次执行现算 ⇒ 设置页改开关后无需重启即生效。
+					 */
+					runtimeEnv: runtimeShellEnv,
 					onDiagnostics: (diagnostics) => recordSandboxDiagnostics(diagnostics, cwd),
+					// 沙箱拒绝执行与提权决定同样进审计（「沙箱」一类，写入点在 sandbox-runner）。
+					onAudit: writeAuditRecord,
 					/*
 					 * 一次性提权审批（spec: add-windows-acl-sandbox 二阶段）。
 					 *
@@ -2367,6 +2422,8 @@ async function createHost(
 			createDocxConvertTool({
 				engineDir: join(getResourcesDir(), "docx-engine"),
 				homeDir: homedir(),
+				// 运行时装不上要进审计中心（「运行时」一类，写入点在工具层）。
+				onAudit: writeAuditRecord,
 			}),
 			/*
 			 * docx 版式提取：craft 白名单含 docx_extract，所有用户会话都装。
@@ -2377,6 +2434,8 @@ async function createHost(
 			createDocxExtractTool({
 				engineDir: join(getResourcesDir(), "docx-engine"),
 				homeDir: homedir(),
+				// 运行时装不上要进审计中心（「运行时」一类，写入点在工具层）。
+				onAudit: writeAuditRecord,
 			}),
 			// 内联可视化（read_me + show_widget）：无副作用、无用户交互，
 			// 所有用户会话注册（run 会话的 widget 随历史可见）。
@@ -3804,9 +3863,86 @@ const handlers: Record<string, Handler> = {
 	},
 
 	// docx venv 四态：只探测不安装（诊断页不该有环境副作用，
-	// 见 shared/ipc.ts 该通道注释）。
+	// 见 shared/ipc.ts 该通道注释）。探测的落点由托管根解析决定（Python 已迁入托管运行时）。
 	[INVOKE.docxEnvStatus]: async (): Promise<DocxEnvStatus> =>
-		inspectVenv(docxEnvContext(), defaultSpawn),
+		inspectPythonRuntime(pythonRuntimeOptions(), defaultSpawn),
+
+	/* ── 托管运行时（设置页「内置运行时」一级分区，spec: add-managed-runtimes 阶段 3）── */
+
+	/*
+	 * 清单与开关都走 core/runtime-inventory.ts 这一个模块：状态口径与模型侧
+	 * `python_env` 段同一份（不 spawn，只读磁盘事实 + 落盘失败日志），开关写的是
+	 * preferences.runtimes 这一处 —— 于是「设置页看到被禁用」与「模型看到被禁用」
+	 * 不可能分叉。写开关后立刻重新采集：返回的清单即生效后的状态（开关无需重启）。
+	 */
+	[INVOKE.runtimesSnapshot]: async (): Promise<RuntimeInventory> => collectRuntimeInventory(),
+
+	[INVOKE.setRuntimeMaster]: async ([enabled]): Promise<RuntimeInventory> => {
+		writeRuntimeMaster(enabled as boolean);
+		/*
+		 * 审计留痕（spec: add-managed-runtimes 阶段 4 的「运行时」一类：被禁用）。
+		 * 关掉总开关 = 三个运行时都不再注入，模型侧也拿不到路径 —— 这是用户显式
+		 * 收回能力的动作，属审计要记的「谁把什么关掉了」，而不是普通的偏好变更。
+		 */
+		if (enabled === false) {
+			writeAuditRecord({
+				category: "runtime",
+				outcome: "disabled",
+				detail: "用户关闭了「内置运行时」总开关：全部托管运行时都不再注入",
+			});
+		}
+		return collectRuntimeInventory();
+	},
+
+	[INVOKE.setRuntimeEnabled]: async ([id, enabled]): Promise<RuntimeInventory> => {
+		writeRuntimeEnabled(id as string, enabled as boolean);
+		// 逐项关闭同样留痕（重新开启不记）：审计要回答的是「什么时候少了什么能力」。
+		if (enabled === false) {
+			writeAuditRecord({
+				category: "runtime",
+				outcome: "disabled",
+				detail: clipAuditDetail(`用户禁用了运行时「${String(id)}」：路径与托管目录不再注入`),
+			});
+		}
+		return collectRuntimeInventory();
+	},
+
+	// 诊断按需 spawn（深度四态：版本不符 / 缺依赖只有真跑一次才知道），
+	// 与清单的浅判据分工见 core/runtime-inventory.ts 文件头。
+	[INVOKE.runtimeDiagnostics]: async ([id]) =>
+		collectRuntimeDiagnosticsText(id as string, defaultSpawn),
+
+	// 重置走内核的幂等链路（清残留 → 安装 → 校验 → 进位 → 发布）。失败 reject，
+	// 原因带相位与底层错误 —— 用户主动点的修复不许静默失败。
+	[INVOKE.runtimeReset]: async ([id]): Promise<RuntimeInventory> => {
+		try {
+			return await resetManagedRuntime(id as string, defaultSpawn);
+		} catch (error) {
+			// 重置失败也进审计（「运行时」一类的安装失败）：这是用户主动点的修复，
+			// 失败了必须留下可查的痕迹，否则只剩一个弹窗里闪过的报错。
+			const message = error instanceof Error ? error.message : String(error);
+			writeAuditRecord({
+				category: "runtime",
+				outcome: "failed",
+				detail: clipAuditDetail(`重置运行时「${String(id)}」失败：${message}`),
+			});
+			throw error;
+		}
+	},
+
+	/* ── 审计中心（spec: add-managed-runtimes 阶段 4） ─────────────── */
+
+	// 面板拉取。/ 清空后的回读 / 导出全文三者共用下面的 auditSnapshot ——
+	// 「导出与面板同源」靠这条共用，而不是靠约定。
+	[INVOKE.auditList]: async ([category]) => auditSnapshot(category),
+
+	[INVOKE.auditClear]: async () => {
+		// 清空由 core/audit-log 先删后补（留痕），返回新状态省掉一次往返。
+		clearAuditRecords();
+		return auditSnapshot(undefined);
+	},
+
+	[INVOKE.auditExport]: async () => exportAuditRecords(),
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 
@@ -4877,6 +5013,24 @@ const handlers: Record<string, Handler> = {
 };
 
 /**
+ * 面板形态的审计快照：类别过滤 + 展示上限 + 过滤后的总数。
+ *
+ * 类别值来自 IPC（半可信）：非法值**响亮拒绝**，不当成「不过滤」——
+ * 静默忽略会让面板显示全量而用户以为筛过了。
+ * 过滤与截断都走 core/audit-log.ts 的同一条查询（导出走同一条、只是不给 limit）。
+ */
+function auditSnapshot(category: unknown): AuditQueryResult {
+	if (category !== undefined && !isAuditCategory(category)) {
+		throw new Error(`未知的审计类别：${String(category)}`);
+	}
+	const { records, total } = readAuditRecords({
+		...(category === undefined ? {} : { category: category as AuditCategory }),
+		limit: AUDIT_PANEL_LIMIT,
+	});
+	return { records, total, limit: AUDIT_PANEL_LIMIT };
+}
+
+/**
  * 校验两轴的取值。
  *
  * 未实现的项（ready:false）仍在列表里显示 —— 那是对齐 WorkBuddy 的能力面，
@@ -5094,8 +5248,14 @@ function start(): void {
 	 * fire-and-forget：不阻塞 ready（首装要联网拉 Python，可能几分钟）；
 	 * 失败静默记事件日志 —— 转换前的幂等 ensure 才是兜底（docx_convert 工具层），
 	 * 预热只是省首次等待，它的失败不该惊动用户。
+	 *
+	 * 开关门（spec: add-managed-runtimes）：用户在设置页关掉 python（总开关或逐项）
+	 * 就**不预热** —— 他说过不要这个运行时，启动时替他联网拉一份是背着用户做事。
+	 * 注意门只管预热这一条：docx_convert / docx_extract 工具层仍会按需 ensure
+	 * （那是内置功能自己的运行时依赖，不随模型侧的可见性开关走），
+	 * 关闭的影响面是「不注入路径 + 不预热」，不是「功能失效」。
 	 */
-	void ensureDocxEnv(docxEnvContext(), defaultSpawn)
+	if (isRuntimeEnabled("python")) void ensurePythonRuntime(pythonRuntimeOptions(), defaultSpawn)
 		.then((result) => {
 			if (result.status === "ready") {
 				eventLog.append({ kind: "docx_env_warmup", outcome: "ready" });
@@ -5106,14 +5266,31 @@ function start(): void {
 					phase: result.phase,
 					error: result.error,
 				});
+				/*
+				 * 启动预热失败也进审计中心（「运行时」一类）。为什么预热这条也要记：
+				 * 它失败意味着这台机器上 docx 生成/提取**当下就不可用**，而事件日志
+				 * 是排障现场、用户看不到 —— 审计中心才是用户能自己看到「环境没装好」的地方。
+				 * 与工具层的写入点是同一份结构、同一个写入函数（core/audit-log）。
+				 */
+				writeAuditRecord({
+					category: "runtime",
+					outcome: "failed",
+					detail: clipAuditDetail(`docx 运行时启动预热失败（${result.phase}）：${result.error}`),
+				});
 			}
 		})
 		.catch((error: unknown) => {
 			// ensure 自身抛出（状态机 bug / spawn 异常逃逸）：同口径记日志，不放任成 unhandledRejection。
+			const message = error instanceof Error ? error.message : String(error);
 			eventLog.append({
 				kind: "docx_env_warmup",
 				outcome: "error",
-				message: error instanceof Error ? error.message : String(error),
+				message,
+			});
+			writeAuditRecord({
+				category: "runtime",
+				outcome: "failed",
+				detail: clipAuditDetail(`docx 运行时启动预热异常：${message}`),
 			});
 		});
 

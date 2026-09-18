@@ -26,6 +26,8 @@ import type { AgentDefinition } from "../core/agents.ts";
 import { getAppDir, getConfigDir, getResourcesDir, getSpillsDir } from "../core/config-paths.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import { composeSubagentPrompt } from "../core/prompt-composer.ts";
+import { writeAuditRecord } from "../core/audit-log.ts";
+import { planRuntimeShellInjection } from "../core/runtime-inventory.ts";
 import type { LoadedResources } from "../core/resources.ts";
 import { SessionHost } from "../core/session-host.ts";
 import { sanitizeSubagentOutput } from "../core/subagent-sanitize.ts";
@@ -370,12 +372,25 @@ export function buildSubagentExtensions(
 		 * 不接 onDiagnostics：沙箱可用性是**进程级**事实（FFI 能否加载、卷是否
 		 * 支持 ACL），主会话建立时的预热已经上报过同一个 cwd 的结论，
 		 * 这里再报一遍只是重复。
+		 *
+		 * 接 onAudit：审计是**每条命令**的事实，不是进程级结论 —— 子代理被沙箱
+		 * 拒掉的命令、被检查器拦掉的命令都必须留痕（否则「模型绕过主会话去委派
+		 * 一条危险命令」这条路径在审计里恰好是空白）。
 		 */
 		powershellExtensionFactory({
+			onAudit: writeAuditRecord,
 			runner: createSandboxedRunner({
 				getSettings: deps.getPermissions,
 				workspaceDir: cwd,
 				fallback: runCommand,
+				/*
+				 * 运行时注入补丁：与主会话**同一份判据**（core/runtime-inventory.ts
+				 * 的 planRuntimeShellInjection）。主会话的 shell 能在 PATH 上找到随包
+				 * node / git，子代理就必须同样找得到 —— 否则同一句命令在两处行为不同，
+				 * 而委派是模型可自主发起的。每次执行现算（改开关即刻生效）。
+				 */
+				runtimeEnv: () => planRuntimeShellInjection().env,
+				onAudit: writeAuditRecord,
 				/*
 				 * **有意不接 requestEscalation**（spec: add-windows-acl-sandbox 二阶段）。
 				 * 于是子代理里的提权申请一律被拒（sandbox-runner 的
@@ -402,6 +417,8 @@ export function buildSubagentExtensions(
 		createDocxConvertTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
+			// 运行时失败进审计中心（与主会话同一个写入函数，见 daemon/index.ts）。
+			onAudit: writeAuditRecord,
 		}),
 		/*
 		 * docx 版式提取：与 docx_convert 同档 —— 受控 spawn venv python
@@ -412,6 +429,8 @@ export function buildSubagentExtensions(
 		createDocxExtractTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
+			// 运行时失败进审计中心（与主会话同一个写入函数，见 daemon/index.ts）。
+			onAudit: writeAuditRecord,
 		}),
 		// 不注册 visualizer（read_me / show_widget）：子代理的输出只以文本回传
 		// 主代理，widget 没有渲染通道 —— 注册了只会白占上下文

@@ -14,9 +14,11 @@
  */
 
 import type { AutomationTask, Schedule } from "./automation.ts";
+import type { AuditCategory, AuditExportResult, AuditQueryResult } from "./audit.ts";
 import type { ImagePart } from "./image.ts";
 import type { ObservabilitySnapshot, RunLedgerEntry } from "./observability.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
+import type { RuntimeDiagnosticsText, RuntimeInventory } from "./runtimes.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type {
@@ -471,9 +473,48 @@ export const INVOKE = {
 	/**
 	 * 查询 docx 引擎 venv 的四态状态（诊断页状态行）。
 	 * 只探测不安装 —— 诊断页不该有环境副作用；安装是 docx_convert 首次调用
-	 * 与 daemon 预热的事（documents/docx-env.ts 的 ensureDocxEnv）。
+	 * 与 daemon 预热的事（core/runtimes/python.ts 的 ensurePythonRuntime，
+	 * 探测/安装/发布都走托管运行时内核）。
 	 */
 	docxEnvStatus: "diagnostics:docx-env-status",
+
+	/* ── 审计中心（spec: add-managed-runtimes 阶段 4） ─────────────── */
+
+	/**
+	 * 拉取审计记录（拦截/放行留痕：命令安全 / 沙箱 / 运行时三类 + 审计管理动作）。
+	 *
+	 * 类别过滤与展示上限都在 daemon 侧的同一条查询里做（core/audit-log.ts 的
+	 * readAuditRecords），renderer 不再过滤一遍 —— 两处各筛一次就会出现
+	 * 「面板显示 3 条、导出 5 条」这类对不上。返回同时带过滤后的总数，
+	 * 面板据此如实说明「只显示了最近 N 条」。
+	 */
+	auditList: "audit:list",
+	/**
+	 * 清空全部审计记录（需面板侧二次确认后再调）。daemon 先删后补，
+	 * **清空动作本身**会成为清空后唯一的一条记录（spec Scenario: 清空记录）。
+	 * 返回清空后的新状态（含那条留痕），面板不必再拉一次。
+	 */
+	auditClear: "audit:clear",
+	/**
+	 * 导出全部审计记录到文本文件，返回文件绝对路径与条数（由 daemon 写盘，
+	 * 与面板同一条查询 + 同一份渲染；面板只负责把路径摆给用户）。
+	 */
+	auditExport: "audit:export",
+	/**
+	 * 托管运行时的开关与清单（设置页「内置运行时」一级分区，spec:
+	 * add-managed-runtimes 阶段 3）。只读磁盘事实、**不 spawn**：状态口径与模型侧
+	 * `python_env` 段是同一份（core/runtime-inventory.ts）——
+	 * 深度四态探测在 runtimeDiagnostics。
+	 */
+	runtimesSnapshot: "runtimes:snapshot",
+	/** 总开关（「内置运行时」那一级）。返回更新后的完整清单（开关立即生效，无需重启）。 */
+	setRuntimeMaster: "runtimes:set-master",
+	/** 逐运行时开关（false = 显式的「已禁用」标记）。返回更新后的完整清单。 */
+	setRuntimeEnabled: "runtimes:set-enabled",
+	/** 单个运行时的可复制诊断报告 + 落盘日志路径（按需 spawn 的深度探测）。 */
+	runtimeDiagnostics: "runtimes:diagnostics",
+	/** 重置并重新安装（内核的幂等链路，需联网、可能几分钟）。返回更新后的完整清单。 */
+	runtimeReset: "runtimes:reset",
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 
@@ -1001,6 +1042,20 @@ export interface InvokeMap {
 	/** 尚未注册过（查询早于 whenReady 流程）时为 undefined。 */
 	[INVOKE.globalShortcutStatus]: { args: []; result: GlobalShortcutStatus | undefined };
 	[INVOKE.docxEnvStatus]: { args: []; result: DocxEnvStatus };
+
+	[INVOKE.runtimesSnapshot]: { args: []; result: RuntimeInventory };
+	/** 总开关：改完立即生效（下一次模型调用的注入与设置页状态同一个读点）。 */
+	[INVOKE.setRuntimeMaster]: { args: [enabled: boolean]; result: RuntimeInventory };
+	/** 逐运行时开关；`enabled=false` 即写入显式的「已禁用」标记。 */
+	[INVOKE.setRuntimeEnabled]: { args: [id: string, enabled: boolean]; result: RuntimeInventory };
+	[INVOKE.runtimeDiagnostics]: { args: [id: string]; result: RuntimeDiagnosticsText };
+	/** 失败时 reject（原因带相位与底层错误）—— 用户主动点的修复不许静默失败。 */
+	[INVOKE.runtimeReset]: { args: [id: string]; result: RuntimeInventory };
+
+	/** 审计记录（category 缺省 = 全部；过滤与上限都在 daemon 的同一查询里做）。 */
+	[INVOKE.auditList]: { args: [category?: AuditCategory]; result: AuditQueryResult };
+	[INVOKE.auditClear]: { args: []; result: AuditQueryResult };
+	[INVOKE.auditExport]: { args: []; result: AuditExportResult };
 
 	[INVOKE.automationList]: { args: []; result: AutomationTask[] };
 	[INVOKE.automationSave]: { args: [input: AutomationSaveInput]; result: AutomationTask };

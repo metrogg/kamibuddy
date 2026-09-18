@@ -13,7 +13,10 @@
  *
  * 环境准备：每次转换前幂等 ensure（已就绪秒退），daemon 启动时的后台预热
  * 只是省首次等待，这里的 ensure 才是兜底 —— 与 WB「每次转换前重跑 setup
- * 脚本」同语义。环境装不上（无外网等）如实报错并建议 Markdown 降级交付，
+ * 脚本」同语义。解释器来自**托管运行时**（core/runtimes/python.ts：托管根
+ * `<configDir>/runtimes/python/<version>/` + current 指针，兼容 HTML_TO_DOCX_VENV
+ * 覆盖口与既有 ~/.venv-html-to-docx 的复用），本文件不自己拼 venv 路径。
+ * 环境装不上（无外网等）如实报错并建议 Markdown 降级交付，
  * 不静默吞（spec Scenario: 无外网/安装失败时返回明确降级）。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
@@ -37,14 +40,13 @@ import {
 	type ConvertSuccess,
 	type RunFn,
 } from "../documents/docx-convert.ts";
+import { defaultSpawn, type EnsureResult, type SpawnFn } from "../documents/docx-env.ts";
 import {
-	createEnvContext,
-	defaultSpawn,
-	ensureDocxEnv,
-	type EnvContext,
-	type EnsureResult,
-	type SpawnFn,
-} from "../documents/docx-env.ts";
+	defaultPythonRuntimeOptions,
+	ensurePythonRuntime,
+	type RuntimeOptions,
+} from "../core/runtimes/python.ts";
+import { clipAuditDetail, type AuditSink } from "../shared/audit.ts";
 
 export interface DocxConvertToolOptions {
 	/** 引擎目录（resources/docx-engine）。 */
@@ -53,9 +55,16 @@ export interface DocxConvertToolOptions {
 	/** 缺省 process.platform；测试注入。 */
 	readonly platform?: string;
 	/** 测试注入（状态机全分支在 documents 层已测，这里只测接缝）。 */
-	readonly ensure?: (ctx: EnvContext, spawn: SpawnFn) => Promise<EnsureResult>;
+	readonly ensure?: (options: RuntimeOptions, spawn: SpawnFn) => Promise<EnsureResult>;
 	/** 测试注入。 */
 	readonly convert?: (req: ConvertRequest, run: RunFn) => Promise<ConvertSuccess>;
+	/**
+	 * 审计写入通道 —— 运行时一类的写入点之一（spec: add-managed-runtimes 阶段 4）：
+	 * 环境装不上是用户真会遇到的那种「运行时失败」，只记启动预热的话，
+	 * 「预热时好好的、用着用着环境没了」这条路径在审计里就是空白。
+	 * 注入而非直接写盘：本文件的单测会跑 ensure 失败分支（污染真实配置目录）。
+	 */
+	readonly onAudit?: AuditSink;
 }
 
 /** 降级 Markdown 附进错误消息的上限：够模型救回内容交付 .md，又不糊满上下文。 */
@@ -96,15 +105,22 @@ export function createDocxConvertTool(options: DocxConvertToolOptions) {
 				marginRight: Type.Optional(Type.Number({ description: "右边距，厘米（缺省 3.17）。" })),
 			}),
 			async execute(_toolCallId, params) {
-				const ctx = createEnvContext(
-					options.engineDir,
-					options.homeDir,
-					options.platform ?? process.platform,
-				);
-				const ensure = options.ensure ?? ensureDocxEnv;
+				const runtimeOptions = defaultPythonRuntimeOptions({
+					engineDir: options.engineDir,
+					homeDir: options.homeDir,
+					platform: options.platform ?? process.platform,
+				});
+				const ensure = options.ensure ?? ensurePythonRuntime;
 				// 幂等 ensure：已就绪秒退；装不上抛 env-not-ready（带阶段归因与联网/镜像引导）。
-				const env = await ensure(ctx, defaultSpawn);
-				if (env.status !== "ready") throw classifyEnsureError(env);
+				const env = await ensure(runtimeOptions, defaultSpawn);
+				if (env.status !== "ready") {
+					options.onAudit?.({
+						category: "runtime",
+						outcome: "failed",
+						detail: clipAuditDetail(`docx 生成运行时未就绪（${env.phase}）：${env.error}`),
+					});
+					throw classifyEnsureError(env);
+				}
 
 				const convert = options.convert ?? convertHtmlToDocx;
 				const cliOptions: ConvertCliOptions = {

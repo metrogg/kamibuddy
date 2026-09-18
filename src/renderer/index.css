@@ -5081,6 +5081,21 @@ textarea:focus-visible {
 	overflow-wrap: anywhere;
 }
 
+/* ── 设置页「审计中心」分区（spec: add-managed-runtimes 阶段 4）────── */
+
+/* 一行一条的留痕：列表容器/行/工具栏/标签全部复用既有档位
+   （.provider-list / .provider-row / .provider-main / .provider-tag / .provider-meta，
+   见服务商列表那一段与 DESIGN.md §3.4），这里只补「详情」一档 ——
+   它是这一行的主文、可被截断（完整内容在行的 title 里），不新造任何视觉值。 */
+.audit-detail {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: var(--text-list);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 /* ── 设置页「记忆」分区（spec: add-memory-system）──────────────── */
 
 /* 画像编辑块与上面的开关行拉开距离（它有自己的标题行，不再套 provider-row）。 */
@@ -5354,6 +5369,33 @@ textarea:focus-visible {
 .key-note {
 	font-size: var(--text-meta);
 	color: var(--text-secondary);
+}
+
+/* ── 设置页「内置运行时」（spec: add-managed-runtimes Task 3.1）────────── */
+
+/* 总开关关闭：子项整行压暗、开关不可点（交互照 WorkBuddy 的 RuntimeToolsCard）。
+   只改透明度不置灰背景（DESIGN.md §3.4 禁用行口径）。 */
+.runtime-row-off .provider-main,
+.runtime-row-off .runtime-meta {
+	opacity: 0.5;
+}
+
+/* 每项的第二行：状态 + 用途（第一行是名称 / 版本 / 操作，见 runtimes-section.tsx）。 */
+.runtime-meta {
+	padding: 0 var(--space-4) var(--space-3);
+	font-size: var(--text-meta);
+	color: var(--text-secondary);
+}
+
+/* 诊断报告：复用 .code-block 的容器与头行，只把正文换成等宽 —— 报告是逐行读数，
+   比例字体读不出对齐；路径很长，必须能换行（否则撑破设置卡）。 */
+.runtime-report pre {
+	padding: var(--space-3) var(--space-4);
+	font-family: var(--font-mono);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* ── 提示词预览（设置页） ─────────────────────────────────────── */

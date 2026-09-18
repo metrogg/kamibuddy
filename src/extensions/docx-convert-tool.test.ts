@@ -91,8 +91,11 @@ describe("执行", () => {
 		expect(text).toContain("present_files");
 	});
 
-	it("ensure 失败 → 抛 env-not-ready 文案（引导 + Markdown 降级建议），不发起 convert", async () => {
+	it("ensure 失败 → 抛 env-not-ready 文案（引导 + Markdown 降级建议），不发起 convert；并写一条运行时审计", async () => {
 		let convertCalled = false;
+		// 运行时失败要进审计中心（spec: add-managed-runtimes 阶段 4）：注入观测点，
+		// 钉「环境未就绪时确实留痕」，且详情带相位与错误（否则事后查不出为什么）。
+		const records: Array<{ category: string; outcome: string; detail: string }> = [];
 		const { tools } = mount({
 			ensure: () =>
 				Promise.resolve({
@@ -104,6 +107,7 @@ describe("执行", () => {
 				convertCalled = true;
 				return Promise.resolve({ docxPath: "", warnings: [] });
 			},
+			onAudit: (record) => records.push(record),
 		});
 		const execute = tools.get("docx_convert")?.execute;
 
@@ -111,6 +115,10 @@ describe("执行", () => {
 			execute!("t1", { htmlPath: join("ws", "a.html"), outputPath: join("ws", "a.docx") }),
 		).rejects.toThrow("未找到 uv");
 		expect(convertCalled).toBe(false);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ category: "runtime", outcome: "failed" });
+		expect(records[0]?.detail).toContain("probe-uv");
+		expect(records[0]?.detail).toContain("未找到 uv");
 	});
 
 	it("转换失败带 markdown_fallback → 抛错文案如实附降级内容（引导存 .md 交付）", async () => {

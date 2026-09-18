@@ -18,7 +18,8 @@ import { join, resolve } from "node:path";
 
 export {};
 
-const { createEnvContext, defaultSpawn, ensureDocxEnv } = await import("../src/documents/docx-env.ts");
+const { defaultSpawn } = await import("../src/documents/docx-env.ts");
+const { defaultPythonRuntimeOptions, ensurePythonRuntime } = await import("../src/core/runtimes/python.ts");
 const { convertHtmlToDocx, defaultRun } = await import("../src/documents/docx-convert.ts");
 
 const results: { name: string; ok: boolean; detail: string }[] = [];
@@ -28,12 +29,12 @@ function check(name: string, ok: boolean, detail: string): void {
 }
 
 const engineDir = resolve("resources/docx-engine");
-const ctx = createEnvContext(engineDir, homedir(), process.platform);
+const runtimeOptions = defaultPythonRuntimeOptions({ engineDir, homeDir: homedir(), platform: process.platform });
 const outDir = mkdtempSync(join(tmpdir(), "kami-docx-smoke-"));
 
 try {
 	// 1. 环境：幂等 ensure（已就绪约 5 次探测秒退；缺啥装啥）
-	const ensured = await ensureDocxEnv(ctx, defaultSpawn);
+	const ensured = await ensurePythonRuntime(runtimeOptions, defaultSpawn);
 	check(
 		"venv 环境就绪",
 		ensured.status === "ready",

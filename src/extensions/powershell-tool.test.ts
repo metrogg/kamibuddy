@@ -16,8 +16,10 @@
 import { describe, expect, it } from "vitest";
 import { Compile } from "typebox/compile";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AuditSink } from "../shared/audit.ts";
 import {
 	powershellExtensionFactory,
+	shellChildEnv,
 	type CommandOutcome,
 	type CommandRunner,
 } from "./powershell-tool.ts";
@@ -54,6 +56,7 @@ interface FakeToolDef {
 function mount(options?: {
 	readonly unattended?: boolean;
 	readonly runner?: CommandRunner;
+	readonly onAudit?: AuditSink;
 }): FakeToolDef {
 	let tool: FakeToolDef | undefined;
 	const fakePi = {
@@ -180,6 +183,24 @@ describe("危险命令检查器拦截", () => {
 
 		expect(result.details.blocked).toBe(true);
 		expect(result.details.category).toBe("recursive-force-delete");
+	});
+
+	it("拦截时写审计（命令安全/已拦截，含类别与命令原文）；放行时不写", async () => {
+		const records: Array<{ category: string; outcome: string; detail: string }> = [];
+		const { runner } = fakeRunner();
+		const tool = mount({ runner, onAudit: (record) => records.push(record) });
+
+		await tool.execute("t1", { command: "iex 'Get-Date'" });
+		expect(records).toHaveLength(1);
+		expect(records[0]?.category).toBe("command");
+		expect(records[0]?.outcome).toBe("blocked");
+		// 事后要能回答「拦的是哪一条」，所以命令原文必须留在详情里。
+		expect(records[0]?.detail).toContain("dynamic-execution");
+		expect(records[0]?.detail).toContain("iex 'Get-Date'");
+
+		// 放行不写审计（审计记的是拦截/放行决定，不是每一次执行）。
+		await tool.execute("t2", { command: "Get-Date" });
+		expect(records).toHaveLength(1);
 	});
 });
 
@@ -329,5 +350,32 @@ describe("注入执行器（沙箱接缝，spec: add-windows-acl-sandbox）", ()
 		expect(updates[0]?.blocked).toBe(false);
 		// 终态照旧，不被进度影响
 		expect(result.content[0]?.text).toContain("done");
+	});
+});
+
+/*
+ * 运行时注入补丁的**落点语义**（SubTask 2.1.3）：补丁由执行器算好交给本层，
+ * 本层只负责合进子进程环境。真 spawn 不在这里测（理由见文件头），但
+ * 「合并而非整体替换」与「不回写本进程环境」这两条必须被钉住 ——
+ * 前者写错的症状是 powershell 起不来（缺 SystemRoot），后者写错的症状是
+ * 我们自己的转换链路被顺带改了环境。
+ */
+describe("运行时注入补丁的落点（SubTask 2.1.3）", () => {
+	it("补丁**合并**在基线之上，且不改动 daemon 自己的 process.env", () => {
+		const baseline = { ...process.env };
+		const patch = { KAMIBUDDY_NODE_HOME: "C:\\cfg\\runtimes\\node\\22" };
+		const env = shellChildEnv(patch);
+
+		for (const [key, value] of Object.entries(baseline)) {
+			if (value === undefined) continue;
+			expect(env[key], `基线变量 ${key} 不该被补丁挤掉`).toBe(value);
+		}
+		expect(env["KAMIBUDDY_NODE_HOME"]).toBe("C:\\cfg\\runtimes\\node\\22");
+		// 本进程环境一个键都不许多：补丁只跟着这一次 spawn 走。
+		expect({ ...process.env }).toEqual(baseline);
+	});
+
+	it("没有补丁时原样返回基线（接线前后逐字节一致）", () => {
+		expect(shellChildEnv(undefined)).toBe(process.env);
 	});
 });

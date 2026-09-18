@@ -60,7 +60,7 @@
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
 	BeforeAgentStartEvent,
@@ -78,7 +78,7 @@ import { loadResources } from "../src/core/resources.ts";
 import { filterEnabledSkills } from "../src/core/skill-status.ts";
 import { SessionHost } from "../src/core/session-host.ts";
 import { createSystemPromptComposerFromDefaults } from "../src/core/system-prompt-composer.ts";
-import { createEnvContext, venvPython } from "../src/documents/docx-env.ts";
+import { collectRuntimeInventory } from "../src/core/runtime-inventory.ts";
 import {
 	billedInputTokens,
 	cacheHitRate,
@@ -160,14 +160,12 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 });
 
 /**
- * 托管 Python 解释器的绝对路径 —— 与 daemon 的 docxPythonPath 同一套取值
- * （resources/docx-engine + homedir + platform）。它**不进系统提示词**（随机器变，
- * 进去就是「换机 / 重建 venv 即断前缀」），而是作为 hidden context 的 `python_env`
- * 段注入 —— 探针的请求要与出货形态一致，所以这条注入照给。
+ * 托管运行时清单 —— 与 daemon 的取值同一处（core/runtime-inventory.ts 的
+ * collectRuntimeInventory）。它**不进系统提示词**（随机器与开关变，进去就是
+ * 「换机 / 重建 venv 即断前缀」），而是作为 hidden context 的 `python_env` 段注入
+ * —— 探针的请求要与出货形态一致，所以这条注入照给。
  */
-const pythonPath = venvPython(
-	createEnvContext(join(getResourcesDir(), "docx-engine"), homedir(), process.platform),
-);
+const runtimeInventory = collectRuntimeInventory();
 
 const skillCount = enabledSkillDescriptors().length;
 console.log(`工作场景：${SCENE_ID} × ${INTERACTION_ID}，已启用技能 ${skillCount} 个（与出货同一份技能清单）`);
@@ -359,9 +357,9 @@ async function createHost(
 			if (usage !== undefined) recorder.onAssistantDone(event.message.text, usage);
 		},
 		resources,
-		// 与出货同一份 hidden context：解释器路径走注入（python_env 段），
-		// 系统提示词里没有它（见上面 pythonPath 的注释）。
-		pythonPath,
+		// 与出货同一份 hidden context：运行时清单走注入（python_env 段），
+		// 系统提示词里没有它（见上面 runtimeInventory 的注释）。
+		getRuntimeInventory: () => runtimeInventory,
 		// 内存会话：探针不需要落盘历史，也就不必往用户配置目录写会话文件
 		//（写 ~/.kamibuddy/sessions 在受限终端里会被外部沙箱拦成 EPERM，与探针要测的东西无关）。
 		sessionManager: SessionManager.inMemory(cwd),

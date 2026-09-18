@@ -137,8 +137,11 @@ describe("执行", () => {
 		});
 	});
 
-	it("ensure 失败 → 抛 env-not-ready 文案，不发起 extract", async () => {
+	it("ensure 失败 → 抛 env-not-ready 文案，不发起 extract；并写一条运行时审计", async () => {
 		let extractCalled = false;
+		// 运行时失败要进审计中心（spec: add-managed-runtimes 阶段 4）：注入观测点，
+		// 钉「环境未就绪时确实留痕」，且详情带相位与错误（否则事后查不出为什么）。
+		const records: Array<{ category: string; outcome: string; detail: string }> = [];
 		const { tools } = mount({
 			ensure: () =>
 				Promise.resolve({
@@ -150,6 +153,7 @@ describe("执行", () => {
 				extractCalled = true;
 				return Promise.resolve(SUCCESS);
 			},
+			onAudit: (record) => records.push(record),
 		});
 		const execute = tools.get("docx_extract")?.execute;
 
@@ -157,6 +161,10 @@ describe("执行", () => {
 			execute!("t1", { docxPath: join("ws", "a.docx"), outputPath: join("ws", "a.html") }),
 		).rejects.toThrow("未找到 uv");
 		expect(extractCalled).toBe(false);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ category: "runtime", outcome: "failed" });
+		expect(records[0]?.detail).toContain("probe-uv");
+		expect(records[0]?.detail).toContain("未找到 uv");
 	});
 
 	it("提取失败带引擎警告 → 抛错文案同时含原因与警告（不静默丢）", async () => {

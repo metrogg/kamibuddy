@@ -6,6 +6,7 @@
  */
 
 import type { AutomationTask } from "./automation.ts";
+import type { AuditCategory, AuditExportResult, AuditQueryResult } from "./audit.ts";
 import type {
 	AutomationEvent,
 	AutomationSaveInput,
@@ -39,6 +40,7 @@ import type {
 import type { ObservabilitySnapshot } from "./observability.ts";
 import type { UsageStats } from "./usage-stats.ts";
 import type { PermissionInfo, PermissionSettings } from "./permissions.ts";
+import type { RuntimeDiagnosticsText, RuntimeInventory } from "./runtimes.ts";
 import type { SessionEventEnvelope, SessionSnapshot, ThinkingLevel, QueuedMessages } from "./session-events.ts";
 import type { WorktreeBranchList } from "./worktree.ts";
 import type {
@@ -351,6 +353,31 @@ export interface KamiBridge {
 	 * 预热/首次转换可能改变它，跟随诊断页「刷新」重查。
 	 */
 	readonly docxEnvStatus: () => Promise<DocxEnvStatus>;
+	/**
+	 * 托管运行时的开关与清单（设置页「内置运行时」）。只读磁盘事实、不 spawn；
+	 * 状态口径与模型侧 `python_env` 段同一份。
+	 */
+	readonly runtimesSnapshot: () => Promise<RuntimeInventory>;
+	/** 总开关；返回更新后的完整清单（立即生效，无需重启）。 */
+	readonly setRuntimeMaster: (enabled: boolean) => Promise<RuntimeInventory>;
+	/** 逐运行时开关；false = 显式写入「已禁用」标记。返回更新后的完整清单。 */
+	readonly setRuntimeEnabled: (id: string, enabled: boolean) => Promise<RuntimeInventory>;
+	/** 该运行时的可复制诊断报告 + 落盘日志路径（按需 spawn 的深度探测）。 */
+	readonly runtimeDiagnostics: (id: string) => Promise<RuntimeDiagnosticsText>;
+	/** 重置并重新安装（幂等链路，需联网）；失败 reject，原因为相位 + 底层错误。 */
+	readonly runtimeReset: (id: string) => Promise<RuntimeInventory>;
+
+	/* ── 审计中心（spec: add-managed-runtimes 阶段 4） ─────────────── */
+
+	/** 审计记录（category 缺省 = 全部）；过滤与展示上限都在 daemon 的同一条查询里。 */
+	readonly auditList: (category?: AuditCategory) => Promise<AuditQueryResult>;
+	/**
+	 * 清空审计记录。**调用方必须先做二次确认** —— 这是不可逆动作。
+	 * 返回清空后的新状态（含「已清空」那条留痕），面板不必再拉一次。
+	 */
+	readonly auditClear: () => Promise<AuditQueryResult>;
+	/** 导出全部审计记录为文本文件，返回文件路径与条数（与面板同一条查询 + 同一份渲染）。 */
+	readonly auditExport: () => Promise<AuditExportResult>;
 
 	/* ── 定时任务 ─────────────────────────────────────────────────── */
 

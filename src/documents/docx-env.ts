@@ -1,5 +1,5 @@
 /**
- * docx 引擎托管环境：~/.venv-html-to-docx 的探测与幂等 ensure。
+ * docx 引擎托管环境：venv 的**探测与幂等 ensure 状态机**（九相位）。
  *
  * 机制照抄 WorkBuddy 的 setup-html-to-docx.sh
  * （证据：插件 scripts/wb/local/setup-html-to-docx.sh，逆向笔记 docs/workbuddy分析/）。
@@ -17,17 +17,29 @@
  *     装的时候 --only-binary=:all: 强制只用 wheel（同一个 lxml 坑）
  *   → 引擎包 import 冒烟（PYTHONPATH=resources/docx-engine）
  *
+ * 【2026-09-17 迁入托管运行时（spec: add-managed-runtimes 阶段 1，BREAKING）】
+ * venv 的**位置**不再由本文件决定：平级隐式路径 `~/.venv-html-to-docx` 已退役为
+ * 「复用/迁入来源」，真正的落点由托管根（`<configDir>/runtimes/python/<version>/`
+ * + `current` 指针）决定 —— 优先级与判据只在 core/runtimes/python.ts 的
+ * `resolvePythonVenv` 一处（唯一真源），本文件通过 `EnvContext.venvDir` 收下结论。
+ * 为什么这样切：documents/ 不许 import core（AGENTS.md §1），而「落点在哪」要知道
+ * 配置目录、版本指针与旧路径是否存在 —— 那三样都是宿主侧知识。切完之后本文件仍是
+ * 「内容 + 环境」的纯函数层：给一个 venv 目录，把环境装到就绪。
+ *
  * 为什么状态机是纯函数 + spawn 注入：documents/ 不许 import pi/electron
  * （AGENTS.md §1），这一层是我们最重的模块，测试是 AI 写它时唯一的护栏 ——
  * 全部迁移都能用 fake spawn 在单测里跑完，不需要真装 Python。
+ * 相位推进的**驱动**（取下一步 → spawn → 喂回）已抽到 core/runtimes/machine.ts，
+ * 本文件只留纯函数（initialEnvState / nextStep / reduce）——「同样输入必得同样指令」
+ * 这条性质因此还能被逐相位断言，而多运行时共用同一套驱动。
  *
  * 与 agent shell 能力的关系（2026-09-17 修订，见 spec：转换调用受控）：
  * ensure/convert 都是 daemon 进程内受控 spawn（命令与参数全部写死在本文件，
  * 模型只能给 HTML 输入与产物路径），**转换这条链路**仍然不经 agent 的 shell。
  * 但解释器路径本身会交给模型（隐藏注入而非系统提示词 —— 它随机器变，进提示词
  * 就是「换机即断前缀」，片段 resources/prompts/fragments/python-env.md 只留恒定
- * 纪律文字；实际取值经 daemon 的 docxPythonPath 进 hidden context 的 python_env
- * 段），模型可以用它跑自己写的脚本 —— 原因是模型缺库时会去
+ * 纪律文字；实际取值经 daemon 的运行时清单（core/runtime-inventory.ts）进 hidden
+ * context 的 python_env 段），模型可以用它跑自己写的脚本 —— 原因是模型缺库时会去
  * `pip install`，而 pip 在写入沙箱里必定失败（Python 的 tempfile 用 0700 建
  * 受保护 DACL，见 AGENTS.md 引的 docs/ARCHITECTURE.md 已知边界第 8 条）。
  */
@@ -103,29 +115,35 @@ export interface EnvContext {
 	readonly homeDir: string;
 	/** process.platform；注入是为了让 Windows 布局在测试里可断言。 */
 	readonly platform: string;
+	/**
+	 * venv 根 —— **注入值**，本文件不推导它。
+	 * 判据与优先级（托管根 current > 既有 ~/.venv-html-to-docx > 待安装）
+	 * 只在 core/runtimes/python.ts 的 resolvePythonVenv 一处；`HTML_TO_DOCX_VENV`
+	 * 覆盖口的读取也在那边（唯一真源，避免两处各判一遍后分叉）。
+	 */
+	readonly venvDir: string;
 }
 
 export function createEnvContext(
 	engineDir: string,
 	homeDir: string,
 	platform: string,
+	venvDir: string,
 ): EnvContext {
-	return { engineDir, homeDir, platform };
+	return { engineDir, homeDir, platform, venvDir };
 }
 
-/** venv 根。可用 HTML_TO_DOCX_VENV 覆盖（WB 脚本同款 env，私有化预置环境用）。 */
-export function venvDir(ctx: EnvContext): string {
-	const override = process.env["HTML_TO_DOCX_VENV"];
-	return override !== undefined && override !== ""
-		? override
-		: join(ctx.homeDir, ".venv-html-to-docx");
+/**
+ * venv 解释器路径（纯函数）。
+ * Windows 布局是 Scripts/python.exe，posix 是 bin/python。
+ */
+export function venvPythonPath(venvDir: string, platform: string): string {
+	return platform === "win32" ? join(venvDir, "Scripts", "python.exe") : join(venvDir, "bin", "python");
 }
 
-/** venv 解释器。Windows 布局是 Scripts/python.exe，posix 是 bin/python。 */
+/** 当前上下文里的 venv 解释器。 */
 export function venvPython(ctx: EnvContext): string {
-	return ctx.platform === "win32"
-		? join(venvDir(ctx), "Scripts", "python.exe")
-		: join(venvDir(ctx), "bin", "python");
+	return venvPythonPath(ctx.venvDir, ctx.platform);
 }
 
 /**
@@ -221,7 +239,7 @@ export function nextStep(state: EnvState, ctx: EnvContext): SpawnRequest | null 
 			return { command: venvPython(ctx), args: ["--version"] };
 		case "create-venv":
 			// --clear 对应 WB 的 rm -rf 后重建（版本不符/损坏的 venv 直接清掉重来）。
-			return { command: uvOf(state), args: ["venv", "--python", "3.12", "--clear", venvDir(ctx)] };
+			return { command: uvOf(state), args: ["venv", "--python", "3.12", "--clear", ctx.venvDir] };
 		case "smoke-deps":
 			return { command: venvPython(ctx), args: ["-c", DEPS_PROBE] };
 		case "install-deps":
@@ -330,7 +348,7 @@ export function reduce(state: EnvState, outcome: SpawnOutcome, ctx: EnvContext):
 			const missing = parseMissingModule(outcome.stdout);
 			if (missing === null) return { ...state, phase: "smoke-engine" };
 			if (state.depsInstallAttempted === true) {
-				return fail("smoke-deps", `依赖安装一轮后仍缺 ${missing}（venv 可能损坏，可删除 ${venvDir(ctx)} 后重试）`);
+				return fail("smoke-deps", `依赖安装一轮后仍缺 ${missing}（venv 可能损坏，可删除 ${ctx.venvDir} 后重试）`);
 			}
 			return { ...state, phase: "install-deps", depsInstallAttempted: true };
 		}
@@ -370,45 +388,20 @@ function parseMissingModule(stdout: string): string | null {
 	return "unknown";
 }
 
-/* ── 驱动：幂等 ensure ────────────────────────────────────────────── */
-
-export type EnsureResult =
-	| { readonly status: "ready"; readonly python: string; readonly venvDir: string }
-	| { readonly status: "failed"; readonly phase: EnvPhase; readonly error: string };
+/* ── ensure 的产出契约 ────────────────────────────────────────────── */
 
 /**
- * 幂等确保 venv 就绪。已就绪时只做探测（约 5 次快速 spawn）秒退；
- * 缺啥装啥。对应 WB「每次转换前重跑 setup 脚本 + SessionStart 预热」的调用语义。
+ * 幂等 ensure 的产出。`phase` 是**归因**（失败时停在哪个相位），工具层据此写给
+ * 模型可行动的文案（docx-convert.ts 的 classifyEnsureError）。
+ *
+ * 为什么 phase 是 string 而不是 EnvPhase：驱动（取下一步 → spawn → 喂回）已挪到
+ * core/runtimes/machine.ts 与 registry.ts，托管安装还会多出几个非 venv 相位
+ * （暂存进位后复验、发布 current 失败等）。把它们塞进 EnvPhase 只能靠伪造相位，
+ * 如实放宽成 string 更好 —— 归因的语义没变，只是不再假装只有九相位。
  */
-export async function ensureDocxEnv(ctx: EnvContext, spawnFn: SpawnFn): Promise<EnsureResult> {
-	let state: EnvState = initialEnvState();
-	/*
-	 * 迁移步数上界：状态机构造上有限（uvIndex/moduleIndex 有界、depsInstallAttempted
-	 * 只翻转一次、其余相位单调前进），这里是防 reduce 改出循环 bug 时把 daemon 挂死 ——
-	 * 撞线即响亮报错，不是静默兜底。
-	 */
-	for (let step = 0; step < 40; step += 1) {
-		const req = nextStep(state, ctx);
-		if (req === null) break;
-		const outcome = await spawnFn(req);
-		state = reduce(state, outcome, ctx);
-	}
-	if (state.phase === "ready") {
-		return { status: "ready", python: venvPython(ctx), venvDir: venvDir(ctx) };
-	}
-	if (state.phase === "failed") {
-		return {
-			status: "failed",
-			phase: state.failedAt ?? "failed",
-			error: state.error ?? "未知失败",
-		};
-	}
-	return {
-		status: "failed",
-		phase: state.phase,
-		error: `ensure 步数超限（状态机未能收敛，停在 ${state.phase}）`,
-	};
-}
+export type EnsureResult =
+	| { readonly status: "ready"; readonly python: string; readonly venvDir: string }
+	| { readonly status: "failed"; readonly phase: string; readonly error: string };
 
 /* ── 诊断：四态探测（只读，绝不变更环境） ──────────────────────────── */
 

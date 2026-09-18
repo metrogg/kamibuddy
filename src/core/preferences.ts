@@ -107,6 +107,23 @@ export interface Preferences {
 	 * `user-invocable` / `disable-model-invocation` 各自生效，互不覆盖。
 	 */
 	readonly skillOverrides?: SkillOverrides;
+	/**
+	 * 托管运行时的开关（spec: add-managed-runtimes）。
+	 *
+	 * 缺省语义收在调用方一处（core/runtime-inventory.ts 的 readRuntimeSwitch：
+	 * 总开关与逐项都按**开启**处理 —— 既有行为是「运行时随包提供、自动准备」，
+	 * 不新增开关也照样如此）。这里只存用户的**显式决定**：关闭写 false、
+	 * 打开写 true，于是「已禁用」与「从没设置过」在文件里可区分，
+	 * 将来改缺省值不会悄悄推翻用户的选择。
+	 */
+	readonly runtimes?: RuntimePrefs;
+}
+
+export interface RuntimePrefs {
+	/** 总开关（「内置运行时」那一级）。缺省 true。 */
+	readonly enabled?: boolean;
+	/** 逐运行时开关（运行时 id → 是否启用）。`false` = 用户显式禁用；缺键 = 未设置（按启用）。 */
+	readonly items?: Readonly<Record<string, boolean>>;
 }
 
 export interface WebSearchPrefs {
@@ -149,6 +166,7 @@ export function readPreferences(): Preferences {
 			agentTeamsEnabled?: unknown;
 			spawnBudget?: unknown;
 			subagentTimeoutMs?: unknown;
+			runtimes?: unknown;
 		};
 		const key =
 			typeof record.activeModelKey === "string" && record.activeModelKey !== ""
@@ -227,6 +245,8 @@ export function readPreferences(): Preferences {
 		const subagentTimeoutMs = optPositiveInt("subagentTimeoutMs");
 		// 技能启停：逐条形状校验（坏键 / 坏值忽略并记日志），见 readSkillOverrides。
 		const skillOverrides = readSkillOverrides(rec["skillOverrides"]);
+		// 托管运行时开关：形状校验同 skillOverrides（手改的坏键只忽略那一条）。
+		const runtimes = readRuntimePrefs(rec["runtimes"]);
 		return {
 			activeModelKey: key,
 			...(webSearch !== undefined && webSearch.providerId !== ""
@@ -247,6 +267,7 @@ export function readPreferences(): Preferences {
 			...(welcomeGreeting !== undefined ? { welcomeGreeting } : {}),
 			...(showChangeDetails !== undefined ? { showChangeDetails } : {}),
 			...(skillOverrides !== undefined ? { skillOverrides } : {}),
+			...(runtimes !== undefined ? { runtimes } : {}),
 		};
 	} catch {
 		return EMPTY;
@@ -320,6 +341,44 @@ function readSkillOverrides(value: unknown): SkillOverrides | undefined {
 		out[name] = state;
 	}
 	return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/**
+ * 解析托管运行时开关。
+ *
+ * 容错口径同 skillOverrides（手改文件的可再生字段不值得打挂启动路径）：
+ * 坏形状整块忽略并记一行日志，items 里坏值逐条忽略；一条都不剩 → 归一 undefined，
+ * 让「没设置过」只有一种表示（写入侧同样在无内容时不写这个键）。
+ */
+function readRuntimePrefs(value: unknown): RuntimePrefs | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		console.error("偏好文件的 runtimes 应为对象（{ enabled, items }），已整块忽略：", value);
+		return undefined;
+	}
+	const record = value as { enabled?: unknown; items?: unknown };
+	const enabled = typeof record.enabled === "boolean" ? record.enabled : undefined;
+	let items: Record<string, boolean> | undefined;
+	if (record.items !== undefined) {
+		if (typeof record.items !== "object" || record.items === null || Array.isArray(record.items)) {
+			console.error("偏好文件的 runtimes.items 应为对象（运行时 id → 布尔），已忽略：", record.items);
+		} else {
+			const kept: Record<string, boolean> = {};
+			for (const [id, state] of Object.entries(record.items as Record<string, unknown>)) {
+				if (typeof state !== "boolean") {
+					console.error(`runtimes.items["${id}"] 应为布尔值，实际是 ${JSON.stringify(state)}，已忽略该条`);
+					continue;
+				}
+				kept[id] = state;
+			}
+			items = Object.keys(kept).length === 0 ? undefined : kept;
+		}
+	}
+	if (enabled === undefined && items === undefined) return undefined;
+	return {
+		...(enabled === undefined ? {} : { enabled }),
+		...(items === undefined ? {} : { items }),
+	};
 }
 
 export function writePreferences(preferences: Preferences): void {

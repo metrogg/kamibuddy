@@ -113,7 +113,7 @@ export const DEFAULT_EXTRACT_TIMEOUT_MS = 120_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 
 export interface ExtractRequest {
-	/** venv 解释器（ensureDocxEnv 的产出）。 */
+	/** venv 解释器（ensurePythonRuntime 的产出）。 */
 	readonly python: string;
 	/** 引擎目录（resources/docx-engine）——CLI 的 cwd 与 PYTHONPATH。 */
 	readonly engineDir: string;
@@ -228,7 +228,7 @@ function parseFailureJson(stderr: string, code: number | null): DocxExtractError
 /**
  * 跑一次提取。成功返回产物路径、图片清单、警告与不可复原项；
  * 失败一律抛 DocxExtractError（带分类与可执行建议）。
- * 调用前必须先 ensureDocxEnv 就绪（或走工具层的组合入口）。
+ * 调用前必须先 ensurePythonRuntime 就绪（或走工具层的组合入口）。
  */
 export async function extractDocxToHtml(
 	req: ExtractRequest,

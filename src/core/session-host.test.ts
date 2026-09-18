@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 回归测试：回复输出完后 UI 卡在「正在思考…」（isStreaming 永远为 true）。
  *
  * 根因（pi 源码实证）：
@@ -1093,6 +1093,7 @@ import type {
 	RunLedgerEntryKind,
 } from "../shared/observability.ts";
 import { HIDDEN_CONTEXT_CUSTOM_TYPE, RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
+import type { RuntimeInventory } from "../shared/runtimes.ts";
 import type { RunLedger } from "./run-ledger.ts";
 
 interface LedgerCall<K extends RunLedgerEntryKind = RunLedgerEntryKind> {
@@ -1149,7 +1150,7 @@ function createLedgerHost(
 	ledger: RunLedger,
 	segments?: readonly { source: string; chars: number }[],
 	expertLabel?: string,
-	pythonPath?: string,
+	runtimes?: RuntimeInventory,
 ): SessionHost {
 	const options: SessionHostOptions = {
 		catalog: {} as unknown as ModelCatalog,
@@ -1163,7 +1164,7 @@ function createLedgerHost(
 		createLedger: () => ledger,
 		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
 		...(expertLabel === undefined ? {} : { getExpertLabel: () => expertLabel }),
-		...(pythonPath === undefined ? {} : { pythonPath }),
+		...(runtimes === undefined ? {} : { getRuntimeInventory: () => runtimes }),
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -2156,18 +2157,54 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		expect(out[2]?.content).toBe("你好");
 	});
 
-	it("python_env 段：托管解释器路径经注入送达（随机器变的事实不进系统提示词）", async () => {
+	it("python_env 段：运行时清单（id/版本/状态/用途）经注入送达，「被禁用」与「找不到」可区分", async () => {
 		/*
 		 * 该事实曾以 `{{pythonPath}}` 槽位拼在场景骨架里（系统提示词内部）——
-		 * 它随 homedir / 安装位置 / HTML_TO_DOCX_VENV 变，进提示词就是「重建 venv /
-		 * 换机器即断前缀」。现在它只有一个出口：hidden context 的 `python_env` 段
-		 * （spec: stabilize-prompt-prefix）。这条断言就是「信息没丢」的取证。
+		 * 它随 homedir / 安装位置 / HTML_TO_DOCX_VENV / 用户开关变，进提示词就是
+		 * 「重建 venv / 换机器 / 切开关即断前缀」。现在它只有一个出口：hidden context
+		 * 的 `python_env` 段（spec: stabilize-prompt-prefix + add-managed-runtimes 阶段 5）。
+		 *
+		 * 条目级断言（spec Task 5.1 的验收）：清单逐项给出 id / 版本 / 状态 / 用途；
+		 * 「已被用户禁用」与「尚未准备」在模型看到的信息里**可区分**；被禁用的项
+		 * **不出现路径**（spec: 关闭某个运行时 ⇒ 路径不注入）。
 		 */
 		const PYTHON_PATH = "C:\\Users\\tester\\.venv-html-to-docx\\Scripts\\python.exe";
+		const inventory: RuntimeInventory = {
+			master: true,
+			items: [
+				{
+					id: "python",
+					label: "Python（docx 引擎）",
+					purpose: "文档转换（docx 引擎的解释器）",
+					version: "3.12",
+					enabled: true,
+					status: { kind: "ready" },
+					activeDir: "C:\\cfg\\runtimes\\python\\3.12\\venv",
+					executable: PYTHON_PATH,
+					executableLabel: "Python 解释器",
+				},
+				{
+					id: "node",
+					label: "Node",
+					purpose: "运行 JavaScript / Node 脚本",
+					version: "22",
+					enabled: false,
+					status: { kind: "disabled" },
+				},
+				{
+					id: "gitbash",
+					label: "Git Bash",
+					purpose: "提供 bash 与常用 unix 工具",
+					version: "2.47",
+					enabled: true,
+					status: { kind: "missing", detail: "尚无可用实例" },
+				},
+			],
+		};
 		const { ledger } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
 		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
-		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, PYTHON_PATH);
+		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, inventory);
 		await host.prompt("你好");
 
 		const out = (await agent.transformContext?.([
@@ -2175,12 +2212,21 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		])) as { role: string; content: unknown }[];
 		const content = String(out[1]?.content);
 		expect(content).toContain("<python_env>");
-		expect(content).toContain(`Python 解释器：${PYTHON_PATH}`);
+		expect(content).toContain("Python 解释器：" + PYTHON_PATH);
+		// 就绪项给落点与用途
+		expect(content).toContain("python 3.12 · 就绪 · 文档转换（docx 引擎的解释器）");
+		// 被禁用：明说被禁用 + 给出该走的那一步，且**不给路径**
+		expect(content).toContain("node 22 · 已被用户禁用");
+		expect(content).toContain("已被用户禁用：不要调用它");
+		expect(content).not.toContain("C:\\cfg\\runtimes\\node");
+		// 未就绪：与「被禁用」不同的一句话（后者说的是用户关掉了它）
+		expect(content).toContain("gitbash 2.47 · 未就绪（尚未准备）");
+		expect(content).toContain("该运行时尚未准备好：首次使用会自动准备");
 		expect(content).toContain("</python_env>");
-		// 与「解释器路径」无关的段不受影响（同一容器里的 workspace_context 仍在）。
+		// 与「运行时清单」无关的段不受影响（同一容器里的 workspace_context 仍在）。
 		expect(content).toContain("<workspace_context>");
 
-		// 不注入（子代理 / 成员会话的宿主不给这个值）：整段缺席，不留空壳。
+		// 不注入（子代理 / 成员会话的宿主不给这条取值函数）：整段缺席，不留空壳。
 		// 换一套 session/agent：同一个 agent 上再包一层会让上面那次的注入也出现在
 		// 返回值里（两层 transformContext 包装），断言就测不到「不注入」。
 		const bareSession = createLedgerSession();
@@ -2193,6 +2239,34 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		const bareContent = String(bareOut[1]?.content);
 		expect(bareContent).toContain("<workspace_context>");
 		expect(bareContent).not.toContain("python_env");
+	});
+
+	it("总开关关闭：清单仍列出运行时而状态是被禁用（模型侧与设置页同一份结论）", async () => {
+		const inventory: RuntimeInventory = {
+			master: false,
+			items: [
+				{
+					id: "python",
+					label: "Python（docx 引擎）",
+					purpose: "文档转换（docx 引擎的解释器）",
+					version: "3.12",
+					enabled: true,
+					status: { kind: "disabled" },
+				},
+			],
+		};
+		const { ledger } = createFakeLedger();
+		const { session, agent } = createLedgerSession();
+		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
+		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, inventory);
+		await host.prompt("你好");
+		const out = (await agent.transformContext?.([
+			{ role: "user", content: "你好", timestamp: 1 },
+		])) as { role: string; content: unknown }[];
+		const content = String(out[1]?.content);
+		// 用途/状态还在（模型知道「有这么个运行时、但被关掉了」），路径不在。
+		expect(content).toContain("python 3.12 · 已被用户禁用 · 文档转换（docx 引擎的解释器）");
+		expect(content).not.toContain("Python 解释器：");
 	});
 
 	it("相邻两轮：首条差异落在上一轮尾部那条注入上（上一轮整段仍在命中前缀里）", async () => {
