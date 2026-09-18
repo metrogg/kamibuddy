@@ -161,7 +161,7 @@ describe("私有技能收集", () => {
 		// 目录名与全局技能不同名，但 frontmatter name 撞上全局 —— 证明用的是 frontmatter name。
 		writeExpertSkill(builtinDir, "work-report", "some-dir", "docx");
 
-		expect(() => load()).toThrow(/技能名「docx」重复/);
+		expect(() => load()).toThrow(/技能名「docx」与全局技能重名/);
 	});
 
 	it("技能子目录的附带文件与子目录不影响加载", () => {
@@ -278,12 +278,26 @@ describe("报错路径", () => {
 		expect(() => load()).toThrow(/技能目录缺少 SKILL\.md/);
 	});
 
-	it("SKILL.md 缺 name → 抛错", () => {
+	it("SKILL.md 缺 name → pi 用目录名兜底，技能仍加载（不报错）", () => {
+		// 这条与旧行为相反：旧解析器要求 name 必填，而 pi（真正的加载方）在 name
+		// 缺省时用技能目录名兜底并照常加载。加载器的口径跟着 pi 走，否则会出现
+		// 「我们说这个技能坏了、模型却看得到它」。
 		writeBuiltin("work-report");
 		const skillDir = join(builtinDir, "work-report", "skills", "no-name");
 		mkdirSync(skillDir, { recursive: true });
 		writeFileSync(join(skillDir, "SKILL.md"), expertDoc("description: 只有描述"));
-		expect(() => load()).toThrow(/SKILL\.md.*name/);
+
+		const expert = load().find((e) => e.name === "work-report");
+		expect(expert?.skillsDir).toBeDefined();
+	});
+
+	it("SKILL.md 缺 description → pi 不加载它，加载器报错（模型看不到 = 技能丢了）", () => {
+		writeBuiltin("work-report");
+		const skillDir = join(builtinDir, "work-report", "skills", "no-desc");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(join(skillDir, "SKILL.md"), "---\nname: no-desc\n---\n\n正文");
+
+		expect(() => load()).toThrow(/SKILL\.md.*没有加载这个技能/);
 	});
 
 	it("私有技能与全局技能重名 → 抛错且含两边路径", () => {
@@ -296,15 +310,18 @@ describe("报错路径", () => {
 		expect(message).toContain(join(builtinDir, "work-report", "skills", "docx", "SKILL.md"));
 	});
 
-	it("两个专家的私有技能重名 → 抛错且含两边路径", () => {
+	it("两个专家的私有技能重名 → 允许（上游专家包共享技能池，且一会话只绑一个专家）", () => {
 		writeBuiltin("expert-a");
 		writeBuiltin("expert-b");
 		writeExpertSkill(builtinDir, "expert-a", "shared");
 		writeExpertSkill(builtinDir, "expert-b", "shared-dir", "shared");
 
-		const message = errorMessage(load);
-		expect(message).toContain(join(builtinDir, "expert-a", "skills", "shared", "SKILL.md"));
-		expect(message).toContain(join(builtinDir, "expert-b", "skills", "shared-dir", "SKILL.md"));
+		const experts = load();
+		// 各自保留自己的那份（专家必须自包含：绑定谁都拿得到它的技能）。
+		const a = experts.find((e) => e.name === "expert-a");
+		const b = experts.find((e) => e.name === "expert-b");
+		expect(a?.skillsDir).toBeDefined();
+		expect(b?.skillsDir).toBeDefined();
 	});
 
 	it("用户目录里的坏文件同样抛错，不因为是用户级就放宽", () => {
@@ -319,38 +336,74 @@ describe("真实 resources/experts/ 的回归约束", () => {
 	// （与 agents.test.ts 里内置四员回归测试同款防护）。
 	const realBuiltin = resolve(import.meta.dirname, "..", "..", "resources", "experts");
 	const realSkills = resolve(import.meta.dirname, "..", "..", "resources", "skills");
-	// 用户目录传一个必不存在的路径（root 由 beforeEach 建好，收集期拿不到，故在 it 内求值）。
-	const noUser = () => join(root, "无用户目录");
+	// 用户目录传一个必不存在的路径（root 由 beforeEach 建好，收集期拿不到）。
+	const noUserDir = join(realBuiltin, "__不存在的用户目录__");
+	/**
+	 * 只加载一次，三个用例共用：loadExperts 现在会走 pi 的技能加载器（真 YAML 解析
+	 * 每个 SKILL.md，14 个专家约 40 份），每处各调一次等于把这份开销乘三 ——
+	 * 并行跑测试时会顶到别的用例的 5s 超时线（实测 doc-extract 因此偶发超时）。
+	 * 写在 describe 体里 = 只在收集期付一次。
+	 */
+	const realExperts = loadExperts(realBuiltin, noUserDir, realSkills);
 
-	it("内置五员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
-		const experts = loadExperts(realBuiltin, noUser(), realSkills);
+	it("内置十四员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
+		// 后 9 员是「最佳实践案例」绑定的专家，从 WorkBuddy 专家中心照搬
+		// （来源见各目录 README.md）；它们必须能被专家菜单正常列出。
+		const experts = realExperts;
 		expect(experts.map((e) => e.name)).toEqual([
+			"data-analytics-reporter",
+			"deep-research",
+			"developer-evangelist",
 			"equity-research",
 			"gpt-researcher-team",
 			"long-manuscript-expert",
+			"market-researcher",
+			"openspec-doc-team",
+			"ppt-creation-expert",
+			"technical-documentation-engineer",
+			"trend-researcher",
 			"ui-designer",
+			"visual-storytelling-expert",
 			"workspace-builder",
 		]);
 		// displayName/profession 是模式菜单与对话头部的展示字段，逐个钉死：
 		// 少一个专家或错一个名字都要亮红，不用「非空」这类宽松断言。
 		expect(Object.fromEntries(experts.map((e) => [e.name, e.displayName]))).toEqual({
+			"data-analytics-reporter": "舒明析",
+			"deep-research": "深研研",
+			"developer-evangelist": "布道道",
 			"equity-research": "严估深",
 			"gpt-researcher-team": "深度研究团队",
 			"long-manuscript-expert": "福帮手",
+			"market-researcher": "严研行",
+			"openspec-doc-team": "专业文档生成团队",
+			"ppt-creation-expert": "腾讯云知（乐享）",
+			"technical-documentation-engineer": "文通通",
+			"trend-researcher": "风向标",
 			"ui-designer": "像素君",
+			"visual-storytelling-expert": "图说说",
 			"workspace-builder": "小台",
 		});
 		expect(Object.fromEntries(experts.map((e) => [e.name, e.profession]))).toEqual({
+			"data-analytics-reporter": "数据分析报告师",
+			"deep-research": "深度研究专家",
+			"developer-evangelist": "开发者布道师",
 			"equity-research": "股票研究专家",
 			"gpt-researcher-team": "多源深度研究报告工坊",
 			"long-manuscript-expert": "长文档写作与改稿专家",
+			"market-researcher": "行业研究员",
+			"openspec-doc-team": "专业文档生成团队",
+			"ppt-creation-expert": "腾讯云PPT制作专家",
+			"technical-documentation-engineer": "技术文档工程师",
+			"trend-researcher": "行业趋势专家",
 			"ui-designer": "UI设计师",
+			"visual-storytelling-expert": "视觉叙事专家",
 			"workspace-builder": "工作台搭建师",
 		});
 	});
 
-	it("私有技能分布：只有三人带私有技能，数量精确", () => {
-		const experts = loadExperts(realBuiltin, noUser(), realSkills);
+	it("私有技能分布：数量精确（技能 frontmatter 由 pi 的加载器判定，不是我们自解析）", () => {
+		const experts = realExperts;
 		const counts = Object.fromEntries(
 			experts.map((e) => [
 				e.name,
@@ -361,16 +414,27 @@ describe("真实 resources/experts/ 的回归约束", () => {
 			]),
 		);
 		expect(counts).toEqual({
+			"data-analytics-reporter": 0,
+			// 它的 wechat-article-search 已在 resources/plugins/ 全局预装，故专家目录里不再放一份
+			"deep-research": 0,
+			"developer-evangelist": 0,
 			"equity-research": 15,
 			"gpt-researcher-team": 0,
 			"long-manuscript-expert": 9,
+			"market-researcher": 7,
+			"openspec-doc-team": 0,
+			// 同 deep-research：ppt-implement 技能已全局预装
+			"ppt-creation-expert": 0,
+			"technical-documentation-engineer": 5,
+			"trend-researcher": 3,
 			"ui-designer": 1,
+			"visual-storytelling-expert": 3,
 			"workspace-builder": 0,
 		});
 	});
 
 	it("每员的展示字段与正文人格齐全，且不顺带与全局技能重名", () => {
-		const experts = loadExperts(realBuiltin, noUser(), realSkills);
+		const experts = realExperts;
 		for (const expert of experts) {
 			expect(expert.displayName, `${expert.name} 应有 displayName`).not.toBe("");
 			expect(expert.profession, `${expert.name} 应有 profession`).not.toBe("");

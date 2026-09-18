@@ -35,7 +35,28 @@
 | `chipKind` | `playbook` 或 `scene`，只决定提示词从哪来 |
 | `prompts` | 仅 `chipKind: "scene"` 用：内联提示词数组 |
 
-`cases.json`（数组）：`id` / `chipId` / `title` / `subtitle` / `prompt` / `cover`。
+`cases.json`（数组）：`id` / `chipId` / `title` / `subtitle` / `prompt` / `expert` / `cover`。
+
+## 案例绑定的专家（已随包预装）
+
+WorkBuddy 的每条案例都带一个专家（上游字段 `experts[0].id`，如 `TechnicalDocumentationEngineer`）。
+这些专家已搬进 `resources/experts/`（人设 + 各自私有技能，来源见各专家目录的 README.md），
+`cases.json` 的 `expert` 存的是**我们的专家目录名**：
+
+| 案例 | WorkBuddy 专家 id | 我们的目录 |
+|---|---|---|
+| doc-book-summary-notes / doc-api-reference | TechnicalDocumentationEngineer | `technical-documentation-engineer` |
+| doc-meeting-decision-digest | OpenSpecDocTeam | `openspec-doc-team` |
+| data-global-population-structure / data-ecommerce-rfm-value | DataAnalyticsReporter | `data-analytics-reporter` |
+| data-gdp-hdi-explorer | VisualStorytellingExpert | `visual-storytelling-expert` |
+| research-cheetah-conservation | DeepResearchExpert | `deep-research` |
+| research-gold-price-drivers | FsiMarketResearcher | `market-researcher` |
+| research-ai-coding-business-model | TrendResearcher | `trend-researcher` |
+| ppt-popmart-brand-intro / ppt-journey-west-intro | PptCreationExpert | `ppt-creation-expert` |
+| ppt-ai-history-timeline | DeveloperEvangelist | `developer-evangelist` |
+
+`expert` 目前只进数据与校验（`resources.test.ts` 断言它指向真实存在的专家目录），
+**尚未参与交互** —— WorkBuddy 是点卡片时顺带安装/启用该专家，我们还没有这一步。
 
 ## 依赖的插件（已随包预装）
 

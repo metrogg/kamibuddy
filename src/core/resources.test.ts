@@ -5,7 +5,7 @@
  * （回落到 pi 的 coding assistant 提示词）。每条报错路径都有测试压着。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { formatSkillsForPrompt, loadSkills } from "@earendil-works/pi-coding-agent";
@@ -231,6 +231,7 @@ describe("首页预设加载（welcome/）", () => {
 		title: "标题",
 		subtitle: "副标题",
 		prompt: "提示词",
+		expert: "doc-expert",
 		cover: "https://example.com/c.png",
 	};
 
@@ -557,6 +558,11 @@ describe("真实 resources/ 的回归约束", () => {
 		const chipIds = new Set(welcome.chips.map((c) => c.id));
 		for (const item of welcome.cases) {
 			expect(chipIds.has(item.chipId), `案例 ${item.id} 的胶囊「${item.chipId}」应存在`).toBe(true);
+		}
+		// 跨资源：案例绑定的专家必须是真实存在的专家目录（绑错 = 这条案例点了没专家可带）。
+		const expertDirs = new Set(readdirSync(join(realDir, "experts")));
+		for (const item of welcome.cases) {
+			expect(expertDirs.has(item.expert), `案例 ${item.id} 绑定的专家「${item.expert}」应存在`).toBe(true);
 		}
 	});
 

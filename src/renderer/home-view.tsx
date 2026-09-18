@@ -140,7 +140,13 @@ function CaseCover({
 	const [failed, setFailed] = useState(false);
 	return (
 		<span className="case-cover">
-			{failed ? <Icon size={28} /> : <img src={cover} alt="" loading="lazy" onError={() => setFailed(true)} />}
+			{failed ? (
+				<span className="case-cover-fallback">
+					<Icon size={28} />
+				</span>
+			) : (
+				<img src={cover} alt="" loading="lazy" onError={() => setFailed(true)} />
+			)}
 		</span>
 	);
 }

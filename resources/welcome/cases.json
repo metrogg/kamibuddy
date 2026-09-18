@@ -5,8 +5,8 @@
 		"title": "《思考，快与慢》精读笔记卡",
 		"subtitle": "把认知心理学经典整理成可随时翻阅的知识卡片",
 		"prompt": "帮我把《思考，快与慢》（丹尼尔·卡尼曼）整理成一份精美的读书笔记网页，单文件HTML。要优雅的阅读笔记风格：米色纸感背景、衬线标题、书签色带。内容包括书籍信息（作者/领域/核心命题）、一句话总览、系统1与系统2的双系统核心框架对比、关键认知偏误卡片（锚定、可得性、损失厌恶、框架效应等）、全书章节脉络图、3-5条金句引用块、对工作和决策的行动启发、以及适合谁读。用图书馆书架的大图做hero并叠渐变蒙版压标题。要响应式，手机上不裁切。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-book-summary-notes/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "technical-documentation-engineer",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-book-summary-notes/cover-portrait.png"
 	},
 	{
 		"id": "doc-api-reference",
@@ -14,8 +14,8 @@
 		"title": "Orders API 接口文档",
 		"subtitle": "订单服务 REST API 开发者参考文档",
 		"prompt": "帮我写一份「订单服务 Orders API」的 REST 接口参考文档，做成单文件 HTML，开发者文档风（类似 Stripe/ReadMe）：左侧是端点导航、点击平滑滚动到右侧详情，深色代码卡呈现请求/响应。内容要自洽完整：API 概览、Bearer Token 鉴权与基础 URL，以及 GET /orders、POST /orders、GET /orders/{id}、PATCH、DELETE 共五个端点，每个含方法/路径/参数表/curl 请求示例/JSON 响应示例/状态码；再加通用错误码表、限流说明和版本变更。HTTP 方法用语义色标签，要响应式、不要外链。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-api-reference/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "technical-documentation-engineer",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-api-reference/cover-portrait.png"
 	},
 	{
 		"id": "doc-meeting-decision-digest",
@@ -23,8 +23,8 @@
 		"title": "会议决议精炼看板",
 		"subtitle": "把冗长会议记录提炼成决议、待办与时间线",
 		"prompt": "帮我把一场跨部门季度评审会的记录提炼成会议决议看板（单文件 HTML）。要直观看到：会议主题/时间/参会人/一句话结论与会议健康度、决议事项与待办事项双栏（待办含负责人/截止/优先级）、议题时间线、分歧与风险、下次会议安排。浅灰极简办公风、时间线 + 双栏布局，界面中文。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-meeting-decision-digest/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "openspec-doc-team",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/doc-meeting-decision-digest/cover-portrait.png"
 	},
 	{
 		"id": "data-global-population-structure",
@@ -32,8 +32,8 @@
 		"title": "八十二亿之后：全球人口结构与趋势图志",
 		"subtitle": "杂志信息图风 · 人口峰值、老龄化、生育率下降与区域分化",
 		"prompt": "帮我做一个单文件 HTML 的全球人口结构与趋势数据可视化页面，杂志信息图/编辑设计风（明亮大胆、强对比大色块、超大数字排版、图片裁成色块拼贴）。要用联合国 World Population Prospects 2024 的真实数据：2024 年世界人口约 82 亿，预计 2084 年前后达峰约 103 亿、2100 年约 102 亿，全球总和生育率约 2.3（更替水平 2.1），印度 2023 年超越中国，65 岁以上人口将在 2070 年代后期超过 18 岁以下儿童。页面要包含：带城市航拍配图的 Hero 和 82 亿→103 亿叙事、关键数字指标墙、人口达峰曲线（SVG，标注峰值点）、多区域生育率下降折线（世界/非洲/亚洲/欧洲含更替线）、老龄化 65+ vs 18− 交叉图、印度 vs 中国人口交叉、区域增长分化板块（穿插人群配图）、来源与建模说明页脚。所有 CSS/JS 和两张图片都内联，不要外链，界面用简体中文，图表用 SVG 绘制不要溢出坐标轴。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-global-population-structure/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "data-analytics-reporter",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-global-population-structure/cover-portrait.png"
 	},
 	{
 		"id": "data-ecommerce-rfm-value",
@@ -41,8 +41,8 @@
 		"title": "电商用户价值 RFM 分析驾驶舱",
 		"subtitle": "RFM 模型 + 8 层用户分层运营策略",
 		"prompt": "我是电商运营，想要一份用户价值分析报告（单文件 HTML，深色数据驾驶舱风格）。请用 RFM 模型把我们的活跃用户分成重要价值/重要保持/重要发展/重要挽留/一般价值/一般保持/一般发展/流失预警共 8 层。页面要有：店铺信息和分析周期的 Hero、活跃用户数/GMV/客单价/复购率四个关键指标卡、RFM 三维说明、用 SVG 画的分层矩阵热力格、各层人数占比 vs GMV 贡献占比的对比条形图（体现二八结构）、4-8 张分层运营策略卡（含人群特征、典型 RFM 分数、运营动作、预期目标）、近 6 个月趋势折线，以及方法口径脚注。请使用真实电商公开数据集或用户提供的真实数据；如仅演示可用合成数据但须在脚注明确标注为合成、且内部勾稽一致，纯 SVG/CSS 不要外链。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-ecommerce-rfm-value/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "data-analytics-reporter",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-ecommerce-rfm-value/cover-portrait.png"
 	},
 	{
 		"id": "data-gdp-hdi-explorer",
@@ -50,8 +50,8 @@
 		"title": "GDP 之外：用 HDI 重新丈量发展",
 		"subtitle": "经济总量 ≠ 人类发展水平的跨国数据星图",
 		"prompt": "帮我做一个单文件 HTML 数据可视化页面，主题是『GDP 之外：用 HDI 重新丈量发展』，讲清楚经济总量不等于人类发展水平。要深空天文台/数据星图风格，深蓝近黑宇宙底色，用一张从太空看地球城市夜灯的大图做 Hero（叠深色渐变蒙版保证白色标题清晰）。内容包含：HDI 三维度（健康/教育/生活水平）拆解说明、核心的人均 GDP × HDI 散点图（标注各国、能看出高收入未必高 HDI）、HDI 横向排行榜条形图（中国和中国香港高亮）、几张反差洞察卡片，以及标注 UNDP 人类发展报告 2025 的页脚。用真实 HDI 数据，所有 CSS/JS 和图片都内联，界面中文。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-gdp-hdi-explorer/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "visual-storytelling-expert",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/data-gdp-hdi-explorer/cover-portrait.png"
 	},
 	{
 		"id": "research-cheetah-conservation",
@@ -59,8 +59,8 @@
 		"title": "奔跑在消失的疆域：猎豹保护现状研究",
 		"subtitle": "种群、威胁与跨境保护行动的深度研究报告",
 		"prompt": "我想要一份关于猎豹（Acinonyx jubatus）保护现状的深度研究报告，做成精美的单文件 HTML（CSS/JS 全内联，可离线打开）。请基于 IUCN 红色名录和 WWF 2024 的真实数据，包含：hero 大图标题、执行摘要、核心数据速览（野外约 6500 只 / IUCN 易危 / 仅存历史范围 10% / 亚洲亚种极危）、一张历史种群下降趋势的 SVG 折线图、三大威胁章节（人兽冲突、盗猎与非法贸易、栖息地丧失与碎片化）、历史 vs 现存范围对比、种群与繁育章节、保护行动与展望，以及页脚的完整来源清单。视觉走自然保护科考/野生动物纪录片风格，大地暖色调，关键数据正文标注来源。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-cheetah-conservation/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "deep-research",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-cheetah-conservation/cover-portrait.png"
 	},
 	{
 		"id": "research-gold-price-drivers",
@@ -68,8 +68,8 @@
 		"title": "黄金的高光之年：2025 金价牛市深度复盘",
 		"subtitle": "从突破 3000 到逼近 4600 美元——降息、去美元化与避险三重共振",
 		"prompt": "帮我做一份关于 2025 年国际金价牛市的深度研究报告，要做成精美的单文件 HTML（CSS/JS 全部内联，可直接打开）。视觉走高端财经研报、黑金奢华质感。内容要包含：hero 大图标题、执行摘要、核心读数（全年涨约65%、盘中峰值约4549.96美元/盎司、全球需求5002吨、央行连续三年净购超千吨）、金价台阶式走势图（标注3月破3000、10月上4000、年底逼近4600这三个关键点位）、降息/去美元化/避险三大驱动因素章节、需求结构构成图（投资/央行/金饰/工业合计100%）、央行购金趋势对比柱状图、展望与风险，以及页脚完整数据来源清单（WGC、新华社、Bullionvault）。正文关键数据要标注来源。注意中国习惯涨红跌绿。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-gold-price-drivers/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "market-researcher",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-gold-price-drivers/cover-portrait.png"
 	},
 	{
 		"id": "research-ai-coding-business-model",
@@ -77,8 +77,8 @@
 		"title": "代码的新经济：AI 编程工具商业模式研究",
 		"subtitle": "Cursor / GitHub Copilot / Windsurf 的市场、变现与竞争深度拆解",
 		"prompt": "帮我做一份关于 AI 编程工具赛道商业模式的深度研究报告，做成单文件 HTML，风投/产品分析 deck 风格（明亮现代 SaaS 商业风、靛蓝+翠绿强调、卡片化）。要覆盖：执行摘要核心结论、核心读数（开发者采用率、GitHub Copilot 用户与付费、Cursor 估值、市场规模）、市场增长曲线、竞争象限与玩家对比、变现模式拆解（订阅/企业席位/API用量/模型差价）、单位经济与挑战、SWOT 和趋势展望，关键数据要标注来源、页脚附完整来源清单，核心数据（采用率、Copilot/Cursor 用户与营收、市场规模等）须联网搜索真实公开来源并标注，仅在缺乏公开数据时对推算部分注明为估算。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-ai-coding-business-model/cover-portrait.png",
-		"coverMode": "portrait"
+		"expert": "trend-researcher",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/research-ai-coding-business-model/cover-portrait.png"
 	},
 	{
 		"id": "ppt-popmart-brand-intro",
@@ -86,8 +86,8 @@
 		"title": "泡泡玛特品牌与潮玩商业模式介绍",
 		"subtitle": "盲盒、IP 飞轮与情绪消费的潮玩帝国",
 		"prompt": "帮我做一个介绍泡泡玛特（POP MART）品牌和潮玩商业模式的 HTML 幻灯片演示，可以翻页，大概 11 页：封面、一句话定位、公司速览、盲盒模式解析（带抽盒概率条）、头部 IP 矩阵（Molly/Labubu/Dimoo/SkullPanda）、IP 运营飞轮、渠道矩阵、全球化扩张、增长驱动逻辑、风险与展望、结尾页。风格要潮玩波普风、明亮撞色、圆角卡片、俏皮现代，用 CSS 画盲盒和图标不要用图片，财务数字请联网搜索泡泡玛特真实财报/公告数据（注明年份与来源），不要编造。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-popmart-brand-intro/cover.png",
-		"coverMode": "landscape"
+		"expert": "ppt-creation-expert",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-popmart-brand-intro/cover.png"
 	},
 	{
 		"id": "ppt-ai-history-timeline",
@@ -95,8 +95,8 @@
 		"title": "人工智能简史：从图灵到大模型",
 		"subtitle": "科技编年史风格的 AI 发展历程科普幻灯片",
 		"prompt": "帮我做一个关于「人工智能发展历程」的 HTML 幻灯片演示，可以左右翻页，大概 13 页左右，一屏一页 16:9。内容要覆盖从 1950 图灵测试、1956 达特茅斯会议、感知机、专家系统与 AI 寒冬、1997 深蓝、2012 AlexNet、2016 AlphaGo、2017 Transformer、GPT 预训练与 GPT-3、2022 ChatGPT 到当下的 Agent、多模态、端侧 AI。年份和事件务必真实准确。风格要科技编年史、深色未来感时间线，有发光节点和时间轴，封面和结尾要有设计感，不要用 reveal.js 或任何外链。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-ai-history-timeline/cover.png",
-		"coverMode": "landscape"
+		"expert": "developer-evangelist",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-ai-history-timeline/cover.png"
 	},
 	{
 		"id": "ppt-journey-west-intro",
@@ -104,7 +104,7 @@
 		"title": "《西游记》名著介绍 PPT",
 		"subtitle": "国风水墨卷轴风格，一部降妖伏魔、修心问道的奇幻史诗",
 		"prompt": "帮我做一个介绍《西游记》的 HTML 幻灯片演示，可以翻页，大概 12 页一屏一页。内容要文学常识准确：封面、一句话题解、作者吴承恩和成书背景、长安到西天的取经主线、孙悟空/唐僧/猪八戒/沙僧+白龙马五个人物（性格和法宝）、大闹天宫等经典篇章、艺术成就与影响、主题思想、结尾名句。风格要中国古典水墨、国风卷轴感：宣纸米色底、水墨远山祥云、朱砂红印章、楷书感字体，古雅有文化味，不要用 emoji，单文件能直接打开翻页。",
-		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-journey-west-intro/cover.png",
-		"coverMode": "landscape"
+		"expert": "ppt-creation-expert",
+		"cover": "https://static.workbuddy.cn/workbuddy/playbook/cases/ppt-journey-west-intro/cover.png"
 	}
 ]

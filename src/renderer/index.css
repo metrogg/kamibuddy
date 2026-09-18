@@ -1789,7 +1789,11 @@ textarea:focus-visible {
 
 .case-grid {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	/* 照抄 WorkBuddy 的 .wb-related-playbooks__row：必须是 minmax(0, 1fr) 而不是 1fr。
+	   封面是远程实图，它的固有宽度（上千像素）会算进 grid 项的自动最小尺寸
+	   （min-width:auto），把列顶宽 —— 四列就变成「谁的图宽谁列宽」，卡片不再等宽
+	   （实测踩过：修好封面比例后列宽仍不齐）。 */
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	/* WB __row：4 列 gap 8（原我们 12）。 */
 	gap: var(--space-3);
 	justify-content: start;
@@ -1798,7 +1802,10 @@ textarea:focus-visible {
 .case-card {
 	display: flex;
 	flex-direction: column;
-	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。 */
+	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。
+	   width/min-width 也同 WB：min-width:0 是上面 minmax(0,1fr) 的配套保险。 */
+	width: 100%;
+	min-width: 0;
 	gap: var(--space-3);
 	border: 0;
 	background: transparent;
@@ -1807,13 +1814,16 @@ textarea:focus-visible {
 }
 
 .case-cover {
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	/* 封面盒子的几何照抄 WorkBuddy 的 .wb-related-playbooks__card-cover：
+	   position:relative + display:block + aspect-ratio + overflow:hidden。
+	   必须 block 且 overflow:hidden —— 写成 flex、或漏掉 overflow，aspect-ratio
+	   就只是「建议值」：内容（高长图）会把盒子撑高，四张卡各高各的（实测踩过）。
+	   图标兜底改为绝对定位居中（.case-cover-fallback），不再靠 flex。 */
+	position: relative;
+	display: block;
 	width: 100%;
-	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 描边。
-	   描边色由 WB 的 8% 黑收编到 --border（10% 黑，肉眼无差，且暗色下可用）。 */
 	aspect-ratio: 16 / 9;
+	overflow: hidden;
 	border: 0.5px solid var(--border);
 	border-radius: var(--radius-lg);
 	/* 封面 = WorkBuddy 案例库的实图（CDN）；图标 + 统一单色底降级为兜底 ——
@@ -1825,10 +1835,20 @@ textarea:focus-visible {
 
 /* 封面实图铺满封面位，圆角继承容器（图片自身不带圆角会切角溢出）。 */
 .case-cover img {
+	display: block;
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
 	border-radius: inherit;
+}
+
+/* 图标兜底：铺满封面位并居中（图片加载失败时显示）。 */
+.case-cover-fallback {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 /* hover 无上浮无阴影（与 task-item 等全站卡片 hover 语言一致）：封面底色加深一档。 */

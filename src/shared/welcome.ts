@@ -39,6 +39,12 @@ export interface WelcomeCase {
 	readonly subtitle: string;
 	/** 点击卡片填进输入框的提示词（原文照搬，不改写）。 */
 	readonly prompt: string;
+	/**
+	 * 本案例在 WorkBuddy 里绑定的专家（值是 `resources/experts/` 下的目录名）。
+	 * 上游是 `experts[0].id`（如 `TechnicalDocumentationEngineer`），照搬时映射成我们的目录名，
+	 * 映射过程见 `resources/welcome/README.md`。当前只做数据与校验，尚未参与交互。
+	 */
+	readonly expert: string;
 	/** 封面图 URL（WorkBuddy 公开 CDN）；加载失败时 UI 回落图标底。 */
 	readonly cover: string;
 }

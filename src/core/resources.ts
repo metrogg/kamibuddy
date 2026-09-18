@@ -280,6 +280,9 @@ function loadWelcome(resourcesDir: string, scenes: readonly SceneResource[]): We
 			title: requireStringField(raw, "title", at),
 			subtitle: requireStringField(raw, "subtitle", at),
 			prompt: requireStringField(raw, "prompt", at),
+			// 绑定的专家是 resources/experts/ 的目录名；存在性由测试跨资源校验
+			// （加载器这里只有 welcome 一个目录的视野，看不到 experts/）。
+			expert: requireStringField(raw, "expert", at),
 			cover: requireStringField(raw, "cover", at),
 		};
 	});
