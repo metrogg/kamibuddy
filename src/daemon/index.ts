@@ -100,7 +100,8 @@ import {
 } from "../core/prompt-composer.ts";
 import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resources.ts";
 import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
-import { importSkill, readInstalledMeta, userSkillsDir } from "../core/skill-install.ts";
+import { importSkill, readInstalledMeta, removeAgentSkill, userSkillsDir } from "../core/skill-install.ts";
+import { packSkillDir } from "../core/skill-pack.ts";
 import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
 import { computeSkillsCost } from "../core/skills-cost.ts";
 import { buildExportPath } from "../core/session-export.ts";
@@ -137,6 +138,8 @@ import { rememberRuleFromApproval } from "../extensions/permission-rules.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
+import { createSkillInstallTool } from "../extensions/skill-install-tool.ts";
+import { createSkillUninstallTool } from "../extensions/skill-uninstall-tool.ts";
 import {
 	createSandboxedRunner,
 	warmUpSandbox,
@@ -2418,6 +2421,31 @@ async function createHost(
 			 */
 			createUseSkillTool({
 				resolveSkills: () => toUseSkills(bucket.conversation.state.expertId),
+			}),
+			/*
+			 * 技能安装（craft 白名单含 skill_install）：把模型产在工作区里的技能装进
+			 * 用户技能目录，接上「模型创建技能」这条链路的最后一环 —— 照搬 WorkBuddy
+			 * 的创建流程（它是直接写盘 + 扫目录即出现），但我们不能开那个写口子
+			 * （权限门：技能正文即提示词），所以走 importSkill 这条受校验通道。
+			 * agentCreated: true 是这条通道的**来源标记**（对齐 WorkBuddy 写进
+			 * SKILL.md 的 `agent_created: true`）：只有模型装的技能之后才允许被
+			 * 覆盖或删除，技能页导入的技能不受影响。
+			 * 装完把技能目录打成 `<workspace>/<name>.zip`（WorkBuddy 的 skill-creator
+			 * 收尾就是 package_skill.py），交付仍由 present_files 负责。
+			 * 权限档登记为「改变应用自身数据」= 询问（可记住），见 permission-policy。
+			 */
+			createSkillInstallTool({
+				installSkill: (sourcePath) => importSkill(sourcePath, { agentCreated: true }),
+				packSkill: packSkillDir,
+				getWorkspaceDir: () => bucket.cwd,
+			}),
+			/*
+			 * 技能删除（craft 白名单含 skill_uninstall）：与上面同一条链路的回程 ——
+			 * 对齐 WorkBuddy 的 skill_manage(action="delete")，只放行模型自建的技能，
+			 * 判定在 core 的 removeAgentSkill。权限档同为询问（弹窗即「先跟用户确认」）。
+			 */
+			createSkillUninstallTool({
+				removeSkill: removeAgentSkill,
 			}),
 			/*
 			 * docx 生成：craft 白名单含 docx_convert，所有用户会话都装。

@@ -297,4 +297,55 @@ CodeBuddy 接入了 MCP 官方 `io.modelcontextprotocol/ui` 扩展（ext-apps，
 
 ---
 
+## 七、我们的对齐决策（KamiBuddy 侧落地口径）
+
+### 决策 A：模型创建的技能走受校验安装通道，`agent_created` 语义落在 sidecar
+
+**结论（2026-09-18 定，已实现）**
+
+- WorkBuddy 的创建链路是「模型**直接写** `~/.workbuddy/skills/<name>/SKILL.md`」
+  （`skill-creator` 的 `init_skill.py <name> --path <用户技能目录>`；其
+  `main/fs-protection.js` 明确把 `skills/` 归为合法路径，不在保护哨兵里），
+  写完**立刻可用**，回复末尾再附一份 `package_skill.py` 打出的 `<name>.zip`。
+  这条链路**不经过市场** —— 市场（`marketplace-skill-installer` + `_skillhub_meta.json`）
+  只管第三方技能的分发。改/删自己建的技能由 `skill_manage(action=modify|delete)`
+  按 `agent_created` 判定放行（`cli/dist/codebuddy.js` 的 `validateAgentCreated`：
+  市场 / 内置 / 插件技能一律拒）。
+- 我们的落地：模型仍在**工作区**产出技能目录，经 `skill_install`（内部调
+  `core/skill-install.ts` 的 `importSkill`）落进 `<configDir>/skills`，装完立刻出现在技能页
+  与 `/` 菜单（`skillOverrides` 缺省启用）；同一工具顺带打出 `<工作区>/<name>.zip`
+  （布局照 `package_skill.py`：zip 内带技能目录名作根），交付走 `present_files`。
+  **改 = 把改好的目录重装一次**（覆盖），**删 = `skill_uninstall`**。
+- **授权边界落在 sidecar `_installed.json` 的 `agentCreated`**（只认 `true`）：只有模型装的
+  技能才允许被模型覆盖 / 删除；用户经技能页导入或手工放进来的一律走「已存在，请用户自己处理」
+  的拒绝分支。装 / 删在权限门都登记为 APP_DATA_MUTATING（询问），弹窗即 WorkBuddy
+  要求的「先跟用户确认」。
+
+**为什么不照抄「直接写盘」**：我们的权限门对 `<configDir>/skills` 只放开读（阶段 1 的结论：
+技能正文即提示词，`write`/`edit` 篡改 = 提示注入面）。照抄就得为写开口子，那会把
+「模型能改技能正文」变成一条无审批的常态路径 —— 与「装 / 删都要用户点头」直接冲突。
+落点、生效时机、用户可见效果与 WorkBuddy 一致，差别只是**中间多一次受校验的工具调用**。
+
+**为什么标记进 sidecar 而不是 SKILL.md 的 frontmatter**：技能元数据本来就有 sidecar 通道
+（`_installed.json`；卡片上的版本 / 来源 / 导入时间都读它），标记放这里是零新增机制；
+写 frontmatter 则要**重写用户给出的 YAML**（转义、块标量、既有键顺序都得自己保证），
+收益只是「用文本编辑器能看到那一行」。
+
+## 否决方案
+
+1. **照抄「模型直接写 `<configDir>/skills`」** —— 提示注入面 + 与审批档冲突（见上）。
+   将来要打开这条，前提是先把权限门阶段 1 的结论推翻，并另写一份决策记录。
+2. **frontmatter 里写 `agent_created: true`** —— 手改 YAML 的风险大于收益（见上）。
+   不影响与 WorkBuddy 的**行为**对齐：判定只认「谁装的」，不认标记写在哪个文件里。
+3. **在技能页加一个「模型创建」市场区 / 入口** —— WorkBuddy 的创建链路本就不经市场；
+   把创建出来的技能塞进市场、再要求用户开开关，是凭空加一道用户没要求的闸门。
+4. **让 `skill_uninstall` 也能删用户手工放的技能（靠弹窗兜底）** —— 删除不可逆，而
+   「这个技能是谁的」有确定性答案（sidecar 标记）。能用确定性判定拦住的事，不该交给用户
+   在弹窗里临场判断。
+5. **打包 zip 时把 sidecar 一并打进去**（WorkBuddy 的 `package_skill.py` 不过滤）——
+   `_installed.json` 记的是本机安装事实（含模型工作区的绝对路径），跟着 zip 分享出去
+   既无用又漏本机路径。这条是**有意偏离**，已在 `core/skill-pack.ts` 注释里标明。
+
+---
+
 *证据路径前缀：`extracted/` = `c:\Program Files\WorkBuddy\_analysis\extracted\`。文档类证据均在 `extracted/cli/dist/web-ui/docs/cn/cli/`；插件实物证据均在 `extracted/resources/plugins/workbuddy-builtin/`。*

@@ -611,6 +611,28 @@ describe("automation 工具（读写 KamiBuddy 自身任务库，不涉及用户
 		}
 	});
 
+	it("skill_install → 询问 medium（它改的是提示词面），只读档下拒绝", () => {
+		// 模型自己创建的技能经这条通道进用户技能目录：装进去就等于让一段指令进入
+		// 技能清单，所以与 automation_* 同档 —— 默认询问，且完全访问档也不开口子。
+		const decision = decide(facts({ toolName: "skill_install" }), PATHS, CWD);
+		expect(decision).toMatchObject({ kind: "ask", risk: "medium" });
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.summary).toContain("安装技能");
+		expect(decide(facts({ toolName: "skill_install" }), PATHS, CWD, READONLY).kind).toBe("deny");
+		expect(decide(facts({ toolName: "skill_install" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+
+	it("skill_uninstall → 询问 medium（删掉的是用户已看得见的能力），只读档下拒绝", () => {
+		// 与 skill_install 对称：删技能同样改提示词面，且删的是用户已经拥有的能力；
+		// 批准弹窗就是 WorkBuddy skill_manage(delete) 要求的「先跟用户确认」。
+		const decision = decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD);
+		expect(decision).toMatchObject({ kind: "ask", risk: "medium" });
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.summary).toContain("删除技能");
+		expect(decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD, READONLY).kind).toBe("deny");
+		expect(decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+
 	it("询问摘要说明动作（创建 / 删除自动化任务）", () => {
 		const create = decide(facts({ toolName: "automation_create" }), PATHS, CWD);
 		if (create.kind !== "ask") throw new Error("应为 ask");

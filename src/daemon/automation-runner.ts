@@ -31,6 +31,8 @@ import { writeAuditRecord } from "../core/audit-log.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
+import { importSkill, removeAgentSkill } from "../core/skill-install.ts";
+import { packSkillDir } from "../core/skill-pack.ts";
 import { SessionHost } from "../core/session-host.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
@@ -42,6 +44,8 @@ import { createProjectTrust } from "../extensions/project-trust.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory } from "../extensions/powershell-tool.ts";
+import { createSkillInstallTool } from "../extensions/skill-install-tool.ts";
+import { createSkillUninstallTool } from "../extensions/skill-uninstall-tool.ts";
 import { spillExtensionFactory } from "../extensions/spill-hook.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
@@ -276,6 +280,21 @@ function buildRunExtensions(
 		 * 技能取的是与清单段同一个出口（deps.resolveSkills）。
 		 */
 		createUseSkillTool({ resolveSkills: deps.resolveSkills }),
+		/*
+		 * 技能安装 / 删除：craft 白名单含 skill_install / skill_uninstall，
+		 * run 会话注册同名真实工具（否则模型对着白名单调一个不存在的能力）。
+		 * **不需要 unattended 变体**：两条都是 APP_DATA_MUTATING = 询问档，
+		 * 而本会话的权限门是 unattended（审批类操作自动拒绝并把原因回给模型）——
+		 * 无人值守下装/删技能本来就该被拒，拒绝理由由权限门统一给出，
+		 * 与 powershell 那种「工具层直接拒」的分工一致（它拒的是执行权，
+		 * 这里拒的是改应用数据）。注册而不另写拒法：少一条只有定时任务走得到的旁路。
+		 */
+		createSkillInstallTool({
+			installSkill: (sourcePath) => importSkill(sourcePath, { agentCreated: true }),
+			packSkill: packSkillDir,
+			getWorkspaceDir: () => cwd,
+		}),
+		createSkillUninstallTool({ removeSkill: removeAgentSkill }),
 		/*
 		 * docx 生成：craft 白名单含 docx_convert，run 会话注册同名真实工具
 		 * （否则模型对着白名单调一个不存在的能力）。无需 unattended 变体 ——
