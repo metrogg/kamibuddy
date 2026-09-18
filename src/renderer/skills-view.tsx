@@ -231,11 +231,21 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 }
 
 /**
- * 来源文案：内置 / 导入（有 `_installed.json`）/ 手工放置（自装但没有 sidecar）。
- * 三种都是**确定的信息**，没有「未知」这一态 —— 缺失项不显示伪造值（spec: 技能包元数据）。
+ * 来源文案：内置 / 本项目 / 导入 / 手工放置。
+ *
+ * `origin` 说的是技能**落在哪一层**（内置随包 / 本项目工作区内 / 用户级，判定见
+ * `core/skill-scope.ts`），与「谁装的」无关，所以内置与本项目各有唯一文案。
+ * 只有**用户级**才需要再按 sidecar 分「导入 / 手工放置」：`_installed.json` 存在
+ * （`sourcePath` 有值）说明它是经导入/安装进来的，否则是自己放进技能目录的。
+ * 这是用户级既有的口径，不能因为 origin 扩了三态就把它丢掉 —— 丢了两者会合并成
+ * 同一个标签，用户就分不清「我装过它」和「我手工摆过它」。项目级不做这层拆分：
+ * 两种来路的工作区技能都是同一件事（随项目生效），拆开只是噪声。
+ *
+ * 四种都是**确定的信息**，没有「未知」这一态 —— 缺失项不显示伪造值（spec: 技能包元数据）。
  */
 function sourceLabel(skill: SkillInfo): string {
 	if (skill.origin === "builtin") return "内置";
+	if (skill.origin === "project") return "本项目";
 	return skill.sourcePath === undefined ? "手工放置" : "导入";
 }
 

@@ -95,6 +95,19 @@ function extractFacts(toolName: string, input: Record<string, unknown>): ToolCal
 		return typeof value === "string" && value !== "" ? value : undefined;
 	};
 
+	/*
+	 * 改应用数据类工具的**展示对象**（只进弹窗详情，不进任何路径判定）：
+	 * skill_install 的入参是工作区里的来源路径、skill_uninstall 的是技能名 ——
+	 * 它们不是「将被写的目标路径」，所以不能混进下面的 path（那会让阶段 1 的
+	 * configDir 判定与阶段 2 的路径规则拿错对象：从已装技能目录再装一次时，
+	 * 来源路径本来就在 configDir 里）。
+	 *
+	 * 按工具名白名单式列举，不做「有 sourcePath/name 就取」的通用兜底：
+	 * team_create 之类的工具也有 name，取来展示只会让弹窗多一行噪声。
+	 * automation_* 没有可展示对象，保持 undefined（details 留空）。
+	 */
+	const appDataTarget = toolName === "skill_install" ? pick("sourcePath") : toolName === "skill_uninstall" ? pick("name") : undefined;
+
 	return {
 		toolName,
 		// pi 的内置工具用 `path`；自定义工具可能用 file_path 之类的别名。
@@ -102,6 +115,7 @@ function extractFacts(toolName: string, input: Record<string, unknown>): ToolCal
 		// （policy 的 MUTATING 注释）；两者共用这一条，不必按工具名分支。
 		path: pick("path") ?? pick("file_path") ?? pick("filePath") ?? pick("outputPath"),
 		command: pick("command"),
+		appDataTarget,
 	};
 }
 

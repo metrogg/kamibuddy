@@ -18,6 +18,11 @@
 删技能走 `skill_uninstall`（`src/extensions/skill-uninstall-tool.ts`）。
 决策与偏离见 `docs/workbuddy分析/03-plugins-skills.md` 的「决策 A」。
 
+**两层作用域（2026-09-18 起）**：技能分**项目级**（`<工作区>/.pi/skills/`、`.agents/skills/`，
+只在该工作区可见、写完即被发现、不弹审批）与**用户级**（`<configDir>/skills/`，跨工作区，
+写入走 `skill_install` 弹一次询问）。SKILL.md 的 §七 写的就是这套口径：**默认造项目级**，
+用户明确说「所有项目都要用」时才升级到用户级。
+
 ## 目录布局
 
 ```
@@ -35,6 +40,8 @@ resources/skills/skill-creator/
 |---|---|
 | 名字规则、description 必填、同名拒绝 / 覆盖、删除授权、错误原文 | `src/core/skill-install.ts` |
 | 打包布局（zip 内以技能目录名为根、排除 sidecar） | `src/core/skill-pack.ts` |
+| 两层作用域的判定（内置 / 本项目 / 用户级） | `src/core/skill-scope.ts` |
+| 工作区技能根写入按普通工作区文件放行（技能根例外） | `src/extensions/safe-commands.ts`（`.pi/extensions/**`、`.pi/settings.json`、`.pi/SYSTEM.md` 仍高危，这一区分不在 SKILL.md 正文里） |
 | 两个工具的名字 / 入参 / 返回文案 | `src/extensions/skill-install-tool.ts`、`src/extensions/skill-uninstall-tool.ts` |
 | 权限档（装 / 删都询问）与 craft 白名单 | `src/extensions/permission-policy.ts`、`resources/modes/craft.md` |
 | frontmatter 的写法限制（子集） | `src/core/frontmatter.ts` |

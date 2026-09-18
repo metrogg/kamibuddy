@@ -98,8 +98,14 @@ export interface SkillInfo {
 	readonly description: string;
 	/** SKILL.md 绝对路径。模型按需加载全文的入口，展示给用户便于排查。 */
 	readonly filePath: string;
-	/** 随应用内置（resources/skills/）还是用户自装（~/.kamibuddy/skills/ 等）。 */
-	readonly origin: "builtin" | "user";
+	/**
+	 * 技能**落在哪一层**（内置 / 本项目 / 用户级），不是「谁装的」：
+	 *   builtin —— 随应用内置（resources/skills/、resources/plugins/，含照搬的市场插件）；
+	 *   project —— 落在**当前会话工作区**内（`<工作区>/.pi/skills/`、`.agents/skills/`）；
+	 *   user    —— 其余用户级位置（`<configDir>/skills/`、`~/.agents/skills/` 等）。
+	 * 判定走 core/skill-scope.ts 的纯函数（按落点判，不按目录名猜）。
+	 */
+	readonly origin: "builtin" | "project" | "user";
 	/** frontmatter 声明仅限手动 /skill:name 触发，不出现在模型提示词里。 */
 	readonly disableModelInvocation: boolean;
 	/**

@@ -45,7 +45,13 @@ const paths: PolicyPaths = {
 	protectedDirs: [join(root, "fake-ssh")],
 };
 
-/** 「配置即代码」的文件：内容会变成被执行的行为。 */
+/*
+ * 「配置即代码」的文件：内容会变成被执行的行为。
+ *
+ * 注意（2026-09-18）：技能根 `.pi/skills/**`、`.agents/skills/**` **不算**配置即代码了
+ * —— 技能正文是纯文本、加载时不执行，写入回归普通工作区文件（放行）。
+ * 完整决策见 `docs/workbuddy分析/03-plugins-skills.md` 的「决策 B」。
+ */
 const CONFIG_AS_CODE: ReadonlyArray<{ readonly path: string; readonly why: string }> = [
 	/*
 	 * 最严重的一个：pi 从工作目录加载 `.pi/extensions`，那是**以本进程权限
@@ -56,7 +62,7 @@ const CONFIG_AS_CODE: ReadonlyArray<{ readonly path: string; readonly why: strin
 	{ path: join(workspace, ".pi", "extensions", "evil.ts"), why: "pi 项目级扩展：会话建立时**加载即执行**，权限门在它之后" },
 	{ path: join(workspace, ".pi", "settings.json"), why: "pi 项目级设置：可改变加载行为" },
 	{ path: join(workspace, ".pi", "SYSTEM.md"), why: "项目级系统提示词：提示注入的持久落点" },
-	{ path: join(workspace, ".agents", "skills", "x", "SKILL.md"), why: "pi 也从 .agents/skills 加载技能" },
+	{ path: join(workspace, ".vscode", "tasks.json"), why: "编辑器按它执行 tasks（与 .pi/skills 不同，它真的会被执行）" },
 	{ path: join(workspace, ".git", "config"), why: "core.fsmonitor / alias → git status、git diff 执行任意命令（已实测）" },
 	{ path: join(workspace, ".git", "hooks", "pre-commit"), why: "git 钩子，**用户自己**下次提交时执行（逃出我们进程的持久化）" },
 	{ path: join(workspace, "package.json"), why: "scripts → npm run / npm test 执行任意命令" },

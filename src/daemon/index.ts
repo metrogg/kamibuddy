@@ -102,6 +102,7 @@ import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resource
 import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
 import { importSkill, readInstalledMeta, removeAgentSkill, userSkillsDir } from "../core/skill-install.ts";
 import { packSkillDir } from "../core/skill-pack.ts";
+import { skillScopeOf } from "../core/skill-scope.ts";
 import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
 import { computeSkillsCost } from "../core/skills-cost.ts";
 import { buildExportPath } from "../core/session-export.ts";
@@ -513,14 +514,22 @@ async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
 			includeDefaults: true,
 		});
 		return skills.map((s): SkillEntry => {
-			// origin 只分「随包」与「用户自装」两类：插件技能也是随包分发的，
-			// 归 builtin（它的来龙去脉在 resources/plugins/README.md，不在这个字段里）。
-			const origin = BUILTIN_SKILL_DIRS.some((dir) => s.filePath.startsWith(dir)) ? "builtin" : "user";
+			/*
+			 * 作用域按**落点**判（内置 / 本项目 / 用户级），判定收在纯函数里可单测 ——
+			 * 这里不许再内联一段路径前缀比较（裸 startsWith 会把 `D:\ws2` 误判进 `D:\ws`，
+			 * 也漏掉分隔符/大小写归一）。注意插件技能也是随包分发的，归 builtin
+			 * （它的来龙去脉在 resources/plugins/README.md，不在这个字段里）。
+			 */
+			const origin = skillScopeOf(s.filePath, {
+				builtinDirs: BUILTIN_SKILL_DIRS,
+				workspaceDir: getEffectiveWorkspaceRoot(),
+			});
 			const meta = readSkillMeta(s.filePath);
 			/*
 			 * 安装元数据只对**自装且经技能页导入**的技能存在（sidecar 写在技能目录里）。
-			 * 内置技能不该有、手工放进技能目录的技能没有 —— 两种都没有 sidecar，
-			 * 于是 installedAt / sourcePath 不带字段，卡片按「手工放置」呈现。
+			 * 导入的落点固定是用户级（core/skill-install.ts 的 userSkillsDir），项目级技能
+			 * 是就地放/写在工作区里的，没有 sidecar；内置技能同理不该有 —— 于是
+			 * installedAt / sourcePath 不带字段，卡片按「手工放置」呈现。
 			 */
 			const installed = origin === "user" ? readInstalledMeta(dirname(s.filePath)) : undefined;
 			/*

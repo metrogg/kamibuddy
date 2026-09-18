@@ -8,11 +8,13 @@
  * 纯函数，任何平台可跑。
  */
 
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	classifySafeCommand,
 	commandTouchesConfigAsCode,
 	hasCleanStructure,
+	isConfigAsCodePath,
 } from "./safe-commands.ts";
 
 describe("第一层：只读自省（无条件免审批）", () => {
@@ -211,6 +213,67 @@ describe("退化输入", () => {
 	});
 });
 
+describe("技能根例外（isConfigAsCodePath，2026-09-18 判据收窄）", () => {
+	/*
+	 * 判据是「该文件**会被执行**或**改变加载行为**」，不是「它在某个目录名下」。
+	 * 技能正文（`.pi/skills/**`、`.agents/skills/**`）是纯文本，pi 加载它时
+	 * 不执行任何东西（其中的脚本要跑须另过 shell/受控运行时那条闸），
+	 * 与工作区的 `AGENTS.md` 同类。所以它按普通工作区文件处置 ——
+	 * 写侧不命中名单（工作区放行）。
+	 */
+	it("技能根下的任意文件都放行（含 SKILL.md / references / 嵌套层级 / 任意层级）", () => {
+		for (const relative of [
+			join(".pi", "skills", "x", "SKILL.md"),
+			join(".pi", "skills", "x", "references", "a.md"),
+			join(".pi", "skills", "deep", "nested", "a.md"),
+			join(".agents", "skills", "x", "SKILL.md"),
+			join("packages", "sub", ".pi", "skills", "a.md"),
+		]) {
+			expect(isConfigAsCodePath(relative), relative).toBe(false);
+		}
+	});
+
+	it("`.pi` 的其余高危判定保持不变（收窄成精确，不是把名单删掉）", () => {
+		for (const relative of [
+			join(".pi", "extensions", "a.ts"),
+			join(".pi", "extensions", "nested", "deep.ts"),
+			join(".pi", "settings.json"),
+			join(".pi", "SYSTEM.md"),
+			join(".git", "config"),
+			"package.json",
+			join("node_modules", ".bin", "tsc"),
+		]) {
+			expect(isConfigAsCodePath(relative), relative).toBe(true);
+		}
+	});
+
+	it("精度：例外只认**相邻两段**，近名目录不因字符串出现就被特殊化", () => {
+		// foo.pi / mypi 都不是 `.pi` 段；`.agents/notes` 不是技能根。
+		for (const relative of [
+			join("foo.pi", "skills", "a.md"),
+			join("mypi", "skills", "a.md"),
+			join(".agents", "notes", "a.md"),
+		]) {
+			expect(isConfigAsCodePath(relative), relative).toBe(false);
+		}
+	});
+
+	it("`..` 逃逸时例外**失效**（宁可假阳性，回落名单判定；Task 7）", () => {
+		/*
+		 * `..` 一出现，纯文本层就无法保证仍在技能根内 ——
+		 * `.pi\skills\..\settings.json` 实际落回 `.pi`（改加载行为）。
+		 * 例外失效只多弹一次高危，漏放行会让文本闸形同虚设。
+		 * 注意这里用字面量而非 join：join 会把 `..` 归一化掉（就测不到逃逸了）。
+		 */
+		expect(isConfigAsCodePath(".pi/skills/../settings.json")).toBe(true);
+		// 防过度豁免：例外要求段名**严格**是 `skills`，不是前缀 —— `skills.md` 不是技能根。
+		expect(isConfigAsCodePath(join(".pi", "skills.md"))).toBe(true);
+		// 回归保护：未含 `..` 时例外仍生效，技能根写入照旧放行。
+		expect(isConfigAsCodePath(join(".pi", "skills", "x", "SKILL.md"))).toBe(false);
+		expect(isConfigAsCodePath(join(".agents", "skills", "x", "SKILL.md"))).toBe(false);
+	});
+});
+
 describe("配置文本闸（commandTouchesConfigAsCode，四期先跑后问的闸门）", () => {
 	it("命令写到配置路径 → 命中", () => {
 		for (const command of [
@@ -219,11 +282,34 @@ describe("配置文本闸（commandTouchesConfigAsCode，四期先跑后问的�
 			'Out-File -FilePath package.json',
 			"Remove-Item C:\\repo\\.git\\hooks\\pre-commit",
 			"New-Item .pi\\extensions\\x.ts",
-			"Copy-Item evil.ts .agents\\skills\\x\\SKILL.md",
 			"git log > .git\\hooks\\x",
 		]) {
 			expect(commandTouchesConfigAsCode(command), command).toBe(true);
 		}
+	});
+
+	it("技能根**不**命中（与写侧同一口径，2026-09-18 收窄）", () => {
+		/*
+		 * 技能正文是纯文本、加载时不执行 —— 与写侧共用同一份判定，
+		 * 所以这一句在文本闸里也必须放行（改一处即同步两处）。
+		 */
+		expect(commandTouchesConfigAsCode("Copy-Item evil.ts .agents\\skills\\x\\SKILL.md")).toBe(false);
+		expect(commandTouchesConfigAsCode("Set-Content .pi\\skills\\x\\SKILL.md y")).toBe(false);
+	});
+
+	it("`..` 逃逸时例外**失效**（技能根不得被 `..` 绕过；Task 7）", () => {
+		/*
+		 * 这是本次修的绕过口：例外若在 `..` 出现时仍生效，
+		 * `Set-Content .pi\skills\..\extensions\evil.ts` 会被文本闸放行 ——
+		 * 而 `.pi/extensions` 加载即执行，等于把三期堵上的链条重新打开。
+		 */
+		expect(commandTouchesConfigAsCode("Set-Content .pi\\skills\\..\\extensions\\evil.ts y")).toBe(true);
+		// `.agents` 侧同类写法同样兜住（回落到收窄前的相邻段命中口径）。
+		expect(commandTouchesConfigAsCode("Set-Content .agents\\skills\\..\\x y")).toBe(true);
+		// 防过度豁免：`skills.md` 不是技能根（段名严格等于 `skills`）。
+		expect(commandTouchesConfigAsCode("Set-Content .pi\\skills.md y")).toBe(true);
+		// 回归保护：未含 `..` 时技能根写入照旧不命中（例外仍生效）。
+		expect(commandTouchesConfigAsCode("Set-Content .pi\\skills\\x\\SKILL.md y")).toBe(false);
 	});
 
 	it("大小写与正反斜杠同判（Windows 语义）", () => {

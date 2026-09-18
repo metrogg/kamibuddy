@@ -85,6 +85,16 @@ export interface ToolCallFacts {
 	readonly path: string | undefined;
 	/** shell 命令（bash / powershell 专用）。 */
 	readonly command: string | undefined;
+	/**
+	 * 改**应用自身数据**的工具所操作的对象，**仅供审批弹窗展示，不参与任何路径判定**：
+	 * 这类工具没有「将被写的路径」（automation_* 落 configDir，技能类动的是技能目录），
+	 * 但用户必须看见这次动的是哪个东西。混进 `path` 会让阶段 1/2 的路径判定误判 ——
+	 * 技能类工具那个入参是「来源路径 / 技能名」，不是「目标路径」。
+	 *
+	 * 可选：只有需要展示对象的工具才填（permission-gate 的 extractFacts 按工具名列举），
+	 * 其余（含旧调用点与探针脚本）不填也不影响任何判定。
+	 */
+	readonly appDataTarget?: string | undefined;
 }
 
 export interface PolicyPaths {
@@ -622,6 +632,12 @@ function decideUnderMode(
 		 * 为什么排在 danger-full-access 之后：那个档位的语义是用户明示的
 		 * 「不再逐次询问」，与 appDir 判定同一位置、同一理由。
 		 *
+		 * 【2026-09-18 名单已收窄】工作区内的**技能根**（`<任意层级>/.pi/skills/**`、
+		 * `<任意层级>/.agents/skills/**`）不算配置即代码，不再进这条分支 ——
+		 * 技能正文不执行，与工作区的 `AGENTS.md` 同等处置（理由与残留风险见
+		 * safe-commands.ts 文件头）。`.pi` 的其余高危判定（`extensions/**`、
+		 * `settings.json`、`SYSTEM.md`）保持不变。
+		 *
 		 * **这不是完备的**：「配置即代码」是开放集合（还有 Makefile 的变体、
 		 * 各种 *.config.js、编辑器与 CI 的其他约定）。这里覆盖已知的高价值项，
 		 * 不声称穷尽 —— 所以它是纵深防御的一层，不是可以依赖的边界。
@@ -662,14 +678,25 @@ function decideUnderMode(
 	}
 
 	/*
-	 * 改变 KamiBuddy 自身数据的工具（automation_* / skill_install）：
+	 * 改变 KamiBuddy 自身数据的工具（automation_* / skill_install / skill_uninstall）：
 	 * 显式询问档，理由见上方 APP_DATA_MUTATING 的登记注释。
 	 * 放在 read-only 拒绝（阶段 3）之后：只读档下它们同样被拒，语义自洽。
-	 * 无路径入参，details 没有可展示的目标，留空。
+	 *
+	 * details 给「这次动的是哪个东西」：技能类工具有一个可展示的对象（来源路径 /
+	 * 技能名，由 permission-gate 的 extractFacts 取进 appDataTarget），
+	 * automation_* 没有 —— 它们照旧留空。**这句话是知情同意的下限**：
+	 * 只写「安装技能（会改变模型可见的技能清单）」，用户点允许时并不知道装的是谁，
+	 * 而装进去的正文下一轮就会作为提示词被模型读到（对齐 codex 审批事件带 reason /
+	 * 可选决策、WorkBuddy 的 Edit 审批给 diff、dsh 要求 justification）。
 	 */
 	const appDataSummary = APP_DATA_MUTATING.get(toolName);
 	if (appDataSummary !== undefined) {
-		return { kind: "ask", risk: "medium", summary: appDataSummary, details: "" };
+		return {
+			kind: "ask",
+			risk: "medium",
+			summary: appDataSummary,
+			details: facts.appDataTarget ?? "",
+		};
 	}
 
 	/*
