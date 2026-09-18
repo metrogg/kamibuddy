@@ -17,7 +17,7 @@ import type {
 	CommandRunResult,
 } from "../extensions/powershell-tool.ts";
 import type { PermissionSettings, SandboxMode } from "../shared/permissions.ts";
-import { SandboxPrepareFailure } from "../sandbox/index.ts";
+import { SandboxPrepareFailure, type SandboxRunRequest } from "../sandbox/index.ts";
 import {
 	createSandboxedRunner,
 	resetSandboxRunnerForTest,
@@ -244,6 +244,143 @@ describe("档位映射", () => {
 		await run("echo hi", 120, undefined, undefined, controller.signal);
 
 		expect(seen).toEqual([controller.signal]);
+	});
+});
+
+/*
+ * 运行时注入补丁**接进执行路径**（spec: add-managed-runtimes 的 SubTask 2.1.3）。
+ *
+ * 这一段钉的是「注入层被真的用上了」：补丁从 `runtimeEnv` getter 现算，喂给
+ * 两条 spawn 路径（沙箱 / 降级直连），且**只**进子进程 —— 不回写 daemon 自己
+ * 的 `process.env`。改坏这里（例如只喂沙箱、或忘传 fallback 的第 6 参）
+ * 就等于「设了开关，模型 shell 里照样找不到随包 node」，而那是没有任何症状的坏。
+ */
+describe("运行时注入补丁进执行路径（SubTask 2.1.3）", () => {
+	/** 一份典型的补丁：PATH 前缀 + 两个 KAMIBUDDY 变量。 */
+	const PATCH: Readonly<Record<string, string>> = {
+		Path: "C:\\cfg\\runtimes\\node\\22;C:\\Windows\\System32",
+		KAMIBUDDY_NODE_HOME: "C:\\cfg\\runtimes\\node\\22",
+		KAMIBUDDY_RUNTIMES_DIR: "C:\\cfg\\runtimes",
+	};
+
+	it("workspace-write：补丁进沙箱子进程的环境请求，且**不回写** daemon 的 process.env", async () => {
+		const seen: Array<Readonly<Record<string, string>> | undefined> = [];
+		const h = harness({
+			run: async (request: SandboxRunRequest) => {
+				seen.push(request.env);
+				return ok("sandboxed");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			runtimeEnv: () => PATCH,
+		});
+		ran(await run("node --version", 120));
+
+		expect(seen).toEqual([PATCH]);
+		// 补丁只跟着子进程走：本进程环境一个键都不许多（回写会连带改掉
+		// 我们自己的受控转换链路，见 core/runtimes/injection.ts 文件头）。
+		expect(process.env["KAMIBUDDY_NODE_HOME"]).toBeUndefined();
+		expect(process.env["KAMIBUDDY_RUNTIMES_DIR"]).toBeUndefined();
+	});
+
+	it("read-only：补丁同样进只读沙箱（注入不该只在写档生效）", async () => {
+		const seen: Array<Readonly<Record<string, string>> | undefined> = [];
+		const h = harness({
+			run: async (request: SandboxRunRequest) => {
+				seen.push(request.env);
+				return ok("sandboxed");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("read-only"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			runtimeEnv: () => PATCH,
+		});
+		ran(await run("node --version", 120));
+
+		expect(seen).toEqual([PATCH]);
+	});
+
+	it("danger-full-access：补丁经降级直连 spawn 的第 6 参传下去", async () => {
+		const seen: Array<Readonly<Record<string, string>> | undefined> = [];
+		const h = harness();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("danger-full-access"),
+			workspaceDir: WORKSPACE,
+			fallback: async (command, _timeoutSeconds, _onProgress, _escalation, _signal, env) => {
+				seen.push(env);
+				return ok(command);
+			},
+			sandbox: h.facade,
+			runtimeEnv: () => PATCH,
+		});
+		ran(await run("node --version", 120));
+
+		expect(seen).toEqual([PATCH]);
+		// 这条路根本不探测沙箱（与档位映射那组一致），但环境补丁一样要给。
+		expect(h.recorded.probeCalls).toEqual([]);
+	});
+
+	it("每次执行现算：getter 返回新补丁时下一次命令即生效（改开关无需重启）", async () => {
+		let patch: Readonly<Record<string, string>> = PATCH;
+		const seen: Array<Readonly<Record<string, string>> | undefined> = [];
+		const h = harness({
+			run: async (request: SandboxRunRequest) => {
+				seen.push(request.env);
+				return ok("sandboxed");
+			},
+		});
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			runtimeEnv: () => patch,
+		});
+		ran(await run("first", 120));
+		patch = {};
+		ran(await run("second", 120));
+
+		expect(seen).toEqual([PATCH, {}]);
+	});
+
+	it("没有 provider（未接线）⇒ 两条路径都不带 env（行为与接线前逐字节相同）", async () => {
+		const sandboxRequests: SandboxRunRequest[] = [];
+		const h = harness({
+			run: async (request: SandboxRunRequest) => {
+				sandboxRequests.push(request);
+				return ok("sandboxed");
+			},
+		});
+		const fallbackEnvs: Array<Readonly<Record<string, string>> | undefined> = [];
+		const run = createSandboxedRunner({
+			getSettings: () => settings("danger-full-access"),
+			workspaceDir: WORKSPACE,
+			fallback: async (command, _timeoutSeconds, _onProgress, _escalation, _signal, env) => {
+				fallbackEnvs.push(env);
+				return ok(command);
+			},
+			sandbox: h.facade,
+		});
+		ran(await run("echo hi", 120));
+
+		expect(fallbackEnvs).toEqual([undefined]);
+		// 沙箱那一侧的请求形状不变：连 env 这个键都不出现（于是环境块逐字节相同）。
+		const writeRun = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+		});
+		ran(await writeRun("echo hi", 120));
+		expect(sandboxRequests).toHaveLength(1);
+		expect(sandboxRequests[0] !== undefined && "env" in sandboxRequests[0]).toBe(false);
 	});
 });
 
@@ -1022,6 +1159,79 @@ describe("失败一律拒绝（readiness 已不是判据，对齐 dsh）", () =>
 		expect(outcome.note).toContain("只读沙箱");
 		// read-only 连工作区内都写不了，workspace-write 版文案会误导模型
 		expect(outcome.note).not.toContain("只允许写工作目录内");
+	});
+});
+
+describe("审计留痕（spec: add-managed-runtimes 阶段 4）", () => {
+	/** 审计写入的观测点：三类来源的记录形状由 core/audit-log 的测试钉，这里钉「写入点在不在这里」。 */
+	function sink(): { readonly records: Array<{ category: string; outcome: string; detail: string }> } {
+		return { records: [] };
+	}
+
+	/** 极简审批器（这里只关心「批 / 不批」，请求内容由「提权申请」那组钉）。 */
+	function approve(answer: boolean): (request: {
+		readonly toMode: SandboxMode;
+		readonly justification: string;
+		readonly command: string;
+	}) => Promise<boolean> {
+		return () => Promise.resolve(answer);
+	}
+
+	it("沙箱不可用拒了命令 → 记一条 sandbox/blocked（原因与给模型的同一句）", async () => {
+		const h = harness({
+			probe: async () => ({ available: false, reason: "ffi-load-failed", detail: "koffi 没装" }) as const,
+		});
+		const audit = sink();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			onAudit: (record) => audit.records.push(record),
+		});
+		await run("Get-ChildItem", 120);
+		expect(audit.records).toHaveLength(1);
+		expect(audit.records[0]?.category).toBe("sandbox");
+		expect(audit.records[0]?.outcome).toBe("blocked");
+		expect(audit.records[0]?.detail).toContain("系统调用组件加载失败");
+	});
+
+	it("用户批准提权 → 记一条 sandbox/allowed（放宽约束是审计要管的放行）", async () => {
+		const h = harness();
+		const audit = sink();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: approve(true),
+			onAudit: (record) => audit.records.push(record),
+		});
+		await run("Set-Content D:\\out\\x.txt", 120, undefined, {
+			toMode: "danger-full-access",
+			justification: "导出到交付目录",
+		});
+		expect(audit.records).toHaveLength(1);
+		expect(audit.records[0]).toMatchObject({ category: "sandbox", outcome: "allowed" });
+		expect(audit.records[0]?.detail).toContain("danger-full-access");
+	});
+
+	it("用户拒绝提权 → 记一条 sandbox/blocked，且命令一行都没跑", async () => {
+		const h = harness();
+		const audit = sink();
+		const run = createSandboxedRunner({
+			getSettings: () => settings("workspace-write"),
+			workspaceDir: WORKSPACE,
+			fallback: h.fallback,
+			sandbox: h.facade,
+			requestEscalation: approve(false),
+			onAudit: (record) => audit.records.push(record),
+		});
+		await run("Set-Content D:\\x.txt", 120, undefined, { toMode: "danger-full-access", justification: "写 D 盘" });
+		expect(h.recorded.sandboxCalls).toEqual([]);
+		expect(h.recorded.fallbackCalls).toEqual([]);
+		expect(audit.records).toHaveLength(1);
+		expect(audit.records[0]).toMatchObject({ category: "sandbox", outcome: "blocked" });
 	});
 });
 

@@ -158,6 +158,15 @@ const bridge: KamiBridge = {
 	globalShortcutStatus: () => ipcRenderer.invoke(INVOKE.globalShortcutStatus),
 	docxEnvStatus: () => ipcRenderer.invoke(INVOKE.docxEnvStatus),
 
+	auditList: (category) => ipcRenderer.invoke(INVOKE.auditList, category),
+	auditClear: () => ipcRenderer.invoke(INVOKE.auditClear),
+	auditExport: () => ipcRenderer.invoke(INVOKE.auditExport),
+	runtimesSnapshot: () => ipcRenderer.invoke(INVOKE.runtimesSnapshot),
+	setRuntimeMaster: (enabled) => ipcRenderer.invoke(INVOKE.setRuntimeMaster, enabled),
+	setRuntimeEnabled: (id, enabled) => ipcRenderer.invoke(INVOKE.setRuntimeEnabled, id, enabled),
+	runtimeDiagnostics: (id) => ipcRenderer.invoke(INVOKE.runtimeDiagnostics, id),
+	runtimeReset: (id) => ipcRenderer.invoke(INVOKE.runtimeReset, id),
+
 	listAutomations: () => ipcRenderer.invoke(INVOKE.automationList),
 	saveAutomation: (input) => ipcRenderer.invoke(INVOKE.automationSave, input),
 	deleteAutomation: (id) => ipcRenderer.invoke(INVOKE.automationDelete, id),

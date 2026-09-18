@@ -64,20 +64,37 @@ KamiBuddy 是基于 [pi agent harness](https://pi.dev) 的办公 AI Agent 桌面
   不许出现"直接拼 docx 对象"的第二条路径——那样预览、PDF、图表全要另做一遍。
 - **文档流水线按 WorkBuddy 的方式跑 Python，不再禁止 bash/python。**
   S3「HTML→docx」用 Python 引擎（`python-docx` / `html-for-docx` /
-  beautifulsoup4 / lxml / Pillow），环境用「托管 venv + `uv` 装独立 Python 3.12」
-  解决，不要求用户机器上预装 Python / Git for Windows。
+  beautifulsoup4 / lxml / Pillow），环境用**随包托管的运行时**解决：
+  `python` / `node` / `gitbash` 三个运行时统一放在托管根
+  `<configDir>/runtimes/<id>/<version>/` + `current` 指针（内核在 `src/core/runtimes/`），
+  **用户什么都不用装**（也不要求预装 Python / Git for Windows）。
+  python 仍由 `uv` 在运行期装（`--only-binary=:all:`），node / gitbash 由构建期脚本拉取后
+  **随包分发**（gitbash 的 7z 解包只在构建期做 —— 7-Zip 不进产物）。
+  来源、校验、许可义务与体积实测见 `docs/运行时来源与许可.md` 与
+  `resources/runtimes/README.md`（后者含 §5 的**否决方案**）。
 - **环境准备照 WorkBuddy 的** **`setup-html-to-docx.sh`** **抄机制**：
   - 幂等脚本，已就绪秒退；首次联网装 `uv` → `uv python install 3.12` 拉独立发行版
-    → 建 `~/.venv-html-to-docx` → `--only-binary=:all:` 装 wheel（绕开 lxml 无
+    → 在托管根下建 venv → `--only-binary=:all:` 装 wheel（绕开 lxml 无
     libxml2/libxslt 时源码编译失败的坑）→ import 冒烟。
+    历史路径 `~/.venv-html-to-docx` 若存在，被**复用**并如实上报（不静默丢弃）；
+    `HTML_TO_DOCX_VENV` 作为显式覆盖口保留。
   - 私有化/无外网：`UV_INDEX_URL` + `UV_PYTHON_INSTALL_MIRROR` 指向内网镜像，
-    或运维预置 `uv` 与离线 wheel。
+    或运维预置 `uv` 与离线 wheel；node / gitbash 的**随包载荷**同样可手工放置
+    （`resources/runtimes/payload/<id>/<version>/`，fetch 脚本幂等跳过，dist 链因此不必联网）。
   - 会话启动后台预热（SessionStart hook，超时不阻塞），首次冷启动不卡会话。
   - 转换失败降级 Markdown；组件/图片失败只跳过或占位，不整篇崩。
   - 这套 venv 是进程内受控调用，不等于把 `bash` 暴露给 agent 当自由 shell
     工具（agent 的 shell 能力见下一节）。
-- **agent 的 shell 能力另有决策**：`bash` 仍然不用（上面那条理由不变），
-  但 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已启用**
+- **agent 的 shell 能力另有决策**（2026-09-17 修订：原「**`bash` 仍然不用**」**作废**）：
+  Git Bash 现在**随包**作为托管运行时提供（用户不必装 Git for Windows，原约束的**前提已消失**），
+  但**「是否把 `bash` 开放成模型的自由 shell 工具」是另行决策，至今未做** ——
+  工具面里没有 `bash`（`resources/modes/*.md` 的白名单只含 `powershell`），
+  `permission-policy.ts` 对 `bash` 仍维持高风险询问（无检查器、无法包沙箱，fail-closed）。
+  随包提供运行时只让它在**路径上找得到**（注入层：`src/core/runtime-inventory.ts` 的
+  `planRuntimeShellInjection` 算出环境补丁 → `src/daemon/**` 的 `createSandboxedRunner` 把它
+  注入模型 shell 的**子进程**环境，进沙箱与降级直连两条 spawn 路径都在内），不改工具面
+  —— 别把两件事混成一件。
+  而 `powershell` 是 Windows 原生、不依赖 Git for Windows，**已启用**
   （决策记录见 `docs/workbuddy分析/09-sandbox-and-permissions.md` §6 决策 A）。
   **前置条件「危险命令检查器」已落地**：`src/extensions/command-guard.ts` 拦五类
   （动态执行 / 下载执行 / 凭据目录读取 / 递归强制删除 / 系统破坏），

@@ -87,6 +87,8 @@ scripts/       冒烟测试 / 依赖规则校验
 
 Electron 自带 Node 运行时，用户不需要装任何东西，与 §4.4 的零依赖原则一致。
 崩溃不带走主进程。
+（别与 §4.4 的 `node` **托管运行时**混为一谈：那是给模型/脚本用的、随包的 node.exe，
+Electron 内置的这一个只跑我们自己的代码 —— 为什么不复用它见 `docs/运行时来源与许可.md` 的否决方案 2。）
 
 **原生模块风险（已大幅降低）**。依赖树里有三个 `.node`：
 
@@ -137,33 +139,60 @@ WorkBuddy 自己就是这条路（`doc-typeset` → HTML → `html-to-docx` → 
   → 导出器
 ```
 
-### 4.4 文档流水线按 WorkBuddy 跑 Python venv
+### 4.4 文档流水线按 WorkBuddy 跑 Python venv（2026-09-17 扩成三个托管运行时）
 
 文档生成的 S3「HTML→docx」照 WorkBuddy 的 `tencent-docx` 来：不要求用户机器
 预装 Python / Git for Windows，而是自托管一套运行时（决策由用户拍板，替代 2026-09-08
 的「不碰 shell / 不假设第三方命令」旧方案）。
 
+**2026-09-17（spec: add-managed-runtimes）**：托管范围从一个隐式 venv 扩成**三个运行时**，
+统一落在托管根 `<configDir>/runtimes/<id>/<version>/` + `current` 指针（内核 `src/core/runtimes/`，
+`node` / `gitbash` 是随包载荷型）—— 用户机器上**三个都不用装**：
+
+| 运行时 | 来源 | 形态 |
+| --- | --- | --- |
+| `python` | `uv` 运行期装（`python-build-standalone` 的独立 CPython 3.12）+ PyPI wheel | 托管根下的 venv |
+| `node` | nodejs.org 官方 `node-v22.23.2-win-x64.zip` | **随包**（构建期拉取，运行期只复制） |
+| `gitbash` | Git for Windows **PortableGit** 2.55.0.5 | **随包**（构建期用 7-Zip/SFX 解包，7-Zip 不进产物） |
+
+来源 URL、sha256、许可义务、体积实测（node 94.9 MB / gitbash 389.1 MB）与**否决方案**
+（为何不用 MinGit、为何不在运行期解 7z、为何不复用系统已装）见
+`docs/运行时来源与许可.md` 与 `resources/runtimes/README.md`。
+
 环境准备抄 WorkBuddy 的 `setup-html-to-docx.sh` 机制：
 
 - 幂等脚本，已就绪秒退；首次联网三步：装 `uv`（`astral.sh`）→
   `uv python install 3.12` 拉独立 Python 发行版（`python-build-standalone`）→
-  建 `~/.venv-html-to-docx` → `--only-binary=:all:` 装 wheel。
+  **在托管根下建 venv** → `--only-binary=:all:` 装 wheel。
+  历史路径 `~/.venv-html-to-docx` 若存在则**复用**并如实上报（不静默丢弃）；
+  `HTML_TO_DOCX_VENV` 作为显式覆盖口保留。
 - 强制 `--only-binary=:all:` 是刻意的：绕开 lxml 在无 libxml2/libxslt 时源码构建失败。
 - 私有化 / 无外网：`UV_INDEX_URL` + `UV_PYTHON_INSTALL_MIRROR` 指向内网镜像，
-  或运维预置 `uv` 与离线 wheel；未配置时首跑必然失败——这是明确交付前置条件，
-  不是静默降级。
+  或运维预置 `uv` 与离线 wheel；node / gitbash 的随包载荷同样可手工放置
+  （`resources/runtimes/payload/<id>/<version>/`，fetch 脚本幂等跳过）。未配置时首跑必然失败
+  ——这是明确交付前置条件，不是静默降级。
 - SessionStart hook 后台异步预热（超时 5s 不阻塞），首次冷启动不卡会话。
 - 转换失败降级 Markdown；单个组件/图片失败只跳过或占位，不整篇崩。
 
 这套 venv 是文档流水线的进程内受控调用，**不等于把** **`bash`** **作为 agent 的自由
-shell 工具暴露出去**——agent 的 shell 能力是另一个决策，见 §4.4a。
+shell 工具暴露出去** —— 随包提供 `gitbash` 运行时只让它「路径上找得到」，工具面仍只有
+`powershell`；**是否开放 `bash` 工具面是另行决策，至今未做**，见 §4.4a。
 
-### 4.4a agent 的 shell 能力：用 powershell，不用 bash
+### 4.4a agent 的 shell 能力：用 powershell；`bash` 工具面开不开是另行决策
 
 决策日期 2026-09-08，四方调研见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
+**2026-09-17 状态修订**：原「不用 bash」的那条约束**作废**（理由见下），但**不等于**已经
+把 `bash` 放进工具面 —— 那件事**至今没做**，属另行决策。
 
-- **不用 bash**：pi 在 Windows 找不到 bash 会直接抛异常（`utils/shell.ts:100`），
-  目标用户不装 Git for Windows；见 `docs/workbuddy分析/09-sandbox-and-permissions.md`。
+- **`bash` 工具面：未开放**（这是当前事实）。工具面由模式白名单决定
+  （`resources/modes/*.md` 只含 `powershell`），`permission-policy.ts` 对 `bash` 仍维持
+  高风险询问（fail-closed）。**机制事实仍然成立**：pi 在 Windows 找不到 bash 会直接抛异常
+  （`utils/shell.ts` 的 `getShellConfig`：自定义 → `%ProgramFiles%\Git\bin\bash.exe` →
+  PATH 上的 `bash`），而它一旦被塞进 PATH 就会被解析到 —— 所以注入层**刻意不设 `SHELL`**
+  （`src/core/runtimes/injection.ts`），免得替这个决策先做了决定。
+- **原约束为什么作废**：它写的是「目标用户不装 Git for Windows ⇒ 找不到 bash」。
+  现在 Git Bash **随包**作为 `gitbash` 托管运行时提供（`docs/运行时来源与许可.md`），
+  **前提已消失**；留着的只是「还没决定要不要开」。
 - **用 powershell**：pi 内置该工具，Windows 原生、零额外依赖，绕开了上述问题；
 - **前置条件（已满足）**：必须先有危险命令检查器 ——
   `iex` / `Invoke-Expression` / `Add-Type` / `-EncodedCommand` / 递归删除 / 下载执行…
@@ -402,7 +431,7 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 | UI 传输（`ExtensionUIContext`）       | 已验证：TUI / RPC / Electron 三套 |
 | 配置解析（`config.get`）                | 本地文件 → 云端下发                 |
 | 导出器（`(html, opts) => Buffer`）     | PDF、docx 立刻就有两个             |
-| agent shell 策略（`getShellConfig`）  | 无 agent shell → MinGit      |
+| agent shell 策略（`getShellConfig`）  | 无 agent shell → 随包 Git Bash（`gitbash` 托管运行时，§4.4） |
 
 明确不抽象：LLM provider（`pi-ai` 已是）、插件加载器（pi 有 packages + Skills）、
 会话存储（`SessionManager` 已给 JSONL / 内存两种）、多租户、事件 schema 版本号。

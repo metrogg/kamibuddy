@@ -17,6 +17,22 @@
  * 「结论要能追溯到另一条路径」的产出（统计聚合口径、提示词预览）不会被门禁要求登记，
  * 改动让它们与真实来源分叉时没有任何东西变红。补上这两个域 + 首轮登记。
  *
+ * 【2026-09-17 扩】spec: add-managed-runtimes 阶段 1 落进 `src/core/runtime-store.ts`
+ * 与 `src/core/runtimes/**`，于是新增第五个域「托管运行时」：这些模块之间确实有
+ * 可独立分叉观测的关系（「读侧判就绪」 vs 「磁盘事实」两套判据一旦各写一遍就会分叉，
+ * 症状是「current 写了但环境不可用」），所以它们进 INVARIANTS 而不是 EXEMPT。
+ *
+ * 【2026-09-17 扩二】同 spec 阶段 3 / 5 落进 `src/core/runtime-inventory.ts`（开关状态的
+ * 唯一读点 + 清单判据）与 `src/shared/runtimes.ts`（模型可见清单一处的渲染）：这两处
+ * 是「设置页那一行」与「模型 `python_env` 段」的**共同上游**，各判一遍的症状是
+ * 「界面说已被禁用、模型那边说找不到」（或反过来：禁用了却仍把路径交给模型），
+ * 所以同域登记。
+ *
+ * 【2026-09-17 再扩】spec: add-managed-runtimes 阶段 4 落进 `src/core/audit-log.ts`，
+ * 新增第六个域「审计口径」：这条关系确实可独立分叉观测 —— 面板查一次、导出查一次
+ * （或清空时先补留痕再删文件），三处的结论就会不一致，而症状只是「导出的和面板
+ * 看到的不一样」，没有任何测试会变红。
+ *
  * 与 `scripts/check-model-experience.ts` 的分工：那个管「模型看到什么」，这个管
  * 「模块之间的哪个关系不许分叉」。两者都不替代测试 —— 表里 `observation` 指的就是
  * 那条关系现在由哪个测试钉着；改动让断言失效时，登记表也会在评审里被看见。
@@ -36,14 +52,30 @@ const SCOPE: readonly { readonly dir: string; readonly file: RegExp; readonly wh
 	{ dir: "src/extensions", file: /^permission-[a-z-]+\.ts$/, why: "权限判定链与规则引擎" },
 	{ dir: "src/daemon", file: /^usage-stats\.ts$/, why: "台账口径（跨会话统计的聚合产出侧）" },
 	{ dir: "src/daemon", file: /^prompt-preview\.ts$/, why: "提示词字节稳定（预览与真实组装同源）" },
+	{ dir: "src/core", file: /^runtime-store\.ts$/, why: "托管运行时（版本指针与实例完成标记）" },
+	{ dir: "src/core/runtimes", file: /^machine\.ts$/, why: "托管运行时（相位推进与终止判定）" },
+	{ dir: "src/core/runtimes", file: /^registry\.ts$/, why: "托管运行时（安装/发布的落点口径）" },
+	{ dir: "src/core/runtimes", file: /^python\.ts$/, why: "托管运行时（python 落点解析的唯一真源）" },
+	{ dir: "src/core/runtimes", file: /^diagnostics\.ts$/, why: "托管运行时（诊断报告的现场口径）" },
+	{
+		dir: "src/core/runtimes",
+		file: /^(bundled-payload|node|gitbash|injection)\.ts$/,
+		why: "托管运行时（随包载荷型运行时的安装形状与注入落点；spec 阶段 2）",
+	},
+	{ dir: "src/core", file: /^audit-log\.ts$/, why: "审计记录（三类来源同构、查询截断与清空留痕）" },
+	// 阶段 3 / 5：开关状态与模型可见清单各一处判据（设置页那一行与模型注入不许分叉）。
+	{ dir: "src/core", file: /^runtime-inventory\.ts$/, why: "托管运行时（开关状态的唯一读点与清单判据）" },
+	{ dir: "src/shared", file: /^runtimes\.ts$/, why: "托管运行时（模型可见清单的文案与渲染）" },
 ];
 
-/** 首轮必须出现的四个域（删掉某个域的登记即失败）。 */
+/** 首轮必须出现的四个域 + 托管运行时（阶段 1）+ 审计口径（阶段 4）。 */
 const REQUIRED_CONCERNS = [
 	"会话事件折叠",
 	"提示词字节稳定",
 	"权限判定",
 	"台账口径",
+	"托管运行时",
+	"审计口径",
 ] as const;
 
 interface InvariantEntry {
@@ -131,6 +163,96 @@ const INVARIANTS: readonly InvariantEntry[] = [
 			"预览的分段与字数必须来自与真实会话**同一个** assembleSystemPrompt（同段序、同 read/bash/use_skill 技能段门控、同专家人格路径）；允许的差异只有文件头列出的两条（无活会话 ⇒ piContext 置空、styleId 三态），不得在 daemon 侧另写一份镜像组装",
 		observation:
 			"src/daemon/prompt-preview.test.ts（技能段门控与真实组装同一条规则 / 专家人格同一条路径），被删掉的镜像门控是这条关系的由来",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtime-store.ts",
+		relationship:
+			"「读侧判就绪」必须等价于「current 指向的实例带 manifest」，且 current 是写入顺序的最后一步（改名进位 / 复验 / 写 manifest 都在它之前）—— 顺序一换，崩在中间就会留下「看起来就绪」的状态（转换时才炸在用户面前）",
+		observation:
+			"src/core/runtime-store.test.ts 的三个崩溃点用例（半成品 / 已进位未标记 / 已标记未发布）+ src/core/runtimes/python.test.ts 的崩溃续跑用例",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/machine.ts",
+		relationship:
+			"驱动器给出的结论必须就是状态机自身的结论：ready ⇔ machine.ready(state)，失败归因必须取自 machine.failure(state)；撞步数上界要响亮失败而不是默认成功",
+		observation: "src/core/runtimes/machine.test.ts（收敛 / 失败归因 / 不收敛三例）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/registry.ts",
+		relationship:
+			"安装只写 `<root>/<id>/<version>` 这一处落点，且 current 只在进位 + 只读复验通过后写；三条 ensure 路径（覆盖口/旧路径就地、托管实例就地修复、首次原子安装）不得各自解释落点",
+		observation:
+			"src/core/runtimes/python.test.ts（全新安装 / 崩溃点 / 重置 / 覆盖口就地四组）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/python.ts",
+		relationship:
+			"venv 落点的优先级必须唯一：HTML_TO_DOCX_VENV > 托管根 current（且该实例完整）> 既有 ~/.venv-html-to-docx > 待安装；两条路径并存时以托管为准，坏指针被忽略并如实上报",
+		observation: "src/core/runtimes/python.test.ts 的「落点优先级（唯一真源）」一组",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/diagnostics.ts",
+		relationship:
+			"报告里的状态、路径与缺失项必须来自现场采集（resolve + inspect + store 列举 + 落盘日志），不得自判一份或另写一套说法",
+		observation: "src/core/runtimes/python.test.ts 的「诊断报告」一组（缺依赖指名 / 指针被忽略 / 最近失败来自日志）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/bundled-payload.ts",
+		relationship:
+			"随包载荷型运行时的相位顺序不可换：**先探针、探针不过才复制**（先复制会让每次幂等 ensure 重拷几百 MB，而它挂在模型每次调用前的准备路径上），且载荷缺席/不完整只在「真要复制」时才判（懒校验）—— 否则「实例好好的、只是随包载荷被删了」会被误报成未就绪。复制用 robocopy 位掩码退出码（≤7 即成功），不是「必须等于 0」",
+		observation:
+			"src/core/runtimes/node.test.ts（幂等只探针一次 / 就位即修复 / 载荷缺席响亮失败 / 载荷不完整点名缺文件）+ gitbash.test.ts 同形两组",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/node.ts",
+		relationship:
+			"许可文本必须留在载荷必备文件里（MIT 义务的机械化断言），且**三者同源**：描述符 version、载荷目录名、探针解析出的版本串（`vX.Y.Z`）—— 改版本只改一处而漏改另一处时，安装或复验必须变红而不是静默装错版本",
+		observation: "src/core/runtimes/node.test.ts 的「合规义务被钉住」「版本串解析」「进位后复验不过」三组",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/gitbash.ts",
+		relationship:
+			"探针的 PATH 注入必须与注入层 `RUNTIME_ENV_LAYOUT.gitbash` **同一份**（实测不注入时 `bash -c \"git --version\"` 读到的是机器上另一个 git，那样的探针验的不是随包载荷）；上游版本串 `2.55.0.windows.N` ↔ 我们钉的 `2.55.0.N` 的归一化只有这一处",
+		observation: "src/core/runtimes/gitbash.test.ts 的「探针自带注入」两组与「版本串归一化」一组",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtimes/injection.ts",
+		relationship:
+			"注入判据只有三条且按序短路（总开关关闭 / 逐项禁用 / 尚无实例 ⇒ 都不注入），且每个运行时的「禁用/未就绪」必须在决定里被**指名**（模型侧据此区分「被禁用」与「找不到」）；PATH 拼法唯一（`prependPath`，与安装期探针共用），键名沿用基线的那个",
+		observation: "src/core/runtimes/injection.test.ts（四个判据 + PATH 拼法一组）",
+	},
+	{
+		concern: "审计口径",
+		module: "src/core/audit-log.ts",
+		relationship:
+			"面板、清空回读与导出必须走**同一条查询**（readAuditRecords）：面板是它的截断档、导出是它的全量档；且清空必须**先删后补**——顺序一换，清空动作的留痕会被自己删掉，「谁在什么时候清空了记录」就永远答不出来（三类来源的记录形状也只在 writeAuditRecord 一处成立）",
+		observation:
+			"src/core/audit-log.test.ts（三类同构 / 过滤与上限 / 清空后只剩留痕且新增照常 / 导出含面板每一行）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/core/runtime-inventory.ts",
+		relationship:
+			"开关只有一个读点（readRuntimeSwitch：总开关 × 逐项），且**禁用 ⇒ 不给路径**（entryOf 在禁用时不出 activeDir / executable 两格）—— 设置页那一行与模型侧 `python_env` 段必须由这一份判据产出，任一处另判一遍就会出现「界面说禁用、模型那边说找不到」或「禁用了却仍把路径交给模型」",
+		observation:
+			"src/core/runtime-inventory.test.ts（总开关关 ⇒ 三项都 disabled 且无路径 / 逐项关只影响该项 / 显式标记落盘可区分「关过」与「没设过」）",
+	},
+	{
+		concern: "托管运行时",
+		module: "src/shared/runtimes.ts",
+		relationship:
+			"模型可见的运行时清单正文只由 renderRuntimeEnvSection 一处生成，且「被用户禁用」与「找不到（未就绪）」必须是两句不同的话（前者指向用户去设置页开启，后者指向等待 / 如实告知）—— 两句话合并成一句「不可用」，模型就只能猜自己该做什么",
+		observation:
+			"src/core/runtime-inventory.test.ts（禁用项文案含「已被用户禁用」且不含「尚未准备」；未就绪项反之）+ src/core/session-host.test.ts 的 python_env 条目级断言",
 	},
 ];
 

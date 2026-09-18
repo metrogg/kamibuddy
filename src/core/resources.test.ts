@@ -315,9 +315,9 @@ describe("真实 resources：过程叙述条款两个场景都在", () => {
 		 *
 		 * **路径本身不进这里**（spec: stabilize-prompt-prefix）：它随机器变
 		 * （homedir / 安装位置 / HTML_TO_DOCX_VENV），进系统提示词就是「换机 /
-		 * 重建 venv 即断前缀」。片段只留恒定的纪律文字，真实路径经 daemon 的
-		 * docxPythonPath 走 hidden context 的 python_env 段（正侧断言见
-		 * core/session-host.test.ts）。
+		 * 重建 venv 即断前缀」。片段只留恒定的纪律文字，真实路径经 daemon 的运行时
+		 * 清单（core/runtime-inventory.ts）走 hidden context 的 python_env 段
+		 * （正侧断言见 core/session-host.test.ts）。
 		 */
 		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
 		const { scenes, modes, fragments } = loadResources(realDir);

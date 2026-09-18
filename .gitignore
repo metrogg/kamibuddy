@@ -54,3 +54,7 @@ temp/
 
 # uv.exe 是 fetch:uv 的拉取产物（或运维手工放置），不入库
 resources/bin/
+
+# 托管运行时的随包载荷（fetch:node / fetch:gitbash 的拉取与解包产物，几百 MB），不入库；
+# 构建安装包时它必须在位（extraResources 从磁盘收集，与 gitignore 无关）。
+resources/runtimes/payload/

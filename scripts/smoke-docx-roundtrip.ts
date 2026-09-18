@@ -32,7 +32,8 @@ export {};
  */
 process.env["PYTHONDONTWRITEBYTECODE"] = "1";
 
-const { createEnvContext, defaultSpawn, ensureDocxEnv } = await import("../src/documents/docx-env.ts");
+const { defaultSpawn } = await import("../src/documents/docx-env.ts");
+const { defaultPythonRuntimeOptions, ensurePythonRuntime } = await import("../src/core/runtimes/python.ts");
 const { convertHtmlToDocx, defaultRun } = await import("../src/documents/docx-convert.ts");
 const { extractDocxToHtml } = await import("../src/documents/docx-extract.ts");
 
@@ -86,7 +87,8 @@ const EXPECTED_TEXT: readonly string[] = [
 
 const engineDir = resolve("resources/docx-engine");
 const samplePath = join(engineDir, "examples", "report-sample.html");
-const ctx = createEnvContext(engineDir, homedir(), process.platform);
+/* 与生产同一份装配（托管根 + 家目录 + 平台 + 引擎目录）——不走测试旁路。 */
+const runtimeOptions = defaultPythonRuntimeOptions({ engineDir, homeDir: homedir(), platform: process.platform });
 
 // 全程只写系统临时目录，跑完整个删掉：不污染仓，也不碰用户文档目录。
 const workDir = mkdtempSync(join(tmpdir(), "kami-docx-roundtrip-"));
@@ -101,9 +103,9 @@ const startedAt = Date.now();
 
 try {
 	// 1. 环境：与生产同一条幂等状态机（venv 缺失/版本不符/缺依赖都在这里归因）
-	const ensured = await ensureDocxEnv(ctx, defaultSpawn);
+	const ensured = await ensurePythonRuntime(runtimeOptions, defaultSpawn);
 	check(
-		"venv 环境就绪（docx-env 幂等 ensure）",
+		"venv 环境就绪（托管运行时幂等 ensure）",
 		ensured.status === "ready",
 		ensured.status === "ready" ? ensured.python : `${ensured.phase}: ${ensured.error}`,
 	);

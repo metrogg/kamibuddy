@@ -144,7 +144,7 @@ export interface ConvertCliOptions {
 }
 
 export interface ConvertRequest {
-	/** venv 解释器（ensureDocxEnv 的产出）。 */
+	/** venv 解释器（ensurePythonRuntime 的产出）。 */
 	readonly python: string;
 	/** 引擎目录（resources/docx-engine）——CLI 的 cwd 与 PYTHONPATH。 */
 	readonly engineDir: string;
@@ -231,7 +231,7 @@ function parseFailureJson(stderr: string, code: number | null): DocxConvertError
 
 /**
  * 跑一次转换。成功返回产物路径与引擎警告；失败一律抛 DocxConvertError（带分类）。
- * 调用前必须先 ensureDocxEnv 就绪（或走工具层的组合入口）。
+ * 调用前必须先 ensurePythonRuntime 就绪（或走工具层的组合入口）。
  */
 export async function convertHtmlToDocx(req: ConvertRequest, run: RunFn): Promise<ConvertSuccess> {
 	const outcome = await run({

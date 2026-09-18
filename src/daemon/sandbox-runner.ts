@@ -21,6 +21,7 @@ import type {
 	CommandOutcome,
 	CommandRunner,
 } from "../extensions/powershell-tool.ts";
+import { clipAuditDetail, type AuditSink } from "../shared/audit.ts";
 import {
 	classifyFailure,
 	probeSandbox,
@@ -281,6 +282,8 @@ export interface SandboxRunnerOptions {
 	 * 位置参数**与 `CommandRunner` 逐一对齐**：这样 `runCommand` 能直接接上来
 	 * （它把前四个里用不上的接了就丢），本层也不必为「谁来接信号」写适配层。
 	 * 参数顺序一旦分叉，唯一的调用点就会静默传错位置。
+	 * 第 6 位是**运行时注入补丁**（见 `runtimeEnv`）：本层现算后原样交给它，
+	 * 于是降级直连 spawn 与沙箱路径拿到的是同一份环境。
 	 */
 	readonly fallback: (
 		command: string,
@@ -288,9 +291,32 @@ export interface SandboxRunnerOptions {
 		onProgress?: (text: string) => void,
 		escalation?: CommandEscalationRequest,
 		signal?: AbortSignal,
+		env?: Readonly<Record<string, string>>,
 	) => Promise<CommandOutcome>;
+	/**
+	 * 运行时注入补丁的来源（SubTask 2.1.3）—— 生产是
+	 * `core/runtime-inventory.ts` 的 `planRuntimeShellInjection().env`（核心侧读配置，
+	 * 本层不碰配置目录：与 `getSettings` 同一取向）。
+	 *
+	 * **getter 而非快照**：用户在设置页改开关后，下一次执行的命令即生效（无需重启会话）。
+	 * 缺省不带 = 不注入（环境块与接线之前逐字节相同）。
+	 *
+	 * 只作用于**子进程**环境：沙箱路径经 `SandboxRunRequest.env`，降级直连经
+	 * `fallback` 的第 6 参 —— 都不回写 daemon 的 `process.env`
+	 * （理由与边界见 core/runtimes/injection.ts 文件头）。
+	 */
+	readonly runtimeEnv?: () => Readonly<Record<string, string>>;
 	/** 诊断变化时回调（探测结论、降级原因）。同一结论只报一次。 */
 	readonly onDiagnostics?: (diagnostics: SandboxDiagnostics) => void;
+	/**
+	 * 审计写入通道 —— 沙箱一类的**唯一写入点**（spec: add-managed-runtimes 阶段 4）：
+	 * 拒绝执行、准备失败与提权决定都在本层产生，所以留痕也放在本层，
+	 * 三个调用点（主会话 / 子代理 / 无人值守）不必各记一遍。
+	 *
+	 * 缺省不写：本文件的单测会在拒绝与提权两条分支上跑，直接写盘会污染真实
+	 * 配置目录；「这次会话要不要留痕」是 daemon 装配层的决定。
+	 */
+	readonly onAudit?: AuditSink;
 	/**
 	 * 发起一次提权审批。**省略 = 没有审批通道**，于是任何提权申请都被拒
 	 * （fail-closed：没人能批准的时候「批准」不能凭空发生）。
@@ -456,6 +482,18 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 	 */
 	function refuse(reason: SandboxUnavailableReason, detail: string): CommandBlocked {
 		report({ available: false, reason, detail });
+		/*
+		 * 审计留痕：这是「沙箱拒绝执行」的唯一出口（探测失败 / 授权失败 /
+		 * 令牌与 spawn 失败都收敛到这里），所以沙箱一类的三类形态在这里一次记全。
+		 * 理由取与给模型同一句 describeReason —— 审计与模型看到的原因不许出现两套说法。
+		 */
+		options.onAudit?.({
+			category: "sandbox",
+			outcome: "blocked",
+			detail: clipAuditDetail(
+				`沙箱不可用，命令未执行（${describeReason(reason)}${detail === "" ? "" : `：${detail}`}）`,
+			),
+		});
 		return {
 			blocked: true,
 			category: "sandbox-unavailable",
@@ -470,6 +508,13 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 
 	return async (command, timeoutSeconds, onProgress, escalation, signal) => {
 		const settings = options.getSettings();
+		/*
+		 * 运行时注入补丁**每次执行现算**（getter）：设置页改开关后下一次命令即生效。
+		 * 算出来的这一份同时喂给两条 spawn 路径（沙箱 / 降级直连），口径因此只有一份。
+		 */
+		const injectedEnv = options.runtimeEnv?.();
+		// 没有补丁时**不带** `env` 字段：请求形状与接线之前逐字节相同。
+		const sandboxEnv = injectedEnv === undefined ? {} : { env: injectedEnv };
 
 		/*
 		 * 提权申请先判定，且**先于任何执行** —— 被拒时命令一行都不跑。
@@ -484,7 +529,26 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				settings,
 				options.requestEscalation,
 			);
-			if (verdict.kind === "blocked") return verdict.blocked;
+			if (verdict.kind === "blocked") {
+				// 提权被拒 = 命令一行都没跑（fail-closed）。审计要的是这个事实 +
+				// 为什么拒（理由与弹窗、工具结果同源，不另写一句）。
+				options.onAudit?.({
+					category: "sandbox",
+					outcome: "blocked",
+					detail: clipAuditDetail(`提权申请被拒，命令未执行：${verdict.blocked.reason}`),
+				});
+				return verdict.blocked;
+			}
+			/*
+			 * 批准提权是全系统唯一会「放宽写约束」的动作，属审计要管的放行：
+			 * 单列一条 allowed（不是 blocked 的反面凑数）——它是事后回答
+			 * 「谁在什么时候把约束放开了」的唯一凭据。
+			 */
+			options.onAudit?.({
+				category: "sandbox",
+				outcome: "allowed",
+				detail: clipAuditDetail(`用户批准本次提权到「${verdict.mode}」（仅本次调用有效）：${command}`),
+			});
 			mode = verdict.mode;
 			escalated = true;
 		}
@@ -508,6 +572,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				onProgress,
 				undefined,
 				signal,
+				injectedEnv,
 			);
 			return escalated ? { ...outcome, note: ESCALATED_NOTE } : outcome;
 		}
@@ -541,6 +606,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 					timeoutMs: timeoutSeconds * 1000,
 					mode: "read-only",
 					signal,
+					...sandboxEnv,
 				});
 				report({ available: true });
 				if (looksDenied(outcome.stderr)) {
@@ -577,6 +643,7 @@ export function createSandboxedRunner(options: SandboxRunnerOptions): CommandRun
 				timeoutMs: timeoutSeconds * 1000,
 				mode: "workspace-write",
 				signal,
+				...sandboxEnv,
 			});
 			report({ available: true, prepare: prepareReportOf(prepared) });
 			/*

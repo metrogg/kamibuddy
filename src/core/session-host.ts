@@ -17,6 +17,15 @@
  *    （llm_call 条目，spec: add-observability-ledger）。**边界取 turn_start →
  *    助手 message_end，不取 turn_end** —— pi 的 turn_end 在本轮工具跑完之后才发，
  *    用它会把工具耗时算进模型耗时（settleLlmCall 有完整根因）。
+ *
+ * ── 模型体验契约（scripts/check-model-experience.ts 的三段格式；改行为要同步改这里）──
+ * What the model sees: 每次模型调用前在请求尾部追加 hidden context（本文件
+ * composeRunHiddenContext）：工作目录 / **托管运行时清单与状态**（`python_env` 段，
+ * 含被用户禁用与未就绪的分句）/ 记忆与技能指针 / 当前时间。界面上不显示，也不落会话文件。
+ * Token effect: 每次模型调用都付这一段（常量级：段数固定，运行时清单为条目数 × 两三行）。
+ * KV Cache effect: 注入落在所有已落盘历史之后、不改写任何既有消息
+ * （shared/hidden-context.ts 的尾部独立消息）；运行时清单逐轮可变（开关 / 重建 venv）
+ * 只影响这一段自身，历史前缀不受影响。**系统提示词里绝不放这些随机器变的事实**。
  */
 
 import type {
@@ -42,6 +51,7 @@ import {
 	formatRunTime,
 	type HiddenSection,
 } from "../shared/hidden-context.ts";
+import { renderRuntimeEnvSection, type RuntimeInventory } from "../shared/runtimes.ts";
 import { memoryReminder } from "./memory.ts";
 import {
 	changeFromEdit,
@@ -428,21 +438,25 @@ export interface SessionHostOptions {
 	 */
 	readonly getExpertLabel?: () => string | undefined;
 	/**
-	 * 托管 Python 解释器的绝对路径（documents/docx-env.ts 的 venvPython 产物），
-	 * 进 hidden context 的 `python_env` 段。
+	 * 托管运行时清单（spec: add-managed-runtimes 阶段 5），进 hidden context 的
+	 * `python_env` 段（段名沿用既有契约 —— 片段 python-env.md 与提示词缓存契约文档
+	 * 都按它指代这一段）。
 	 *
-	 * 为什么是注入值而不是宿主自己算：引擎目录 / homedir / platform 这三元组的知识
-	 * 在 daemon（`docxEnvContext()`），宿主自己拼一份必然与它漂移（AGENTS.md §4）。
+	 * 为什么是**取值函数**而不是一个值：用户在设置页切开关、改运行时状态之后，
+	 * 下一次 run 就该看到新事实（spec: 开关切换立即生效、无需重启）。宿主是按会话
+	 * 建的（不是每次 run 新建），拿一份快照会让旧会话一直读旧值；函数形态与
+	 * `getExpertLabel` / `getSystemPromptSegments` 同一个口径。
 	 *
 	 * 为什么走注入而不是系统提示词：它是**随机器变**的事实（homedir、安装位置、
-	 * `HTML_TO_DOCX_VENV` 任一变化都改字节），进提示词就是「该处之后的整段提示词与
-	 * 整段历史一起在 provider 前缀缓存里失配」（片段 python-env.md 曾用
+	 * `HTML_TO_DOCX_VENV`、以及用户开关任一变化都改字节），进提示词就是「该处之后的
+	 * 整段提示词与整段历史一起在 provider 前缀缓存里失配」（片段 python-env.md 曾用
 	 * `{{pythonPath}}` 拼在骨架里，已按这条删掉 —— 见 core/prompt-composer.ts 文件头）。
 	 *
+	 * 采集口径与理由（不 spawn、只看磁盘事实）见 core/runtime-inventory.ts 文件头。
 	 * 缺省 = 该段不注入（子代理 / 成员会话不接场景骨架、也从没有过这条信息；
 	 * 用户会话与定时任务 run 会话由 daemon 给值）。
 	 */
-	readonly pythonPath?: string;
+	readonly getRuntimeInventory?: () => RuntimeInventory;
 	/**
 	 * 当前绑定专家的追加工具白名单（spec: add-team-foundations）。
 	 * 生效工具集 = mode.tools ∪ extraTools（专家只能增不能删）。undefined/空 =
@@ -1980,11 +1994,14 @@ export class SessionHost {
 	 *      （setScene/setExpert 不重组系统提示词）也只有这里跟得上。
 	 *      （子代理/成员会话例外：composeSubagentPrompt 会把同一个 cwd 写进自己的
 	 *      提示词，值同源同为 cwd，不产生两份漂移 —— 见 prompt-composer.ts 文件头。）
-	 *   2. python_env（user-context）—— 托管 Python 解释器的绝对路径。
-	 *      **机器事实的唯一来源**：它是随机器变的值，不能再进系统提示词（片段
-	 *      python-env.md 曾用 `{{pythonPath}}` 把它拼进骨架，那就是「换机 / 重建
-	 *      venv 即断前缀」）。缺省（宿主拿到 undefined）整段缺席 —— 子代理/成员
-	 *      会话本来就没有这条信息。
+	 *   2. python_env（user-context）—— **托管运行时清单 + 状态**（spec:
+	 *      add-managed-runtimes 阶段 5）：逐项 id / 版本 / 状态 / 用途，就绪时附
+	 *      目录与可执行文件绝对路径，被用户禁用或未就绪时附该走的那一步。
+	 *      **机器事实与开关事实的唯一来源**：它们随机器（homedir、安装位置、
+	 *      HTML_TO_DOCX_VENV）与用户开关变，不能再进系统提示词（片段 python-env.md
+	 *      曾用 `{{pythonPath}}` 把它拼进骨架，那就是「换机 / 重建 venv 即断前缀」）。
+	 *      段名沿用 `python_env`（片段与提示词缓存契约文档都按它指代）。
+	 *      缺省（宿主拿到 undefined）整段缺席 —— 子代理/成员会话本来就没有这条信息。
 	 *   3. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
 	 *   4. current_time（additional-data）—— run 冻结时刻，一次性容器。
@@ -2011,14 +2028,15 @@ export class SessionHost {
 		const sections: HiddenSection[] = [
 			{ tag: "workspace_context", role: "user-context", body: workspaceLines.join("\n") },
 		];
-		// 顺序与片段 python-env.md 的指代一致（它说「`<python_env>` 块里的『Python
-		// 解释器』一行」）：这一行就是模型拿到的解释器绝对路径。
-		if (this.options.pythonPath !== undefined) {
-			sections.push({
-				tag: "python_env",
-				role: "user-context",
-				body: `Python 解释器：${this.options.pythonPath}`,
-			});
+		// 顺序与片段 python-env.md 的指代一致（它说「清单里 python 那一项的
+		// 『Python 解释器』一行」）：这一行就是模型拿到的解释器绝对路径。
+		// 清单由 daemon 现算（core/runtime-inventory.ts，只读磁盘事实不 spawn）——
+		// 开关一切、状态一变，下一次 run 的注入就是新的。
+		if (this.options.getRuntimeInventory !== undefined) {
+			const body = renderRuntimeEnvSection(this.options.getRuntimeInventory());
+			if (body !== "") {
+				sections.push({ tag: "python_env", role: "user-context", body });
+			}
 		}
 		const memory = memoryReminder(cwd);
 		if (memory !== undefined) {

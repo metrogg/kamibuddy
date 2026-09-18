@@ -24,7 +24,9 @@
  * What the model sees: powershell 的名称、description、promptSnippet/promptGuidelines 与参数 schema；
  * 返回的 stdout/stderr 拼接文本（标清来源、非零退出码点名）、危险命令检查器的拒绝原因、执行器注入的
  * note（如「沙箱未生效」），以及无人值守时的不可用文案。超限时模型看到的是 spill 层给的
- * 「头部 + 省略字符数 + 落盘路径」（不再是旧版那句「已截断」）。
+ * 「头部 + 省略字符数 + 落盘路径」（不再是旧版那句「已截断」）。另：子进程环境里带着启用中的
+ * 托管运行时补丁（PATH 前缀 + KAMIBUDDY_*，由执行器给），于是命令里的 node / git 解析到随包那一份；
+ * 补丁每次执行现算（设置页改开关后下一次即生效），且不回写 daemon 的 process.env。
  * Token effect: 定义常驻；返回可能撞上 spill 阈值（SPILL_MAX_CHARS，core/spill.ts，
  * 超限部分落盘不进上下文）；等待提示走 onUpdate（瞬时通道，不进最终结果）。
  * KV Cache effect: 定义字面量会话内恒定 ⇒ 前缀稳定；结果追加在历史之后；权限规则与沙箱状态只决定
@@ -35,6 +37,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { clipAuditDetail, type AuditSink } from "../shared/audit.ts";
 import { ESCALATION_TARGETS, validateEscalationArgs } from "../shared/permissions.ts";
 import { checkCommand } from "./command-guard.ts";
 
@@ -45,6 +48,14 @@ export interface PowershellToolOptions {
 	 * 人在场终审，无论权限档一律关掉（questionnaire 的 unattended 同款语义）。
 	 */
 	readonly unattended?: boolean;
+	/**
+	 * 审计写入通道 —— 检查器拦下的命令要进审计中心（spec: add-managed-runtimes
+	 * 阶段 4 的「命令安全」一类）。注入而不是本文件直接写盘：工具层不认识
+	 * 审计目录（那是 core/config-paths 的事），且本文件的单测会在拦截分支上
+	 * 跑，直接写盘会污染真实配置目录。
+	 * 缺省不写 —— 审计是 daemon 装配层的决定，工具本身不知道「这次会话要不要留痕」。
+	 */
+	readonly onAudit?: AuditSink;
 	/**
 	 * 命令执行器。缺省是直接 spawn（今天的行为）；daemon 注入的版本会把命令
 	 * 放进受限令牌里跑（spec: add-windows-acl-sandbox）。
@@ -182,6 +193,21 @@ function killTree(child: ChildProcess): void {
 }
 
 /**
+ * 子进程环境 = 基线（`process.env`）+ 运行时注入补丁。**合并，不整体替换** ——
+ * 整体替换会缺 SystemRoot 之类的变量，powershell 直接起不来（与 sandbox/spawn.ts
+ * 的 buildEnvBlock 同一条口径，那边同样是「继承后覆盖」）。
+ *
+ * 补丁**绝不回写** daemon 的 `process.env`：它只跟着这一次 spawn 走。理由见
+ * core/runtimes/injection.ts 文件头（回写会连带改掉我们自己的受控转换链路，
+ * 还会替「是否把 bash 开放成模型自由 shell 工具」那个另行决策先开前置）。
+ *
+ * 导出是为了让「补丁不丢基线」「本进程环境不变」这两条能被断言，不必真 spawn。
+ */
+export function shellChildEnv(patch?: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
+	return patch === undefined ? process.env : { ...process.env, ...patch };
+}
+
+/**
  * 拉起 powershell.exe 跑一条命令。spawn 失败（非 Windows 没有 powershell.exe）
  * 走 error 事件 → reject，响亮报错；同步 throw 只发生在参数非法时，一并兜住。
  *
@@ -196,6 +222,11 @@ export function runCommand(
 	_onProgress?: (text: string) => void,
 	_escalation?: CommandEscalationRequest,
 	signal?: AbortSignal,
+	/**
+	 * 本次执行的**运行时注入补丁**（可选；SubTask 2.1.3）。由调用方现算后交给本层，
+	 * 本层只负责把它合并进子进程环境 —— 工具不知道托管根在哪，也不读任何配置。
+	 */
+	env?: Readonly<Record<string, string>>,
 ): Promise<CommandOutcome> {
 	return new Promise((resolve, reject) => {
 		let child;
@@ -203,6 +234,7 @@ export function runCommand(
 			child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
 				shell: false,
 				windowsHide: true,
+				env: shellChildEnv(env),
 			});
 		} catch (error) {
 			reject(
@@ -397,6 +429,16 @@ export function powershellExtensionFactory(options?: PowershellToolOptions): Ext
 				}
 				const verdict = checkCommand(params.command);
 				if (verdict !== undefined) {
+					/*
+					 * 审计留痕（spec: add-managed-runtimes 阶段 4）：命令安全一类的**写入点**
+					 * 就是这里 —— 检查器命中即刻记一条，命令原文一并留下（截断到 AUDIT_DETAIL_MAX），
+					 * 否则事后只能回答「拦过一类动态执行」，答不出「拦的是哪一条」。
+					 */
+					options?.onAudit?.({
+						category: "command",
+						outcome: "blocked",
+						detail: clipAuditDetail(`危险命令检查器拦截（${verdict.category}）：${params.command}`),
+					});
 					return {
 						content: [
 							{

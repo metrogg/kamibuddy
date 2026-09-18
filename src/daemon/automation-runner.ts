@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { getAppDir, getConfigDir, getResourcesDir, getSpillsDir } from "../core/config-paths.ts";
+import { writeAuditRecord } from "../core/audit-log.ts";
 import type { ModelCatalog } from "../core/model-catalog.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
@@ -48,6 +49,7 @@ import { visualizerExtensionFactory } from "../extensions/visualizer-tools.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { AutomationTask } from "../shared/automation.ts";
 import type { PermissionSettings } from "../shared/permissions.ts";
+import type { RuntimeInventory } from "../shared/runtimes.ts";
 import type { SessionEvent, ThinkingLevel } from "../shared/session-events.ts";
 import type { AutomationRunExecutor, AutomationRunOutcome } from "./automation-scheduler.ts";
 
@@ -76,13 +78,16 @@ export interface AutomationRunExecutorDeps {
 	readonly composeRuntimeContext: (cwd: string) => string;
 	readonly getPermissions: () => PermissionSettings;
 	/**
-	 * 托管 Python 解释器的绝对路径（daemon 的 docxPythonPath），进 run 会话
+	 * 托管运行时清单（daemon 的 collectRuntimeInventory），进 run 会话
 	 * hidden context 的 `python_env` 段。run 会话的提示词是 work 骨架（含
-	 * python-env 片段），模型要靠这一段才知道该用哪个解释器 —— 该事实随机器变，
-	 * 不能进系统提示词（spec: stabilize-prompt-prefix；片段里那个 `{{pythonPath}}`
-	 * 槽位已删）。
+	 * python-env 片段），模型要靠这一段才知道该用哪个解释器、哪个运行时被
+	 * 用户关掉了 —— 该事实随机器与开关变，不能进系统提示词
+	 * （spec: stabilize-prompt-prefix；片段里那个 `{{pythonPath}}` 槽位已删）。
+	 *
+	 * 传**取值函数**而不是一份快照：run 会话每次新建宿主，但开关切换同样要
+	 * 在下一次组装时立刻反映出来（口径与用户会话同一处）。
 	 */
-	readonly pythonPath: string;
+	readonly getRuntimeInventory: () => RuntimeInventory;
 	/**
 	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。run 会话每次新建，
 	 * 逐会话还原不适用；无人值守会话没有会话内切换入口，全局默认即口径。
@@ -146,9 +151,10 @@ export function createAutomationRunExecutor(
 				interactionId: "craft",
 				emit,
 				resources: deps.resources,
-				// 托管解释器路径进 hidden context 的 python_env（run 会话的提示词
-				// 是 work 骨架，其中有 python-env 片段；那条事实随机器变，只能走注入）。
-				pythonPath: deps.pythonPath,
+				// 托管运行时清单进 hidden context 的 python_env（run 会话的提示词
+				// 是 work 骨架，其中有 python-env 片段；那条事实随机器与开关变，
+				// 只能走注入）。
+				getRuntimeInventory: deps.getRuntimeInventory,
 				// 初始档 = 全局默认；未配置时为 undefined，SessionHost 只把非
 				// undefined 传给 pi（pi 走自己的 medium 默认链）。
 				thinkingLevel: deps.getThinkingLevel(),
@@ -279,6 +285,12 @@ function buildRunExtensions(
 		createDocxConvertTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
+			/*
+			 * 运行时失败进审计中心（与主会话同一个写入函数）。
+			 * 无人值守会话**尤其**要记：这条路径没人看着，环境装不上时用户只能
+			 * 从「任务为什么没产出」去猜，而审计中心是唯一的显式痕迹。
+			 */
+			onAudit: writeAuditRecord,
 		}),
 		/*
 		 * docx 版式提取：craft 白名单含 docx_extract，run 会话注册同名真实工具。
@@ -289,6 +301,8 @@ function buildRunExtensions(
 		createDocxExtractTool({
 			engineDir: join(getResourcesDir(), "docx-engine"),
 			homeDir: homedir(),
+			// 运行时失败进审计中心（与主会话同一个写入函数）。
+			onAudit: writeAuditRecord,
 		}),
 		/*
 			 * 内联可视化：craft 白名单含 read_me / show_widget，run 会话注册同名

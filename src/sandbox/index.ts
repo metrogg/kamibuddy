@@ -67,6 +67,16 @@ export interface SandboxRunRequest {
 	readonly timeoutMs: number;
 	readonly mode: ConfinementMode;
 	/**
+	 * 追加进子进程环境的**覆盖项**（合并进继承来的 `process.env`，不整体替换）。
+	 *
+	 * 由调用方给（spec: add-managed-runtimes 的运行时注入层：让模型 shell 在 PATH 上
+	 * 找得到启用中的托管运行时）。放在 request 而不是本层自己去读配置：本层是纯 Win32
+	 * 适配层 —— 不认识配置目录，也不认识运行时注册表，注入来源归装配层。
+	 *
+	 * 缺省不带这一格：环境块与本字段存在之前**逐字节相同**。
+	 */
+	readonly env?: Readonly<Record<string, string>>;
+	/**
 	 * 调用方的中断信号（用户按「停止」时由 pi 触发）。
 	 *
 	 * 必须由本层处理而不是让上层放弃等待：进程在**沙箱里**，只有这里握着
@@ -502,8 +512,12 @@ export async function runSandboxed(request: SandboxRunRequest): Promise<SandboxR
 			args: request.args,
 			cwd: request.cwd,
 			token: restricted,
-			// 只覆盖 TMP/TEMP，其余继承 —— 不改本进程环境（那会污染整个 daemon）。
-			env: { TMP: tempDir, TEMP: tempDir },
+			/*
+			 * 只覆盖 TMP/TEMP 与调用方给的注入补丁，其余继承 —— 不改本进程环境
+			 * （那会污染整个 daemon）。私有 temp 放在最后：补丁若也带 TMP/TEMP，
+			 * 必须被沙箱自己的、已被授权的那个目录压过。
+			 */
+			env: { ...request.env, TMP: tempDir, TEMP: tempDir },
 		});
 
 		// 必须与等待并发：管道缓冲填满时子进程会阻塞在写上，
