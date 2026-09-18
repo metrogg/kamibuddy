@@ -675,13 +675,15 @@ export class SessionHost {
 		const settingsManager = SettingsManager.create(cwd, agentDir);
 
 		// 扩展要经 ResourceLoader 注入，且必须 reload 后才生效（同 sdk.ts:185-188）。
-		// additionalSkillPaths：随应用内置的技能（resources/skills/）；
+		// additionalSkillPaths：随应用内置的技能 —— 我们自己写的在 resources/skills/，
+		// 照搬 WorkBuddy 市场插件的在 resources/plugins/（pi 递归发现 SKILL.md，
+		// 来源与待适配项见 resources/plugins/README.md）；
 		// 用户的技能（agentDir/skills/）pi 会自动发现。
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
 			settingsManager,
-			additionalSkillPaths: [join(getResourcesDir(), "skills")],
+			additionalSkillPaths: [join(getResourcesDir(), "skills"), join(getResourcesDir(), "plugins")],
 			extensionFactories: [...(options.extensions ?? [])],
 		});
 		await resourceLoader.reload();

@@ -8,6 +8,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { formatSkillsForPrompt, loadSkills } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { composePromptWithMeta } from "./prompt-composer.ts";
 import { loadResources, resolveStyle, toDescriptors, type StyleResource } from "./resources.ts";
@@ -207,6 +208,75 @@ describe("片段加载（prompts/fragments）", () => {
 		writeMode("craft");
 		writeFragment("empty.md", "  \n");
 		expect(() => loadResources(dir)).toThrow(/片段文件为空/);
+	});
+});
+
+describe("首页预设加载（welcome/）", () => {
+	function writeWelcome(chips: unknown, cases: unknown): void {
+		mkdirSync(join(dir, "welcome"), { recursive: true });
+		writeFileSync(join(dir, "welcome", "chips.json"), JSON.stringify(chips));
+		writeFileSync(join(dir, "welcome", "cases.json"), JSON.stringify(cases));
+	}
+	const CHIP = {
+		id: "doc",
+		scene: "work",
+		label: "文档处理",
+		description: "描述",
+		icon: "doc",
+		chipKind: "playbook",
+	};
+	const CASE = {
+		id: "c1",
+		chipId: "doc",
+		title: "标题",
+		subtitle: "副标题",
+		prompt: "提示词",
+		cover: "https://example.com/c.png",
+	};
+
+	it("目录不存在 → 空预设（与 fragments 同口径，不抛错）", () => {
+		writeScene("work");
+		writeMode("craft");
+		const { welcome } = loadResources(dir);
+		expect(welcome.chips).toEqual([]);
+		expect(welcome.cases).toEqual([]);
+	});
+
+	it("胶囊 + 案例正常加载", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeWelcome([CHIP], [CASE]);
+		const { welcome } = loadResources(dir);
+		expect(welcome.chips.map((c) => c.id)).toEqual(["doc"]);
+		expect(welcome.cases.map((c) => c.id)).toEqual(["c1"]);
+	});
+
+	it("scene 写错（不在 scenes/ 里）→ 抛错（否则那个胶囊永远不出现）", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeWelcome([{ ...CHIP, scene: "design" }], [CASE]);
+		expect(() => loadResources(dir)).toThrow(/不在 scenes\/ 中/);
+	});
+
+	it("case 的 chipId 指向不存在的胶囊 → 抛错（那条案例永远不会显示）", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeWelcome([CHIP], [{ ...CASE, chipId: "nope" }]);
+		expect(() => loadResources(dir)).toThrow(/没有对应胶囊/);
+	});
+
+	it("playbook 胶囊没有任何案例 → 抛错（点开是空列表 = 假入口）", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeWelcome([CHIP], []);
+		expect(() => loadResources(dir)).toThrow(/没有任何案例/);
+	});
+
+	it("scene 胶囊缺 prompts → 抛错（同上，不是假入口）", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeWelcome([{ ...CHIP, chipKind: "scene" }], []);
+		expect(() => loadResources(dir)).toThrow(/prompts 必须是非空数组/);
 	});
 });
 
@@ -460,5 +530,67 @@ describe("真实 resources/ 的回归约束", () => {
 			const mode = modes.find((m) => m.id === id);
 			expect(mode?.tools, `${id} 不应有 powershell`).not.toContain("powershell");
 		}
+	});
+
+	it("真实 welcome/：8 个胶囊 / 12 条案例，归属与场景都自洽、每个胶囊都点得开", () => {
+		// 数据照搬自 WorkBuddy（来源与置换说明见 resources/welcome/README.md），
+		// 这条钉住「搬进来之后仍然自洽」：场景存在、归属存在、点开不会是空面板。
+		// 走 getResourcesDir() 同源的真实目录（不是 mkdtemp 样例）。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { scenes, welcome } = loadResources(realDir);
+		const sceneIds = new Set(scenes.map((s) => s.id));
+
+		// 用户要求的配额：日常办公 4 个 + 代码开发 4 个。
+		expect(welcome.chips.filter((c) => c.scene === "work")).toHaveLength(4);
+		expect(welcome.chips.filter((c) => c.scene === "code")).toHaveLength(4);
+		expect(welcome.cases).toHaveLength(12);
+
+		for (const chip of welcome.chips) {
+			expect(sceneIds.has(chip.scene), `胶囊 ${chip.id} 的场景「${chip.scene}」应存在`).toBe(true);
+			const own =
+				chip.chipKind === "scene"
+					? (chip.prompts?.length ?? 0)
+					: welcome.cases.filter((c) => c.chipId === chip.id).length;
+			expect(own, `胶囊 ${chip.id} 应有可点的提示词`).toBeGreaterThan(0);
+		}
+		// 案例侧：归属的胶囊必须都在（否则它永远不会显示）。
+		const chipIds = new Set(welcome.chips.map((c) => c.id));
+		for (const item of welcome.cases) {
+			expect(chipIds.has(item.chipId), `案例 ${item.id} 的胶囊「${item.chipId}」应存在`).toBe(true);
+		}
+	});
+
+	it("照搬的市场插件：15 个技能真的被 pi 的技能加载器发现（不是躺在磁盘上）", () => {
+		// 「预装」的验收点不是文件在不在，而是会话建起来之后模型看不看得见。
+		// 用与 session-host 建会话时同一个加载器、同一条路径（resources/plugins），
+		// 并断言没有 diagnostics —— 名字非法 / 描述超长的技能会被 pi 静默跳过，
+		// 那种情况下预装等于没装。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const result = loadSkills({
+			cwd: realDir,
+			agentDir: realDir,
+			skillPaths: [join(realDir, "plugins")],
+			includeDefaults: false,
+		});
+		const names = result.skills.map((s) => s.name).sort();
+		expect(result.diagnostics).toEqual([]);
+		expect(names).toHaveLength(15);
+		// 首页 5 个依赖插件的胶囊，各自要有拿得出手的技能在名单里。
+		for (const name of ["pdf", "pdfkit-py", "data-visualization", "sql-queries", "wechat-article-search", "ppt-implement", "modern-web-app", "ui-ux-pro-max"]) {
+			expect(names, `技能 ${name} 应被加载`).toContain(name);
+		}
+		// 两条路径一起（= 建会话时的真实形态）也要干净，并给技能段留个预算：
+		// pi 把每个技能的 name+description 常驻上下文，预装多一个插件就多一份开销。
+		// 当前 20 个技能 ≈ 9.4k 字符；这条线是「再加插件前先想清楚」的闸门，
+		// 真要突破就上调这个数并在这里写明理由。
+		const both = loadSkills({
+			cwd: realDir,
+			agentDir: realDir,
+			skillPaths: [join(realDir, "skills"), join(realDir, "plugins")],
+			includeDefaults: false,
+		});
+		expect(both.diagnostics).toEqual([]);
+		expect(both.skills).toHaveLength(20);
+		expect(formatSkillsForPrompt(both.skills).length).toBeLessThan(14000);
 	});
 });

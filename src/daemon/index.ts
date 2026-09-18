@@ -306,6 +306,8 @@ const RESOURCES = loadResources(getResourcesDir());
 
 const SCENES: readonly ModeDescriptor[] = toDescriptors(RESOURCES).scenes;
 const INTERACTIONS: readonly ModeDescriptor[] = toDescriptors(RESOURCES).modes;
+/** 首页预设（能力胶囊 + 最佳实践案例）。静态资源，随快照下发。 */
+const WELCOME = RESOURCES.welcome;
 
 /* ── 模型目录 ─────────────────────────────────────────────────────── */
 
@@ -840,6 +842,7 @@ function freshConversation(
 		entries: [],
 		availableScenes: SCENES,
 		availableModes: INTERACTIONS,
+		welcome: WELCOME,
 		cancelledTurns: [],
 		artifacts: [],
 	};

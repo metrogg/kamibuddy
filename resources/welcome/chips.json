@@ -1,0 +1,90 @@
+[
+	{
+		"id": "doc-processing",
+		"scene": "work",
+		"label": "文档处理",
+		"description": "文档、报告、纪要、接口文档",
+		"icon": "doc",
+		"chipKind": "playbook"
+	},
+	{
+		"id": "data-viz",
+		"scene": "work",
+		"label": "数据分析及可视化",
+		"description": "数据洞察与图表、可视化看板",
+		"icon": "chart",
+		"chipKind": "playbook"
+	},
+	{
+		"id": "deep-research",
+		"scene": "work",
+		"label": "深度研究",
+		"description": "多源调研、事实交叉验证",
+		"icon": "research",
+		"chipKind": "playbook"
+	},
+	{
+		"id": "slides",
+		"scene": "work",
+		"label": "幻灯片",
+		"description": "演示文稿与汇报材料",
+		"icon": "slide",
+		"chipKind": "playbook"
+	},
+	{
+		"id": "dev-daily",
+		"scene": "code",
+		"label": "日常开发",
+		"description": "加功能、重构、修 Bug、补测试",
+		"icon": "code",
+		"chipKind": "scene",
+		"prompts": [
+			"帮我给当前项目添加一个新功能：【功能描述】。",
+			"帮我重构这段代码，提升可读性和可维护性。",
+			"帮我修复这个 Bug：【Bug 描述】。",
+			"帮我优化这个功能的性能，当前问题是【性能问题描述】。",
+			"帮我给这个模块添加单元测试，覆盖核心逻辑。",
+			"帮我排查这个报错：【错误信息】，找出原因并修复。"
+		]
+	},
+	{
+		"id": "web-dev",
+		"scene": "code",
+		"label": "网站开发",
+		"description": "官网、后台、博客、电商站点",
+		"icon": "web",
+		"chipKind": "scene",
+		"prompts": [
+			"帮我开发一个企业官网，公司名称是【公司名称】，主营业务是【业务描述】。要求：包含首页、关于我们、产品服务、联系我们页面，风格简约大气，支持用户登录，网站数据使用云端数据库存储，图片和文件使用云端存储。",
+			"帮我开发一个后台管理系统，用于管理【管理内容】。要求：包含登录认证、数据看板、列表管理、表单编辑功能，数据使用云端数据库持久化，文件使用云端存储，支持响应式布局。",
+			"帮我开发一个个人博客网站，博客主题是【博客主题】。要求：包含文章列表、文章详情、标签分类、关于页面，支持 Markdown 渲染，文章数据使用云端数据库存储，图片和附件使用云端存储，并支持登录认证。",
+			"帮我开发一个电商网站首页，售卖【商品类型】。要求：包含轮播图、商品分类、热门商品展示、促销活动区域，支持用户登录，商品数据使用云端数据库存储，商品图片使用云端存储。"
+		]
+	},
+	{
+		"id": "ci-cd",
+		"scene": "code",
+		"label": "CI/CD",
+		"description": "工作流、镜像、部署编排",
+		"icon": "terminal",
+		"chipKind": "scene",
+		"prompts": [
+			"分析当前项目架构，帮我编写 GitHub Actions 工作流，实现自动构建、测试和部署。",
+			"分析当前项目架构，帮我编写 Dockerfile，优化镜像大小，支持多阶段构建。",
+			"分析当前项目架构，帮我编写 Kubernetes Helm Chart，包含 Deployment、Service 和 ConfigMap。"
+		]
+	},
+	{
+		"id": "dev-docs",
+		"scene": "code",
+		"label": "文档",
+		"description": "README、OpenAPI、架构文档",
+		"icon": "doc",
+		"chipKind": "scene",
+		"prompts": [
+			"分析当前项目的 API 接口，生成 OpenAPI v3 spec，包含完整的接口描述和示例。",
+			"分析当前项目，帮我完善 README 文档，添加安装步骤、使用示例和贡献指南。",
+			"分析当前项目架构，帮我创建系统架构图和设计文档，说明核心模块和数据流。"
+		]
+	}
+]

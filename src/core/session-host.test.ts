@@ -53,7 +53,7 @@ function createHost(session: unknown, emit: (event: SessionEvent) => void): Sess
 		interactionId: "craft",
 		emit,
 		// 本测试不触达两轴与风格资源；空列表即可（构造器不校验）。
-		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
+		resources: { scenes: [], modes: [], styles: [], fragments: new Map(), welcome: { chips: [], cases: [] } },
 	};
 	const Ctor = SessionHost as unknown as new (
 		session: unknown,
@@ -105,7 +105,7 @@ describe("专家与交互模式正交", () => {
 			interactionId,
 			...(expertId === undefined ? {} : { expertId }),
 			emit: () => {},
-			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map() },
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map(), welcome: { chips: [], cases: [] } },
 		};
 		const Ctor = SessionHost as unknown as new (
 			session: unknown,
@@ -1159,7 +1159,7 @@ function createLedgerHost(
 		sceneId: "work",
 		interactionId: "craft",
 		emit,
-		resources: { scenes: [], modes: [], styles: [], fragments: new Map() },
+		resources: { scenes: [], modes: [], styles: [], fragments: new Map(), welcome: { chips: [], cases: [] } },
 		createLedger: () => ledger,
 		...(segments === undefined ? {} : { getSystemPromptSegments: () => segments }),
 		...(expertLabel === undefined ? {} : { getExpertLabel: () => expertLabel }),
@@ -2353,7 +2353,7 @@ describe("专家 extraTools 工具面联动（spec: add-team-foundations）", ()
 			interactionId: opts.interactionId,
 			...(opts.expertId === undefined ? {} : { expertId: opts.expertId }),
 			emit: () => {},
-			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map() },
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map(), welcome: { chips: [], cases: [] } },
 			getExpertExtraTools: opts.getExtra,
 		};
 		const Ctor = SessionHost as unknown as new (

@@ -318,6 +318,7 @@ export function App(): React.JSX.Element {
 					...initialConversation,
 					availableScenes: conversationRef.current.availableScenes,
 					availableModes: conversationRef.current.availableModes,
+					welcome: conversationRef.current.welcome,
 				};
 				viewCacheRef.current.set(sessionId, conversationReducer(base, { type: "event", event }));
 				// 完成 toast（Task 3.3）：推送列表只带 running 标志（契约无结局字段），
@@ -1480,6 +1481,7 @@ export function App(): React.JSX.Element {
 					ready={link.kind === "ready"}
 					scenes={conversation.availableScenes}
 					sceneId={conversation.state.sceneId}
+					welcome={conversation.welcome}
 					modelId={conversation.state.modelId}
 					thinkingLevel={conversation.state.thinkingLevel}
 					availableThinkingLevels={conversation.state.availableThinkingLevels}

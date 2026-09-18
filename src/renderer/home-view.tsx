@@ -1,19 +1,23 @@
 /**
  * 首页（新建任务页），布局对标 WorkBuddy 首屏：
- * 大标题 → 模式页签 → 能力入口 → 输入卡 → 工作空间/权限 → 最佳实践案例。
+ * 大标题 → 模式页签 → 能力胶囊 → 输入卡 → 工作空间/权限 → 最佳实践案例。
  *
- * 文案是独立撰写的（AGENTS.md §6：机制可学，文字必须自己写）。
- * 案例封面用 CSS 渐变 + 内联图标，不引入位图 —— CSP 的 img-src 不放外部源，
- * 远程封面图会被拦掉，渐变方案零依赖也够看。
+ * 能力胶囊与案例卡片**不在本文件里写死**：数据在 `resources/welcome/{chips,cases}.json`，
+ * daemon 读盘后随快照下发（AGENTS.md §3：加一个胶囊/案例只改数据）。
+ * 素材照搬自 WorkBuddy（其公开 CDN 的 playbook 与场景接口），来源与置换说明见
+ * `resources/welcome/README.md`；封面图直接引它的 CDN 地址（CSP 的 img-src 已放行
+ * https:），加载失败回落图标底 —— WorkBuddy 自己也是「回源失败走占位图」。
  */
 
 import { useEffect, useRef, useState } from "react";
 import type { ImagePart } from "@shared/image.ts";
 import type { ExpertListItem } from "@shared/ipc.ts";
 import type { ModeDescriptor, ThinkingLevel } from "@shared/session-events.ts";
+import type { WelcomeChip, WelcomePresets } from "@shared/welcome.ts";
 import { Composer } from "./composer.tsx";
 import type { ComposerHandle } from "./composer.tsx";
 import { ExpertChip } from "./expert-chip.tsx";
+import { casesForChip, casesForScene, chipsForScene, itemsForChip, page } from "./home-presets.ts";
 import { ModelMenu } from "./model-menu.tsx";
 import { ModeChip } from "./mode-chip.tsx";
 import { PermissionMenu } from "./permission-menu.tsx";
@@ -23,15 +27,14 @@ import { WorkspacePicker } from "./workspace-picker.tsx";
 import { WorktreeChip } from "./worktree-chip.tsx";
 import {
 	IconChart,
-	IconClipboard,
 	IconClose,
+	IconCode,
 	IconDoc,
 	IconRefresh,
 	IconResearch,
 	IconSlide,
-	IconUser,
+	IconTerminal,
 	IconWeb,
-	IconWorkspace,
 } from "./icons.tsx";
 
 interface HomeViewProps {
@@ -46,6 +49,12 @@ interface HomeViewProps {
 	 */
 	readonly scenes: readonly ModeDescriptor[];
 	readonly sceneId: string;
+	/**
+	 * 首页预设（能力胶囊 + 最佳实践案例），daemon 随快照下发（数据源见
+	 * `resources/welcome/README.md`）。undefined = 这份快照没带（事件流拼出的桶种子），
+	 * 按「没有预设」处理：两块都不渲染，而不是渲染空壳。
+	 */
+	readonly welcome?: WelcomePresets;
 	/** 当前模型标识（`provider/model`）。未选时显示「选择模型」。 */
 	readonly modelId: string | undefined;
 	/**
@@ -94,44 +103,53 @@ interface HomeViewProps {
 	readonly onTodo: (feature: string) => void;
 }
 
-/* ── 能力入口 ────────────────────────────────────────────────────── */
+/* ── 能力胶囊 / 最佳实践案例 ──────────────────────────────────────── */
 
-const CAPABILITIES = [
-	{ icon: IconDoc, label: "文档处理" },
-	{ icon: IconChart, label: "数据分析可视化" },
-	{ icon: IconSlide, label: "幻灯片" },
-	{ icon: IconResearch, label: "深度研究" },
-	{ icon: IconWeb, label: "网页开发" },
-	{ icon: IconWorkspace, label: "个人工作台" },
-] as const;
+/**
+ * 图标键 → 组件。数据里只放键（chips.json 的 `icon`），组件映射留在渲染层 ——
+ * 「能力是数据，代码只负责读取」的分工。未知键回落 IconDoc：数据写错由
+ * core/resources.ts 的加载校验拦（那里才认识合法键），这里只保证渲染不崩。
+ */
+const CHIP_ICONS: Readonly<Record<string, typeof IconDoc>> = {
+	doc: IconDoc,
+	chart: IconChart,
+	slide: IconSlide,
+	research: IconResearch,
+	code: IconCode,
+	web: IconWeb,
+	terminal: IconTerminal,
+};
 
-/* ── 案例卡片 ────────────────────────────────────────────────────── */
-
-interface PracticeCase {
-	readonly title: string;
-	readonly prompt: string;
-	/**
-	 * 封面图标（体裁语义）：颜色不编码信息（6 组随机 pastel 渐变是全站唯一的
-	 * AI slop 特征，已废弃），内容类型改由图标编码，底色统一 --bg-raised。
-	 */
-	readonly icon: typeof IconDoc;
-}
-
-const PRACTICE_CASES: readonly PracticeCase[] = [
-	{ title: "一周工作周报速成", prompt: "帮我把本周的工作内容整理成一份结构清晰的周报", icon: IconDoc },
-	{ title: "行业调研报告", prompt: "调研一个行业的近况，输出一份带图表的调研报告", icon: IconResearch },
-	{ title: "销售数据看板", prompt: "把一份销售数据做成可视化看板，突出同比与环比", icon: IconChart },
-	{ title: "发布会幻灯片大纲", prompt: "为一场产品发布会做一份 10 页的幻灯片大纲", icon: IconSlide },
-	{ title: "会议纪要整理", prompt: "把会议记录整理成纪要，并提取出待办事项", icon: IconClipboard },
-	{ title: "岗位简历诊断", prompt: "分析一份简历，针对目标岗位给出修改建议", icon: IconUser },
-];
-
+/** 案例卡一屏四张（WorkBuddy 首页 4 列）。 */
 const PAGE_SIZE = 4;
+
+/**
+ * 案例封面：远程图 + 图标底兜底。
+ *
+ * 为什么不做本地缓存：WorkBuddy 为它单独写了主进程 `wb-cover://` 协议（COS 响应
+ * 不带 Cache-Control，断网必裂图）。我们先用最简单的一层 —— 失败回落图标底，
+ * 断网时看到的是图标而不是裂图；真要离线可用再照它的方案做缓存。
+ */
+function CaseCover({
+	cover,
+	icon: Icon,
+}: {
+	readonly cover: string;
+	readonly icon: typeof IconDoc;
+}): React.JSX.Element {
+	const [failed, setFailed] = useState(false);
+	return (
+		<span className="case-cover">
+			{failed ? <Icon size={28} /> : <img src={cover} alt="" loading="lazy" onError={() => setFailed(true)} />}
+		</span>
+	);
+}
 
 export function HomeView({
 	ready,
 	scenes,
 	sceneId,
+	welcome,
 	modelId,
 	thinkingLevel,
 	availableThinkingLevels,
@@ -182,12 +200,64 @@ export function HomeView({
 	/** 案例分页起点。「换一批」整体平移一页，实现简单且不会重复抽到刚看过的。 */
 	const [caseOffset, setCaseOffset] = useState(0);
 	const [casesVisible, setCasesVisible] = useState(true);
+	/**
+	 * 选中的能力胶囊（同时是卡片筛选条件）+ 下钻面板开合。
+	 *
+	 * WorkBuddy 的胶囊是一物两用：点它既展开它名下的提示词列表，又用它筛下方案例
+	 * （`case.scenario === 胶囊名`）。这里保持同一语义 —— 两个状态分开是因为
+	 * 「从面板里选了一条提示词」之后要收起面板，但筛选要留着。
+	 */
+	const [activeChipId, setActiveChipId] = useState<string | undefined>(undefined);
+	const [chipPanelOpen, setChipPanelOpen] = useState(false);
 
-	const visibleCases = Array.from(
-		{ length: Math.min(PAGE_SIZE, PRACTICE_CASES.length) },
-		(_, i) => PRACTICE_CASES[(caseOffset + i) % PRACTICE_CASES.length],
-		// noUncheckedIndexedAccess 下取模索引仍返回 T|undefined，filter 收窄。
-	).filter((c): c is PracticeCase => c !== undefined);
+	const chips = welcome === undefined ? [] : chipsForScene(welcome.chips, sceneId);
+	const chipById = new Map(chips.map((chip) => [chip.id, chip]));
+	// 案例跟着它所属的胶囊走：代码场景没有案例，整块不渲染（而不是显示办公场景的案例）。
+	const sceneCases = casesForScene(welcome?.cases ?? [], chips);
+	const shownCases = casesForChip(sceneCases, activeChipId);
+	const visibleCases = page(shownCases, caseOffset, PAGE_SIZE);
+	const activeChip = chips.find((chip) => chip.id === activeChipId);
+	const chipItems = activeChip === undefined ? [] : itemsForChip(activeChip, sceneCases);
+	/** 卡片的图标底取自它所属胶囊（远程封面加载失败时显示它）。 */
+	const iconForCase = (chipId: string): typeof IconDoc =>
+		CHIP_ICONS[chipById.get(chipId)?.icon ?? ""] ?? IconDoc;
+
+	// 切场景 = 换一横条胶囊：选中态与分页都作废（留着会指向别的场景的胶囊）。
+	useEffect(() => {
+		setActiveChipId(undefined);
+		setChipPanelOpen(false);
+		setCaseOffset(0);
+	}, [sceneId]);
+
+	// Esc 关闭胶囊面板：面板没有键盘焦点管理，Esc 是键盘用户唯一的关闭路径
+	// （与 backdrop 互补，同 permission-menu 约定）。
+	useEffect(() => {
+		if (!chipPanelOpen) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.key === "Escape") setChipPanelOpen(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [chipPanelOpen]);
+
+	/** 点胶囊：同一个再点一次 = 取消选择并收起；换一个 = 选中并展开该胶囊的提示词。 */
+	const toggleChip = (chip: WelcomeChip): void => {
+		if (chip.id === activeChipId) {
+			setActiveChipId(undefined);
+			setChipPanelOpen(false);
+			return;
+		}
+		setActiveChipId(chip.id);
+		setChipPanelOpen(true);
+		// 换了筛选条件，分页回到第一页（否则停在越界偏移上会看到同一批）。
+		setCaseOffset(0);
+	};
+
+	/** 从面板里选一条：填进输入框待编辑（不直接发送），筛选保持。 */
+	const pickChipItem = (prompt: string): void => {
+		composerRef.current?.setText(prompt);
+		setChipPanelOpen(false);
+	};
 
 	return (
 		<main className="home">
@@ -230,14 +300,57 @@ export function HomeView({
 						</div>
 					)}
 
-					<div className="capability-row">
-						{CAPABILITIES.map(({ icon: Icon, label }) => (
-							<button key={label} type="button" className="capability-chip" onClick={() => onTodo(label)}>
-								<Icon size={16} />
-								{label}
-							</button>
-						))}
-					</div>
+					{chips.length > 0 && (
+						<div className="capability-zone">
+							<div className="capability-row">
+								{chips.map((chip) => {
+									const Icon = CHIP_ICONS[chip.icon] ?? IconDoc;
+									const active = chip.id === activeChipId;
+									return (
+										<button
+											key={chip.id}
+											type="button"
+											className={`capability-chip${active ? " active" : ""}`}
+											title={chip.description}
+											aria-haspopup="menu"
+											aria-expanded={active && chipPanelOpen}
+											onClick={() => toggleChip(chip)}
+										>
+											<Icon size={16} />
+											{chip.label}
+										</button>
+									);
+								})}
+							</div>
+
+							{chipPanelOpen && activeChip !== undefined && (
+								<>
+									{/* 透明 backdrop：点面板外任意处关闭，与同区其它弹层一致。 */}
+									<button
+										type="button"
+										className="ws-backdrop"
+										aria-label="关闭"
+										onClick={() => setChipPanelOpen(false)}
+									/>
+									<div className="pop-menu chip-panel" role="menu">
+										{chipItems.map((item) => (
+											<button
+												key={item.key}
+												type="button"
+												className="chip-panel-item"
+												role="menuitem"
+												/* 提示词很长，列表只给一行；原文挂 title 备查。 */
+												title={item.prompt}
+												onClick={() => pickChipItem(item.prompt)}
+											>
+												{item.title ?? item.prompt}
+											</button>
+										))}
+									</div>
+								</>
+							)}
+						</div>
+					)}
 
 					<div className="composer-zone">
 						{/*
@@ -327,10 +440,10 @@ export function HomeView({
 					</div>
 				</div>
 
-				{casesVisible && (
+				{casesVisible && visibleCases.length > 0 && (
 					<section className="cases">
 						<header className="cases-header">
-							<span>不知道做什么，试试这些</span>
+							<span>不知道做什么，试试最佳实践案例</span>
 							<button type="button" className="cases-action" onClick={() => setCaseOffset((o) => o + PAGE_SIZE)}>
 								<IconRefresh size={14} />
 								换一批
@@ -341,8 +454,8 @@ export function HomeView({
 						</header>
 						<div className="case-grid">
 							{visibleCases.map((c) => (
-								<button key={c.title} type="button" className="case-card" onClick={() => composerRef.current?.setText(c.prompt)}>
-									<span className="case-cover"><c.icon size={28} /></span>
+								<button key={c.id} type="button" className="case-card" title={c.subtitle} onClick={() => composerRef.current?.setText(c.prompt)}>
+									<CaseCover cover={c.cover} icon={iconForCase(c.chipId)} />
 									<span className="case-title">{c.title}</span>
 								</button>
 							))}

@@ -948,6 +948,56 @@ textarea:focus-visible {
 	color: var(--text);
 }
 
+/* 胶囊的定位上下文：下钻面板挂在这一层的下沿。 */
+.capability-zone {
+	position: relative;
+	width: 100%;
+}
+
+/* 选中的胶囊（同时是下方案例的筛选条件）：与 .mode-tab.active 同款 ——
+   WorkBuddy 的 pill 选中态是 75% 黑而不是主按钮的 90%，字重升 600。 */
+.capability-chip.active {
+	background: var(--primary-active);
+	color: var(--primary-text);
+	font-weight: 600;
+}
+
+.capability-chip.active:hover {
+	background: var(--primary-hover);
+}
+
+/* 胶囊下钻面板（WorkBuddy 的三级语义：胶囊 → 提示词列表 → 填进输入框待编辑）。 */
+.chip-panel {
+	top: calc(100% + var(--space-2));
+	left: 0;
+	z-index: var(--z-panel);
+	/* 提示词很长：面板不跟着最长那条无限撑宽，超长单行省略、原文挂 title。 */
+	width: min(560px, 100%);
+	max-height: 320px;
+	overflow-y: auto;
+	padding: var(--space-2);
+}
+
+.chip-panel-item {
+	display: block;
+	width: 100%;
+	/* 列表项内边距：与菜单项同档（紧凑控件）。 */
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
+	line-height: 1.5;
+	color: var(--text-secondary);
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chip-panel-item:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 /* 输入卡与吉祥物同处一个定位上下文，吉祥物浮在卡片右上。 */
 .composer-zone {
 	position: relative;
@@ -1766,11 +1816,19 @@ textarea:focus-visible {
 	aspect-ratio: 16 / 9;
 	border: 0.5px solid var(--border);
 	border-radius: var(--radius-lg);
-	/* 封面 = 体裁语义图标 + 统一单色底：颜色不编码信息（旧 6 组随机 pastel
-	   135° 渐变是全站唯一的 AI slop 特征，已删除），内容类型由图标编码。 */
+	/* 封面 = WorkBuddy 案例库的实图（CDN）；图标 + 统一单色底降级为兜底 ——
+	   远程图加载失败时由 CaseCover 换成图标，底色仍是这一层。 */
 	background: var(--bg-raised);
 	color: var(--text-secondary);
 	transition: background var(--dur-fast) ease;
+}
+
+/* 封面实图铺满封面位，圆角继承容器（图片自身不带圆角会切角溢出）。 */
+.case-cover img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: inherit;
 }
 
 /* hover 无上浮无阴影（与 task-item 等全站卡片 hover 语言一致）：封面底色加深一档。 */
