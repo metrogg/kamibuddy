@@ -772,12 +772,15 @@ expertId, piContext)`（`extensions/prompt-switch.ts:207`）签名里没有权�
   留了一行规则出处。**状态：已落地。**
 
 - **C. 权限边界进 hidden context 的新段 `permission_context`。** 落点是
-  `core/session-host.ts:2002` 的 `composeRunHiddenContext`，与 `python_env` 段完全同构
-  （`getRuntimeInventory` 的注释已经把理由写好：`session-host.ts:445-464`「随机器变的
+  `core/session-host.ts:2033` 的 `composeRunHiddenContext` 返回的 **`hidden` 那一半**
+  （2026-09-18 合并 origin/master 后该函数改为返回 `{ hidden, runTime }`：`current_time`
+  被拆成独立的第三条快照通道，spec: add-supersede-note-and-time-split；环境块与
+  `python_env` 段仍同属 `hidden`），与 `python_env` 段完全同构
+  （`getRuntimeInventory` 的注释已经把理由写好：`session-host.ts:449-467`「随机器变的
   事实，进提示词就是该处之后的整段提示词与整段历史一起在 provider 前缀缓存里失配」——
   **权限是逐次可变的事实，同一论证**）。取值走新增的 `getPermissions?: () => PermissionSettings`
   注入口（与 `getExpertLabel` / `getRuntimeInventory` 同款 getter 口径）。白送的好处：
-  该段每 run 现读、`shouldAppendSnapshot` 按字节去重，所以**用户中途切档，下一轮自动
+  该段每 run 现读、按字节去重（三条通道各自独立去重），所以**用户中途切档，下一轮自动
   追加一条新快照告诉模型新边界** —— 正是 dsh 的「快照在保留历史之后、字节相同不追加」
   同构形态。**状态：方向已定，尚未落地。**
 
