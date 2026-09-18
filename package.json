@@ -33,9 +33,10 @@
     "check:deps": "tsx scripts/check-dependency-rules.ts",
     "check:tokens": "tsx scripts/check-design-tokens.ts",
     "check:model-experience": "tsx scripts/check-model-experience.ts",
-    "check:invariants": "tsx scripts/check-module-invariants.ts",
-    "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run check:deps && npm run check:tokens && npm run check:model-experience && npm run check:invariants",
+ "check:invariants": "tsx scripts/check-module-invariants.ts",
+ "check:expert-assets": "tsx scripts/check-expert-assets.ts",
+ "typecheck": "tsc --noEmit",
+ "check": "npm run typecheck && npm run check:deps && npm run check:tokens && npm run check:model-experience && npm run check:invariants && npm run check:expert-assets",
     "test": "vitest run"
   },
   "dependencies": {

@@ -500,11 +500,13 @@ describe("requireExpertPersona", () => {
 			profession: "职场汇报写作专家",
 			displayDescription: "用数据讲清你的贡献",
 			quickPrompts: ["问题一", "问题二", "问题三"],
-			tags: ["标签一", "标签二", "标签三"],
-			source: "builtin",
-			body: "人格正文",
-		},
-	];
+		tags: ["标签一", "标签二", "标签三"],
+		source: "builtin",
+		expertType: "expert",
+		agents: [],
+		body: "人格正文",
+	},
+];
 
 	it("按 name 取出人格三件套", () => {
 		expect(requireExpertPersona(EXPERTS, "work-report")).toEqual({
@@ -533,6 +535,8 @@ describe("resolveSessionExpert / toExpertPersona", () => {
 		quickPrompts: ["问题一", "问题二", "问题三"],
 		tags: ["标签一", "标签二", "标签三"],
 		source: "builtin",
+		expertType: "expert",
+		agents: [],
 		skillsDir: "C:\\experts\\stock-research-report\\skills",
 		body: "人格正文",
 	};

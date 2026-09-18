@@ -2606,3 +2606,81 @@ describe("上下文快照的 message 事件不产出聊天条目", () => {
 		expect(currentRunStartIndex(view.entries)).toBe(0);
 	});
 });
+
+describe("委派模式工具面收窄（spec: add-team-collaboration-parity 批次 ③）", () => {
+	const MODES: readonly ModeResource[] = [
+		{
+			id: "craft",
+			label: "执行",
+			description: "",
+			ready: true,
+			tools: ["read", "write", "team_create", "team_task_list", "present_files"],
+			body: "",
+		},
+	];
+
+	function createDelegateHost(getExtra: () => readonly string[] | undefined): {
+		host: SessionHost;
+		toolCalls: string[][];
+	} {
+		const toolCalls: string[][] = [];
+		const session = {
+			sessionId: "test-session",
+			model: undefined,
+			isStreaming: false,
+			getContextUsage: () => undefined,
+			thinkingLevel: "off",
+			getAvailableThinkingLevels: () => ["off"],
+			setActiveToolsByName: (tools: readonly string[]) => {
+				toolCalls.push([...tools]);
+			},
+		};
+		const options: SessionHostOptions = {
+			catalog: {} as unknown as ModelCatalog,
+			modelKey: undefined,
+			cwd: "C:\\test",
+			isTempTask: false,
+			sceneId: "work",
+			interactionId: "craft",
+			emit: () => {},
+			resources: { scenes: [], modes: MODES, styles: [], fragments: new Map(), welcome: { chips: [], cases: [] } },
+			getExpertExtraTools: getExtra,
+		};
+		const Ctor = SessionHost as unknown as new (
+			session: unknown,
+			options: SessionHostOptions,
+			sceneId: string,
+			interactionId: string,
+			expertId: string | undefined,
+			skills: readonly unknown[],
+		) => SessionHost;
+		const host = new Ctor(session, options, "work", "craft", undefined, []);
+		return { host, toolCalls };
+	}
+
+	it("开启 → 只留协调与交付类，read/write 被摘掉", () => {
+		const { host, toolCalls } = createDelegateHost(() => undefined);
+		host.setDelegateMode(true);
+		expect(toolCalls.at(-1)).toEqual(["team_create", "team_task_list", "present_files"]);
+	});
+
+	it("关闭 → 回到完整白名单", () => {
+		const { host, toolCalls } = createDelegateHost(() => undefined);
+		host.setDelegateMode(true);
+		host.setDelegateMode(false);
+		expect(toolCalls.at(-1)).toEqual(["read", "write", "team_create", "team_task_list", "present_files"]);
+	});
+
+	it("与专家 extraTools 正交：委派模式下 extraTools 也拿不回来（硬策略）", () => {
+		const { host, toolCalls } = createDelegateHost(() => ["task", "team_status"]);
+		host.setDelegateMode(true);
+		expect(toolCalls.at(-1)).toEqual(["team_create", "team_task_list", "present_files", "team_status"]);
+	});
+
+	it("委派状态进 SessionState（缺省不占字段）", () => {
+		const { host } = createDelegateHost(() => undefined);
+		expect(host.state.delegateMode).toBeUndefined();
+		host.setDelegateMode(true);
+		expect(host.state.delegateMode).toBe(true);
+	});
+});

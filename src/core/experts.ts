@@ -40,12 +40,20 @@
  *   - 内置目录缺失或为空 → 抛错：没有内置专家是打包错误，静默空跑等于
  *     专家菜单在真实会话里一片空白
  *   - 用户目录不存在 = 空（用户没有自定义是正常状态，不是错误）
+ *
+ * 立场修订（2026-09-18，spec: fix-team-expert-assets）：专家目录新增可选
+ * `agents/`（成员人格）与 frontmatter `expertType: expert | team`。起因是照搬的
+ * 团队型专家正文指挥 `TeamCreate` / `Agent(subagent_type)` 而成员人格根本不存在
+ * （`resources/agents/` 只有四个通用角色），`team_create` 必然在 spawn 校验处
+ * 失败并整队解散。「专家包自带成员」是 WorkBuddy 专家团包的形状，也是让团队
+ * 专家自包含的唯一落点。
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
-import { optionalStringArray, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
+import { loadAgentsDir, type AgentDefinition } from "./agents.ts";
+import { optionalString, optionalStringArray, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
 /** 专家人设文件名（目录布局：<name>/expert.md）。 */
 const EXPERT_FILE = "expert.md";
@@ -53,6 +61,11 @@ const EXPERT_FILE = "expert.md";
 const SKILLS_DIR = "skills";
 /** 技能入口文件名（<name>/skills/<skill>/SKILL.md）。 */
 const SKILL_FILE = "SKILL.md";
+/** 专家私有成员人格目录名（<name>/agents/）。 */
+const AGENTS_DIR = "agents";
+
+/** `expertType` 的合法取值（缺省按 expert 解释，见 ExpertDefinition.expertType）。 */
+const EXPERT_TYPES = ["expert", "team"] as const;
 
 export interface ExpertDefinition {
 	readonly name: string;
@@ -81,6 +94,23 @@ export interface ExpertDefinition {
 	 * 的声明式等价物：专家包声明它需要哪些模式白名单之外的工具（如 task）。
 	 */
 	readonly extraTools?: readonly string[];
+	/**
+	 * 专家形态（spec: fix-team-expert-assets）。缺省 `"expert"`（单体人格）；
+	 * `"team"` = 团队型专家（主理人），专家市场「专家团」子页按它筛选。
+	 *
+	 * 对齐 WorkBuddy 的 `expertType` 词汇，但**只取两值**：它的另两值
+	 * （skill / plugin）在我们这里没有对应运行时，加了就是死字段（AGENTS.md §9）。
+	 */
+	readonly expertType: "expert" | "team";
+	/**
+	 * 专家私有的成员人格（`<name>/agents/*.md`，spec: fix-team-expert-assets）。
+	 * 没有 `agents/` 目录时为空数组。
+	 *
+	 * 与 `skillsDir` 不同：技能交给 pi 按路径加载，成员人格由我们自己消费
+	 * （daemon 装配时与全局 agents 库合并成 team 工具的可用成员清单），
+	 * 所以这里直接带已解析的定义而不是目录路径。
+	 */
+	readonly agents: readonly AgentDefinition[];
 	readonly body: string;
 }
 
@@ -168,7 +198,27 @@ function loadExpertSkills(expertDir: string): readonly SkillRef[] {
 	});
 }
 
-/** 加载一个专家目录（<dir>/expert.md + 可选 skills/）。 */
+/**
+ * 收集专家私有成员人格（`<expertDir>/agents/*.md`）；没有 `agents/` 目录 → 空。
+ *
+ * 解析与校验全部复用 `core/agents.ts` 的 `loadAgentsDir`（name 必须等于文件名、
+ * description/tools 必填、tools 非空），不在这里另写一套：成员人格最终由
+ * `team_create` 消费，加载器说合法、运行时就该认，两边同源才不会再出现
+ * 「专家正文点名的成员实际不存在」这种错配（spec: fix-team-expert-assets）。
+ */
+function loadExpertAgents(expertDir: string): readonly AgentDefinition[] {
+	const agentsDir = join(expertDir, AGENTS_DIR);
+	if (!existsSync(agentsDir)) return [];
+	const agents = loadAgentsDir(agentsDir);
+	if (agents.length === 0) {
+		throw new Error(
+			`${agentsDir}: 专家的 ${AGENTS_DIR}/ 目录为空。成员人格必须放在 <成员id>.md；没有私有成员就删掉该目录`,
+		);
+	}
+	return agents;
+}
+
+/** 加载一个专家目录（<dir>/expert.md + 可选 skills/ + 可选 agents/）。 */
 function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user"): LoadedExpert {
 	const innerStray = strayMarkdown(dir, [EXPERT_FILE]);
 	const stray = innerStray[0];
@@ -200,7 +250,16 @@ function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user")
 		throw new Error(`${expertFile}: frontmatter「tags」必须恰好 3 个关键词，当前 ${tags.length} 个`);
 	}
 	const extraTools = optionalStringArray(doc, "extraTools", expertFile);
+	// expertType 是白名单枚举：写错值必须响亮报错（静默回落 expert 会让
+	// 团队专家从专家团页里凭空消失，而文件看起来完全正常）。
+	const rawExpertType = optionalString(doc, "expertType", expertFile);
+	if (rawExpertType !== undefined && !(EXPERT_TYPES as readonly string[]).includes(rawExpertType)) {
+		throw new Error(
+			`${expertFile}: frontmatter「expertType」只能是 ${EXPERT_TYPES.join(" 或 ")}，当前「${rawExpertType}」`,
+		);
+	}
 	const skills = loadExpertSkills(dir);
+	const agents = loadExpertAgents(dir);
 	return {
 		def: {
 			name,
@@ -211,6 +270,8 @@ function loadExpertDir(dir: string, dirName: string, source: "builtin" | "user")
 			quickPrompts,
 			tags,
 			...(extraTools !== undefined ? { extraTools } : {}),
+			expertType: rawExpertType === "team" ? "team" : "expert",
+			agents,
 			...(skills.length > 0 ? { skillsDir: join(dir, SKILLS_DIR) } : {}),
 			body: doc.body,
 		},
@@ -262,11 +323,14 @@ function loadGlobalSkills(globalSkillsDirs: readonly string[]): readonly SkillRe
  * @param globalSkillsDirs 全局技能根（resources/skills + resources/plugins），
  *   用于私有技能重名校验 —— 传全部而不是只传第一个，否则专家技能可能撞上
  *   预装插件里的同名技能而不被发现（那两个根是同一个会话里同时加载的）
+ * @param globalAgents 全局 agents 库（内置 + 用户级），用于私有成员人格重名校验
+ *   （spec: fix-team-expert-assets）
  */
 export function loadExperts(
 	resourcesExpertsDir: string,
 	userExpertsDir: string,
 	globalSkillsDirs: readonly string[],
+	globalAgents: readonly AgentDefinition[],
 ): readonly ExpertDefinition[] {
 	if (!existsSync(resourcesExpertsDir)) {
 		throw new Error(`内置专家目录缺失：${resourcesExpertsDir}。这是打包错误——没有内置专家，专家模式无可用人格`);
@@ -300,6 +364,26 @@ export function loadExperts(
 			const other = claimed.get(ref.name);
 			if (other !== undefined) {
 				throw new Error(`技能名「${ref.name}」与全局技能重名：${ref.file} 与 ${other}`);
+			}
+		}
+	}
+
+	// 成员人格的重名边界，与技能的边界同构但理由不同：
+	//   - 私有成员 vs 全局 agents 库 → **必须唯一**。两者会同时进同一个会话的
+	//     成员清单（全局恒在，绑定专家时追加私有），而 team_create 是
+	//     `agents.find(a => a.name === ...)`（daemon/index.ts:2556）——重名会让
+	//     查找静默取先者，成员人格随机失效，且报错发生在建团那一刻而非加载期。
+	//   - 专家之间 → **允许同名**。一个会话只绑定一个专家，两个专家的成员
+	//     永不同时在场；要求全局唯一就等于不许另一个团队有同名角色。
+	// 否决方案：撞名时让专家私有覆盖全局。否掉的理由是覆盖方向不可预期——
+	// 用户级 agents 是先于专家加载的稳定定义，被专家包悄悄改写更糟。
+	const globalAgentNames = new Set(globalAgents.map((agent) => agent.name));
+	for (const loaded of byName.values()) {
+		for (const agent of loaded.def.agents) {
+			if (globalAgentNames.has(agent.name)) {
+				throw new Error(
+					`成员人格「${agent.name}」与全局 agents 库重名：${join(loaded.def.name, AGENTS_DIR)} 与 resources/agents 或用户级 agents 目录`,
+				);
 			}
 		}
 	}

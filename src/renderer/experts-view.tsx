@@ -85,11 +85,21 @@ export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpe
 	// 未就绪时按空集算：分类/过滤是纯派生，等库回来（experts 有值）自然重算。
 	const list = experts ?? [];
 
-	/** 分类行数据源：全量专家的 tags 按首次出现顺序聚合去重。 */
+	/**
+	 * 子页数据源（spec: fix-team-expert-assets）：「专家团」页只留 `expertType: "team"`
+	 * 的专家（主理人 + 自带成员人格），其余页是全量。分类行与过滤链都基于它，
+	 * 于是团队页的分类行只聚合团队专家的关键词，不会出现点了没结果的分类。
+	 */
+	const scoped = useMemo(
+		() => (listTab === "teams" ? list.filter((e) => e.expertType === "team") : list),
+		[list, listTab],
+	);
+
+	/** 分类行数据源：当前子页专家的 tags 按首次出现顺序聚合去重。 */
 	const allTags = useMemo(() => {
 		const seen = new Set<string>();
 		const ordered: string[] = [];
-		for (const expert of list) {
+		for (const expert of scoped) {
 			for (const tag of expert.tags) {
 				if (!seen.has(tag)) {
 					seen.add(tag);
@@ -98,7 +108,7 @@ export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpe
 			}
 		}
 		return ordered;
-	}, [list]);
+	}, [scoped]);
 
 	const userExperts = useMemo(() => list.filter((e) => e.source === "user"), [list]);
 
@@ -108,10 +118,10 @@ export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpe
 	 */
 	const kw = keyword.trim().toLowerCase();
 	const visibleExperts = useMemo(() => {
-		if (kw !== "") return list.filter((e) => matchKeyword(e, kw));
-		if (selectedTag === undefined) return list;
-		return list.filter((e) => e.tags.includes(selectedTag));
-	}, [list, kw, selectedTag]);
+		if (kw !== "") return scoped.filter((e) => matchKeyword(e, kw));
+		if (selectedTag === undefined) return scoped;
+		return scoped.filter((e) => e.tags.includes(selectedTag));
+	}, [scoped, kw, selectedTag]);
 
 	/*
 	 * 三态的顺序不能反（两处渲染分支都用它）：库为空或拉取失败原来都会落到
@@ -196,60 +206,71 @@ export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpe
 				<button
 					type="button"
 					className={`ex-subtab${listTab === "experts" ? " active" : ""}`}
-					onClick={() => setListTab("experts")}
+					onClick={() => {
+						setListTab("experts");
+						// 子页换了数据集，旧的分类选中值在新集里可能根本没有这个 tag。
+						setSelectedTag(undefined);
+					}}
 				>
 					专家
 				</button>
 				<button
 					type="button"
 					className={`ex-subtab${listTab === "teams" ? " active" : ""}`}
-					onClick={() => setListTab("teams")}
+					onClick={() => {
+						setListTab("teams");
+						setSelectedTag(undefined);
+					}}
 				>
 					专家团
 				</button>
 			</div>
 
-			{listTab === "teams" ? (
-				<EmptyState icon={<IconAssistant size={40} />} title="专家团即将上线" />
-			) : (
-				<>
-					{/* 搜索时分类行隐藏（spec）：关键词是全局面过滤，分类行失去意义。 */}
-					{kw === "" && (
-						<div className="ex-cats">
+			<>
+				{/* 搜索时分类行隐藏（spec）：关键词是全局面过滤，分类行失去意义。 */}
+				{kw === "" && (
+					<div className="ex-cats">
+						<button
+							type="button"
+							className={`ex-cat${selectedTag === undefined ? " active" : ""}`}
+							onClick={() => setSelectedTag(undefined)}
+						>
+							全部
+						</button>
+						{allTags.map((tag) => (
 							<button
+								key={tag}
 								type="button"
-								className={`ex-cat${selectedTag === undefined ? " active" : ""}`}
-								onClick={() => setSelectedTag(undefined)}
+								className={`ex-cat${selectedTag === tag ? " active" : ""}`}
+								onClick={() => setSelectedTag(selectedTag === tag ? undefined : tag)}
 							>
-								全部
+								{tag}
 							</button>
-							{allTags.map((tag) => (
-								<button
-									key={tag}
-									type="button"
-									className={`ex-cat${selectedTag === tag ? " active" : ""}`}
-									onClick={() => setSelectedTag(selectedTag === tag ? undefined : tag)}
-								>
-									{tag}
-								</button>
-							))}
-						</div>
-					)}
-					{error !== undefined ? (
-						<ErrorState message={error} onRetry={onRetry} />
-					) : experts === undefined ? (
-						<LoadingState />
-					) : visibleExperts.length === 0 ? (
+						))}
+					</div>
+				)}
+				{error !== undefined ? (
+					<ErrorState message={error} onRetry={onRetry} />
+				) : experts === undefined ? (
+					<LoadingState />
+				) : visibleExperts.length === 0 ? (
+					kw !== "" ? (
 						<EmptyState title={`没有找到与「${keyword.trim()}」匹配的专家，试试其他关键词`} />
+					) : listTab === "teams" ? (
+						// 团队专家是数据（声明 expertType: team 即进此页），没有就是真没有，
+						// 不再是「即将上线」的占位文案。
+						<EmptyState icon={<IconAssistant size={40} />} title="还没有团队型专家" />
 					) : (
-						<div className="ex-grid">
-							{visibleExperts.map((expert) => (
-								<ExpertCard key={expert.name} expert={expert} onOpen={setDetail} onUse={onUseExpert} />
-							))}
-						</div>
-					)}
-				</>
-			)}
+						<EmptyState icon={<IconAssistant size={40} />} title="专家库为空" />
+					)
+				) : (
+					<div className="ex-grid">
+						{visibleExperts.map((expert) => (
+							<ExpertCard key={expert.name} expert={expert} onOpen={setDetail} onUse={onUseExpert} />
+						))}
+					</div>
+				)}
+			</>
 
 			{detail !== undefined && (
 				<ExpertDetailModal expert={detail} onClose={() => setDetail(undefined)} onUse={onUseExpert} />

@@ -60,7 +60,7 @@ import {
 } from "../shared/audit.ts";
 import { optionalBoolean, parseFrontmatter, type ParsedDocument } from "../core/frontmatter.ts";
 import { ensureUserMemoryFiles, loadMemorySystemPrompt, profilePath, userMemoryPath } from "../core/memory.ts";
-import { loadAgents } from "../core/agents.ts";
+import { loadAgents, mergeAgentPools, type AgentDefinition } from "../core/agents.ts";
 import { loadExperts, type ExpertDefinition } from "../core/experts.ts";
 import {
 	McpConfigError,
@@ -116,6 +116,8 @@ import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from ".
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
 import { TeamRegistry } from "./team-runtime.ts";
+import { TeamTaskBoard } from "../core/team-tasks.ts";
+import { readTeams, removeTeam, TEAM_STORE_VERSION, writeTeam, type StoredTeam } from "../core/team-store.ts";
 import { createWorkspace, listWorkspaces, validateWorkspacePath } from "../core/workspace.ts";
 import {
 	readDisplayNames,
@@ -147,6 +149,7 @@ import {
 	type SandboxPrepareReport,
 } from "./sandbox-runner.ts";
 import { taskExtensionFactory } from "../extensions/task-tool.ts";
+import { teamTaskExtensionFactory } from "../extensions/team-task-tools.ts";
 import { teamExtensionFactory } from "../extensions/team-tools.ts";
 import { todoExtensionFactory } from "../extensions/todo-tool.ts";
 import { createUseSkillTool, type UseSkillTarget } from "../extensions/use-skill-tool.ts";
@@ -566,8 +569,14 @@ async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
  */
 function loadExpertsNow(): readonly ExpertDefinition[] {
 	// 第三个参数是全局技能根（我们自己写的 + 照搬的插件技能）：私有技能与它们重名
-	// 要在加载期拦下（spec: 专家技能重名防护）。
-	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILL_DIRS);
+	// 要在加载期拦下（spec: 专家技能重名防护）。第四个参数是全局 agents 库：
+	// 专家私有成员人格与它重名同样要在加载期拦下（spec: fix-team-expert-assets）。
+	return loadExperts(
+		join(getResourcesDir(), "experts"),
+		join(getConfigDir(), "experts"),
+		BUILTIN_SKILL_DIRS,
+		loadAgents(join(getResourcesDir(), "agents"), join(getConfigDir(), "agents")),
+	);
 }
 
 /**
@@ -1591,13 +1600,26 @@ function requestApproval(
 		risk: request.risk,
 		summary: request.summary,
 	});
+	/*
+	 * 成员归属（spec: add-team-collaboration-parity 批次 ⑦）：成员发起的审批
+	 * 走的是成员自己的 sessionId，用户在主视图看到弹窗时必须知道**是谁在请求**。
+	 * 反查注册表注入成员名与团队名；查不到（主会话/子代理/定时任务）就不带字段 ——
+	 * 渲染层按「无归属」呈现，与现状一致。
+	 */
+	const memberTeam = sessionId === "" ? undefined : teamRegistry.getTeamByMemberSession(sessionId);
+	const member =
+		memberTeam === undefined
+			? undefined
+			: [...memberTeam.members.values()].find((candidate) => candidate.sessionId === sessionId);
+	const attribution =
+		memberTeam === undefined || member === undefined ? {} : { fromMember: member.name, fromTeam: memberTeam.name };
 	return new Promise<PermissionResponse>((resolve, reject) => {
 		pendingApprovals.set(id, { toolName: request.toolName, resolve });
 		try {
 			post({
 				kind: "push",
 				channel: PUSH.permissionRequest,
-				payload: { id, sessionId, ...request },
+				payload: { id, sessionId, ...attribution, ...request },
 			});
 		} catch (error) {
 			/*
@@ -1750,8 +1772,9 @@ const memberRunnerDeps = {
 	isOwnWorkspace: (dir: string) =>
 		isPathInside(getEffectiveWorkspaceRoot(), dir) || isPathInside(getConfigDir(), dir),
 	getWebSearchConfig,
-	requestApproval: (request: Omit<PermissionRequest, "id" | "sessionId">) =>
-		requestApproval(request, ""),
+	// 成员审批带自己的会话 id（批次 ⑦）：requestApproval 据此反查团队归属。
+	requestApproval: (request: Omit<PermissionRequest, "id" | "sessionId">, memberSessionId: string) =>
+		requestApproval(request, memberSessionId),
 };
 
 /* ── 会话间消息信箱（spec: add-team-foundations 批 3） ────────────────
@@ -1833,6 +1856,12 @@ export const teamMessaging = { mailbox: teamMailbox, deliver: deliverSessionMess
 const teamRegistry = new TeamRegistry();
 /** 成员会话句柄（sessionId → handle）。宿主生命周期在接线层，注册表只管身份。 */
 const memberHandlesBySession = new Map<string, MemberHandle>();
+/**
+ * 团队共享任务板（spec: add-team-collaboration-parity 批次 ①）：按领导 sessionId
+ * 一张板，纯逻辑在 daemon/team-tasks.ts。与 registry 分开持有 —— 任务板会被
+ * 多轮读写、批次 ⑤ 起独立落盘，生命周期与团队成员身份不绑定。
+ */
+const teamTaskBoard = new TeamTaskBoard();
 
 /**
  * 把当前团队成员状态折成投影并推给领导会话（spec: add-team-foundations 批 7）。
@@ -1848,6 +1877,8 @@ function emitTeamProgress(leaderSessionId: string): void {
 	const statusMap: Record<string, SubagentStatus["status"]> = {
 		spawning: "queued",
 		running: "running",
+		// closing 仍是活动态（成员在整理收尾报告），UI 上不该显示成「已完成」。
+		closing: "running",
 		idle: "done",
 		failed: "failed",
 		closed: "done",
@@ -1869,6 +1900,89 @@ function emitTeamProgress(leaderSessionId: string): void {
 	const bucket = bucketsById.get(leaderSessionId);
 	if (bucket === undefined) return;
 	emitSessionEvent(bucket, { type: "team_member_progress", members });
+	// 状态变化即落盘（批次 ⑤）：emitTeamProgress 是所有团队状态变化的汇聚点。
+	persistTeam(leaderSessionId);
+}
+
+/** 上一次落盘的内容指纹（按领导会话），用于「没变就不写」（见 persistTeam）。 */
+const persistedFingerprint = new Map<string, string>();
+
+/**
+ * 把团队结构与任务板落盘（spec: add-team-collaboration-parity 批次 ⑤）。
+ *
+ * 调用点：`emitTeamProgress`（团队状态的唯一汇聚点）与任务板三工具的 deps ——
+ * 凡状态变化都会过一遍，不需要在每个动作里手写。
+ *
+ * **内容没变就跳过写盘**：emitTeamProgress 在成员每次工具调用后都会跑（一次 run
+ * 几十次），每次都写文件是白付 IO。指纹刻意**不含 updatedAt**（它每次都变，
+ * 带上它等于永不命中缓存）。
+ *
+ * 写盘失败只记事件日志、不抛：落盘是可靠性增强，不该让一次 team_send 失败。
+ */
+function persistTeam(leaderSessionId: string): void {
+	const team = teamRegistry.getTeam(leaderSessionId);
+	if (team === undefined) return;
+	const members = [...team.members.values()].map((member) => ({
+		name: member.name,
+		agentName: member.agentName,
+		task: member.task,
+		...(member.sessionId === undefined ? {} : { sessionId: member.sessionId }),
+		status: member.status,
+		turns: member.turns,
+		toolCalls: member.toolCalls,
+		tokens: member.tokens,
+		cost: member.cost,
+		planStatus: member.planStatus,
+		planFeedback: member.planFeedback,
+	}));
+	const tasks = teamTaskBoard.listTasks(leaderSessionId);
+	const fingerprint = `${team.name}\u0000${JSON.stringify(members)}\u0000${JSON.stringify(tasks)}`;
+	if (persistedFingerprint.get(leaderSessionId) === fingerprint) return;
+	try {
+		const snapshot: StoredTeam = {
+			version: TEAM_STORE_VERSION,
+			name: team.name,
+			leaderSessionId,
+			updatedAt: Date.now(),
+			members,
+			tasks,
+		};
+		writeTeam(getConfigDir(), snapshot);
+		persistedFingerprint.set(leaderSessionId, fingerprint);
+	} catch (error) {
+		eventLog.append({
+			kind: "team_persist_failed",
+			sessionId: leaderSessionId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/**
+ * 启动恢复（spec: add-team-collaboration-parity 批次 ⑤）：把落盘的团队与任务板
+ * 灌回内存态。成员一律按 `closed` 恢复（宿主不可恢复，理由见 core/team-store.ts
+ * 文件头），所以恢复后主理人看到的是「团队还在、任务板还在、成员需重建」。
+ *
+ * 解析失败**不致命**：记事件日志并继续启动（同 models.json 的容错口径 ——
+ * 一份坏文件不该让界面永久卡在「正在启动」）。
+ */
+function restoreTeamsFromDisk(): void {
+	let restored = 0;
+	try {
+		for (const stored of readTeams(getConfigDir())) {
+			teamRegistry.restoreTeam(stored.leaderSessionId, stored.name, stored.members);
+			teamTaskBoard.restore(stored.leaderSessionId, stored.tasks);
+			restored += 1;
+		}
+	} catch (error) {
+		eventLog.append({
+			kind: "team_restore_failed",
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
+	if (restored > 0) {
+		eventLog.append({ kind: "team_restored", message: `从磁盘恢复 ${restored} 个团队` });
+	}
 }
 
 /**
@@ -1905,7 +2019,21 @@ async function disbandTeamOf(leaderSessionId: string): Promise<void> {
 			memberHandlesBySession.delete(member.sessionId);
 		}
 	}
+	const teamName = team.name;
 	teamRegistry.disband(leaderSessionId);
+	// 任务板随团队一起清（团队没了，账本留着只会误导下一支队伍）。
+	teamTaskBoard.clear(leaderSessionId);
+	// 落盘目录同样清掉（批次 ⑤）：留着会让下次启动把一支已解散的队伍恢复回来。
+	persistedFingerprint.delete(leaderSessionId);
+	try {
+		removeTeam(getConfigDir(), teamName);
+	} catch (error) {
+		eventLog.append({
+			kind: "team_persist_failed",
+			sessionId: leaderSessionId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+	}
 	// 豁免随团队解除：领导桶重新参与 LRU 回收。
 	const bucket = bucketsById.get(leaderSessionId);
 	if (bucket !== undefined) bucket.hasTeam = false;
@@ -2070,7 +2198,29 @@ async function createHost(
 	 * 建会话响亮失败（agents 只挂在 task 工具链上，一次坏文件不该杀掉
 	 * 整个进程）。
 	 */
-	const agents = loadAgents(join(getResourcesDir(), "agents"), join(getConfigDir(), "agents"));
+	const globalAgents = loadAgents(join(getResourcesDir(), "agents"), join(getConfigDir(), "agents"));
+
+	/*
+	 * 成员人格 = 全局库 ∪ 当前专家的私有成员（spec: fix-team-expert-assets）。
+	 *
+	 * 为什么必须是**动态解析**而不是上面的常量：`setExpert` 在对话中切专家是主路径，
+	 * 装配期一次性合并的话，「切到团队专家后成员仍然不存在」——修了等于没修。
+	 * 读 `bucket.conversation.state.expertId` 的当前值即实时生效，且不需要动
+	 * toolsOverride / 工具面重应用链路（成员人格不进工具面，只在被查询时读）。
+	 *
+	 * 为什么要**按 expertId 记忆**：listAgents 每次工具调用都会走一次，而
+	 * loadExpertsNow 要跑 pi 的技能加载（真 YAML 解析几十份 SKILL.md）；
+	 * 不缓存的话，模型每问一次成员清单就要付一次专家库加载。切专家时失效一次即可。
+	 */
+	let agentsCache: { expertId: string | undefined; agents: readonly AgentDefinition[] } | undefined;
+	const resolveAgents = (): readonly AgentDefinition[] => {
+		const expertId = bucket.conversation.state.expertId;
+		if (agentsCache !== undefined && agentsCache.expertId === expertId) return agentsCache.agents;
+		const expert = expertId === undefined ? undefined : loadExpertsNow().find((e) => e.name === expertId);
+		const agents = mergeAgentPools(globalAgents, expert?.agents ?? []);
+		agentsCache = { expertId, agents };
+		return agents;
+	};
 
 	/*
 	 * MCP 连接器：读 mcp.json（用户级 + 项目级）连 MCP server，
@@ -2517,7 +2667,7 @@ async function createHost(
 				 */
 		taskExtensionFactory({
 			runSubagent: (request) => subagentRunner.run({ ...request, cwd }),
-			listAgents: () => agents,
+			listAgents: () => resolveAgents(),
 			checkBudget: () => {
 				if (bucket.spawnBudgetRemaining <= 0) return false;
 				bucket.spawnBudgetRemaining -= 1;
@@ -2534,7 +2684,7 @@ async function createHost(
 		 */
 		teamExtensionFactory({
 			isEnabled: isAgentTeamsEnabled,
-			listAgents: () => agents,
+			listAgents: () => resolveAgents(),
 			startTeam: async (plan, hooks) => {
 				const leaderId = adoptedSessionId(bucket);
 				// 注册表校验先行（单团队/重名/数量）；预算逐成员扣，失败即解散
@@ -2547,19 +2697,23 @@ async function createHost(
 				bucket.hasTeam = true;
 				emitTeamProgress(leaderId);
 				const acks: { name: string; sessionId: string }[] = [];
+				// 成员人格在建团这一刻定格：全局库 ∪ 当前专家的私有成员。
+				// 循环内不再重复解析（每成员一次专家库加载太贵，且同一支队伍
+				// 中途换人格没有意义）。
+				const memberAgents = resolveAgents();
 				try {
 					for (const member of plan.members) {
 						if (bucket.spawnBudgetRemaining <= 0) {
 							throw new Error("spawn 预算已耗尽，无法启动全部成员");
 						}
 						bucket.spawnBudgetRemaining -= 1;
-						const agent = agents.find((a) => a.name === member.agentName);
+						const agent = memberAgents.find((a) => a.name === member.agentName);
 						if (agent === undefined) {
 							throw new Error(`没有名为「${member.agentName}」的子代理定义`);
 						}
 						const handle = await spawnMember(
 							memberRunnerDeps,
-							{ cwd, agent, memberName: member.name, task: member.task },
+							{ cwd, agent, memberName: member.name, task: member.task, ...(member.model === undefined ? {} : { modelKey: member.model }) },
 							{
 								onProgress: (name, text) => {
 									teamRegistry.recordProgress(leaderId, name, 0, text);
@@ -2567,8 +2721,23 @@ async function createHost(
 									hooks.onProgress(name, text);
 								},
 								onComplete: (name, output, turns) => {
-									teamRegistry.markStatus(leaderId, name, "idle", `已完成 ${turns} 轮`);
+									// 收尾请求下的回投 = 成员的告别报告（批次 ②）：交完就关，
+									// 宿主 dispose 掉，别让它再占一个长会话。
+									const wasClosing = teamRegistry.getTeam(leaderId)?.members.get(name)?.status === "closing";
+									teamRegistry.markStatus(
+										leaderId,
+										name,
+										wasClosing ? "closed" : "idle",
+										wasClosing ? `已收尾（${turns} 轮）` : `已完成 ${turns} 轮`,
+									);
 									emitTeamProgress(leaderId);
+									if (wasClosing) {
+										const closingSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
+										if (closingSession !== undefined) {
+											memberHandlesBySession.get(closingSession)?.dispose();
+											memberHandlesBySession.delete(closingSession);
+										}
+									}
 									void deliverSessionMessage(
 										teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId ?? "",
 										leaderId,
@@ -2619,6 +2788,8 @@ async function createHost(
 							},
 						);
 						memberHandlesBySession.set(handle.sessionId, handle);
+						// 回填实际使用的模型（批次 ⑥）：解析链在执行器里算，team_status 从这里读。
+						teamRegistry.recordMemberModel(leaderId, member.name, handle.modelKey);
 						teamRegistry.markSpawned(leaderId, member.name, handle.sessionId);
 						emitTeamProgress(leaderId);
 						acks.push({ name: member.name, sessionId: handle.sessionId });
@@ -2657,10 +2828,118 @@ async function createHost(
 						status: member.status,
 						turns: member.turns,
 						lastActivity: member.lastActivity,
+						planStatus: member.planStatus,
+						...(member.model === "" ? {} : { model: member.model }),
 					})),
 				};
 			},
+			/*
+			 * 计划裁决（spec: add-team-collaboration-parity 批次 ④）。
+			 *
+			 * 与 WorkBuddy 的 plan_approval 消息类型不同：它的成员在会话内**阻塞等批**，
+			 * 我们的成员是 fire-and-forget 长会话 —— 交完一轮就 idle，不存在「阻塞等批」
+			 * 这个状态。于是「提交计划」= 它这一轮的产出（自动回投给领导），
+			 * 「批准/驳回」= 领导裁决后用 team_send 唤醒它继续。本方法把「记状态」与
+			 * 「叫醒它」合成一步：只改状态不发消息，成员会一直闲着等人推。
+			 */
+			reviewPlan: async (member, decision, feedback) => {
+				const leaderId = adoptedSessionId(bucket);
+				const updated = teamRegistry.reviewPlan(leaderId, member, decision, feedback);
+				emitTeamProgress(leaderId);
+				if (decision === "awaiting") {
+					return `已记录：成员「${member}」的计划待审（它当前 ${updated.status}）。决定后再用 approve / reject 调一次。`;
+				}
+				const memberSessionId = teamRegistry.resolveMemberSessions(leaderId, [member])[0];
+				if (memberSessionId === undefined) throw new Error(`成员「${member}」还没有会话，无法通知`);
+				const text =
+					decision === "approve"
+						? `[计划已批准]\n${feedback === undefined || feedback === "" ? "按你交的计划开工。" : feedback}\n\n现在开始执行；完成后把结果整理成最终报告输出。`
+						: `[计划需修改]\n${feedback ?? ""}\n\n请按上述意见调整计划后重新提交：这一轮**只交修订后的计划**，不要直接开工。`;
+				await deliverSessionMessage(leaderId, memberSessionId, text, "主理人");
+				return decision === "approve"
+					? `已批准成员「${member}」的计划，并已通知它开工。`
+					: `已驳回成员「${member}」的计划：反馈已发过去（状态 rejected，等它重交）。`;
+			},
+			/*
+			 * 委派模式（spec: add-team-collaboration-parity 批次 ③）。
+			 *
+			 * 状态在宿主体内（会话内策略，不写偏好、不进会话文件），daemon 只做转发。
+			 * 工具是在宿主构造期间注册的，这里**必须延迟取宿主**（bucket.hostPromise），
+			 * 不能在注册期固化一个还不存在的对象。
+			 */
+			setDelegateMode: async (enabled) => {
+				const host = await bucket.hostPromise;
+				if (host === undefined) throw new Error("会话还没有建立对话，无法切换委派模式");
+				host.setDelegateMode(enabled);
+				return enabled
+					? "已开启委派模式：从下一轮起你只能协调（团队 / 任务 / 提问 / 交付），不能再读写文件、执行命令或检索 —— 实际工作交给成员完成。"
+					: "已关闭委派模式：工具面已恢复，你可以自己下场干活了。";
+			},
+			/*
+			 * 单成员优雅关闭（spec: add-team-collaboration-parity 批次 ②）。
+			 *
+			 * 默认路径是「投收尾请求」而不是 abort：abort 会把成员这一轮的工作全丢掉，
+			 * 而收尾请求让它把已完成的部分整理成报告交回来 —— 这正是「优雅」的全部意义。
+			 * force 只作兜底（成员卡住不收尾时）。交回报告后由 onComplete 翻 closed 并
+			 * dispose 宿主（见上方回调）。
+			 */
+			shutdownMember: async (to, reason, force) => {
+				const leaderId = adoptedSessionId(bucket);
+				if (to.toLowerCase() === "@all") {
+					throw new Error('team_shutdown 一次只关一个成员；整队中止请用 team_delete');
+				}
+				const member = teamRegistry.requireMember(leaderId, to);
+				if (member.status === "closed") throw new Error(`成员「${to}」已经关闭了`);
+				const memberSessionId = member.sessionId;
+				if (memberSessionId === undefined) throw new Error(`成员「${to}」还在启动中，稍后再关`);
+				const handle = memberHandlesBySession.get(memberSessionId);
+				if (handle === undefined) {
+					throw new Error(`成员「${to}」的会话句柄已失效（团队可能已被解散）`);
+				}
+				if (force) {
+					await handle.abort().catch(() => {});
+					handle.dispose();
+					memberHandlesBySession.delete(memberSessionId);
+					teamRegistry.markStatus(leaderId, to, "closed", "已强制关闭");
+					emitTeamProgress(leaderId);
+					return `成员「${to}」已强制关闭：当前轮已中止，未交回的产出丢弃。`;
+				}
+				teamRegistry.markStatus(leaderId, to, "closing", "已请求收尾");
+				emitTeamProgress(leaderId);
+				await handle.prompt(
+					[
+						"[主理人要求收尾]",
+						reason ?? "本阶段工作到此为止。",
+						"",
+						"请立刻把已完成的部分整理成最终报告输出（不要再开始新的检索、不要大改），",
+						"写清三件事：已完成什么、关键结论、还剩什么没做完。",
+						"这条输出会自动回投给主理人，之后本会话即结束。",
+					].join("\n"),
+				);
+				return `已向成员「${to}」发出收尾请求：它交回最终报告后会自动关闭（期间状态为 closing）。`;
+			},
 			closeTeam: () => disbandTeamOf(adoptedSessionId(bucket)),
+		}),
+		/*
+		 * 团队共享任务板（spec: add-team-collaboration-parity 批次 ①）：与团队四件套
+		 * 同一开关（没有团队就没有共享任务）。任务板按领导 sessionId 取用，
+		 * 会话 id 在建会话后才有真值 —— 三个 deps 都是**调用时**才解析
+		 * （`adoptedSessionId(bucket)`），不在注册期固化。
+		 */
+		teamTaskExtensionFactory({
+			isEnabled: isAgentTeamsEnabled,
+			// 写操作后落盘（批次 ⑤）：任务板不经过 emitTeamProgress，得自己记账。
+			createTasks: (inputs) => {
+				const created = teamTaskBoard.createTasks(adoptedSessionId(bucket), inputs);
+				persistTeam(adoptedSessionId(bucket));
+				return created;
+			},
+			updateTask: (taskId, patch) => {
+				const updated = teamTaskBoard.updateTask(adoptedSessionId(bucket), taskId, patch);
+				persistTeam(adoptedSessionId(bucket));
+				return updated;
+			},
+			listTasks: () => teamTaskBoard.listTasks(adoptedSessionId(bucket)),
 		}),
 		],
 	});
@@ -4247,7 +4526,29 @@ const handlers: Record<string, Handler> = {
 			quickPrompts: e.quickPrompts,
 			tags: e.tags,
 			source: e.source,
+			expertType: e.expertType,
 		})),
+
+	/**
+	 * 团队任务板投影（spec: add-team-ux-parity 批次 ③）：Ctrl+T 面板的数据源。
+	 *
+	 * **只读** —— 任务板由模型经 `team_task_*` 工具改，UI 不给写通道
+	 * （人改一格、模型仍按旧认知调度，比不给改更糟；见 spec 否决方案）。
+	 * 无团队 / 会话还没建 → 空数组（面板显示空态，不是错误）。
+	 */
+	[INVOKE.getTeamTasks]: async () => {
+		const sessionId = currentBucket.sessionId;
+		if (sessionId === "") return [];
+		return teamTaskBoard.listTasks(sessionId).map((task) => ({
+			id: task.id,
+			title: task.title,
+			detail: task.detail,
+			...(task.owner === undefined ? {} : { owner: task.owner }),
+			status: task.status,
+			blockedBy: [...task.blockedBy],
+			result: task.result,
+		}));
+	},
 
 	/**
 	 * 切换模型。不依赖会话 —— 设置界面在会话建立前就要能用。
@@ -5232,6 +5533,8 @@ function start(): void {
 	 * fire-and-forget —— ready 只等启动必需的那几项 ms 级同步读。
 	 */
 	void prepareAgentTools();
+	// 团队与任务板的落盘恢复（批次 ⑤）：纯读盘 + 灌内存，失败不致命。
+	restoreTeamsFromDisk();
 }
 
 try {

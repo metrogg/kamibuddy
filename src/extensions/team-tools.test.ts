@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CHILD_AGENTS_DETAILS_KEY } from "../shared/child-agents.ts";
-import { teamExtensionFactory, type TeamToolDeps } from "./team-tools.ts";
+import { teamExtensionFactory, type TeamStartPlan, type TeamToolDeps } from "./team-tools.ts";
 
 interface FakeDetails {
 	readonly teamName: string;
@@ -49,6 +49,9 @@ function mount(deps: Partial<TeamToolDeps> = {}): {
 			name: "攻坚队",
 			members: [{ name: "a", agentName: "scout", status: "running", turns: 2, lastActivity: "正在 read x" }],
 		}),
+		shutdownMember: async (to) => `已向成员「${to}」发出收尾请求`,
+		setDelegateMode: async (enabled) => (enabled ? "已开启委派模式" : "已关闭委派模式"),
+		reviewPlan: async () => "已记录计划裁决",
 		closeTeam: async () => {},
 		...deps,
 	};
@@ -62,9 +65,106 @@ describe("开关门（agentTeamsEnabled）", () => {
 		expect(tools.size).toBe(0);
 	});
 
-	it("isEnabled=true → 四件套齐", () => {
+	it("isEnabled=true → 七件套齐", () => {
 		const { tools } = mount();
-		expect([...tools.keys()].sort()).toEqual(["team_create", "team_delete", "team_send", "team_status"]);
+		expect([...tools.keys()].sort()).toEqual([
+			"team_create",
+			"team_delegate_mode",
+			"team_delete",
+			"team_plan_review",
+			"team_send",
+			"team_shutdown",
+			"team_status",
+		]);
+	});
+});
+
+describe("team_plan_review（批次 ④ 计划裁决）", () => {
+	it("approve / reject 的裁决与反馈原样转给实现层", async () => {
+		const calls: { member: string; decision: string; feedback: string | undefined }[] = [];
+		const { tools } = mount({
+			reviewPlan: async (member, decision, feedback) => {
+				calls.push({ member, decision, feedback });
+				return decision === "approve" ? "已批准并通知开工" : "已驳回，反馈已发";
+			},
+		});
+		const approved = await tools.get("team_plan_review")!.execute("t1", { member: "a", decision: "approve" });
+		expect(approved.content[0]?.text).toContain("已批准");
+		const rejected = await tools.get("team_plan_review")!.execute("t1", {
+			member: "a",
+			decision: "reject",
+			feedback: "来源不足，先补到 5 个",
+		});
+		expect(rejected.content[0]?.text).toContain("已驳回");
+		expect(calls).toEqual([
+			{ member: "a", decision: "approve", feedback: undefined },
+			{ member: "a", decision: "reject", feedback: "来源不足，先补到 5 个" },
+		]);
+	});
+
+	it("驳回缺反馈的报错原样透传（注册表层拦下）", async () => {
+		const { tools } = mount({
+			reviewPlan: async () => {
+				throw new Error("驳回计划必须给 feedback —— 否则成员只能重猜，等于白跑一轮");
+			},
+		});
+		await expect(tools.get("team_plan_review")!.execute("t1", { member: "a", decision: "reject" })).rejects.toThrow(
+			/必须给 feedback/,
+		);
+	});
+});
+
+describe("team_delegate_mode（批次 ③ 委派模式）", () => {
+	it("开启 → 回执说明「从下一轮起只协调」", async () => {
+		const calls: boolean[] = [];
+		const { tools } = mount({
+			setDelegateMode: async (enabled) => {
+				calls.push(enabled);
+				return enabled ? "已开启委派模式：从下一轮起你只能协调" : "已关闭委派模式";
+			},
+		});
+		const on = await tools.get("team_delegate_mode")!.execute("t1", { enabled: true, reason: "这次只编排" });
+		expect(calls).toEqual([true]);
+		expect(on.content[0]?.text).toContain("只能协调");
+		const off = await tools.get("team_delegate_mode")!.execute("t1", { enabled: false });
+		expect(calls).toEqual([true, false]);
+		expect(off.content[0]?.text).toContain("已关闭");
+	});
+});
+
+describe("team_shutdown（批次 ② 单成员优雅关闭）", () => {
+	it("默认路径是发收尾请求，回执说明成员会交回报告后关闭", async () => {
+		const calls: { to: string; reason: string | undefined; force: boolean }[] = [];
+		const { tools } = mount({
+			shutdownMember: async (to, reason, force) => {
+				calls.push({ to, reason, force });
+				return `已向成员「${to}」发出收尾请求`;
+			},
+		});
+		const result = await tools.get("team_shutdown")!.execute("t1", { to: "a", reason: "这维度够用了" });
+		expect(calls).toEqual([{ to: "a", reason: "这维度够用了", force: false }]);
+		expect(result.content[0]?.text).toContain("已向成员「a」发出收尾请求");
+	});
+
+	it("force=true 透传到实现层（走中止而不是收尾请求）", async () => {
+		const calls: boolean[] = [];
+		const { tools } = mount({
+			shutdownMember: async (_to, _reason, force) => {
+				calls.push(force);
+				return "已强制关闭";
+			},
+		});
+		await tools.get("team_shutdown")!.execute("t1", { to: "a", force: true });
+		expect(calls).toEqual([true]);
+	});
+
+	it("@all 的拒绝原样透传（整队要走 team_delete）", async () => {
+		const { tools } = mount({
+			shutdownMember: async () => {
+				throw new Error('team_shutdown 一次只关一个成员；整队中止请用 team_delete');
+			},
+		});
+		await expect(tools.get("team_shutdown")!.execute("t1", { to: "@all" })).rejects.toThrow(/整队中止请用 team_delete/);
 	});
 });
 
@@ -169,5 +269,50 @@ describe("team_send / team_status / team_delete", () => {
 		const result = await tools.get("team_delete")!.execute("t1", {});
 		expect(closed).toBe(true);
 		expect(result.content[0]?.text).toContain("已解散");
+	});
+});
+
+describe("成员级模型（spec: add-team-collaboration-parity 批次 ⑥）", () => {
+	it("members[].model 原样透传给 startTeam（缺省不带该键）", async () => {
+		const plans: TeamStartPlan[] = [];
+		const { tools } = mount({
+			startTeam: async (plan) => {
+				plans.push(plan);
+				return plan.members.map((m) => ({ name: m.name, sessionId: `sid-${m.name}` }));
+			},
+		});
+		await tools.get("team_create")!.execute("t1", {
+			name: "队",
+			members: [
+				{ name: "a", agent: "scout", task: "调研", model: "deepseek/deepseek-chat" },
+				{ name: "b", agent: "scout", task: "执行" },
+			],
+		});
+		const first = plans[0];
+		expect(first, "startTeam 应被调用").toBeDefined();
+		expect(first?.members[0]).toEqual({
+			name: "a",
+			agentName: "scout",
+			task: "调研",
+			model: "deepseek/deepseek-chat",
+		});
+		expect(first?.members[1]).toEqual({ name: "b", agentName: "scout", task: "执行" });
+		// 第二个成员不该凭空多出 model 键（缺省 = 跟随领导模型，由执行器解析）
+		expect("model" in (first?.members[1] ?? {})).toBe(false);
+	});
+
+	it("team_status 显示成员模型（有则显示、无则省略）", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "队",
+				members: [
+					{ name: "a", agentName: "scout", status: "running", turns: 1, lastActivity: "", model: "deepseek/deepseek-chat" },
+					{ name: "b", agentName: "scout", status: "idle", turns: 0, lastActivity: "" },
+				],
+			}),
+		});
+		const out = await tools.get("team_status")!.execute("t1", {});
+		expect(out.content[0]?.text).toContain("模型：deepseek/deepseek-chat");
+		expect(out.content[0]?.text).not.toContain("模型：，");
 	});
 });

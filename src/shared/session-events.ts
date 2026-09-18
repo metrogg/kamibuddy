@@ -647,6 +647,15 @@ export interface SessionState {
 	 * 无专家是常态，不占字段。
 	 */
 	readonly expertId?: string;
+	/**
+	 * 委派模式（spec: add-team-collaboration-parity 批次 ③）：开启后领导工具面收窄为
+	 * 协调类（team_* / team_task_* / 沟通交付类），**不许自己读文件、写代码、跑命令** ——
+	 * 实际工作只能经成员完成。对齐 WorkBuddy Delegate Mode。
+	 *
+	 * 这是**会话内策略**（这个任务我想让它只协调），不是设置项：缺省而非 false，
+	 * 与 expertId 同款「常态不占字段」。不进会话文件持久化，resume 后回到关闭。
+	 */
+	readonly delegateMode?: boolean;
 	readonly modelId: string | undefined;
 	readonly isStreaming: boolean;
 	/**

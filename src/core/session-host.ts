@@ -118,6 +118,33 @@ type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 const DEFAULT_TOOLS = ["read", "write", "edit", "find", "grep", "ls"] as const;
 
 /**
+ * 委派模式下领导保留的工具（spec: add-team-collaboration-parity 批次 ③）。
+ *
+ * 规则（对齐 WorkBuddy Delegate Mode）：**协调、沟通、交付**类留下；**执行**类
+ * （读写文件、跑命令、检索、再委派）全部去掉 —— 领导自己下场干活就失去了「多视角
+ * 并行」的意义，也会与成员的产出互相覆盖。想让它干活就关掉委派模式，别偷偷放行。
+ *
+ * 只影响主会话：子代理/成员会话走 toolsOverride，不参与本过滤。
+ */
+const DELEGATE_MODE_TOOLS: readonly string[] = [
+	"team_create",
+	"team_send",
+	"team_status",
+	"team_shutdown",
+	"team_delete",
+	"team_task_create",
+	"team_task_update",
+	"team_task_list",
+	"team_delegate_mode",
+	"questionnaire",
+	"todo_write",
+	"conversation_search",
+	"read_me",
+	"show_widget",
+	"present_files",
+];
+
+/**
  * 流式 delta 的合批窗口（毫秒），约一帧。
  *
  * 一个 token 一次 IPC 会让 renderer 每 token 重跑一遍渲染，长会话线性放大。
@@ -1129,11 +1156,33 @@ export class SessionHost {
 	 * 生效工具集 = 当前模式白名单 ∪ 专家 extraTools（spec: add-team-foundations）。
 	 * 专家只能增不能删：extraTools 不出现在白名单里就追加，出现了去重跳过。
 	 */
+	/** 委派模式开关（会话内策略，语义见 setDelegateMode）。 */
+	private delegateMode = false;
+
 	private effectiveToolNames(): readonly string[] {
 		const mode = this.options.resources.modes.find((m) => m.id === this.interactionId);
 		const base = mode === undefined ? [...DEFAULT_TOOLS] : [...mode.tools];
 		const extra = this.options.getExpertExtraTools?.() ?? [];
-		return extra.length === 0 ? base : [...base, ...extra.filter((tool) => !base.includes(tool))];
+		const merged = extra.length === 0 ? base : [...base, ...extra.filter((tool) => !base.includes(tool))];
+		// 委派模式取交集（专家 extraTools 也拿不回来 —— 委派是关于「领导不下场」的硬策略）。
+		if (!this.delegateMode) return merged;
+		return merged.filter((tool) => DELEGATE_MODE_TOOLS.includes(tool));
+	}
+
+	/**
+	 * 开关委派模式（spec: add-team-collaboration-parity 批次 ③）。
+	 *
+	 * 只改工具面并重应用（同 setExpert 的即时生效纪律），不动提示词：模式语义由
+	 * team_delegate_mode 工具的回执与团队工具描述承载，提示词字节保持稳定
+	 * （避免为了一个开关把整段前缀打碎，KV 缓存口径同 team-tools 文件头）。
+	 * 子代理会话（toolsOverride 非空）不参与 —— 与 setExpert 的守卫同款。
+	 */
+	setDelegateMode(enabled: boolean): void {
+		this.delegateMode = enabled;
+		if (this.options.toolsOverride === undefined) {
+			this.session.setActiveToolsByName([...this.effectiveToolNames()]);
+		}
+		this.emitState();
 	}
 
 	/** 当前技能描述符，供 daemon 组装提示词的技能段。 */
@@ -1153,6 +1202,8 @@ export class SessionHost {
 			interactionId: this.interactionId,
 			// 无专家时缺省（不占字段），与 SessionState.expertId 的可选契约一致。
 			...(this.expertId === undefined ? {} : { expertId: this.expertId }),
+			// 委派模式：常态不占字段（与 expertId 同款）。
+			...(this.delegateMode ? { delegateMode: true } : {}),
 			modelId:
 				model === undefined ? undefined : toModelKey(model.provider, model.id),
 			// 不能透传 pi 的 session.isStreaming：pi 要到 finally 的 _emitAgentSettled

@@ -59,12 +59,42 @@ function loadAgentFile(file: string, fileName: string): AgentDefinition {
 	};
 }
 
-/** 按文件名序加载一个目录下的全部 .md 定义。 */
-function loadAgentsDir(dir: string): AgentDefinition[] {
+/**
+ * 按文件名序加载一个目录下的全部 .md 定义。
+ *
+ * 导出供 `experts.ts` 复用（专家私有成员人格 `<expert>/agents/*.md`，spec:
+ * fix-team-expert-assets）：成员人格必须与本库**同源**——两边同一套解析与校验，
+ * 才不会出现「专家说有这个成员、运行时说这个文件不合法」的错配。
+ */
+export function loadAgentsDir(dir: string): readonly AgentDefinition[] {
 	return readdirSync(dir)
 		.filter((name) => name.endsWith(".md") && !name.startsWith("."))
 		.sort()
 		.map((name) => loadAgentFile(join(dir, name), name));
+}
+
+/**
+ * 合并「全局 agents 库」与「当前专家的私有成员人格」（spec: fix-team-expert-assets）。
+ *
+ * 顺序 = 全局在前、专家私有在后：前者是稳定基线（内置四员 + 用户覆盖），
+ * 后者随绑定专家变化。重名时保留全局那一份——加载期已禁止重名（experts.ts
+ * 对「私有成员名撞全局库」抛错），这里的去重只是防御第二道：真撞了也必须是
+ * 同名同义的稳定定义优先，而不是让专家包悄悄改写全局人格。
+ *
+ * @param globalAgents 全局库（内置 + 用户级，已去重）
+ * @param expertAgents 当前专家的私有成员人格；未绑定专家或专家无成员时为 `[]`
+ */
+export function mergeAgentPools(
+	globalAgents: readonly AgentDefinition[],
+	expertAgents: readonly AgentDefinition[],
+): readonly AgentDefinition[] {
+	if (expertAgents.length === 0) return globalAgents;
+	const byName = new Map<string, AgentDefinition>();
+	for (const def of globalAgents) byName.set(def.name, def);
+	for (const def of expertAgents) {
+		if (!byName.has(def.name)) byName.set(def.name, def);
+	}
+	return [...byName.values()];
 }
 
 /**

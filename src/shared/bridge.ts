@@ -19,6 +19,7 @@ import type {
 	McpConfigSnapshot,
 	PermissionRequest,
 	PermissionResponse,
+	TeamTaskView,
 	PathStat,
 	PersonalizationInfo,
 	PersonalizationPatch,
@@ -107,6 +108,8 @@ export interface KamiBridge {
 	readonly setExpert: (expertId: string | undefined) => Promise<void>;
 	/** 专家列表（「专家 ▸」子菜单与对话头部显示的数据源）。 */
 	readonly listExperts: () => Promise<readonly ExpertListItem[]>;
+	/** 团队任务板（只读投影，spec: add-team-ux-parity 批次 ③）。 */
+	readonly getTeamTasks: () => Promise<readonly TeamTaskView[]>;
 	readonly setModel: (modelId: string) => Promise<void>;
 	/**
 	 * 切换当前会话的推理强度。pi 恒 clamp 不抛错；

@@ -68,6 +68,7 @@ import {
 	getResourcesDir,
 	getSessionsDir,
 } from "../src/core/config-paths.ts";
+import { loadAgents } from "../src/core/agents.ts";
 import { loadExperts } from "../src/core/experts.ts";
 import { buildMemorySection } from "../src/core/memory.ts";
 import { ModelCatalog } from "../src/core/model-catalog.ts";
@@ -374,7 +375,12 @@ const composeSystemPrompt = createSystemPromptComposerFromDefaults({
 	// 专家库现载（同 daemon）：探针不绑专家，composer 对 expertId === undefined 短路，
 	// 这条读路径不会被走到 —— 但传的是**真加载函数**而不是空数组，接线形态与 daemon 一致。
 	loadExperts: () =>
-		loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), [...getBuiltinSkillDirs()]),
+		loadExperts(
+			join(getResourcesDir(), "experts"),
+			join(getConfigDir(), "experts"),
+			[...getBuiltinSkillDirs()],
+			loadAgents(join(getResourcesDir(), "agents"), join(getConfigDir(), "agents")),
+		),
 	enabledSkills: async () => enabledSkillDescriptors(),
 	onStyleDrift: (drift) => {
 		console.error(`⚠ 回复风格配置漂移：偏好要的是「${drift.requested}」，资源库没有，回落「${drift.fallback}」`);

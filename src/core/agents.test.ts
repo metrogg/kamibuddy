@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadAgents } from "./agents.ts";
+import { loadAgents, mergeAgentPools } from "./agents.ts";
 
 let root: string;
 let builtinDir: string;
@@ -177,5 +177,35 @@ describe("真实 resources/agents/ 的回归约束", () => {
 		for (const tool of ["task", "questionnaire", "automation_create", "automation_list", "automation_delete"]) {
 			expect(worker?.tools, `worker 不应含 ${tool}`).not.toContain(tool);
 		}
+	});
+});
+
+describe("mergeAgentPools（spec: fix-team-expert-assets）", () => {
+	const agent = (name: string, tools: readonly string[] = ["read"]) => ({
+		name,
+		description: `${name}的描述`,
+		tools,
+		model: undefined,
+		body: `${name}正文`,
+	});
+
+	it("没有私有成员 → 原样返回全局库（同一引用，零开销）", () => {
+		const global = [agent("planner"), agent("worker")];
+		expect(mergeAgentPools(global, [])).toBe(global);
+	});
+
+	it("全局在前、私有追加在后", () => {
+		const merged = mergeAgentPools([agent("planner")], [agent("topic-researcher")]);
+		expect(merged.map((a) => a.name)).toEqual(["planner", "topic-researcher"]);
+	});
+
+	it("重名保留全局那份（第二道防线：真撞了也必须由稳定定义胜出）", () => {
+		const merged = mergeAgentPools([agent("scout", ["read", "grep"])], [agent("scout", ["write"])]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.tools).toEqual(["read", "grep"]);
+	});
+
+	it("全局为空时只剩私有成员（不吞掉）", () => {
+		expect(mergeAgentPools([], [agent("doc-auditor")]).map((a) => a.name)).toEqual(["doc-auditor"]);
 	});
 });

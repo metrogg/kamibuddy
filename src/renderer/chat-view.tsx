@@ -5,7 +5,7 @@
  * 消息渲染基于 shared/conversation.ts 折叠出的 entries 视图。
  */
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collectChanges } from "@shared/artifacts.ts";
 import type { ConversationView } from "@shared/conversation.ts";
 import {
@@ -70,6 +70,8 @@ import type { PendingSentAlign } from "./send-anchor.ts";
 import { SourceFavicon } from "./sources-panel.tsx";
 import { TaskAgentCard } from "./task-agent-card.tsx";
 import { latestTeamMembers } from "@shared/child-agents.ts";
+import { nextMemberTarget, TeamStatusBar } from "./team-status-bar.tsx";
+import { TeamTaskPanel } from "./team-task-panel.tsx";
 import { thinkingOpen, toggleThinking } from "./thinking-fold.ts";
 import { projectTodoList, windowTodos } from "./todo-projection.ts";
 import {
@@ -1567,6 +1569,56 @@ export function ChatView({
 				})),
 		[teamMembers],
 	);
+	/*
+	 * 成员焦点导航（spec: add-team-ux-parity 批次 ①）。
+	 *
+	 * 键盘路径与鼠标路径（点成员卡/状态栏）等价：↓ 在主理人与各成员间轮转。
+	 * Ctrl+O 从成员视图回主理人（WorkBuddy 同款）。
+	 */
+	const [teamBarHidden, setTeamBarHidden] = useState(false);
+	/*
+	 * 任务面板（批次 ③，Ctrl+T）：与状态栏**同位互斥** —— 打开面板时状态栏让位
+	 * （同一块地方，同一时刻只关心一件事）。
+	 */
+	const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+	const cycleMember = useCallback((): void => {
+		const target = nextMemberTarget(teamMembers, memberView?.name);
+		if (target === undefined) return; // 没有可切目标：不拦按键（见 nextMemberTarget 注释）
+		if (target.kind === "leader") {
+			onBackToLeader?.();
+			return;
+		}
+		onFocusMember?.(target.sessionId, target.name);
+	}, [teamMembers, memberView?.name, onBackToLeader, onFocusMember]);
+	useEffect(() => {
+		if (memberView === undefined || onBackToLeader === undefined) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "o") {
+				event.preventDefault();
+				onBackToLeader();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [memberView, onBackToLeader]);
+	/*
+	 * Ctrl+T 开关任务面板（批次 ③）。
+	 *
+	 * 只在**有团队**时注册：没有团队的会话里 Ctrl+T 该留给别人（浏览器/系统可能用它），
+	 * 抢一个用不上的快捷键是纯损失。
+	 */
+	const hasTeam = teamMembers.length > 0;
+	useEffect(() => {
+		if (!hasTeam) return;
+		const onKey = (event: KeyboardEvent): void => {
+			if (event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "t") {
+				event.preventDefault();
+				setTaskPanelOpen((open) => !open);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [hasTeam]);
 	const queuedItems = useMemo(
 		() =>
 			queued === undefined
@@ -2537,6 +2589,22 @@ export function ChatView({
 				*/
 					<>
 						{/*
+					团队常驻状态栏（spec: add-team-ux-parity 批次 ②）：输入区上方，
+					团队在就一直在；用户主动收起后本会话不再出现。
+				*/}
+						{taskPanelOpen ? (
+							<TeamTaskPanel onClose={() => setTaskPanelOpen(false)} />
+						) : (
+							!teamBarHidden && (
+								<TeamStatusBar
+									members={teamMembers}
+									{...(memberView === undefined ? {} : { currentName: memberView.name })}
+									onFocus={(sessionId, name) => onFocusMember?.(sessionId, name)}
+									onClose={() => setTeamBarHidden(true)}
+								/>
+							)
+						)}
+						{/*
 					专家起手 chips：问卷浮层分支替代整个输入区，chips 只在 Composer
 					分支内出现。key 挂专家名 —— 切换专家重挂载，「点过即隐藏」随之复位。
 					列表未拉回/专家找不到（currentExpert undefined）时不渲染。
@@ -2570,6 +2638,8 @@ export function ChatView({
 							enableHistory
 							streaming={streaming}
 							onAbort={onAbort}
+							/* 键盘路径（批次 ①）：空输入框按 ↓ 在主理人与成员间轮转。 */
+							{...(teamMembers.length === 0 ? {} : { onCycleMember: cycleMember })}
 							/*
 								模型 chip 走 trailing（右组）而不是 children（左组）：
 								WB 底行是「左：+ / 权限，右：模型 / 麦克风 / 发送」，

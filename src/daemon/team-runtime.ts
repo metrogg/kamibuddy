@@ -17,8 +17,43 @@
  * 在 daemon 接线层（Map<memberSessionId, host>）。
  */
 
-/** 成员状态（对 WorkBuddy member status 的裁剪版）。 */
-export type TeamMemberStatus = "spawning" | "running" | "idle" | "failed" | "closed";
+/**
+ * 成员状态（对 WorkBuddy member status 的裁剪版）。
+ *
+ * `closing` 是 spec: add-team-collaboration-parity 批次 ② 加的：主理人发了
+ * 收尾请求、成员正在把手上工作整理成报告（**不是** abort —— 优雅关闭的全部
+ * 价值就是「让它把东西交出来再走」）。成员回投完成信号后翻 `closed`。
+ */
+export type TeamMemberStatus = "spawning" | "running" | "idle" | "failed" | "closing" | "closed";
+
+/**
+ * 计划裁决状态（spec: add-team-collaboration-parity 批次 ④）。
+ *
+ * 与 WorkBuddy 的 plan_approval 消息类型不同：它的成员在会话内**阻塞等待**审批，
+ * 我们的成员是 fire-and-forget 长会话 —— 交完一轮就结束（状态 idle），
+ * 不存在「阻塞等批」这个状态。于是「提交计划」= 它这一轮的产出（自动回投给领导），
+ * 「批准/驳回」= 领导裁决后 team_send 唤醒它继续。本字段记录的是**裁决本身**，
+ * 让 `team_status` 能回答「谁的计划批了、谁被打回几次」。
+ */
+export type TeamPlanStatus = "none" | "awaiting" | "approved" | "rejected";
+
+/**
+ * 裁决**动作**（入参）与上面裁决**状态**（记录）刻意分成两个类型：
+ * 动作是命令式（approve / reject），状态是结果式（approved / rejected）。
+ * 合成一个类型会让 `reviewPlan(..., "approved")` 这种"结果当命令"的调用
+ * 编译期合法、运行期莫名其妙 —— 实测（2026-09-18）就是类型检查先抓到的。
+ */
+export type TeamPlanDecision = "awaiting" | "approve" | "reject";
+
+/**
+ * 把落盘里读回的裸字符串窄化成本类型（core 的 team-store 不能 import 本文件 ——
+ * 依赖方向 daemon → core 单向，所以那边的 planStatus 只能是 string）。
+ * 不认识的值按 `none` 处理：落盘文件是我们自己写的，出现异值说明有人在手改，
+ * 回退到「未涉及计划审批」比抛错更合理（团队本身还能用）。
+ */
+function toPlanStatus(value: string | undefined): TeamPlanStatus {
+	return value === "awaiting" || value === "approved" || value === "rejected" ? value : "none";
+}
 
 export interface TeamMember {
 	/** 成员名（team_send 的 @寻址键，团队内唯一）。 */
@@ -29,6 +64,12 @@ export interface TeamMember {
 	readonly agentName: string;
 	/** spawn 时给定的初始任务（追溯用）。 */
 	readonly task: string;
+	/**
+	 * 该成员实际使用的模型（`providerId/modelId`，spec: add-team-collaboration-parity
+	 * 批次 ⑥）。spawn 时由接线层从执行器回填最终解析结果（成员显式 → agent 定义 →
+	 * 领导模型），空串 = 尚未回填。
+	 */
+	model: string;
 	status: TeamMemberStatus;
 	/** 已完成的 agent 轮数（接线层从成员事件计数回填）。 */
 	turns: number;
@@ -40,6 +81,10 @@ export interface TeamMember {
 	tokens: number;
 	/** 累计费用（美元）。 */
 	cost: number;
+	/** 计划裁决状态（批次 ④）：none 未涉及 / awaiting 已交计划待审 / approved / rejected。 */
+	planStatus: TeamPlanStatus;
+	/** 驳回反馈（重交计划前读它）；无反馈时为空串。 */
+	planFeedback: string;
 }
 
 export interface Team {
@@ -88,16 +133,65 @@ export class TeamRegistry {
 				sessionId: undefined,
 				agentName: requireNonEmpty(spec.agentName, `成员「${memberName}」的 agent 名`),
 				task: requireNonEmpty(spec.task, `成员「${memberName}」的初始任务`),
+				model: "",
 				status: "spawning",
 				turns: 0,
 				lastActivity: "",
 				toolCalls: 0,
 				tokens: 0,
 				cost: 0,
+				planStatus: "none",
+				planFeedback: "",
 			});
 		}
 		this.teamsByLeader.set(leaderSessionId, team);
 		return team;
+	}
+
+	/**
+	 * 从落盘快照恢复团队（spec: add-team-collaboration-parity 批次 ⑤）。
+	 *
+	 * **成员一律按 `closed` 恢复**：宿主不可恢复（理由见 core/team-store.ts 文件头），
+	 * 留着 running/idle 会让 `team_status` 撒谎「成员还在干活」。恢复后主理人看到的
+	 * 是「这支队需要重建成员」，团队名与任务板原样可用。
+	 */
+	restoreTeam(
+		leaderSessionId: string,
+		name: string,
+		members: ReadonlyArray<{
+			name: string;
+			agentName: string;
+			task: string;
+			sessionId?: string;
+			turns: number;
+			toolCalls: number;
+			tokens: number;
+			cost: number;
+			planStatus?: string;
+			planFeedback?: string;
+		}>,
+	): void {
+		requireNonEmpty(leaderSessionId, "领导会话 id");
+		if (this.teamsByLeader.has(leaderSessionId)) return; // 已有团队 → 不覆盖运行态
+		const team: Team = { name, members: new Map() };
+		for (const stored of members) {
+			team.members.set(stored.name, {
+				name: stored.name,
+				sessionId: undefined, // 旧 sessionId 不可达，不恢复（恢复它只会指向一个死宿主）
+				agentName: stored.agentName,
+				task: stored.task,
+				status: "closed",
+				model: "",
+				turns: stored.turns,
+				lastActivity: "进程重启后成员需重建",
+				toolCalls: stored.toolCalls,
+				tokens: stored.tokens,
+				cost: stored.cost,
+				planStatus: toPlanStatus(stored.planStatus),
+				planFeedback: stored.planFeedback ?? "",
+			});
+		}
+		this.teamsByLeader.set(leaderSessionId, team);
 	}
 
 	/** 领导的团队；没有 → undefined。 */
@@ -121,6 +215,17 @@ export class TeamRegistry {
 		member.status = "running";
 		member.lastActivity = "";
 		this.leaderByMemberSession.set(memberSessionId, leaderSessionId);
+	}
+
+	/**
+	 * 回填成员实际使用的模型（spec: add-team-collaboration-parity 批次 ⑥）。
+	 *
+	 * 解析链（成员显式 → agent 定义 → 领导模型）在成员执行器里算 —— 那里才知道
+	 * 目录里哪些模型可用。接线层拿到 handle 后回填这里，`team_status` 才有真值可显示。
+	 */
+	recordMemberModel(leaderSessionId: string, memberName: string, modelKey: string): void {
+		const member = this.requireMember(leaderSessionId, memberName);
+		member.model = modelKey;
 	}
 
 	markStatus(leaderSessionId: string, memberName: string, status: TeamMemberStatus, activity?: string): void {
@@ -163,6 +268,30 @@ export class TeamRegistry {
 		return leaderId;
 	}
 
+	/**
+	 * 记录计划裁决（spec: add-team-collaboration-parity 批次 ④）。
+	 *
+	 * `decision` 三值：`awaiting`（领导读了回投的计划、先记一笔待审）、
+	 * `approve`、`reject`。**驳回必须给反馈**——没有反馈的驳回等于让成员
+	 * 重新猜一遍，那还不如不要审批这一环。
+	 *
+	 * 这里只写状态；唤醒成员（team_send）由接线层做：注册表不碰宿主。
+	 */
+	reviewPlan(
+		leaderSessionId: string,
+		memberName: string,
+		decision: TeamPlanDecision,
+		feedback?: string,
+	): TeamMember {
+		const member = this.requireMember(leaderSessionId, memberName);
+		if (decision === "reject" && (feedback === undefined || feedback.trim() === "")) {
+			throw new Error("驳回计划必须给 feedback —— 否则成员只能重猜，等于白跑一轮");
+		}
+		member.planStatus = decision === "awaiting" ? "awaiting" : decision === "approve" ? "approved" : "rejected";
+		member.planFeedback = feedback ?? "";
+		return member;
+	}
+
 	requireMember(leaderSessionId: string, memberName: string): TeamMember {
 		const team = this.getTeam(leaderSessionId);
 		const member = team?.members.get(memberName);
@@ -176,12 +305,21 @@ export class TeamRegistry {
 		return member;
 	}
 
-	/** 按成员名列表解析会话 id（team_send 的 @寻址）。任一未知 → 响亮抛错。 */
+	/**
+	 * 按成员名列表解析会话 id（team_send 的 @寻址）。任一未知 → 响亮抛错。
+	 *
+	 * 已关闭的成员**响亮拒绝**（spec: add-team-collaboration-parity 批次 ②）：
+	 * 它的宿主已经 dispose，再投消息会撞一个不可预期的内部错误；这里明确告诉
+	 * 主理人「这个人已经走了」，而不是让它去猜。
+	 */
 	resolveMemberSessions(leaderSessionId: string, memberNames: readonly string[]): readonly string[] {
 		return memberNames.map((name) => {
 			const member = this.requireMember(leaderSessionId, name);
 			if (member.sessionId === undefined) {
 				throw new Error(`成员「${name}」还在启动中，稍后再发消息`);
+			}
+			if (member.status === "closed") {
+				throw new Error(`成员「${name}」已关闭、不再接收消息（要它继续工作就另派一名成员）`);
 			}
 			return member.sessionId;
 		});

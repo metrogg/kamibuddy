@@ -130,6 +130,8 @@ export const INVOKE = {
 	 * 只带展示字段 —— 人格正文不经 IPC，compose 时 daemon 从专家库自取。
 	 */
 	listExperts: "session:list-experts",
+	/** 团队任务板投影（只读，spec: add-team-ux-parity 批次 ③）：Ctrl+T 面板的数据源。 */
+	getTeamTasks: "session:get-team-tasks",
 	/** 切换模型。 */
 	setModel: "session:set-model",
 	/**
@@ -751,6 +753,11 @@ export interface ExpertListItem {
 	readonly tags: readonly string[];
 	/** 来源（专家市场页「我的专家」子页的判定依据：同名用户级覆盖内置后即为 user）。 */
 	readonly source: "builtin" | "user";
+	/**
+	 * 专家形态（spec: fix-team-expert-assets）：`"team"` = 团队型专家（主理人），
+	 * 专家市场「专家团」子页按它筛选；缺省语义是单体人格专家。
+	 */
+	readonly expertType: "expert" | "team";
 }
 
 /**
@@ -946,6 +953,8 @@ export interface InvokeMap {
 	/** expertId 为 undefined 表示清除专家；专家与交互模式正交，只改专家绑定。 */
 	[INVOKE.setExpert]: { args: [expertId: string | undefined]; result: void };
 	[INVOKE.listExperts]: { args: []; result: readonly ExpertListItem[] };
+	/** 只读：任务板由模型经 team_task_* 工具改，UI 不提供写通道（见 spec 否决方案）。 */
+	[INVOKE.getTeamTasks]: { args: []; result: readonly TeamTaskView[] };
 	[INVOKE.setModel]: { args: [modelId: string]; result: void };
 	[INVOKE.setThinkingLevel]: { args: [level: ThinkingLevel]; result: void };
 	[INVOKE.sessionList]: { args: []; result: SessionSummary[] };
@@ -1157,6 +1166,22 @@ export type UiResponse = {
  * 比 ctx.ui.confirm 多出来的信息——工具入参、风险等级、"总是允许"——
  * 是产品同事第一天就会用到的，所以单开一条通道而不是塞进 confirm 的文本里。
  */
+/**
+ * 团队任务板的展示投影（spec: add-team-ux-parity 批次 ③）。
+ *
+ * 与 core/team-tasks.ts 的 TeamTask 同形但不共用类型：core 依赖 shared，
+ * shared 不能反向依赖 core（check:deps 拦得住），所以契约层自己声明一份。
+ */
+export interface TeamTaskView {
+	readonly id: string;
+	readonly title: string;
+	readonly detail: string;
+	readonly owner?: string;
+	readonly status: string;
+	readonly blockedBy: readonly string[];
+	readonly result: string;
+}
+
 export interface PermissionRequest {
 	readonly id: string;
 	/**
@@ -1165,6 +1190,16 @@ export interface PermissionRequest {
 	 * 空串 = 全局（子代理审批暂无桶上下文，见 daemon/index.ts subagentRunner 装配处注释）。
 	 */
 	readonly sessionId: string;
+	/**
+	 * 团队成员归属（spec: add-team-collaboration-parity 批次 ⑦）。
+	 *
+	 * 成员会话触发的审批汇集到主视图时，用户要知道**是谁在请求** —— 只给一个
+	 * 成员会话 id 等于让用户猜。daemon 侧按 sessionId 反查团队注册表注入；
+	 * 非成员（主会话、子代理、定时任务）不带这两个字段。
+	 */
+	readonly fromMember?: string;
+	/** 成员所属团队名（与 fromMember 成对出现）。 */
+	readonly fromTeam?: string;
 	readonly toolName: string;
 	/** 面向用户的动作描述，如「删除 3 个文件」。 */
 	readonly summary: string;

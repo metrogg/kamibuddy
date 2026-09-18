@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadAgents, type AgentDefinition } from "./agents.ts";
 import { loadExperts } from "./experts.ts";
 
 let root: string;
@@ -33,8 +34,16 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-function load(): ReturnType<typeof loadExperts> {
-	return loadExperts(builtinDir, userDir, [globalSkillsDir]);
+/**
+ * 样例用例的全局 agents 库：默认空（专家私有成员不与任何全局人格冲突）。
+ * 专属的重名用例自己造一个传进去 —— 见「成员人格」describe。
+ */
+const NO_GLOBAL_AGENTS: readonly AgentDefinition[] = [];
+
+function load(globalAgents: Parameters<typeof loadExperts>[3] = NO_GLOBAL_AGENTS): ReturnType<
+	typeof loadExperts
+> {
+	return loadExperts(builtinDir, userDir, [globalSkillsDir], globalAgents);
 }
 
 /** 取抛错信息，没抛错则让测试响亮失败（直接 expect(...).toThrow 拿不到文案）。 */
@@ -74,6 +83,16 @@ function writeExpertSkill(base: string, expert: string, dir: string, name = dir)
 	const skillDir = join(base, expert, "skills", dir);
 	mkdirSync(skillDir, { recursive: true });
 	writeFileSync(join(skillDir, "SKILL.md"), expertDoc(`name: ${name}\ndescription: 技能${name}`));
+}
+
+/**
+ * 造一个专家私有成员人格：<base>/<expert>/agents/<id>.md。
+ * 格式与全局 agents 库一致（name/description/tools，tools 非空）。
+ */
+function writeExpertAgent(base: string, expert: string, id: string, tools = "[read, web_search]"): void {
+	const agentsDir = join(base, expert, "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	writeFileSync(join(agentsDir, `${id}.md`), expertDoc(`name: ${id}\ndescription: 成员${id}\ntools: ${tools}`));
 }
 
 /** 造一个全局技能：<globalSkillsDir>/<dir>/SKILL.md。 */
@@ -120,7 +139,7 @@ describe("正常加载", () => {
 
 	it("用户目录不存在 = 空，只返回内置", () => {
 		writeBuiltin("work-report");
-		const experts = loadExperts(builtinDir, join(root, "不存在的目录"), [globalSkillsDir]);
+		const experts = loadExperts(builtinDir, join(root, "不存在的目录"), [globalSkillsDir], NO_GLOBAL_AGENTS);
 		expect(experts.map((e) => e.name)).toEqual(["work-report"]);
 	});
 
@@ -188,7 +207,9 @@ describe("私有技能收集", () => {
 
 describe("报错路径", () => {
 	it("内置目录缺失 → 抛错（打包错误）", () => {
-		expect(() => loadExperts(join(root, "没有"), userDir, [globalSkillsDir])).toThrow(/内置专家目录缺失/);
+		expect(() => loadExperts(join(root, "没有"), userDir, [globalSkillsDir], NO_GLOBAL_AGENTS)).toThrow(
+			/内置专家目录缺失/,
+		);
 	});
 
 	it("内置目录为空 → 抛错", () => {
@@ -344,13 +365,20 @@ describe("真实 resources/experts/ 的回归约束", () => {
 	 * 并行跑测试时会顶到别的用例的 5s 超时线（实测 doc-extract 因此偶发超时）。
 	 * 写在 describe 体里 = 只在收集期付一次。
 	 */
-	const realExperts = loadExperts(realBuiltin, noUserDir, [
-		realSkills,
-		// 生产里全局技能有两个根（我们自己写的 + 照搬的插件），重名校验要按真实形态跑。
-		resolve(realBuiltin, "..", "plugins"),
-	]);
+	const realExperts = loadExperts(
+		realBuiltin,
+		noUserDir,
+		[
+			realSkills,
+			// 生产里全局技能有两个根（我们自己写的 + 照搬的插件），重名校验要按真实形态跑。
+			resolve(realBuiltin, "..", "plugins"),
+		],
+		// 成员人格重名校验同样按真实形态跑：专家私有成员撞上全局 agents 库必须是
+		// 真错误，这条断言就是「团队专家点名的成员真的都在它自己包里」的护栏。
+		loadAgents(resolve(realBuiltin, "..", "agents"), noUserDir),
+	);
 
-	it("内置十四员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
+	it("内置十六员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
 		// 后 9 员是「最佳实践案例」绑定的专家，从 WorkBuddy 专家中心照搬
 		// （来源见各目录 README.md）；它们必须能被专家菜单正常列出。
 		const experts = realExperts;
@@ -362,8 +390,10 @@ describe("真实 resources/experts/ 的回归约束", () => {
 			"gpt-researcher-team",
 			"long-manuscript-expert",
 			"market-researcher",
+			"mvp-dev-expert-team",
 			"openspec-doc-team",
 			"ppt-creation-expert",
+			"stock-partner-team",
 			"technical-documentation-engineer",
 			"trend-researcher",
 			"ui-designer",
@@ -380,8 +410,10 @@ describe("真实 resources/experts/ 的回归约束", () => {
 			"gpt-researcher-team": "深度研究团队",
 			"long-manuscript-expert": "福帮手",
 			"market-researcher": "严研行",
+			"mvp-dev-expert-team": "MVP开发专家团",
 			"openspec-doc-team": "专业文档生成团队",
 			"ppt-creation-expert": "腾讯云知（乐享）",
+			"stock-partner-team": "腾讯自选股股票投研专家团",
 			"technical-documentation-engineer": "文通通",
 			"trend-researcher": "风向标",
 			"ui-designer": "像素君",
@@ -396,14 +428,61 @@ describe("真实 resources/experts/ 的回归约束", () => {
 			"gpt-researcher-team": "多源深度研究报告工坊",
 			"long-manuscript-expert": "长文档写作与改稿专家",
 			"market-researcher": "行业研究员",
+			"mvp-dev-expert-team": "MVP开发专家团",
 			"openspec-doc-team": "专业文档生成团队",
 			"ppt-creation-expert": "腾讯云PPT制作专家",
+			"stock-partner-team": "腾讯自选股股票投研专家团",
 			"technical-documentation-engineer": "技术文档工程师",
 			"trend-researcher": "行业趋势专家",
 			"ui-designer": "UI设计师",
 			"visual-storytelling-expert": "视觉叙事专家",
 			"workspace-builder": "工作台搭建师",
 		});
+	});
+
+	it("四个团队型专家声明 expertType: team 且自带成员人格（spec: fix-team-expert-assets）", () => {
+		const byName = new Map(realExperts.map((e) => [e.name, e]));
+		expect(byName.get("gpt-researcher-team")?.expertType).toBe("team");
+		expect(byName.get("gpt-researcher-team")?.agents.map((a) => a.name)).toEqual([
+			"draft-reviewer",
+			"draft-reviser",
+			"report-publisher",
+			"report-writer",
+			"research-planner",
+			"topic-researcher",
+		]);
+		expect(byName.get("openspec-doc-team")?.expertType).toBe("team");
+		expect(byName.get("openspec-doc-team")?.agents.map((a) => a.name)).toEqual([
+			"doc-auditor",
+			"doc-generator",
+			"doc-researcher",
+		]);
+		// 后两个是 2026-09-18 从本机 WorkBuddy 专家市场包搬来的真团队包
+		expect(byName.get("mvp-dev-expert-team")?.expertType).toBe("team");
+		expect(byName.get("mvp-dev-expert-team")?.agents.map((a) => a.name)).toEqual([
+			"mvp-dev-expert-team-architect",
+			"mvp-dev-expert-team-backend",
+			"mvp-dev-expert-team-designer",
+			"mvp-dev-expert-team-devops",
+			"mvp-dev-expert-team-frontend",
+			"mvp-dev-expert-team-pm",
+			"mvp-dev-expert-team-qa",
+		]);
+		expect(byName.get("stock-partner-team")?.expertType).toBe("team");
+		expect(byName.get("stock-partner-team")?.agents.map((a) => a.name)).toEqual([
+			"contrarian-investor",
+			"fundamental-researcher",
+			"industry-strategist",
+			"shortterm-surfer",
+			"signal-chief",
+			"valuation-analyst",
+		]);
+		// 其余 12 员是单体人格：不声明类型、不自带成员（声明了就会混进专家团页）
+		for (const expert of realExperts) {
+			if (expert.name.endsWith("-team")) continue;
+			expect(expert.expertType, `${expert.name} 应为单体专家`).toBe("expert");
+			expect(expert.agents, `${expert.name} 不应自带成员`).toEqual([]);
+		}
 	});
 
 	it("私有技能分布：数量精确（技能 frontmatter 由 pi 的加载器判定，不是我们自解析）", () => {
@@ -426,9 +505,12 @@ describe("真实 resources/experts/ 的回归约束", () => {
 			"gpt-researcher-team": 0,
 			"long-manuscript-expert": 9,
 			"market-researcher": 7,
+			"mvp-dev-expert-team": 0,
 			"openspec-doc-team": 0,
 			// 同 deep-research：ppt-implement 技能已全局预装
 			"ppt-creation-expert": 0,
+			// 源包自带 3 个：westock-data / westock-tool / md-to-html
+			"stock-partner-team": 3,
 			"technical-documentation-engineer": 5,
 			"trend-researcher": 3,
 			"ui-designer": 1,
@@ -480,5 +562,78 @@ describe("extraTools（spec: add-team-foundations）", () => {
 	it("非字符串数组 → 抛错（元素含非字符串同样不放过）", () => {
 		writeBuiltin("fin", validFrontmatter("fin") + "\nextraTools: 不是数组");
 		expect(errorMessage(() => load())).toContain("extraTools");
+	});
+});
+
+describe("成员人格 agents/（spec: fix-team-expert-assets）", () => {
+	it("有 agents/ → 解析为成员定义（与全局 agents 库同源）", () => {
+		writeBuiltin("research-team");
+		writeExpertAgent(builtinDir, "research-team", "topic-researcher", "[read, web_search, web_fetch]");
+
+		const experts = load();
+		const agents = experts.find((e) => e.name === "research-team")?.agents;
+		expect(agents?.map((a) => a.name)).toEqual(["topic-researcher"]);
+		expect(agents?.[0]).toMatchObject({
+			description: "成员topic-researcher",
+			tools: ["read", "web_search", "web_fetch"],
+		});
+	});
+
+	it("没有 agents/ 目录 → 空数组（单体专家的常态）", () => {
+		writeBuiltin("fin");
+		expect(load().find((e) => e.name === "fin")?.agents).toEqual([]);
+	});
+
+	it("agents/ 为空目录 → 抛错（空壳会让「团队专家自带成员」的承诺静默失效）", () => {
+		writeBuiltin("research-team");
+		mkdirSync(join(builtinDir, "research-team", "agents"), { recursive: true });
+		expect(errorMessage(() => load())).toContain("agents/ 目录为空");
+	});
+
+	it("成员文件 tools 为空 → 抛错（沿用全局库的校验，没有工具的成员无法工作）", () => {
+		writeBuiltin("research-team");
+		writeExpertAgent(builtinDir, "research-team", "idle-one", "[]");
+		expect(errorMessage(() => load())).toContain("tools 不能为空数组");
+	});
+
+	it("成员名与全局 agents 库重名 → 抛错（team_create 的 find 会静默取先者）", () => {
+		writeBuiltin("research-team");
+		writeExpertAgent(builtinDir, "research-team", "scout");
+		expect(errorMessage(() =>
+			load([{ name: "scout", description: "全局侦察", tools: ["read"], model: undefined, body: "正文" }]),
+		)).toContain("与全局 agents 库重名");
+	});
+
+	it("专家之间成员同名 → 允许（一个会话只绑定一个专家，成员永不同时在场）", () => {
+		writeBuiltin("team-a");
+		writeBuiltin("team-b");
+		writeExpertAgent(builtinDir, "team-a", "reviewer-role");
+		writeExpertAgent(builtinDir, "team-b", "reviewer-role");
+
+		const experts = load();
+		expect(experts.find((e) => e.name === "team-a")?.agents.map((a) => a.name)).toEqual(["reviewer-role"]);
+		expect(experts.find((e) => e.name === "team-b")?.agents.map((a) => a.name)).toEqual(["reviewer-role"]);
+	});
+});
+
+describe("expertType（spec: fix-team-expert-assets）", () => {
+	it("声明 team → 解析为 team", () => {
+		writeBuiltin("research-team", validFrontmatter("research-team") + "\nexpertType: team");
+		expect(load().find((e) => e.name === "research-team")?.expertType).toBe("team");
+	});
+
+	it("未声明 → expert（缺省口径，12 个内置专家行为不变）", () => {
+		writeBuiltin("fin");
+		expect(load().find((e) => e.name === "fin")?.expertType).toBe("expert");
+	});
+
+	it("声明 expert → 解析为 expert", () => {
+		writeBuiltin("fin", validFrontmatter("fin") + "\nexpertType: expert");
+		expect(load().find((e) => e.name === "fin")?.expertType).toBe("expert");
+	});
+
+	it("非法值 → 抛错（静默回落 expert 会让团队专家从专家团页凭空消失）", () => {
+		writeBuiltin("fin", validFrontmatter("fin") + "\nexpertType: squad");
+		expect(errorMessage(() => load())).toContain("expertType");
 	});
 });

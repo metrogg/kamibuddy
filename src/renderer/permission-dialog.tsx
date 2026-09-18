@@ -97,6 +97,14 @@ export function PermissionDialog({ request, onDecide }: PermissionDialogProps): 
 				<div className="permission-head">
 					<span className={`permission-badge risk-${request.risk}`}>{RISK_TEXT[request.risk]}</span>
 					<span className="permission-tool">{request.toolName}</span>
+					{/* 成员归属（spec: add-team-collaboration-parity 批次 ⑦）：团队成员发起的
+					    审批汇集到主视图弹窗时，用户必须知道是谁在请求 —— 复用既有 muted 小字
+					    样式，不引入新的视觉值（DESIGN.md 口径）。 */}
+					{request.fromMember !== undefined && (
+						<span className="permission-tool" title={request.fromTeam === undefined ? "" : `来自团队「${request.fromTeam}」`}>
+							来自成员「{request.fromMember}」
+						</span>
+					)}
 				</div>
 
 				{/* summary 同时当可访问名：它是用户判断批不批的那句话，alertdialog 的名字理应就是它。 */}

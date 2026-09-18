@@ -15,22 +15,27 @@
   「多源深度研究报告工坊」）。
 - 无私有技能（源包没有 `skills/`），故本目录**不含 `skills/`**。
 
-## 与源包的形态差异（重要）
+## 与源包的形态差异
 
-**源包为专家团（team 型，7 agents），本轮按单人设拍平，只取主理人 `research-chief-editor`；
-多 agent 协作待 C11 多代理团队能力落地。**
+**源包为专家团（team 型，主理人 + 6 位成员，源包自带 `agents/`）。**
+2026-09-14 搬入时多代理团队能力未落地，故按单人设拍平；**2026-09-18 已按源包结构补齐成员**
+（spec: fix-team-expert-assets）：
 
-- 未搬的 6 位成员：`research-planner`、`topic-researcher`、`draft-reviewer`、
-  `draft-reviser`、`report-writer`、`report-publisher`。
-- 人设正文仍保留完整的团队协作机制（TeamCreate、按 Agent ID 调度 6 位成员、5 阶段
-  Workflow A/B/C、研究参数卡、成员超时降级表等）。在本仓库多代理团队能力落地前，
-  这些内容只能作单人设参考，无法真正执行跨成员调度。
-- 拍平阶段 frontmatter 不含源包的 `teamInfo` / `members` 字段。
+- 成员人格：6 位成员落到本目录 `agents/`——`research-planner`、`topic-researcher`、
+  `draft-reviewer`、`draft-reviser`、`report-writer`、`report-publisher`（Agent ID 即文件名）。
+  人设按源包成员职责 + 本专家各 Phase 的下发任务**重写**，不是逐字节搬用。
+- 调度语义：源包正文指挥 `TeamCreate` + `Agent(name, subagent_type)`，本产品没有这两个工具，
+  照搬会导致建团必然失败（工具不存在、成员人格也不在 agents 库）。已改写为
+  `team_create`（`name` 填花名、`agent` 填 Agent ID）/ `team_send` / `team_status` /
+  `team_delete`，并写明产出自动回投、并行副本必须唯一 `name`。
+- 成员超时表改为「软预期」注脚：本运行的成员是长会话，没有硬性 maxTurns 开关。
+- frontmatter 加 `expertType: team`（专家市场「专家团」页按它筛选）。
+- **未改**：5 阶段 Workflow A/B/C、研究参数卡、6 维审稿标准、质量规则、铁律与禁止行为。
 
 ## 待定制项
 
-- 待 C11 多代理团队能力落地后，按源包 7 agents 结构恢复成员，或把人设正文中的团队协作
-  机制改写到与 pi 子代理/团队能力匹配。
+- 并行加速（多副本）依赖成员名唯一，副本命名规则已写进正文；若后续支持成员级模型选择，
+  可给 `topic-researcher` 单独配便宜模型（它跑的轮次最多）。
 - 正文为中文，未与现有 `resources/skills/` 全局技能做过交集裁剪。
 
 ## 合规说明

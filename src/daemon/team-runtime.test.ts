@@ -114,3 +114,48 @@ describe("resolveMemberSessions 与解散", () => {
 		expect(new TeamRegistry().disband(LEADER)).toEqual([]);
 	});
 });
+
+describe("已关闭成员不再接收消息（spec: add-team-collaboration-parity 批次 ②）", () => {
+	it("resolveMemberSessions 对 closed 成员响亮拒绝（它的宿主已 dispose）", () => {
+		const registry = registryWithTeam();
+		registry.markSpawned(LEADER, "scout-a", "sid-a");
+		registry.markStatus(LEADER, "scout-a", "closed", "已收尾");
+
+		expect(() => registry.resolveMemberSessions(LEADER, ["scout-a"])).toThrow(/已关闭、不再接收消息/);
+	});
+
+	it("closing 期间仍可收消息（允许追加一句「就收到这里」）", () => {
+		const registry = registryWithTeam();
+		registry.markSpawned(LEADER, "scout-a", "sid-a");
+		registry.markStatus(LEADER, "scout-a", "closing", "已请求收尾");
+
+		expect(registry.resolveMemberSessions(LEADER, ["scout-a"])).toEqual(["sid-a"]);
+	});
+});
+
+describe("计划裁决（spec: add-team-collaboration-parity 批次 ④）", () => {
+	it("等候审 / 批准 / 驳回三值都记进成员状态", () => {
+		const registry = registryWithTeam();
+		registry.markSpawned(LEADER, "scout-a", "sid-a");
+		expect(registry.requireMember(LEADER, "scout-a").planStatus).toBe("none");
+		registry.reviewPlan(LEADER, "scout-a", "awaiting");
+		expect(registry.requireMember(LEADER, "scout-a").planStatus).toBe("awaiting");
+		registry.reviewPlan(LEADER, "scout-a", "reject", "缺来源");
+		expect(registry.requireMember(LEADER, "scout-a")).toMatchObject({ planStatus: "rejected", planFeedback: "缺来源" });
+		registry.reviewPlan(LEADER, "scout-a", "approve");
+		expect(registry.requireMember(LEADER, "scout-a").planStatus).toBe("approved");
+	});
+
+	it("驳回必须给反馈（没有反馈的驳回等于让成员重猜）", () => {
+		const registry = registryWithTeam();
+		registry.markSpawned(LEADER, "scout-a", "sid-a");
+		expect(() => registry.reviewPlan(LEADER, "scout-a", "reject")).toThrow(/必须给 feedback/);
+		expect(() => registry.reviewPlan(LEADER, "scout-a", "reject", "   ")).toThrow(/必须给 feedback/);
+	});
+
+
+	it("未知成员 → 抛错", () => {
+		const registry = registryWithTeam();
+		expect(() => registry.reviewPlan(LEADER, "ghost", "approve")).toThrow(/没有成员「ghost」/);
+	});
+});

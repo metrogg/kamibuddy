@@ -39,6 +39,12 @@ export interface MemberSpawnInput {
 	readonly memberName: string;
 	/** 初始任务。 */
 	readonly task: string;
+	/**
+	 * 成员级模型覆盖（spec: add-team-collaboration-parity 批次 ⑥）：
+	 * `providerId/modelId`。缺省 undefined 时按「agent 定义的 model → 领导当前模型」
+	 * 回落（见 spawnMember 的解析链）。
+	 */
+	readonly modelKey?: string;
 }
 
 export interface MemberHooks {
@@ -66,15 +72,27 @@ export interface MemberRunnerDeps {
 	readonly isTempCwd: (cwd: string) => boolean;
 	readonly isOwnWorkspace: (dir: string) => boolean;
 	readonly getWebSearchConfig: () => import("../core/web-search.ts").WebSearchConfig | undefined;
-	/** 用户在场审批通道（与主会话/子代理同一 requestApproval）。 */
+	/**
+	 * 用户在场审批通道（与主会话/子代理同一 requestApproval）。
+	 *
+	 * 第二参是成员自己的会话 id（spec: add-team-collaboration-parity 批次 ⑦）：
+	 * 宿主建成前为空串（零星事件没有审批可发），建成后由本模块回填 ——
+	 * daemon 侧据此反查团队注册表，把「哪个成员在请求」标注到审批卡上。
+	 */
 	readonly requestApproval: (
 		request: Omit<PermissionRequest, "id" | "sessionId">,
+		memberSessionId: string,
 	) => Promise<PermissionResponse>;
 }
 
 export interface MemberHandle {
 	/** 成员会话 id（宿主建好即有真值）。 */
 	readonly sessionId: string;
+	/**
+	 * 实际使用的模型（`providerId/modelId`）：解析链的最终结果，
+	 * 由接线层回填注册表供 `team_status` 展示（批次 ⑥）。
+	 */
+	readonly modelKey: string;
 	/** 向成员投一条消息（followUp 语义：idle 唤醒 / running 排队）。 */
 	prompt: (text: string) => Promise<void>;
 	/** 解散时中止成员当前轮。 */
@@ -93,12 +111,26 @@ export async function spawnMember(
 ): Promise<MemberHandle> {
 	const { agent, cwd, memberName } = input;
 	const catalog = await deps.getCatalog();
-	const modelKey = deps.getModelKey();
+	/*
+	 * 模型解析链（spec: add-team-collaboration-parity 批次 ⑥，对齐 agents.ts 的既有立场）：
+	 *   成员显式指定（team_create 的 members[].model）
+	 *   → agent 定义里的 model（人格自带的偏好）
+	 *   → 领导当前模型（现状行为）。
+	 *
+	 * 前两级不可用时**响亮报错**、绝不静默回落：回落会让「调研用便宜模型」的意图
+	 * 悄悄变成主模型费率 —— 那正是 agents.ts 文件头立过的规矩（子代理同款）。
+	 */
+	const explicit = input.modelKey ?? agent.model;
+	const modelKey = explicit ?? deps.getModelKey();
 	if (modelKey === undefined) {
 		throw new Error("还没有选择模型，请先在设置里配置 API Key 并选择模型");
 	}
 	if (!catalog.isUsable(modelKey)) {
-		throw new Error("选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型");
+		throw new Error(
+			explicit === undefined
+				? "选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型"
+				: `成员「${memberName}」指定的模型不可用：${explicit}（请确认它的服务商已配置 API Key）`,
+		);
 	}
 
 	let turns = 0;
@@ -146,7 +178,9 @@ export async function spawnMember(
 				isTempCwd: deps.isTempCwd,
 				isOwnWorkspace: deps.isOwnWorkspace,
 				getWebSearchConfig: deps.getWebSearchConfig,
-				requestApproval: deps.requestApproval,
+				// 审批带成员会话归属（批次 ⑦）：装配层只认单参，包一层把成员自己的
+				// sessionId 补上（宿主建成前是空串，daemon 侧按「无归属」处理）。
+				requestApproval: (request) => deps.requestApproval(request, sessionIdRef.current),
 			},
 			agent,
 			cwd,
@@ -183,6 +217,7 @@ export async function spawnMember(
 
 	return {
 		sessionId,
+		modelKey,
 		prompt: (text: string) => host.prompt(text, "followUp"),
 		abort: () => host.abort(),
 		dispose: () => host.dispose(),

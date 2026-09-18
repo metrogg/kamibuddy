@@ -102,6 +102,13 @@ interface ComposerProps {
 	readonly trailing?: React.ReactNode;
 	/** 见 ComposerHandle：父组件拿它触发「添加文件」选择框。 */
 	readonly ref?: React.Ref<ComposerHandle>;
+	/**
+	 * 成员焦点导航（spec: add-team-ux-parity 批次 ①）：**空输入框**按 ↓ 时回调。
+	 *
+	 * undefined = 当前没有可切换的团队成员（或调用方不关心），↓ 保持原生行为。
+	 * 有团队时由调用方传入：↓ 在成员与主理人视图之间轮转（WorkBuddy 同款键盘路径）。
+	 */
+	readonly onCycleMember?: () => void;
 }
 
 /**
@@ -161,6 +168,7 @@ export function Composer({
 	children,
 	trailing,
 	ref,
+	onCycleMember,
 }: ComposerProps): React.JSX.Element {
 	// 草稿按 draftKey 存进模块级 Map（input-history.ts）：视图切换卸载组件后
 	// 切回仍能还原。挂载时先还原一次，之后 key 变化由下方 effect 接续。
@@ -306,6 +314,20 @@ export function Composer({
 				requestStop();
 			}
 			return;
+		}
+		/*
+		 * 空输入框按 ↓ 切成员（spec: add-team-ux-parity 批次 ①，WorkBuddy 的成员焦点导航）。
+		 *
+		 * 三条前提缺一不可：①有团队（onCycleMember 传了）；②框是空的（非空时 ↓ 是光标
+		 * 移动，抢走它会毁掉正常编辑）；③无修饰键（Alt+↓ 是历史导航，紧接着的守卫要它）。
+		 * IME 候选期间不拦（方向键归输入法）。
+		 */
+		if (onCycleMember !== undefined && e.key === "ArrowDown" && !e.altKey && !e.ctrlKey && !e.metaKey) {
+			if (draft.trim() === "" && !ime.shouldSwallowNow()) {
+				e.preventDefault();
+				onCycleMember();
+				return;
+			}
 		}
 		if (e.key !== "Enter" && !(e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown"))) return;
 		// IME 选词期间 Enter 是确认候选、方向键是移动候选条，都归输入法，守卫一律吞。

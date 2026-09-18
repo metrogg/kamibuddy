@@ -9210,3 +9210,162 @@ textarea:focus-visible {
 *:hover::-webkit-scrollbar-thumb {
 	background: color-mix(in srgb, var(--text) 26%, transparent);
 }
+
+/* ── 团队常驻状态栏（spec: add-team-ux-parity 批次 ②）──────────────────
+   位置：输入区上方（WorkBuddy status bar 同位）。团队在就常驻，
+   与消息流里的成员卡分工：卡片是一次性记录，这里是实时汇总。 */
+.team-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	margin-bottom: var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-raised);
+	font-size: var(--text-meta);
+}
+.team-bar-lead {
+	color: var(--text-faint);
+	white-space: nowrap;
+	padding-left: var(--space-1);
+}
+.team-bar-members {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	flex: 1;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.team-bar-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-2);
+	border: 1px solid transparent;
+	border-radius: var(--radius-full);
+	background: var(--bg-chip);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	white-space: nowrap;
+	cursor: pointer;
+}
+.team-bar-chip:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+.team-bar-chip.active {
+	border-color: var(--primary);
+	color: var(--text);
+}
+.team-bar-chip:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+.team-bar-mark.st-running {
+	color: var(--primary);
+}
+.team-bar-mark.st-done {
+	color: var(--ok);
+}
+.team-bar-mark.st-failed {
+	color: var(--danger);
+}
+.team-bar-mark.st-queued {
+	color: var(--text-faint);
+}
+.team-bar-name {
+	color: var(--text);
+}
+.team-bar-count {
+	color: var(--text-faint);
+}
+.team-bar-close {
+	border: none;
+	background: none;
+	color: var(--text-faint);
+	cursor: pointer;
+	font-size: var(--text-list);
+	padding: 0 var(--space-1);
+	line-height: 1;
+}
+.team-bar-close:hover {
+	color: var(--text);
+}
+
+/* ── 团队任务面板（spec: add-team-ux-parity 批次 ③，Ctrl+T）────────────
+   与状态栏同位互斥（输入区上方）：看人在哪干活 vs 看活分到哪一步。 */
+.team-tasks {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--bg-raised);
+	margin-bottom: var(--space-2);
+	font-size: var(--text-meta);
+}
+.team-tasks-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	border-bottom: 1px solid var(--border);
+}
+.team-tasks-title {
+	color: var(--text);
+}
+.team-tasks-hint {
+	color: var(--text-faint);
+	flex: 1;
+}
+.team-tasks-empty {
+	margin: 0;
+	padding: var(--space-2) var(--space-3);
+	color: var(--text-faint);
+}
+.team-tasks-body {
+	max-height: 240px;
+	overflow-y: auto;
+	padding: var(--space-1) var(--space-2) var(--space-2);
+}
+.team-tasks-group + .team-tasks-group {
+	margin-top: var(--space-2);
+}
+.team-tasks-group-head {
+	color: var(--text-faint);
+	padding: var(--space-1) 0;
+}
+.team-tasks-group-head.st-ready {
+	color: var(--primary);
+}
+.team-tasks-group-head.st-completed {
+	color: var(--ok);
+}
+.team-tasks-group-head.st-cancelled {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+.team-tasks-row {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--radius-sm);
+}
+.team-tasks-row:hover {
+	background: var(--bg-hover);
+}
+.team-tasks-id {
+	color: var(--text-faint);
+	font-family: var(--font-mono);
+}
+.team-tasks-name {
+	color: var(--text);
+	flex: 1;
+}
+.team-tasks-owner {
+	color: var(--primary);
+}
+.team-tasks-deps,
+.team-tasks-result {
+	color: var(--text-faint);
+}

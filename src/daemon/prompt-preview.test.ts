@@ -78,6 +78,8 @@ const EXPERTS: readonly ExpertDefinition[] = [
 		quickPrompts: ["写周报", "写月报", "写述职"],
 		tags: ["汇报", "周报", "职场"],
 		source: "builtin",
+		expertType: "expert",
+		agents: [],
 		body: "你是工作汇报专家，先问清受众再搭结构。",
 	},
 ];
@@ -278,9 +280,11 @@ describe("专家私有技能进预览技能段（daemon 需把专家的 skillsDi
 			displayDescription: "从财务数据到估值结论出研报",
 			quickPrompts: ["出一份研报", "做同业对比", "给个估值结论"],
 			tags: ["研报", "估值", "券商"],
-			source: "builtin",
-			// 专家私有技能目录：daemon 绑定该专家时应把它追加进 listSkills 的加载路径。
-			skillsDir: "/experts/stock-research-report/skills",
+		source: "builtin",
+		expertType: "expert",
+		agents: [],
+		// 专家私有技能目录：daemon 绑定该专家时应把它追加进 listSkills 的加载路径。
+		skillsDir: "/experts/stock-research-report/skills",
 			body: "你是证券研报专家，结论必须能追溯到数据。",
 		},
 	];

@@ -38,6 +38,7 @@ const bridge: KamiBridge = {
 		ipcRenderer.invoke(INVOKE.setInteraction, interactionId),
 	setExpert: (expertId) => ipcRenderer.invoke(INVOKE.setExpert, expertId),
 	listExperts: () => ipcRenderer.invoke(INVOKE.listExperts),
+	getTeamTasks: () => ipcRenderer.invoke(INVOKE.getTeamTasks),
 	setModel: (modelId) => ipcRenderer.invoke(INVOKE.setModel, modelId),
 	setThinkingLevel: (level) =>
 		ipcRenderer.invoke(INVOKE.setThinkingLevel, level),

@@ -40,7 +40,13 @@ declareReadOnlyTools([
 	"team_create",
 	"team_send",
 	"team_status",
+	"team_shutdown",
+	"team_delegate_mode",
+	"team_plan_review",
 	"team_delete",
+	"team_task_create",
+	"team_task_update",
+	"team_task_list",
 	"questionnaire",
 	"read_me",
 	"show_widget",
@@ -569,12 +575,25 @@ describe("todo_write / task（编排类，无本地副作用）", () => {
 
 describe("team 工具（团队编排，无本地副作用）", () => {
 	it("三档都放行 —— 不落 fail-safe 拒绝（2026-09-16 用户实测回归：不询问策略下 team_create 被拒）", () => {
-		// team 四件套只做编排与注册表操作：成员是独立 SessionHost，敏感操作
-		// 发生在成员内部，由成员自带的权限门（与子代理同一套装配）逐次判定；
-		// team_delete 只中止自己建的成员会话，不碰用户数据。
+		// team 四件套 + 任务板三件套只做编排与注册表/任务板操作：成员是独立
+		// SessionHost，敏感操作发生在成员内部，由成员自带的权限门（与子代理同一套
+		// 装配）逐次判定；team_delete 只中止自己建的成员会话，不碰用户数据；
+		// team_task_* 只写内存里的团队账本，无文件副作用。
 		// 与 todo_write 的 2026-09-11 事故同型：新工具不登记 → 未知工具落
 		// fail-safe，「不询问」策略直接拒绝，整条功能链路不可用。
-		for (const toolName of ["team_create", "team_send", "team_status", "team_delete"]) {
+		const teamTools = [
+			"team_create",
+			"team_send",
+			"team_status",
+			"team_shutdown",
+			"team_delegate_mode",
+			"team_plan_review",
+			"team_delete",
+			"team_task_create",
+			"team_task_update",
+			"team_task_list",
+		];
+		for (const toolName of teamTools) {
 			for (const settings of [undefined, READONLY, FULL]) {
 				expect(decide(facts({ toolName }), PATHS, CWD, settings)).toEqual({
 					kind: "allow",

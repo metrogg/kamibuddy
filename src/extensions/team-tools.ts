@@ -1,6 +1,8 @@
 /**
- * 团队工具四件套（spec: add-team-foundations 批 5）：team_create / team_send /
- * team_status / team_delete。
+ * 团队工具七件套（spec: add-team-foundations 批 5；team_shutdown / team_delegate_mode /
+ * team_plan_review 见 spec: add-team-collaboration-parity 批次 ②③④）：
+ * team_create / team_send / team_status / team_shutdown / team_plan_review /
+ * team_delegate_mode / team_delete。
  *
  * 与 task-tool 同取向：编排与回传格式在本文件，执行本体（成员 spawn、路由、
  * 注册表）由 daemon 装配时注入 —— 脱离宿主可单测。
@@ -11,6 +13,8 @@
  *   - **fire-and-forget**：team_create 返回时成员已 spawn ack（会话 id 已定、
  *     初始任务已开跑），不等成员完成；成员产出经完成回投（deliverSessionMessage）
  *     自动回到领导会话；
+ *   - **单成员可优雅关闭**：team_shutdown 只针对一个成员（发收尾请求 → 它交回
+ *     报告后关闭；force 走 abort）。整队中止仍然只有 team_delete；
  *   - **@寻址**：team_send 的 to 是成员名或 "@all"（大小写不敏感，WorkBuddy
  *     同款），未知成员名响亮报错；
  *   - **深度锁**：成员装配不注册本组工具（member-runner 复用的
@@ -22,11 +26,12 @@
  * kind 盖 "team" —— 主会话活动卡按团队成员分组呈现，渲染层零改动。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 四个工具（team_create / team_send / team_status / team_delete）的名称、
- * description 与参数 schema；返回的成员 spawn 计划、成员名单与状态摘要、以及错误文案
- * （未知成员名 / 已有团队 / 成员不许再委派）。成员产出经完成回投作为新消息回到领导会话。
- * Token effect: 定义常驻（**四条**定义，比单工具多三份）；返回是团队规模与状态的摘要文本。
- * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时四个工具**根本不注册** ——
+ * What the model sees: 六个工具（team_create / team_send / team_status / team_shutdown /
+ * team_delegate_mode / team_delete）的名称、description 与参数 schema；返回的成员 spawn 计划、
+ * 成员名单与状态摘要、以及错误文案（未知成员名 / 已有团队 / 成员不许再委派 /
+ * 已关闭成员不再收消息）。成员产出经完成回投作为新消息回到领导会话。
+ * Token effect: 定义常驻（**七条**定义）；返回是团队规模与状态的摘要文本。
+ * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时七个工具**根本不注册** ——
  * 工具集本身就是前缀的一部分，开关在会话间翻转会让改动点之后的整段前缀（含历史）失配
  * （判据同 mcp-client）。结果追加在历史之后，不动既有前缀。
  */
@@ -42,6 +47,11 @@ export interface TeamMemberPlan {
 	readonly name: string;
 	readonly agentName: string;
 	readonly task: string;
+	/**
+	 * 成员级模型覆盖（spec: add-team-collaboration-parity 批次 ⑥）：
+	 * `providerId/modelId`。缺省 = 用 agent 定义的 model，再缺省 = 领导当前模型。
+	 */
+	readonly model?: string;
 }
 
 export interface TeamStartPlan {
@@ -56,6 +66,13 @@ export interface TeamMemberState {
 	readonly status: string;
 	readonly turns: number;
 	readonly lastActivity: string;
+	/**
+	 * 计划裁决状态（spec: add-team-collaboration-parity 批次 ④）：
+	 * `none` 未涉及 / `awaiting` 已交计划待审 / `approved` / `rejected`。
+	 */
+	readonly planStatus?: string;
+	/** 该成员实际使用的模型（`providerId/modelId`）；未记录时缺省。 */
+	readonly model?: string;
 }
 
 export interface MemberSpawnHooks {
@@ -87,6 +104,27 @@ export interface TeamToolDeps {
 	readonly sendToMembers: (to: string, text: string) => Promise<readonly string[]>;
 	/** 当前团队状态；无团队 → undefined。 */
 	readonly getTeamState: () => { name: string; members: readonly TeamMemberState[] } | undefined;
+	/**
+	 * 单成员优雅关闭（spec: add-team-collaboration-parity 批次 ②）：
+	 * force=false → 投收尾请求（成员交回报告后关闭）；force=true → 直接中止。
+	 * 未知成员名 / 未启动 / 已关闭 → throw；返回给模型看的回执文案。
+	 */
+	readonly shutdownMember: (to: string, reason: string | undefined, force: boolean) => Promise<string>;
+	/**
+	 * 开关委派模式（spec: add-team-collaboration-parity 批次 ③）：开启后领导工具面
+	 * 收窄为协调类。返回给模型看的回执（说明从下一轮起生效）。
+	 */
+	readonly setDelegateMode: (enabled: boolean) => Promise<string>;
+	/**
+	 * 记录计划裁决并唤醒成员（spec: add-team-collaboration-parity 批次 ④）：
+	 * `awaiting` 只记状态；`approve` / `reject` 记状态后**自动 team_send**
+	 * （批准 → 「按计划开工」；驳回 → 带上 feedback 让它改）。返回给模型看的回执。
+	 */
+	readonly reviewPlan: (
+		member: string,
+		decision: "awaiting" | "approve" | "reject",
+		feedback: string | undefined,
+	) => Promise<string>;
 	/** 解散：中止 + 清理全部成员与注册表。无团队 → no-op。 */
 	readonly closeTeam: () => Promise<void>;
 }
@@ -95,6 +133,9 @@ const TeamMemberItem = Type.Object({
 	name: Type.String({ minLength: 1, description: "成员名（@寻址键，团队内唯一）。" }),
 	agent: Type.String({ minLength: 1, description: "agents 库里的定义名（人格与工具面来源）。" }),
 	task: Type.String({ minLength: 1, description: "初始任务（自包含：背景、文件路径、验收要求）。" }),
+	model: Type.Optional(
+		Type.String({ description: "该成员用的模型（providerId/modelId）；缺省跟随你当前的模型。" }),
+	),
 });
 
 /** 投影 details 的形状（契约键即 shared/child-agents 的 CHILD_AGENTS_DETAILS_KEY）。 */
@@ -146,7 +187,12 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			async execute(_toolCallId, params, _signal, onUpdate): Promise<ToolResult> {
 				const plan: TeamStartPlan = {
 					name: params.name,
-					members: params.members.map((m) => ({ name: m.name, agentName: m.agent, task: m.task })),
+					members: params.members.map((m) => ({
+						name: m.name,
+						agentName: m.agent,
+						task: m.task,
+						...(m.model === undefined ? {} : { model: m.model }),
+					})),
 				};
 				const agents = deps.listAgents();
 				const projection = new ChildAgentsProjection(
@@ -238,13 +284,80 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 						details: emptyDetails,
 					};
 				}
-				const lines = state.members.map(
-					(m) => `- ${m.name}（${m.agentName}）：${m.status}，已完成 ${m.turns} 轮${m.lastActivity === "" ? "" : `，最近：${m.lastActivity}`}`,
-				);
+				const lines = state.members.map((m) => {
+					const plan = m.planStatus === undefined || m.planStatus === "none" ? "" : `，计划：${m.planStatus}`;
+					const model = m.model === undefined || m.model === "" ? "" : `，模型：${m.model}`;
+					const recent = m.lastActivity === "" ? "" : `，最近：${m.lastActivity}`;
+					return `- ${m.name}（${m.agentName}）：${m.status}，已完成 ${m.turns} 轮${plan}${model}${recent}`;
+				});
 				return {
 					content: [{ type: "text" as const, text: `团队「${state.name}」：\n${lines.join("\n")}` }],
 					details: emptyDetails,
 				};
+			},
+		});
+
+		pi.registerTool({
+			name: "team_plan_review",
+			label: "审计划",
+			description:
+				"裁决成员交回的计划：`awaiting` 只把状态记为待审（你读了它的计划但还没决定）；" +
+				"`approve` 批准并自动让它开工；`reject` 驳回并自动把 feedback 发给它改计划（**驳回必须给反馈**）。" +
+				"用法：在初始任务里要求成员「先交计划再动手」，它把计划作为一轮产出自带回投，" +
+				"你审阅后用本工具裁决。计划状态可在 team_status 里看到。",
+			promptSnippet: "team_plan_review: 裁决成员交回的计划（批准即开工 / 驳回必带反馈）",
+			promptGuidelines: [
+				"只在初始任务里明确要求过「先交计划」时才走这条链路——小任务交计划纯属多一轮往返。",
+				"驳回要写清楚改哪一点（缺什么证据、范围该收在哪），不要只说「再想想」。",
+			],
+			parameters: Type.Object({
+				member: Type.String({ minLength: 1, description: "成员名。" }),
+				decision: Type.Union([Type.Literal("awaiting"), Type.Literal("approve"), Type.Literal("reject")]),
+				feedback: Type.Optional(Type.String({ description: "驳回时必须给的修改要求（批准时可留一句批注）。" })),
+			}),
+			async execute(_toolCallId, params): Promise<ToolResult> {
+				const text = await deps.reviewPlan(params.member, params.decision, params.feedback);
+				return { content: [{ type: "text" as const, text }], details: emptyDetails };
+			},
+		});
+
+		pi.registerTool({
+			name: "team_delegate_mode",
+			label: "委派模式",
+			description:
+				"开关委派模式：开启后你（领导）**只协调不下场**——保留团队、任务、提问与交付工具，" +
+				"失去读写文件、执行命令、检索与再委派的能力，所有实际工作必须由成员完成。" +
+				"适合「这次我只做编排与裁决」的任务；想自己下场就先关掉它。只影响本会话（不写设置）。",
+			promptSnippet: "team_delegate_mode: 开启后领导工具面收窄为团队/任务/交付类，只协调不下场",
+			parameters: Type.Object({
+				enabled: Type.Boolean({ description: "true 开、false 关。" }),
+				reason: Type.Optional(Type.String({ description: "开启/关闭理由（写进回执，便于用户理解这次策略）。" })),
+			}),
+			async execute(_toolCallId, params): Promise<ToolResult> {
+				const text = await deps.setDelegateMode(params.enabled);
+				return { content: [{ type: "text" as const, text }], details: emptyDetails };
+			},
+		});
+
+		pi.registerTool({
+			name: "team_shutdown",
+			label: "收尾成员",
+			description:
+				"让**单个**成员收尾退出：它会把手上的工作整理成最终报告交回，然后结束。" +
+				"适合收掉跑偏的成员、或某个维度已经问完不再需要它。与 team_delete 的区别：" +
+				"后者中止**整个**团队。成员交回报告后状态变 closed，不能再给它发消息；" +
+				"若它长时间不收尾，可用 force 强制中止（当前轮产出会丢弃）。",
+			promptSnippet: "team_shutdown: 让单个成员收尾退出（交回报告后关闭），区别于整队 team_delete",
+			parameters: Type.Object({
+				to: Type.String({ minLength: 1, description: "成员名（单成员语义，不支持 \"@all\"；整队请用 team_delete）。" }),
+				reason: Type.Optional(
+					Type.String({ description: "收尾原因（写进给成员的消息里，让它知道该收在哪）。" }),
+				),
+				force: Type.Optional(Type.Boolean({ description: "true = 直接中止，不等它交报告。" })),
+			}),
+			async execute(_toolCallId, params): Promise<ToolResult> {
+				const text = await deps.shutdownMember(params.to, params.reason, params.force === true);
+				return { content: [{ type: "text" as const, text }], details: emptyDetails };
 			},
 		});
 
