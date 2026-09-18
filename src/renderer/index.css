@@ -948,6 +948,56 @@ textarea:focus-visible {
 	color: var(--text);
 }
 
+/* 胶囊的定位上下文：下钻面板挂在这一层的下沿。 */
+.capability-zone {
+	position: relative;
+	width: 100%;
+}
+
+/* 选中的胶囊（同时是下方案例的筛选条件）：与 .mode-tab.active 同款 ——
+   WorkBuddy 的 pill 选中态是 75% 黑而不是主按钮的 90%，字重升 600。 */
+.capability-chip.active {
+	background: var(--primary-active);
+	color: var(--primary-text);
+	font-weight: 600;
+}
+
+.capability-chip.active:hover {
+	background: var(--primary-hover);
+}
+
+/* 胶囊下钻面板（WorkBuddy 的三级语义：胶囊 → 提示词列表 → 填进输入框待编辑）。 */
+.chip-panel {
+	top: calc(100% + var(--space-2));
+	left: 0;
+	z-index: var(--z-panel);
+	/* 提示词很长：面板不跟着最长那条无限撑宽，超长单行省略、原文挂 title。 */
+	width: min(560px, 100%);
+	max-height: 320px;
+	overflow-y: auto;
+	padding: var(--space-2);
+}
+
+.chip-panel-item {
+	display: block;
+	width: 100%;
+	/* 列表项内边距：与菜单项同档（紧凑控件）。 */
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--radius-sm);
+	font-size: var(--text-list);
+	line-height: 1.5;
+	color: var(--text-secondary);
+	text-align: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chip-panel-item:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 /* 输入卡与吉祥物同处一个定位上下文，吉祥物浮在卡片右上。 */
 .composer-zone {
 	position: relative;
@@ -1739,7 +1789,11 @@ textarea:focus-visible {
 
 .case-grid {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	/* 照抄 WorkBuddy 的 .wb-related-playbooks__row：必须是 minmax(0, 1fr) 而不是 1fr。
+	   封面是远程实图，它的固有宽度（上千像素）会算进 grid 项的自动最小尺寸
+	   （min-width:auto），把列顶宽 —— 四列就变成「谁的图宽谁列宽」，卡片不再等宽
+	   （实测踩过：修好封面比例后列宽仍不齐）。 */
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	/* WB __row：4 列 gap 8（原我们 12）。 */
 	gap: var(--space-3);
 	justify-content: start;
@@ -1748,7 +1802,10 @@ textarea:focus-visible {
 .case-card {
 	display: flex;
 	flex-direction: column;
-	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。 */
+	/* WB __card：无边框、透明底、gap 8、标题居中（原我们带边白卡 + 左对齐）。
+	   width/min-width 也同 WB：min-width:0 是上面 minmax(0,1fr) 的配套保险。 */
+	width: 100%;
+	min-width: 0;
 	gap: var(--space-3);
 	border: 0;
 	background: transparent;
@@ -1757,20 +1814,41 @@ textarea:focus-visible {
 }
 
 .case-cover {
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	/* 封面盒子的几何照抄 WorkBuddy 的 .wb-related-playbooks__card-cover：
+	   position:relative + display:block + aspect-ratio + overflow:hidden。
+	   必须 block 且 overflow:hidden —— 写成 flex、或漏掉 overflow，aspect-ratio
+	   就只是「建议值」：内容（高长图）会把盒子撑高，四张卡各高各的（实测踩过）。
+	   图标兜底改为绝对定位居中（.case-cover-fallback），不再靠 flex。 */
+	position: relative;
+	display: block;
 	width: 100%;
-	/* WB __card-cover：16/9（原我们 16/10）、圆角 16、0.5px 描边。
-	   描边色由 WB 的 8% 黑收编到 --border（10% 黑，肉眼无差，且暗色下可用）。 */
 	aspect-ratio: 16 / 9;
+	overflow: hidden;
 	border: 0.5px solid var(--border);
 	border-radius: var(--radius-lg);
-	/* 封面 = 体裁语义图标 + 统一单色底：颜色不编码信息（旧 6 组随机 pastel
-	   135° 渐变是全站唯一的 AI slop 特征，已删除），内容类型由图标编码。 */
+	/* 封面 = WorkBuddy 案例库的实图（CDN）；图标 + 统一单色底降级为兜底 ——
+	   远程图加载失败时由 CaseCover 换成图标，底色仍是这一层。 */
 	background: var(--bg-raised);
 	color: var(--text-secondary);
 	transition: background var(--dur-fast) ease;
+}
+
+/* 封面实图铺满封面位，圆角继承容器（图片自身不带圆角会切角溢出）。 */
+.case-cover img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: inherit;
+}
+
+/* 图标兜底：铺满封面位并居中（图片加载失败时显示）。 */
+.case-cover-fallback {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 /* hover 无上浮无阴影（与 task-item 等全站卡片 hover 语言一致）：封面底色加深一档。 */
@@ -1884,6 +1962,13 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	/* 刻度轨要在「没有右侧留白」的窄容器里整块隐藏（见 .turn-nav 的 @container）,
+	   而留白多少取决于内容列宽（--chat-content-width），不是窗口宽 —— 侧栏开合、
+	   右侧面板开合都会改它。容器查询是唯一能按**自身宽度**判定的机制。
+	   contain: layout 的副作用核过：本元素内没有 sticky / fixed 后代，三个浮层
+	   （.turn-nav / .stream-fade / .jump-to-bottom）本来就是 relative 定位基准上的
+	   absolute，语义不变。 */
+	container-type: inline-size;
 }
 
 .stream {
@@ -1999,44 +2084,199 @@ textarea:focus-visible {
    刻度宽 12px 落在 .stream 的 24px 左 padding 区内，不遮消息文字，
    内容区布局不动。容器 pointer-events:none 让左缘选字/滚动条不受干扰，
    只有刻度本身可点。z-index 与 jump-to-bottom 同级（--z-base），低于各弹层。 */
-.turn-rail {
+/* ── 消息刻度轨（TurnNav，移植自 dsh TurnNavigator）───────────────── */
+
+/*
+ * 会话右缘的固定间距刻度梯。与它前身（按内容比例定位的 .turn-rail）的区别见
+ * turn-nav.ts 头注：比例定位会把长轮拉开、短轮挤扁，固定间距让每轮同等权重。
+ *
+ * 几何三值对齐 dsh 原值，只写在这里（TS 侧没有消费方）：
+ *   最大高 420px、上下各留 64px 净空、两端渐隐带 24px。
+ * 定位让开滚动条：.stream 常驻 6px 槽（scrollbar-gutter: stable），
+ * right 取 16px 后轨道右缘离滚动条还有 10px，不会被压在下面。
+ */
+.turn-nav {
 	position: absolute;
-	left: 0;
-	top: 0;
-	bottom: 0;
-	width: 14px;
-	pointer-events: none;
+	top: 50%;
+	right: var(--space-5);
 	z-index: var(--z-base);
-}
-
-.turn-rail-tick {
-	/* button 复位：只留一条小横杠。 */
-	appearance: none;
-	padding: 0;
-	border: none;
-	position: absolute;
-	left: 1px;
-	display: block;
-	width: 12px;
-	height: 2px;
-	border-radius: 1px;
-	background: var(--text-secondary);
-	opacity: 0.45;
-	/* top 按刻度中心给（ratio 是消息顶端），横杠自身高 2px 要上收一半。 */
+	width: 28px;
+	height: min(var(--turn-nav-natural, 0px), calc(100% - 64px), 420px);
 	transform: translateY(-50%);
-	pointer-events: auto;
-	cursor: pointer;
+	/* 轨道高度**不过渡**（dsh 在这里做了 220ms 的高度动画）：DESIGN.md §5.1 禁止
+	   过渡 height，而这里能换来的只是「新开一轮时 10px 的微动」—— 收益不抵一条
+	   受控例外，直接瞬时到位。 */
 }
 
-.turn-rail-tick:hover {
-	opacity: 1;
+/* 轨道自身不是滚动内容的一部分（挂在 .stream-wrap 上），但梯子高过轨道时
+   内部要能滚。滚动条不显示 —— 它只有 28px 宽，多一条槽就只剩刻度了。 */
+.turn-nav-scroller {
+	position: absolute;
+	inset: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: none;
+}
+
+.turn-nav-scroller::-webkit-scrollbar {
+	display: none;
+}
+
+/* 两端渐隐：还有刻度在视野外时才挂，两端都能滚时两条渐变并存。
+   mask 的 #000 不是颜色而是「保留」的占位（mask 只读 alpha），不参与主题。 */
+.turn-nav-scroller.fade-top {
+	mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 100%);
+}
+
+.turn-nav-scroller.fade-bottom {
+	mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+
+.turn-nav-scroller.fade-top.fade-bottom {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent 0,
+		#000 24px,
+		#000 calc(100% - 24px),
+		transparent 100%
+	);
+}
+
+.turn-nav-marks {
+	position: relative;
+	height: var(--turn-nav-natural, 0px);
+}
+
+/* 刻度位：top 直接取行内 --turn-nav-position，值由 turn-nav.ts 的 markTop()
+   算出（序号 × 间距 + 首端留白）。CSS **不再二次加留白** —— 两边各加一次
+   刻度会整体偏下 6px。 */
+.turn-nav-mark-pos {
+	position: absolute;
+	top: var(--turn-nav-position, 0px);
+	right: 0;
+	left: 0;
+	height: 10px;
+	transform: translateY(-50%);
+}
+
+/* 整条轨道负责指针输入，刻度本身只是「键盘可达的落点」：
+   pointer-events: none 让鼠标事件穿透到轨道上（轨道按 clientY 算命中哪一格），
+   于是鼠标不用精确压住 12px 的小横杠。 */
+.turn-nav-mark {
+	position: absolute;
+	inset: 0 0 0 auto;
+	width: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	cursor: pointer;
+	pointer-events: none;
+}
+
+/*
+ * 横杠本体：右对齐，长度随状态变（dsh 的 mark::before 同款）。
+ *
+ * 长度用 **scaleX** 而不是过渡 width：DESIGN.md §5.1 把 width 列在禁止过渡的
+ * 属性里。右端对齐的横杠从右端伸缩，视觉与改宽度等价，且是合成属性。
+ * 基准宽取最长的那档（20px），各样式的长度差异全部由 scaleX 表达。
+ * transform-origin 必须钉右端：默认的中心原点是两头一起长，和 dsh 的
+ * 「从右端向左变长」不是一回事。
+ */
+.turn-nav-mark::before {
+	position: absolute;
+	top: 50%;
+	right: 0;
+	width: 20px;
+	height: 2px;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--text) 22%, transparent);
+	content: "";
+	transform: translateY(-50%) scaleX(0.6);
+	transform-origin: right center;
+	transition: transform var(--dur-fast) var(--ease-standard), background-color var(--dur-fast) var(--ease-standard);
+}
+
+.turn-nav-mark.preview::before {
+	transform: translateY(-50%) scaleX(0.9);
+	background: var(--text-secondary);
+}
+
+.turn-nav-mark.active::before {
+	transform: translateY(-50%) scaleX(1);
 	background: var(--text);
 }
 
-/* 视口顶之上最近的用户消息：激活态用既有成功色，与全局「当前/进行」语义一致。 */
-.turn-rail-tick.active {
-	background: var(--ok);
-	opacity: 1;
+/* 键盘焦点压过其余状态：横杠取 --accent（全轨唯一用它的地方），
+   再加一圈 hairline 环 —— 焦点停在 20px 的横杠上，在密集的刻度梯里要看得见。 */
+.turn-nav-mark:focus-visible::before {
+	transform: translateY(-50%) scaleX(1);
+	background: var(--accent);
+}
+
+.turn-nav-mark:focus-visible {
+	outline: 1px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* 悬停预览卡：挂在轨道层（不随刻度梯滚），位置 = 该刻度位 - 轨道滚动量，
+   再钳到轨道内，避免首尾两格的气泡被裁掉。 */
+.turn-nav-preview {
+	position: absolute;
+	top: clamp(
+		0px,
+		calc(var(--turn-nav-preview-at, 0px) - var(--turn-nav-scroll-top, 0px) - 50px),
+		calc(100% - 100px)
+	);
+	right: calc(100% + var(--space-3));
+	box-sizing: border-box;
+	width: min(300px, 60vw);
+	max-height: 100px;
+	overflow: hidden;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	color: var(--text);
+	background: var(--bg);
+	box-shadow: var(--shadow-md);
+	pointer-events: none;
+	animation: pop-layer-in var(--dur-fast) var(--ease-out);
+}
+
+.turn-nav-preview-prompt,
+.turn-nav-preview-response {
+	display: -webkit-box;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+}
+
+.turn-nav-preview-prompt {
+	font-size: var(--text-list);
+	font-weight: 600;
+	-webkit-line-clamp: 1;
+}
+
+.turn-nav-preview-response {
+	margin-top: var(--space-1);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	-webkit-line-clamp: 3;
+}
+
+/* 窄容器里没有右侧留白可站（内容列按 --chat-content-width 居中，窄窗口下
+   两侧留白归零）——整块隐藏，别压在正文上。920 = 832 内容列 + 2×44 留白。 */
+@container (max-width: 920px) {
+	.turn-nav {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.turn-nav-mark::before,
+	.turn-nav-preview {
+		transition: none;
+		animation: none;
+	}
 }
 
 .stream>* {

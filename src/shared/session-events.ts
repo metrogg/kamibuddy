@@ -15,6 +15,7 @@ import type { SessionStatCard, TokenUsage } from "./observability.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 import type { ArtifactRef, FileChange, PresentedFile } from "./artifacts.ts";
 import type { ImagePart } from "./image.ts";
+import type { WelcomePresets } from "./welcome.ts";
 import type { WorktreeInfo } from "./worktree.ts";
 
 /**
@@ -724,6 +725,12 @@ export interface SessionSnapshot {
 	readonly availableScenes: readonly ModeDescriptor[];
 	/** 可选交互模式，供对话页切换器渲染。 */
 	readonly availableModes: readonly ModeDescriptor[];
+	/**
+	 * 首页预设（能力胶囊 + 最佳实践案例）。与场景/模式清单同性质：静态资源，
+	 * 不随会话变化，daemon 装配时一并带上。缺省 = 这份快照没带（如从事件流
+	 * 拼出的桶种子），renderer 按「没有预设」处理。
+	 */
+	readonly welcome?: WelcomePresets;
 	/** 最近的上下文用量明细。还没有过带用量的响应时为 undefined。 */
 	readonly usageDetail?: ContextUsageDetail;
 	/**

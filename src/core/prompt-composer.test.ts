@@ -626,21 +626,25 @@ describe("会话技能路径（专家私有技能预加载）", () => {
 		writeSkill(join(globalSkillsDir, "meeting-notes"), "meeting-notes");
 		writeSkill(join(expertSkillsDir, "dcf-model-builder"), "dcf-model-builder");
 
-		const bound = await formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir, expertSkillsDir)));
+		const bound = await formatSkillsSection(loadDescriptors(sessionSkillPaths([globalSkillsDir], expertSkillsDir)));
 		expect(bound).toContain("meeting-notes");
 		expect(bound).toContain("dcf-model-builder");
 
-		const unbound = await formatSkillsSection(loadDescriptors(sessionSkillPaths(globalSkillsDir)));
+		const unbound = await formatSkillsSection(loadDescriptors(sessionSkillPaths([globalSkillsDir])));
 		expect(unbound).toContain("meeting-notes");
 		expect(unbound).not.toContain("dcf-model-builder");
 	});
 
-	it("路径顺序：全局在前、专家私有在后（pi 先注册者胜出，全局优先）", () => {
-		expect(sessionSkillPaths("/resources/skills", "/experts/x/skills")).toEqual([
+	it("路径顺序：随包技能根在前、专家私有在后（pi 先注册者胜出，随包优先）", () => {
+		expect(sessionSkillPaths(["/resources/skills", "/resources/plugins"], "/experts/x/skills")).toEqual([
 			"/resources/skills",
+			"/resources/plugins",
 			"/experts/x/skills",
 		]);
-		expect(sessionSkillPaths("/resources/skills")).toEqual(["/resources/skills"]);
+		expect(sessionSkillPaths(["/resources/skills", "/resources/plugins"])).toEqual([
+			"/resources/skills",
+			"/resources/plugins",
+		]);
 	});
 });
 

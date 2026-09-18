@@ -78,11 +78,11 @@ import { parseTodoArgs } from "./todo-parse.ts";
 import { parseSources } from "./source-parse.ts";
 import { splitSkillBlocks } from "../shared/skill-block.ts";
 import type { SkillDescriptor } from "./prompt-composer.ts";
-import { getConfigDir, getResourcesDir, getSessionsDir } from "./config-paths.ts";
+import { getBuiltinSkillDirs, getConfigDir, getSessionsDir } from "./config-paths.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
 import { parseModelKey, toModelKey } from "./model-catalog.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 /**
  * 为什么 pi 的运行时值不再静态导入（勿改回去）：pi 整包实测热态 1809ms
@@ -689,13 +689,15 @@ export class SessionHost {
 		const settingsManager = SettingsManager.create(cwd, agentDir);
 
 		// 扩展要经 ResourceLoader 注入，且必须 reload 后才生效（同 sdk.ts:185-188）。
-		// additionalSkillPaths：随应用内置的技能（resources/skills/）；
+		// additionalSkillPaths：随应用预装的技能根 —— 真源是 core/config-paths.ts 的
+		// getBuiltinSkillDirs（daemon 的 listSkills 用的是同一份；分家会出现
+		// 「模型能用、界面看不见」）。pi 递归发现 SKILL.md；
 		// 用户的技能（agentDir/skills/）pi 会自动发现。
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
 			settingsManager,
-			additionalSkillPaths: [join(getResourcesDir(), "skills")],
+			additionalSkillPaths: [...getBuiltinSkillDirs()],
 			extensionFactories: [...(options.extensions ?? [])],
 		});
 		await resourceLoader.reload();

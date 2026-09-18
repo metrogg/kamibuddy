@@ -1,0 +1,9 @@
+{
+  "name": "Word 文档生成",
+  "slug": "minimax-docx",
+  "version": "1.0.0",
+  "installedAt": 1779411700875,
+  "source": "marketplace",
+  "iconSource": "minimax-docx",
+  "preinstalledTemplate": true
+}

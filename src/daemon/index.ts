@@ -38,6 +38,7 @@ import { ensureBuiltinMemoryTask } from "../core/builtin-memory-task.ts";
 import {
 	getAppDir,
 	getAuthPath,
+	getBuiltinSkillDirs,
 	getConfigDir,
 	getResourcesDir,
 	getSessionsDir,
@@ -327,6 +328,8 @@ const RESOURCES = loadResources(getResourcesDir());
 
 const SCENES: readonly ModeDescriptor[] = toDescriptors(RESOURCES).scenes;
 const INTERACTIONS: readonly ModeDescriptor[] = toDescriptors(RESOURCES).modes;
+/** 首页预设（能力胶囊 + 最佳实践案例）。静态资源，随快照下发。 */
+const WELCOME = RESOURCES.welcome;
 
 /* ── 模型目录 ─────────────────────────────────────────────────────── */
 
@@ -404,8 +407,12 @@ const PROTECTED_DIRS = defaultProtectedDirs(homedir());
  */
 ensureUserMemoryFiles();
 
-/** 内置技能目录（resources/skills/，随应用分发）。 */
-const BUILTIN_SKILLS_DIR = join(getResourcesDir(), "skills");
+/**
+ * 随包预装的技能根（我们自己写的 skills/ + 照搬的市场插件 plugins/）。
+ * 路径的真源在 core/config-paths.ts 的 getBuiltinSkillDirs —— session-host 给 pi
+ * 的 additionalSkillPaths 用的是同一份，两边分家就会出现「模型能用、界面看不见」。
+ */
+const BUILTIN_SKILL_DIRS = getBuiltinSkillDirs();
 
 /** 技能列表需要、而 pi 的 loader 不提供的 frontmatter 字段。 */
 interface SkillMeta {
@@ -499,11 +506,13 @@ async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
 			 */
 			cwd: getEffectiveWorkspaceRoot(),
 			agentDir: getConfigDir(),
-			skillPaths: sessionSkillPaths(BUILTIN_SKILLS_DIR, expertSkillsDir),
+			skillPaths: sessionSkillPaths(BUILTIN_SKILL_DIRS, expertSkillsDir),
 			includeDefaults: true,
 		});
 		return skills.map((s): SkillEntry => {
-			const origin = s.filePath.startsWith(BUILTIN_SKILLS_DIR) ? "builtin" : "user";
+			// origin 只分「随包」与「用户自装」两类：插件技能也是随包分发的，
+			// 归 builtin（它的来龙去脉在 resources/plugins/README.md，不在这个字段里）。
+			const origin = BUILTIN_SKILL_DIRS.some((dir) => s.filePath.startsWith(dir)) ? "builtin" : "user";
 			const meta = readSkillMeta(s.filePath);
 			/*
 			 * 安装元数据只对**自装且经技能页导入**的技能存在（sidecar 写在技能目录里）。
@@ -544,8 +553,9 @@ async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
  * 三模式的 compose 不走这条读路径。
  */
 function loadExpertsNow(): readonly ExpertDefinition[] {
-	// 第三个参数是全局技能目录：私有技能与它重名要在加载期拦下（spec: 专家技能重名防护）。
-	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILLS_DIR);
+	// 第三个参数是全局技能根（我们自己写的 + 照搬的插件技能）：私有技能与它们重名
+	// 要在加载期拦下（spec: 专家技能重名防护）。
+	return loadExperts(join(getResourcesDir(), "experts"), join(getConfigDir(), "experts"), BUILTIN_SKILL_DIRS);
 }
 
 /**
@@ -878,6 +888,7 @@ function freshConversation(
 		entries: [],
 		availableScenes: SCENES,
 		availableModes: INTERACTIONS,
+		welcome: WELCOME,
 		cancelledTurns: [],
 		artifacts: [],
 	};

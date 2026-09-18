@@ -2,7 +2,8 @@
  * 极简 YAML frontmatter 解析。
  *
  * 为什么不引 js-yaml：我们只消费**自己写的**资源文件，格式完全可控 ——
- * 常态需要的仍是 `key: value`、`key: [a, b]`、布尔与数字四种。
+ * 常态需要的仍是 `key: value`、`key: [a, b]`（元素可加引号以容纳值里的半角逗号）、
+ * 布尔与数字四种。
  * 为此引一个通用 YAML 解析器（及其全部语法面）不划算（AGENTS.md §9 YAGNI）。
  *
  * 这是 WorkBuddy「双面文件」机制的地基：一份 .md 的 frontmatter 给加载器读
@@ -51,12 +52,39 @@ function parseScalar(raw: string): FrontmatterValue {
 	return text;
 }
 
-/** 解析行内数组 `[a, b, c]`。空数组写 `[]`。 */
+/**
+ * 解析行内数组 `[a, b, c]`。空数组写 `[]`。
+ *
+ * 元素可用单/双引号包裹，以容纳**值里本来就有的半角逗号** —— 搬 WorkBuddy
+ * 资产时需要：上游 quickPrompts 是「先,后」这种混用半角的写法，而我们不改上游
+ * 文字（AGENTS.md §6 逐字节保留），所以由解析器让步而不是回改数据。
+ */
 function parseInlineArray(raw: string): string[] {
 	const inner = raw.trim().slice(1, -1).trim();
 	if (inner === "") return [];
-	return inner
-		.split(",")
+	const parts: string[] = [];
+	let current = "";
+	let quote: "" | '"' | "'" = "";
+	for (const char of inner) {
+		if (quote === "") {
+			if (char === '"' || char === "'") {
+				quote = char;
+				current += char;
+				continue;
+			}
+			if (char === ",") {
+				parts.push(current);
+				current = "";
+				continue;
+			}
+			current += char;
+			continue;
+		}
+		if (char === quote) quote = "";
+		current += char;
+	}
+	parts.push(current);
+	return parts
 		.map((part) => {
 			const value = parseScalar(part);
 			// 数组元素一律当字符串：工具名、id 这类不该被误转成数字。

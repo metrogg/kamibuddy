@@ -87,6 +87,25 @@ export function getResourcesDir(): string {
 }
 
 /**
+ * 随包预装的技能根（顺序即优先级）—— **唯一真源**。
+ *
+ * 为什么必须只有这一处：技能有两个消费面，用的必须是同一份路径 ——
+ *   - pi 的加载器（会话里真正喂给模型的那一份）；
+ *   - daemon 的 `listSkills`（技能页 / `/` 菜单 / 提示词清单段 / use_skill 判定）。
+ * 两边各写一遍，就会出现「模型能用、界面看不见」（照搬市场插件时踩过：一边加了
+ * resources/plugins，另一边没加，技能页少 15 个技能）。AGENTS.md §4 的「不许两侧
+ * 各写一遍」说的就是这种。
+ *
+ *   - `skills/`：我们自己写的技能；
+ *   - `plugins/`：照搬的 WorkBuddy 市场插件，层级为 `<市场>/<插件>/<版本>/skills/<技能>`，
+ *     递归发现交给 pi（来源与置换说明见 resources/plugins/README.md）。
+ */
+export function getBuiltinSkillDirs(): readonly string[] {
+	const resources = getResourcesDir();
+	return [join(resources, "skills"), join(resources, "plugins")];
+}
+
+/**
  * 应用自身目录（工作空间守卫要拒的那个「应用目录」）。
  *
  * **不能用 process.cwd()**：daemon 是 utilityProcess，cwd 继承 Electron 主进程的

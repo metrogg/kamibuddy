@@ -31,6 +31,7 @@ import { generatingLabel } from "./session-events.ts";
 import { mergePresentedArtifacts, type ArtifactRef } from "./artifacts.ts";
 import type { ContextUsageDetail } from "./context-usage.ts";
 import type { SessionStatCard } from "./observability.ts";
+import type { WelcomePresets } from "./welcome.ts";
 
 export interface ConversationView {
 	readonly state: SessionState;
@@ -39,6 +40,11 @@ export interface ConversationView {
 	readonly availableScenes: readonly ModeDescriptor[];
 	/** 交互轴选项（对话页切换器）。 */
 	readonly availableModes: readonly ModeDescriptor[];
+	/**
+	 * 首页预设（能力胶囊 + 最佳实践案例）。与场景/模式清单同为「全局资源、每会话一份」，
+	 * 由 daemon 装配时带上（见 core/resources.ts 的 loadWelcome）。
+	 */
+	readonly welcome?: WelcomePresets;
 	/** 最近的上下文用量明细（context_usage 事件折叠而来）。 */
 	readonly usageDetail?: ContextUsageDetail;
 	/**
@@ -375,6 +381,9 @@ export function conversationReducer(view: ConversationView, action: Conversation
 			entries: action.snapshot.entries,
 			availableScenes: action.snapshot.availableScenes,
 			availableModes: action.snapshot.availableModes,
+			// 与场景/模式清单同一份「全局资源」：快照没带就保留现值（事件流拼出的桶
+			// 种子不带它，清掉会让首页胶囊凭空消失）。
+			welcome: action.snapshot.welcome ?? view.welcome,
 			usageDetail: action.snapshot.usageDetail,
 			sessionStats: action.snapshot.sessionStats,
 			turn: action.snapshot.turn,

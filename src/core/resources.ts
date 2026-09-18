@@ -14,6 +14,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ModeDescriptor } from "../shared/session-events.ts";
+import type { WelcomeCase, WelcomeChip, WelcomePresets } from "../shared/welcome.ts";
 import { optionalBoolean, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
 /**
@@ -83,6 +84,12 @@ export interface LoadedResources {
 	 * 但骨架引了片段就会响亮失败（composer 侧），两条语义不混。
 	 */
 	readonly fragments: ReadonlyMap<string, string>;
+	/**
+	 * 首页预设（能力胶囊 + 最佳实践案例）。目录不存在 = 空预设（首页不显示这两块），
+	 * 与 fragments 同口径：它是 UI 内容面，缺失不改变产品身份，只是少一块展示；
+	 * 但目录在、文件坏必须响亮抛错。
+	 */
+	readonly welcome: WelcomePresets;
 }
 
 /** 供 daemon 下发 UI 的描述符列表（工具白名单不下发——UI 不需要知道）。 */
@@ -176,7 +183,7 @@ export function loadResources(resourcesDir: string): LoadedResources {
 		});
 	if (styles.length === 0) throw new Error(`styles/ 下没有任何回复风格（${stylesDir}）`);
 
-	return { scenes, modes, styles, fragments: loadFragments(resourcesDir) };
+	return { scenes, modes, styles, fragments: loadFragments(resourcesDir), welcome: loadWelcome(resourcesDir, scenes) };
 }
 
 /**
@@ -214,6 +221,123 @@ function loadFragments(resourcesDir: string): ReadonlyMap<string, string> {
 		fragments.set(id, body);
 	}
 	return fragments;
+}
+
+/**
+ * 加载 welcome/{chips,cases}.json → 首页预设（能力胶囊 + 最佳实践案例）。
+ *
+ * 坏数据必须响亮抛错，别让首页静默少一块 —— 校验的都是「错了也不会报错、
+ * 只是永远不出现」的形态：
+ *   - chip.scene 必须是已存在的场景 id（写错场景 = 该胶囊永不出现）
+ *   - chipKind=playbook 的胶囊至少要有一条案例（否则点开是空列表 = 假入口）
+ *   - chipKind=scene 必须有非空 prompts（同上）
+ *   - case.chipId 必须指向已存在的胶囊；两边的 id 各自唯一（UI 拿它们做 key 与查表）
+ */
+function loadWelcome(resourcesDir: string, scenes: readonly SceneResource[]): WelcomePresets {
+	const dir = join(resourcesDir, "welcome");
+	if (!existsSync(dir)) return { chips: [], cases: [] };
+
+	const chipsFile = join(dir, "chips.json");
+	const casesFile = join(dir, "cases.json");
+	const rawChips = readJsonArray(chipsFile);
+	const rawCases = readJsonArray(casesFile);
+
+	const sceneIds = new Set(scenes.map((s) => s.id));
+	const chips: WelcomeChip[] = rawChips.map((raw, index) => {
+		const at = `${chipsFile}[${index}]`;
+		const kind = requireStringField(raw, "chipKind", at);
+		if (kind !== "playbook" && kind !== "scene") {
+			throw new Error(`${at}: chipKind 只能是 playbook 或 scene（实际「${kind}」）`);
+		}
+		const scene = requireStringField(raw, "scene", at);
+		if (!sceneIds.has(scene)) {
+			throw new Error(`${at}: scene「${scene}」不在 scenes/ 中（写错的场景让这个胶囊永远不出现）`);
+		}
+		const prompts =
+			kind === "scene" ? requireStringListField(raw, "prompts", at) : undefined;
+		return {
+			id: requireStringField(raw, "id", at),
+			scene,
+			label: requireStringField(raw, "label", at),
+			description: requireStringField(raw, "description", at),
+			icon: requireStringField(raw, "icon", at),
+			chipKind: kind,
+			...(prompts === undefined ? {} : { prompts }),
+		};
+	});
+	requireUniqueIds(chips.map((c) => c.id), chipsFile);
+
+	const chipIds = new Set(chips.map((c) => c.id));
+	const cases: WelcomeCase[] = rawCases.map((raw, index) => {
+		const at = `${casesFile}[${index}]`;
+		const chipId = requireStringField(raw, "chipId", at);
+		if (!chipIds.has(chipId)) {
+			throw new Error(`${at}: chipId「${chipId}」没有对应胶囊（这条案例永远不会显示）`);
+		}
+		return {
+			id: requireStringField(raw, "id", at),
+			chipId,
+			title: requireStringField(raw, "title", at),
+			subtitle: requireStringField(raw, "subtitle", at),
+			prompt: requireStringField(raw, "prompt", at),
+			// 绑定的专家是 resources/experts/ 的目录名；存在性由测试跨资源校验
+			// （加载器这里只有 welcome 一个目录的视野，看不到 experts/）。
+			expert: requireStringField(raw, "expert", at),
+			cover: requireStringField(raw, "cover", at),
+		};
+	});
+	requireUniqueIds(cases.map((c) => c.id), casesFile);
+
+	// playbook 胶囊的下钻列表就是它的案例：一条都没有时点开是空面板，那是假入口。
+	for (const chip of chips) {
+		if (chip.chipKind === "playbook" && !cases.some((c) => c.chipId === chip.id)) {
+			throw new Error(`${chipsFile}: 胶囊「${chip.id}」是 playbook 类型但没有任何案例`);
+		}
+	}
+
+	return { chips, cases };
+}
+
+function readJsonArray(file: string): readonly unknown[] {
+	if (!existsSync(file)) throw new Error(`缺少 ${file}`);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		throw new Error(`${file}: JSON 解析失败（${error instanceof Error ? error.message : String(error)}）`);
+	}
+	if (!Array.isArray(parsed)) throw new Error(`${file}: 顶层必须是数组`);
+	return parsed;
+}
+
+function requireStringField(source: unknown, key: string, at: string): string {
+	const value = (source as Record<string, unknown> | null)?.[key];
+	if (typeof value !== "string" || value.trim() === "") {
+		throw new Error(`${at}: ${key} 缺失或不是非空字符串`);
+	}
+	return value;
+}
+
+/** 提示词列表（chipKind=scene 用）：必须存在、非空、且每项都是非空字符串。 */
+function requireStringListField(source: unknown, key: string, at: string): readonly string[] {
+	const value = (source as Record<string, unknown> | null)?.[key];
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new Error(`${at}: ${key} 必须是非空数组`);
+	}
+	return value.map((item, index) => {
+		if (typeof item !== "string" || item.trim() === "") {
+			throw new Error(`${at}: ${key}[${index}] 不是非空字符串`);
+		}
+		return item;
+	});
+}
+
+function requireUniqueIds(ids: readonly string[], file: string): void {
+	const seen = new Set<string>();
+	for (const id of ids) {
+		if (seen.has(id)) throw new Error(`${file}: id「${id}」重复`);
+		seen.add(id);
+	}
 }
 
 /**

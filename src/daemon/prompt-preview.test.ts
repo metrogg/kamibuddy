@@ -59,6 +59,7 @@ function makeResources(): LoadedResources {
 			{ id: "sarcastic", label: "毒舌", body: "毒舌风格正文" },
 		],
 		fragments: new Map([["delivery-rules", "交付纪律内容"]]),
+		welcome: { chips: [], cases: [] },
 	};
 }
 
