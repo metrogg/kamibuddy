@@ -214,6 +214,18 @@
       "snippet": "fontSize: 13",
       "rule": "font-size",
       "reason": "Monaco 的 fontSize 是 number 配置项（像素数字，不是 CSS 值）：写 var(--text-list) 会立刻挂 typecheck，运行时也算不出行高。值与 --text-list(13) 手动对齐，改字号档时需同步此处。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#000 24px",
+      "rule": "color",
+      "reason": "mask 的 #000 不是颜色而是「保留」占位：mask-image 只读 alpha 通道，任何不透明色等价。这里照抄 dsh TurnNavigator 的原值（该组件整体移植自它，MIT）；换成 token 反而会让人以为它在表达某种主题色。两条 snippet 分别覆盖「单端渐隐」与「两端并存」两种写法。"
+    },
+    {
+      "file": "src/renderer/index.css",
+      "snippet": "#000 calc(100% - 24px)",
+      "rule": "color",
+      "reason": "mask 的 #000 不是颜色而是「保留」占位：mask-image 只读 alpha 通道，任何不透明色等价。这里照抄 dsh TurnNavigator 的原值（该组件整体移植自它，MIT）；换成 token 反而会让人以为它在表达某种主题色。两条 snippet 分别覆盖「单端渐隐」与「两端并存」两种写法。"
     }
   ]
 }

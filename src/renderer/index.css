@@ -1962,6 +1962,13 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	/* 刻度轨要在「没有右侧留白」的窄容器里整块隐藏（见 .turn-nav 的 @container）,
+	   而留白多少取决于内容列宽（--chat-content-width），不是窗口宽 —— 侧栏开合、
+	   右侧面板开合都会改它。容器查询是唯一能按**自身宽度**判定的机制。
+	   contain: layout 的副作用核过：本元素内没有 sticky / fixed 后代，三个浮层
+	   （.turn-nav / .stream-fade / .jump-to-bottom）本来就是 relative 定位基准上的
+	   absolute，语义不变。 */
+	container-type: inline-size;
 }
 
 .stream {
@@ -2077,44 +2084,199 @@ textarea:focus-visible {
    刻度宽 12px 落在 .stream 的 24px 左 padding 区内，不遮消息文字，
    内容区布局不动。容器 pointer-events:none 让左缘选字/滚动条不受干扰，
    只有刻度本身可点。z-index 与 jump-to-bottom 同级（--z-base），低于各弹层。 */
-.turn-rail {
+/* ── 消息刻度轨（TurnNav，移植自 dsh TurnNavigator）───────────────── */
+
+/*
+ * 会话右缘的固定间距刻度梯。与它前身（按内容比例定位的 .turn-rail）的区别见
+ * turn-nav.ts 头注：比例定位会把长轮拉开、短轮挤扁，固定间距让每轮同等权重。
+ *
+ * 几何三值对齐 dsh 原值，只写在这里（TS 侧没有消费方）：
+ *   最大高 420px、上下各留 64px 净空、两端渐隐带 24px。
+ * 定位让开滚动条：.stream 常驻 6px 槽（scrollbar-gutter: stable），
+ * right 取 16px 后轨道右缘离滚动条还有 10px，不会被压在下面。
+ */
+.turn-nav {
 	position: absolute;
-	left: 0;
-	top: 0;
-	bottom: 0;
-	width: 14px;
-	pointer-events: none;
+	top: 50%;
+	right: var(--space-5);
 	z-index: var(--z-base);
-}
-
-.turn-rail-tick {
-	/* button 复位：只留一条小横杠。 */
-	appearance: none;
-	padding: 0;
-	border: none;
-	position: absolute;
-	left: 1px;
-	display: block;
-	width: 12px;
-	height: 2px;
-	border-radius: 1px;
-	background: var(--text-secondary);
-	opacity: 0.45;
-	/* top 按刻度中心给（ratio 是消息顶端），横杠自身高 2px 要上收一半。 */
+	width: 28px;
+	height: min(var(--turn-nav-natural, 0px), calc(100% - 64px), 420px);
 	transform: translateY(-50%);
-	pointer-events: auto;
-	cursor: pointer;
+	/* 轨道高度**不过渡**（dsh 在这里做了 220ms 的高度动画）：DESIGN.md §5.1 禁止
+	   过渡 height，而这里能换来的只是「新开一轮时 10px 的微动」—— 收益不抵一条
+	   受控例外，直接瞬时到位。 */
 }
 
-.turn-rail-tick:hover {
-	opacity: 1;
+/* 轨道自身不是滚动内容的一部分（挂在 .stream-wrap 上），但梯子高过轨道时
+   内部要能滚。滚动条不显示 —— 它只有 28px 宽，多一条槽就只剩刻度了。 */
+.turn-nav-scroller {
+	position: absolute;
+	inset: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: none;
+}
+
+.turn-nav-scroller::-webkit-scrollbar {
+	display: none;
+}
+
+/* 两端渐隐：还有刻度在视野外时才挂，两端都能滚时两条渐变并存。
+   mask 的 #000 不是颜色而是「保留」的占位（mask 只读 alpha），不参与主题。 */
+.turn-nav-scroller.fade-top {
+	mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 100%);
+}
+
+.turn-nav-scroller.fade-bottom {
+	mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+
+.turn-nav-scroller.fade-top.fade-bottom {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent 0,
+		#000 24px,
+		#000 calc(100% - 24px),
+		transparent 100%
+	);
+}
+
+.turn-nav-marks {
+	position: relative;
+	height: var(--turn-nav-natural, 0px);
+}
+
+/* 刻度位：top 直接取行内 --turn-nav-position，值由 turn-nav.ts 的 markTop()
+   算出（序号 × 间距 + 首端留白）。CSS **不再二次加留白** —— 两边各加一次
+   刻度会整体偏下 6px。 */
+.turn-nav-mark-pos {
+	position: absolute;
+	top: var(--turn-nav-position, 0px);
+	right: 0;
+	left: 0;
+	height: 10px;
+	transform: translateY(-50%);
+}
+
+/* 整条轨道负责指针输入，刻度本身只是「键盘可达的落点」：
+   pointer-events: none 让鼠标事件穿透到轨道上（轨道按 clientY 算命中哪一格），
+   于是鼠标不用精确压住 12px 的小横杠。 */
+.turn-nav-mark {
+	position: absolute;
+	inset: 0 0 0 auto;
+	width: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	cursor: pointer;
+	pointer-events: none;
+}
+
+/*
+ * 横杠本体：右对齐，长度随状态变（dsh 的 mark::before 同款）。
+ *
+ * 长度用 **scaleX** 而不是过渡 width：DESIGN.md §5.1 把 width 列在禁止过渡的
+ * 属性里。右端对齐的横杠从右端伸缩，视觉与改宽度等价，且是合成属性。
+ * 基准宽取最长的那档（20px），各样式的长度差异全部由 scaleX 表达。
+ * transform-origin 必须钉右端：默认的中心原点是两头一起长，和 dsh 的
+ * 「从右端向左变长」不是一回事。
+ */
+.turn-nav-mark::before {
+	position: absolute;
+	top: 50%;
+	right: 0;
+	width: 20px;
+	height: 2px;
+	border-radius: 2px;
+	background: color-mix(in srgb, var(--text) 22%, transparent);
+	content: "";
+	transform: translateY(-50%) scaleX(0.6);
+	transform-origin: right center;
+	transition: transform var(--dur-fast) var(--ease-standard), background-color var(--dur-fast) var(--ease-standard);
+}
+
+.turn-nav-mark.preview::before {
+	transform: translateY(-50%) scaleX(0.9);
+	background: var(--text-secondary);
+}
+
+.turn-nav-mark.active::before {
+	transform: translateY(-50%) scaleX(1);
 	background: var(--text);
 }
 
-/* 视口顶之上最近的用户消息：激活态用既有成功色，与全局「当前/进行」语义一致。 */
-.turn-rail-tick.active {
-	background: var(--ok);
-	opacity: 1;
+/* 键盘焦点压过其余状态：横杠取 --accent（全轨唯一用它的地方），
+   再加一圈 hairline 环 —— 焦点停在 20px 的横杠上，在密集的刻度梯里要看得见。 */
+.turn-nav-mark:focus-visible::before {
+	transform: translateY(-50%) scaleX(1);
+	background: var(--accent);
+}
+
+.turn-nav-mark:focus-visible {
+	outline: 1px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* 悬停预览卡：挂在轨道层（不随刻度梯滚），位置 = 该刻度位 - 轨道滚动量，
+   再钳到轨道内，避免首尾两格的气泡被裁掉。 */
+.turn-nav-preview {
+	position: absolute;
+	top: clamp(
+		0px,
+		calc(var(--turn-nav-preview-at, 0px) - var(--turn-nav-scroll-top, 0px) - 50px),
+		calc(100% - 100px)
+	);
+	right: calc(100% + var(--space-3));
+	box-sizing: border-box;
+	width: min(300px, 60vw);
+	max-height: 100px;
+	overflow: hidden;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	color: var(--text);
+	background: var(--bg);
+	box-shadow: var(--shadow-md);
+	pointer-events: none;
+	animation: pop-layer-in var(--dur-fast) var(--ease-out);
+}
+
+.turn-nav-preview-prompt,
+.turn-nav-preview-response {
+	display: -webkit-box;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+}
+
+.turn-nav-preview-prompt {
+	font-size: var(--text-list);
+	font-weight: 600;
+	-webkit-line-clamp: 1;
+}
+
+.turn-nav-preview-response {
+	margin-top: var(--space-1);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	-webkit-line-clamp: 3;
+}
+
+/* 窄容器里没有右侧留白可站（内容列按 --chat-content-width 居中，窄窗口下
+   两侧留白归零）——整块隐藏，别压在正文上。920 = 832 内容列 + 2×44 留白。 */
+@container (max-width: 920px) {
+	.turn-nav {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.turn-nav-mark::before,
+	.turn-nav-preview {
+		transition: none;
+		animation: none;
+	}
 }
 
 .stream>* {

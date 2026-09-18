@@ -17,7 +17,7 @@
  *
  * 本模块是纯函数层（三态决策），chat-view 只做 DOM 执行
  * （scrollIntoView / scrollTop）与状态持有 —— 决策脱离 React 单测，
- * 与 thinking-fold / turn-rail 同一拆法。
+ * 与 thinking-fold / turn-nav 同一拆法。
  *
  * 这里原本还有回合分组（groupTurnBlocks，消费 metafold v1 的 RenderBlock
  * 块流）：轮折叠落地后块流退役，切轮由 turn-fold.ts 的 buildTurnViews

@@ -24,7 +24,8 @@ class ErrorBoundary extends Component<
 
 	override componentDidCatch(error: Error, info: { componentStack?: string }): void {
 		// 「Maximum update depth exceeded」的金矿在 componentStack——复现一次就能
-		// 直接看到是哪个组件在循环（turn-rail 的级联 effect 是第一嫌疑人）。
+		// 直接看到是哪个组件在循环（测量 → setState → 测量的级联 effect 是第一嫌疑人，
+		// 刻度轨那类「测了再渲染」的组件历史上踩过）。
 		this.setState({ componentStack: info.componentStack });
 		console.error("[ErrorBoundary]", error, info.componentStack);
 		// 「重新加载」按钮会销毁现场，而诊断这类错误全靠 componentStack ——
