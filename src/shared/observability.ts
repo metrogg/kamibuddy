@@ -527,40 +527,28 @@ export function contentFingerprint(text: string): number {
 }
 
 /**
- * 逐轮可变事实（记忆内容 + 个性化）注入消息的自定义类型，由
- * extensions/prompt-switch.ts 的 `context` 事件注入。
+ * 逐 run 可变事实（记忆内容 + 个性化）**上下文快照**消息的自定义类型，
+ * 由 extensions/prompt-switch.ts 的 before_agent_start handler 产出。
  *
- * 定义在这里而不是扩展里的原因：request_snapshot 的逐条清单
- * （core/session-host.ts）也要靠它把这类幽灵条目标成瞬态
- * （`MessageRef.transient`），而 core 不许 import extensions（AGENTS.md §1），
+ * 定义在这里而不是扩展里的原因：它是会话文件里 `custom_message` 条目的身份 ——
+ * 消费点不止一个（扩展的按通道去重、会话导出 / 翻译过滤、
+ * request_snapshot 的逐条清单），而 core 不许 import extensions（AGENTS.md §1），
  * 常量放 shared 才是唯一实现处（防重复，AGENTS.md §4）。
  */
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "kamibuddy-runtime-context";
 
 /**
- * hidden context（F5）注入消息的自定义类型，由 core/session-host.ts 的
- * `installHiddenContext`（pi transformContext 钩子）注入。
+ * hidden context（F5）**上下文快照**消息的自定义类型，同样由
+ * extensions/prompt-switch.ts 的 before_agent_start handler 产出
+ * （内容来自 SessionHost 在 run 开始冻结的那份全文）。
  *
- * 与 runtime context 同住一个文件、同一个机制：两者都是「每请求现算、不落会话、
- * 追加在消息数组末尾」的瞬态注入项，按 customType 归到下面同一组里判定。
+ * 与 runtime context 同住一个文件、同一套投递机制：两者都是「落进会话文件、
+ * 只在内容变化时追加一条」的持久快照消息，去重与追加由 extensions/prompt-switch.ts
+ * 各按自己的 customType 判定。
+ * 分两条通道而不是合并成一条：hidden context 因 `current_time` 每 run 必变，
+ * 合并会让稳定的那部分跟着每 run 重发（spec: persist-context-snapshots 否决方案 ④）。
  */
 export const HIDDEN_CONTEXT_CUSTOM_TYPE = "kamibuddy-hidden-context";
-
-/**
- * 「每请求现算、不落会话」的瞬态注入项的全部 customType（唯一实现处）。
- *
- * 为什么是一组而不是一个：瞬态与否是**注入机制**的属性，而这个机制已经有两个
- * 使用者（runtime context 与 hidden context）。让判定点逐个认 customType，加第三个
- * 注入通道时就会漏标 —— 漏标的后果是缓存断点归因每轮误报一次（见
- * shared/cache-prefix.ts 的 dropTransient），且不会响亮失败。
- *
- * 消费方 core/session-host.ts 的 buildMessageRefs 用这个集合**整体**判定，
- * 不在这里之外的任何地方再写一遍 customType 字面量（防重复，AGENTS.md §4）。
- */
-export const TRANSIENT_INJECTION_CUSTOM_TYPES: readonly string[] = [
-	RUNTIME_CONTEXT_CUSTOM_TYPE,
-	HIDDEN_CONTEXT_CUSTOM_TYPE,
-];
 
 /** 系统提示词一个分段的 provenance（source 来自 prompt-composer 的 PromptSegmentSource）。 */
 export interface SystemSegmentStat {
@@ -613,19 +601,6 @@ export interface MessageRef {
 	 * 算法唯一实现处：shared/observability.ts 的 `contentFingerprint`。
 	 */
 	readonly fp: number;
-	/**
-	 * 这一条是「每请求现算、不落会话」的瞬态注入项
-	 * （`TRANSIENT_INJECTION_CUSTOM_TYPES`：`kamibuddy-runtime-context` 与
-	 * `kamibuddy-hidden-context` 两条，都由各自注入点追加在消息数组末尾）。
-	 *
-	 * 有了它，缓存断点归因（shared/cache-prefix.ts）才认得出「上一轮尾部有、这一轮
-	 * 没了」的幽灵条目是**有意设计**，不把它当成断点原因（否则每轮都会误报一次）。
-	 *
-	 * 可选：加它之前落的台账没有这个字段，消费方按「旧台账」降级（退到
-	 * 「role 归 other 的尾部条目」这一可判定条件）；只在瞬态条目上写 true，
-	 * 真历史条目**不写** `transient: false`（每条都写白白撑大落盘体积）。
-	 */
-	readonly transient?: boolean;
 }
 
 /**
@@ -648,10 +623,18 @@ export interface RequestSnapshotData {
 		readonly other: MessageClassStat;
 	};
 	/**
-	 * hidden context（F5）注入块的字符数。快照在**注入之后**记录（钩子包装
-	 * 顺序见 session-host），这部分字符落在那条瞬态注入消息上，因而计入
-	 * `messages.other`（**不是** user）—— 这个字段把它单独亮明，面板的成分
-	 * 视图据此单列一行。
+	 * hidden context（F5）**上下文快照**条目的字符数（与 SessionHost 在 run 开始时
+	 * 冻结的那份全文同源，见 session-host 的 `pendingHidden` / `peekHiddenContext`）。
+	 *
+	 * 口径（2026-09-18 订正，spec: persist-context-snapshots）：快照已改为 **pi 落盘的
+	 * 持久消息**（`custom_message` + customType `kamibuddy-hidden-context` +
+	 * `display:false`），不再是「每请求现算、不落盘的瞬态注入块」。所以它现在是历史里
+	 * 一条**普通条目**：出现在 `messageList` 里（`role` 归 other）、计入 `messages.other`
+	 * （**不是** user），也因此参与缓存断点的逐条 diff —— 归因不得再剔除它
+	 * （理由与剔除史见 shared/cache-prefix.ts 的文件头）。
+	 *
+	 * 为什么仍单列一个字段：它混在 other 桶里分不出来，而面板要能回答「这条快照多大」。
+	 * 内容不变就不会追加新条目，故同一 run 内各轮读到的是同一个数。
 	 *
 	 * 缺席 = 该次调用没有注入（run 已清账后的压缩调用等）。
 	 */

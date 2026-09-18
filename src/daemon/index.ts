@@ -99,7 +99,9 @@ import {
 } from "../core/prompt-composer.ts";
 import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resources.ts";
 import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
-import { importSkill, readInstalledMeta, userSkillsDir } from "../core/skill-install.ts";
+import { importSkill, readInstalledMeta, removeAgentSkill, userSkillsDir } from "../core/skill-install.ts";
+import { packSkillDir } from "../core/skill-pack.ts";
+import { skillScopeOf } from "../core/skill-scope.ts";
 import { filterEnabledSkills, isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "../core/skill-status.ts";
 import { computeSkillsCost } from "../core/skills-cost.ts";
 import { buildExportPath } from "../core/session-export.ts";
@@ -136,6 +138,8 @@ import { rememberRuleFromApproval } from "../extensions/permission-rules.ts";
 import { createProjectTrust } from "../extensions/project-trust.ts";
 import { questionnaireExtensionFactory } from "../extensions/questionnaire-tool.ts";
 import { powershellExtensionFactory, runCommand } from "../extensions/powershell-tool.ts";
+import { createSkillInstallTool } from "../extensions/skill-install-tool.ts";
+import { createSkillUninstallTool } from "../extensions/skill-uninstall-tool.ts";
 import {
 	createSandboxedRunner,
 	warmUpSandbox,
@@ -510,14 +514,22 @@ async function listSkills(expertSkillsDir?: string): Promise<SkillEntry[]> {
 			includeDefaults: true,
 		});
 		return skills.map((s): SkillEntry => {
-			// origin 只分「随包」与「用户自装」两类：插件技能也是随包分发的，
-			// 归 builtin（它的来龙去脉在 resources/plugins/README.md，不在这个字段里）。
-			const origin = BUILTIN_SKILL_DIRS.some((dir) => s.filePath.startsWith(dir)) ? "builtin" : "user";
+			/*
+			 * 作用域按**落点**判（内置 / 本项目 / 用户级），判定收在纯函数里可单测 ——
+			 * 这里不许再内联一段路径前缀比较（裸 startsWith 会把 `D:\ws2` 误判进 `D:\ws`，
+			 * 也漏掉分隔符/大小写归一）。注意插件技能也是随包分发的，归 builtin
+			 * （它的来龙去脉在 resources/plugins/README.md，不在这个字段里）。
+			 */
+			const origin = skillScopeOf(s.filePath, {
+				builtinDirs: BUILTIN_SKILL_DIRS,
+				workspaceDir: getEffectiveWorkspaceRoot(),
+			});
 			const meta = readSkillMeta(s.filePath);
 			/*
 			 * 安装元数据只对**自装且经技能页导入**的技能存在（sidecar 写在技能目录里）。
-			 * 内置技能不该有、手工放进技能目录的技能没有 —— 两种都没有 sidecar，
-			 * 于是 installedAt / sourcePath 不带字段，卡片按「手工放置」呈现。
+			 * 导入的落点固定是用户级（core/skill-install.ts 的 userSkillsDir），项目级技能
+			 * 是就地放/写在工作区里的，没有 sidecar；内置技能同理不该有 —— 于是
+			 * installedAt / sourcePath 不带字段，卡片按「手工放置」呈现。
 			 */
 			const installed = origin === "user" ? readInstalledMeta(dirname(s.filePath)) : undefined;
 			/*
@@ -2284,10 +2296,20 @@ async function createHost(
 					bucket.systemPromptSegments = composed.segments;
 					return composed.prompt;
 				},
-				// 逐轮可变事实（记忆内容/个性化）的注入块：每请求现读本会话 cwd。
+				// 逐 run 可变事实（记忆内容/个性化）的快照通道：每 run 现读本会话 cwd，
+				// 内容与上一条同类型快照相同时不追加（去重判据在扩展侧）。
 				// 提示词里已不含它们（见 composeSystemPrompt 注释）；时间不走这里，
 				// 由本会话 SessionHost 的 hidden context `current_time` 送达。
 				composeRuntimeContext: () => buildRuntimeContext(cwd),
+				/*
+				 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文。
+				 * 时序成立 —— before_agent_start 只在 pi 的 session.prompt() 里触发，
+				 * 而 host.prompt() 在调它之前已同步 freeze（见
+				 * session-host.peekHiddenContext 的注释）。这里用 `host` 是
+				 * 「扩展工厂先于宿主建成、闭包在事件触发时才求值」的既有范式
+				 * （subagent-runner / member-runner 同形），事件触发时 host 必已赋值。
+				 */
+				composeHiddenContext: () => host.peekHiddenContext(),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -2415,6 +2437,31 @@ async function createHost(
 			 */
 			createUseSkillTool({
 				resolveSkills: () => toUseSkills(bucket.conversation.state.expertId),
+			}),
+			/*
+			 * 技能安装（craft 白名单含 skill_install）：把模型产在工作区里的技能装进
+			 * 用户技能目录，接上「模型创建技能」这条链路的最后一环 —— 照搬 WorkBuddy
+			 * 的创建流程（它是直接写盘 + 扫目录即出现），但我们不能开那个写口子
+			 * （权限门：技能正文即提示词），所以走 importSkill 这条受校验通道。
+			 * agentCreated: true 是这条通道的**来源标记**（对齐 WorkBuddy 写进
+			 * SKILL.md 的 `agent_created: true`）：只有模型装的技能之后才允许被
+			 * 覆盖或删除，技能页导入的技能不受影响。
+			 * 装完把技能目录打成 `<workspace>/<name>.zip`（WorkBuddy 的 skill-creator
+			 * 收尾就是 package_skill.py），交付仍由 present_files 负责。
+			 * 权限档登记为「改变应用自身数据」= 询问（可记住），见 permission-policy。
+			 */
+			createSkillInstallTool({
+				installSkill: (sourcePath) => importSkill(sourcePath, { agentCreated: true }),
+				packSkill: packSkillDir,
+				getWorkspaceDir: () => bucket.cwd,
+			}),
+			/*
+			 * 技能删除（craft 白名单含 skill_uninstall）：与上面同一条链路的回程 ——
+			 * 对齐 WorkBuddy 的 skill_manage(action="delete")，只放行模型自建的技能，
+			 * 判定在 core 的 removeAgentSkill。权限档同为询问（弹窗即「先跟用户确认」）。
+			 */
+			createSkillUninstallTool({
+				removeSkill: removeAgentSkill,
 			}),
 			/*
 			 * docx 生成：craft 白名单含 docx_convert，所有用户会话都装。

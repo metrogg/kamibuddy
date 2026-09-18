@@ -443,6 +443,19 @@ describe("真实 resources/ 的回归约束", () => {
 		}
 	});
 
+	it("skill_install / skill_uninstall 只在 craft 白名单（模型创建技能的两个通道）", () => {
+		// 同款防护：注册了却漏加白名单 = 模型看不到它，「模型创建技能」这条链路又断回人工导入。
+		// ask / plan 不加：它们是只读模式，装/删技能会改提示词面。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const { modes } = loadResources(realDir);
+		for (const tool of ["skill_install", "skill_uninstall"]) {
+			expect(modes.find((m) => m.id === "craft")?.tools, `craft 的 tools 应含 ${tool}`).toContain(tool);
+			for (const id of ["ask", "plan"]) {
+				expect(modes.find((m) => m.id === id)?.tools, `${id} 不应有 ${tool}`).not.toContain(tool);
+			}
+		}
+	});
+
 	it("read_me / show_widget 在 craft 与 ask 白名单，plan 不加", () => {
 		// 与 present_files 同款防护。plan 只读调研、产出是计划文本，
 		// 不产出可视化交付，明确不加（spec: add-inline-widgets；

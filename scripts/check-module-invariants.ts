@@ -124,7 +124,7 @@ const INVARIANTS: readonly InvariantEntry[] = [
 		concern: "提示词字节稳定",
 		module: "src/extensions/prompt-switch.ts",
 		relationship:
-			"before_agent_start 必须返回整串 systemPrompt；context 注入只在消息数组末尾追加，不改动任何既有消息（逐条引用与字节都不变）",
+			"before_agent_start 必须返回整串 systemPrompt；两条上下文快照经持久 message 落进会话文件（落位在本轮用户消息之后），与活分支末条同类型快照逐字节相同时不追加 —— 既有条目一律不改写（append-only，逐条引用与字节都不变）",
 		observation: "src/extensions/prompt-switch.test.ts",
 	},
 	{

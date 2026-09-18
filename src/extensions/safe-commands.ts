@@ -199,6 +199,23 @@ export function hasCleanStructure(command: string): boolean {
  * 2026-09-16 从 permission-policy.ts 搬入：四期加「命令文本侧」判定时，
  * 两处必须共享同一份名单（语义同源，改一处漏一处的老问题），而门侧
  * 已经 import 本模块 —— 名单跟着判定逻辑走，单向依赖保持无环。
+ *
+ * 【2026-09-18 判据收窄】把判据说成一句可执行的话：
+ *   **这个文件会被执行，或改变加载行为。**（不是「它在某个目录名下」。）
+ *   - 会被执行 / 改加载行为 → 高危：`.pi/extensions/*.ts` 加载即执行、
+ *     `.pi/settings.json` 改加载行为、`.pi/SYSTEM.md` 是系统提示词落点、
+ *     `package.json` 的 scripts 会被 `npm run` 执行、`.git/config` 的
+ *     fsmonitor 会让 `git status` 执行命令（git 2.55 实测）……
+ *   - 技能正文（`.pi/skills/**`、`.agents/skills/**`）与工作区的 `AGENTS.md`
+ *     同类：会被 pi 读进上下文，但**不执行**任何东西 —— 故与普通工作区文件
+ *     同等处置（工作区内写入放行）。此前把它当可执行配置拦下，代价是
+ *     「很平常的写技能每次都弹高风险」，收益与代价不匹配。
+ *   - **残留风险（如实写出）**：项目级技能正文会成为**该项目后续会话**的
+ *     提示注入持久落点。缓解是三件事，缺一不可：① 作用域仅限本项目；
+ *     ② 技能页可见（用户能看到技能列表里多了什么）；③ 技能里的脚本要执行，
+ *     仍必须过 powershell / 受控运行时那条已有的闸。
+ *   名单仍**不完备**（见 isConfigAsCodePath 的说明）——它是纵深防御的一层，
+ *   不是可依赖的边界。
  */
 
 /**
@@ -211,6 +228,7 @@ export function hasCleanStructure(command: string): boolean {
 const CONFIG_AS_CODE_DIRS: ReadonlySet<string> = new Set([
 	// pi 的项目级资源：扩展是 TS 模块、**加载即以本进程权限执行**；
 	// settings 改加载行为；SYSTEM.md 是提示注入的持久落点。
+	// 例外：`.pi/skills/**`（能力=数据，纯文本、加载时不执行）—— 见本段文件头判据。
 	".pi",
 	// config（core.fsmonitor / alias 让 git status、git diff 执行任意命令，
 	// git 2.55 实测）、hooks（**用户自己**提交时执行，逃出我们进程）。
@@ -245,14 +263,20 @@ const CONFIG_AS_CODE_FILES: ReadonlySet<string> = new Set([
 /**
  * 按**相邻两段**算（同样是任何层级命中）。
  *
- * 这一档存在的理由是**精度**：整个 `.agents` 不该进 CONFIG_AS_CODE_DIRS ——
- * pi 只加载 `.agents/skills`，而本仓库的 `.agents/notes/` 全是纯文档。
- * 把无害目录一并拦下的代价不是「多点一次弹窗」：它会训练用户对高风险弹窗
- * 条件反射点允许，那正是 project-trust.ts 警告过的失效模式。所以名单要**准**，不是要宽。
+ * 这一档存在的理由是**精度**：整目录命中会把无害的兄弟目录一并拦下，
+ * 而误报的代价不是「多点一次弹窗」—— 它会训练用户对高风险弹窗条件反射点
+ * 允许，那正是 project-trust.ts 警告过的失效模式。所以名单要**准**，不是要宽。
+ * `node_modules/.bin` 就是这一档现在的唯一成员：只有 `.bin/` 会被 `npm run`
+ * 加进 PATH 并调起，同目录下的普通包文件不该连坐。
+ *
+ * 【2026-09-18 移除 `[".agents", "skills"]`】pi 只把 `.agents/skills` 当
+ * **技能根**：纯文本，加载时不执行任何东西；其中的脚本要跑，必须另过
+ * powershell / 受控运行时那条已有的闸。把它与 `.pi/extensions`（加载即执行）
+ * 同等对待，代价是「很平常的写技能被当高危拦」，收益与代价不匹配 ——
+ * 判据与残留风险见本文件「配置即代码」段头。`.agents` 的其余子目录
+ * （如本仓库的 `.agents/notes/`）本来就是纯文档，从一开始就不该命中。
  */
 const CONFIG_AS_CODE_DIR_PAIRS: ReadonlyArray<readonly [string, string]> = [
-	// pi 从这里加载技能；技能正文 = 提示词，被改写即提示注入的持久落点。
-	[".agents", "skills"],
 	// npm run 把这里加进 PATH 并调起其中的可执行文件。
 	["node_modules", ".bin"],
 ];
@@ -298,6 +322,18 @@ export function commandTouchesConfigAsCode(command: string): boolean {
 
 
 /**
+ * 这一段是**技能根的头**吗（`.pi`/`.agents` 紧跟 `skills`）？
+ *
+ * 必须**相邻两段**才算 —— `foo.pi/skills`、`.agents/notes` 都不是技能根，
+ * 各自按原有名单处置（不因字符串里出现 `.pi`/`skills` 就被特殊化）。
+ * 技能根是纯文本（能力即数据）：pi 加载它时不执行任何东西，其中的脚本要跑
+ * 必须另过 powershell / 受控运行时那条闸 —— 故写入按普通工作区文件处置。
+ */
+function isSkillRootHead(segment: string, next: string | undefined): boolean {
+	return next === "skills" && (segment === ".pi" || segment === ".agents");
+}
+
+/**
  * 段序列 → 是否命中名单。写侧（路径段）与文本侧（命令 token）共用。
  *
  * `filesAnywhere` 的分歧不是疏漏，是两种输入的形状不同：
@@ -318,15 +354,40 @@ function segmentsTouchConfigAsCode(
 		const fileName = segments[segments.length - 1];
 		if (fileName !== undefined && CONFIG_AS_CODE_FILES.has(fileName)) return true;
 	}
+	/*
+	 * `..` 一出现，技能根例外**一律失效**（回落到原有名单判定）：
+	 *   `.pi\skills\..\settings.json`      → 实际落回 `.pi`（settings 改加载行为）；
+	 *   `.pi\skills\..\extensions\evil.ts` → 实际落回 `.pi/extensions`（加载即执行）；
+	 *   `.agents\skills\..\x`              → 实际落回 `.agents`（收窄前由相邻段命中）。
+	 * 纯文本层无法保证 `..` 之后仍在技能根内，所以例外不能在这一层生效。
+	 * 取舍是**宁可假阳性**：例外失效的代价只是 `Set-Content .pi\skills\x\..\SKILL.md`
+	 * 这类写法多弹一次高危（可接受），而漏放行的代价是文本闸形同虚设 ——
+	 * 模型很容易写出 `.pi\skills\..\extensions\evil.ts`，那等于把三期堵上的
+	 * 「加载即执行」链条重新打开。
+	 */
+	const escapesSkillRoot = segments.some((segment) => segment === "..");
 	for (let i = 0; i < segments.length; i += 1) {
 		const segment = segments[i];
 		if (segment === undefined || segment === "") continue;
 		if (filesAnywhere && CONFIG_AS_CODE_FILES.has(segment)) return true;
 		/*
+		 * 技能根例外**先于**这条：`.pi`/`.agents` 紧跟 `skills` 时那两段是
+		 * 技能根（纯文本），整目录命中不适用。只豁免这一段自身的整目录命中，
+		 * 不影响其他段 —— 例如 `Copy-Item .pi\skills\x\SKILL.md .git\config`
+		 * 仍会因 `.git` 段命中。
+		 *
+		 * `..` 出现时例外失效（见上）：技能根本身回到名单判定 —— `.pi` 本就
+		 * 整目录命中，`.agents/skills` 回落到收窄前的那条相邻段命中。
+		 */
+		const skillRootHead = isSkillRootHead(segment, segments[i + 1]);
+		if (skillRootHead && escapesSkillRoot) return true;
+		/*
 		 * 目录本身（最后一段就是它）不算 —— 那是 mkdir / 「提到目录」语义，
 		 * 危险的是里面的文件。所以命中要求目录段之后还有东西。
 		 */
-		if (CONFIG_AS_CODE_DIRS.has(segment) && i < segments.length - 1) return true;
+		if (!skillRootHead && CONFIG_AS_CODE_DIRS.has(segment) && i < segments.length - 1) {
+			return true;
+		}
 		for (const [first, second] of CONFIG_AS_CODE_DIR_PAIRS) {
 			// 同上：两段之后还得有文件名，否则只是建目录。
 			if (segment === first && segments[i + 1] === second && i + 2 < segments.length) return true;

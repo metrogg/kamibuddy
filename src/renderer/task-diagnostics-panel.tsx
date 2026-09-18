@@ -270,10 +270,11 @@ function Fold({
  * 四个成分块，两类口径不许混（shared/context-usage.ts 纪律）：
  *   - 「占用与分类」= **现在**：pi 精确 used/total + 分类估算（~ 前缀那套）；
  *   - 「最近一次入模拆分」= **当时**：台账最后一条 request_snapshot 的真实
- *     计数（系统分段 + 消息组成 + hidden context 注入量）；
+ *     计数（系统分段 + 消息组成 + hidden context 快照字数）；
  *   - 「系统提示词全文」= prompt:preview 同一条组装路径现算（不含 pi 上下文段，
  *     页脚口径同设置页预览）；
- *   - 「hidden context 注入块」= 宿主最近一次注入的全文（run 结束仍可看）。
+ *   - 「hidden context 快照」= 宿主最近一次冻结、已落进会话文件的那条快照全文
+ *     （run 结束仍可看）。
  */
 function ContextSection({
 	detail,
@@ -284,7 +285,7 @@ function ContextSection({
 	readonly detail: ContextUsageDetail | undefined;
 	readonly latestSnapshot: RequestSnapshotData | undefined;
 	readonly axes: { readonly sceneId: string; readonly interactionId: string; readonly expertId: string | undefined };
-	/** 当前会话 id —— hidden 注入块的换会话清态键。 */
+	/** 当前会话 id —— hidden 快照块的换会话清态键。 */
 	readonly sessionId: string;
 }): React.JSX.Element {
 	return (
@@ -327,9 +328,9 @@ function ContextSection({
 				}}
 			/>
 			<Fold
-				label="hidden context 注入块"
-				hint="最近一次 · 作为尾部独立消息注入（在最后一条用户消息之后）"
-				emptyText="还没有跑过任何一轮 —— 注入块随第一次发送出现。"
+				label="hidden context 快照"
+				hint="最近一次 · 落盘快照（在本轮用户消息之后，内容未变则不追加）"
+				emptyText="还没有跑过任何一轮 —— 快照随第一次发送出现。"
 				resetKey={sessionId}
 				onLoad={() => window.kami.hiddenContext()}
 			/>

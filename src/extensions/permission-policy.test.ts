@@ -611,6 +611,69 @@ describe("automation 工具（读写 KamiBuddy 自身任务库，不涉及用户
 		}
 	});
 
+	it("skill_install → 询问 medium（它改的是提示词面），只读档下拒绝", () => {
+		// 模型自己创建的技能经这条通道进用户技能目录：装进去就等于让一段指令进入
+		// 技能清单，所以与 automation_* 同档 —— 默认询问，且完全访问档也不开口子。
+		const decision = decide(facts({ toolName: "skill_install" }), PATHS, CWD);
+		expect(decision).toMatchObject({ kind: "ask", risk: "medium" });
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.summary).toContain("安装技能");
+		expect(decide(facts({ toolName: "skill_install" }), PATHS, CWD, READONLY).kind).toBe("deny");
+		expect(decide(facts({ toolName: "skill_install" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+
+	it("skill_uninstall → 询问 medium（删掉的是用户已看得见的能力），只读档下拒绝", () => {
+		// 与 skill_install 对称：删技能同样改提示词面，且删的是用户已经拥有的能力；
+		// 批准弹窗就是 WorkBuddy skill_manage(delete) 要求的「先跟用户确认」。
+		const decision = decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD);
+		expect(decision).toMatchObject({ kind: "ask", risk: "medium" });
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.summary).toContain("删除技能");
+		expect(decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD, READONLY).kind).toBe("deny");
+		expect(decide(facts({ toolName: "skill_uninstall" }), PATHS, CWD, FULL).kind).toBe("deny");
+	});
+
+	it("技能类工具的弹窗带出「动的是谁」（知情同意的下限，不能盲批）", () => {
+		/*
+		 * 装进去的正文下一轮就会作为提示词被模型读到 —— 用户点「允许」时必须知道
+		 * 装的是哪个技能、从哪来（对齐 codex 审批事件带 reason、WorkBuddy 的 Edit
+		 * 给 diff、dsh 要 justification）。这条钉住 appDataTarget 真的接到了 details 上。
+		 */
+		const install = decide(
+			facts({ toolName: "skill_install", appDataTarget: "D:\\KamiBuddy\\hu-yan-luan-yu" }),
+			PATHS,
+			CWD,
+		);
+		if (install.kind !== "ask") throw new Error("应为 ask");
+		expect(install.details).toBe("D:\\KamiBuddy\\hu-yan-luan-yu");
+
+		const uninstall = decide(facts({ toolName: "skill_uninstall", appDataTarget: "hu-yan-luan-yu" }), PATHS, CWD);
+		if (uninstall.kind !== "ask") throw new Error("应为 ask");
+		expect(uninstall.details).toBe("hu-yan-luan-yu");
+	});
+
+	it("appDataTarget 只进展示，不参与路径判定（来源路径落在 configDir 里也照样放行到询问）", () => {
+		/*
+		 * 技能可以从「已装技能目录」再装一次（来源就在 configDir 里）。若把
+		 * appDataTarget 当成 path 用，阶段 1 的 configDir 禁写会在这里误拒 ——
+		 * 这条用例就是那个耦合的回归探针。
+		 */
+		const decision = decide(
+			facts({ toolName: "skill_install", path: undefined, appDataTarget: join(PATHS.configDir, "skills", "demo") }),
+			PATHS,
+			CWD,
+		);
+		expect(decision).toMatchObject({ kind: "ask", risk: "medium" });
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.details).toBe(join(PATHS.configDir, "skills", "demo"));
+	});
+
+	it("automation_* 没有可展示对象 → details 留空（不留一句「undefined」占位）", () => {
+		const decision = decide(facts({ toolName: "automation_create" }), PATHS, CWD);
+		if (decision.kind !== "ask") throw new Error("应为 ask");
+		expect(decision.details).toBe("");
+	});
+
 	it("询问摘要说明动作（创建 / 删除自动化任务）", () => {
 		const create = decide(facts({ toolName: "automation_create" }), PATHS, CWD);
 		if (create.kind !== "ask") throw new Error("应为 ask");
@@ -1103,7 +1166,6 @@ describe("配置即代码：写入需要审批", () => {
 		join(".pi", "extensions", "nested", "deep.ts"),
 		join(".pi", "settings.json"),
 		join(".pi", "SYSTEM.md"),
-		join(".agents", "skills", "x", "SKILL.md"),
 		join(".git", "config"),
 		join(".git", "hooks", "pre-commit"),
 		join(".github", "workflows", "ci.yml"),
@@ -1209,6 +1271,39 @@ describe("配置即代码：写入需要审批", () => {
 		// 配置目录里的 package.json 该走「禁止读写配置与凭据文件」，不是本分支。
 		const verdict = decide(facts({ path: join(PATHS.configDir, "package.json") }), PATHS, CWD);
 		expect(verdict.kind).toBe("deny");
+	});
+});
+
+describe("工作区内技能根写入 → 与普通工作区文件同等（spec: add-project-scoped-skills）", () => {
+	/*
+	 * 2026-09-18 判据收窄：高危名单只留「会被执行 / 改变加载行为」的路径。
+	 * 技能正文（`.pi/skills/**`、`.agents/skills/**`）会被 pi 读进上下文，
+	 * 但**不执行**任何东西 —— 与工作区的 `AGENTS.md` 同类，按普通工作区文件
+	 * 处置（放行）。上面的反侧断言（EXECUTABLE_CONFIGS 里 `.pi/extensions`、
+	 * `settings.json`、`SYSTEM.md` 仍是高风险）钉住「收窄成精确」而不是
+	 * 「把整条名单删掉」。
+	 */
+	it("写 / 改技能根下的文件 → 放行（write 与 edit 都放行，不弹窗）", () => {
+		for (const relative of [
+			join(".pi", "skills", "x", "SKILL.md"),
+			join(".agents", "skills", "x", "SKILL.md"),
+		]) {
+			const target = join(PATHS.workspaceDir, relative);
+			for (const toolName of ["write", "edit"]) {
+				expect(decide(facts({ toolName, path: target }), PATHS, CWD), `${toolName} ${relative}`).toEqual({
+					kind: "allow",
+				});
+			}
+		}
+	});
+
+	it("反侧：可执行配置仍高风险询问（防止把整条名单拿掉）", () => {
+		for (const relative of [join(".pi", "extensions", "evil.ts"), join(".pi", "settings.json")]) {
+			expect(decide(facts({ path: join(PATHS.workspaceDir, relative) }), PATHS, CWD), relative).toMatchObject({
+				kind: "ask",
+				risk: "high",
+			});
+		}
 	});
 });
 

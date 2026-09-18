@@ -1,21 +1,29 @@
 /**
- * 技能导入：把「含 SKILL.md 的文件夹」或「单个 .md」装进用户技能目录。
+ * 技能导入 / 删除：把「含 SKILL.md 的文件夹」或「单个 .md」装进用户技能目录，
+ * 以及把**模型自己创建的**技能移出去。
  *
  * 为什么校验从紧：pi 按 frontmatter 的 name 注册 /skill:name 命令、
  * 按 description 做自动路由 —— 缺了就是「列表里有但永远不会被用」的死技能，
  * 不如导入时就报清楚。name 规则同 pi 的 validateName（小写 a-z/0-9/连字符）。
  *
- * 同名拒绝而不覆盖：目标可能是用户手工改过的技能，静默覆盖 = 丢改动
- * （与 custom-providers 的归属守卫同一原则）。
+ * 同名默认拒绝（目标可能是用户手工改过的技能，静默覆盖 = 丢改动，与
+ * custom-providers 的归属守卫同一原则）；**唯一的例外**是带 `agentCreated`
+ * 标记的技能（模型经 skill_install 装的，对齐 WorkBuddy 的 `agent_created: true`）——
+ * 那条链路要支持「改一下我上次建的那个技能」，否则模型每次都得让用户先去手工删目录。
+ * 判定只认 sidecar 里的标记，不认目录长相：用户手工放进来的同名技能永远走拒绝分支。
+ *
+ * 覆盖是**两段式换名**（装到暂存目录 → 旧目录改名备份 → 新目录上位 → 删备份），
+ * 中途失败会把备份改回去 —— 模型能触发的这条路径上，不能出现「复制到一半，
+ * 用户原来的技能没了」。
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { SkillInfo } from "../shared/settings.ts";
 import { getConfigDir } from "./config-paths.ts";
 import { parseFrontmatter, optionalBoolean, optionalString, requireString } from "./frontmatter.ts";
-import { readPreferences } from "./preferences.ts";
-import { isSkillEnabled, SKILL_NAME_PATTERN } from "./skill-status.ts";
+import { readPreferences, writePreferences } from "./preferences.ts";
+import { isSkillEnabled, SKILL_NAME_PATTERN, type SkillOverride } from "./skill-status.ts";
 
 /** pi 的技能名校验规则额外还有长度上限（skills.ts validateName），一并照抄。 */
 const NAME_MAX = 64;
@@ -34,6 +42,16 @@ export function userSkillsDir(): string {
 	return join(getConfigDir(), "skills");
 }
 
+/** importSkill 的可选入参。 */
+export interface ImportSkillOptions {
+	/**
+	 * 本次安装由**模型**发起（skill_install 工具）。写入 sidecar 后，该技能才允许
+	 * 被模型覆盖安装或删除（对齐 WorkBuddy 的 `agent_created: true` 语义）。
+	 * 用户经技能页导入时不传 —— 那些技能是用户的，模型不许改。
+	 */
+	readonly agentCreated?: boolean;
+}
+
 /** `_installed.json` 的形状（只在导入时写，见 importSkill）。 */
 interface InstalledMetaFile {
 	readonly name: string;
@@ -43,6 +61,11 @@ interface InstalledMetaFile {
 	readonly source: "local-import";
 	readonly sourcePath: string;
 	readonly installedAt: number;
+	/**
+	 * 模型装的（对齐 WorkBuddy 写入 SKILL.md 的 `agent_created: true`）。
+	 * 只在为 true 时写键：用户经技能页导入的技能不带这个键，读取侧归一 false。
+	 */
+	readonly agentCreated?: true;
 }
 
 /** 读回来的安装元数据。字段缺失即 undefined，与 `SkillInfo` 的可选字段一一对应。 */
@@ -50,6 +73,8 @@ export interface InstalledSkillMeta {
 	readonly version: string | undefined;
 	readonly sourcePath: string | undefined;
 	readonly installedAt: number | undefined;
+	/** 是否模型创建（决定模型能不能覆盖/删除它）。缺键 = false，不是 undefined。 */
+	readonly agentCreated: boolean;
 }
 
 interface ParsedSkill {
@@ -148,15 +173,28 @@ export function readInstalledMeta(skillDir: string): InstalledSkillMeta | undefi
 		version: typeof version === "string" && version !== "" ? version : undefined,
 		sourcePath: typeof sourcePath === "string" && sourcePath !== "" ? sourcePath : undefined,
 		installedAt: typeof installedAt === "number" && Number.isFinite(installedAt) ? installedAt : undefined,
+		// 只认 true：写歪的值（"true" / 1）当没标记 —— 授权判定上，读不懂就是不给权限。
+		agentCreated: record["agentCreated"] === true,
 	};
+}
+
+/**
+ * 覆盖安装时的暂存根。**必须放在 skills/ 之外**：技能加载器会把
+ * `<skills>/<每个一级子目录>/SKILL.md` 当技能发现，暂存目录（点前缀、名字也不是
+ * 合法技能名）会在安装的中间态被扫成一个不存在的技能。同盘改名仍然成立
+ * （暂存根与技能目录都在 configDir 下）。
+ */
+function stagingRoot(): string {
+	return join(getConfigDir(), ".skill-staging");
 }
 
 /**
  * 导入技能，返回安装后的信息。
  *
  * 目标目录名 = frontmatter 的 name（pi 按它注册命令，目录名只是容器）。
+ * 同名且是模型创建时**覆盖**（见文件头），其余同名一律拒。
  */
-export function importSkill(sourcePath: string): SkillInfo {
+export function importSkill(sourcePath: string, options: ImportSkillOptions = {}): SkillInfo {
 	const source = resolve(sourcePath);
 	const parsed = parseSource(source);
 
@@ -167,39 +205,62 @@ export function importSkill(sourcePath: string): SkillInfo {
 	if (parsed.description.trim() === "") throw new Error("SKILL.md 缺少 description —— 没有它模型无法判断何时使用该技能");
 
 	const destDir = join(userSkillsDir(), parsed.name);
-	if (existsSync(destDir)) {
+	const existing = existsSync(destDir);
+	if (existing && readInstalledMeta(destDir)?.agentCreated !== true) {
 		throw new Error(`技能「${parsed.name}」已存在。如需替换，请先到技能目录手动删除旧的（${destDir}）`);
 	}
 
-	mkdirSync(destDir, { recursive: true });
-	if (parsed.sourceDir !== null) cpSync(parsed.sourceDir, destDir, { recursive: true });
-	else cpSync(parsed.skillMdPath, join(destDir, "SKILL.md"));
+	const stagingDir = join(stagingRoot(), `${parsed.name}-${process.pid}-${Date.now()}`);
+	const installedAt = Date.now();
+	try {
+		// 技能目录本身可能还不存在（首次安装）：改名要落在已存在的父目录下，
+		// 少了这一句 ENOENT 会在最后一步换名时才炸出来。
+		mkdirSync(userSkillsDir(), { recursive: true });
+		mkdirSync(stagingDir, { recursive: true });
+		if (parsed.sourceDir !== null) cpSync(parsed.sourceDir, stagingDir, { recursive: true });
+		else cpSync(parsed.skillMdPath, join(stagingDir, "SKILL.md"));
+
+		/*
+		 * 写 sidecar 是**无条件覆盖**：来源里若本来就带 `_installed.json`（例如从一个已装技能目录
+		 * 再导入一次），cpSync 会把它一起复制过来，而那份记录的是**上一处**的安装信息 ——
+		 * 本目录的安装时间必须以本次为准。
+		 */
+		const metaFile: InstalledMetaFile = {
+			name: parsed.name,
+			...(parsed.version === undefined ? {} : { version: parsed.version }),
+			source: "local-import",
+			sourcePath: source,
+			installedAt,
+			...(options.agentCreated === true ? { agentCreated: true as const } : {}),
+		};
+		writeFileSync(join(stagingDir, INSTALLED_META_FILE), `${JSON.stringify(metaFile, null, 2)}\n`, "utf8");
+	} catch (error) {
+		// 暂存目录半装（有技能没元数据）就删掉：留着只会让下次同名安装撞上「已存在」。
+		rmSync(stagingDir, { recursive: true, force: true });
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(`技能「${parsed.name}」安装失败，技能目录未被改动：${reason}`);
+	}
 
 	/*
-	 * 写 sidecar 是**无条件覆盖**：来源里若本来就带 `_installed.json`（例如从一个已装技能目录
-	 * 再导入一次），cpSync 会把它一起复制过来，而那份记录的是**上一处**的安装信息 ——
-	 * 本目录的导入时间必须以本次为准。
+	 * 两段式换名：旧目录先改名让位（**不是删掉**），新的上位成功后才删备份。
+	 * 任何一步失败都能把旧的改回去 —— 覆盖是模型能触发的路径，
+	 * 不能出现「装上新的、旧的没了，而新的其实是半成品」。
 	 */
-	const installedAt = Date.now();
-	const metaFile: InstalledMetaFile = {
-		name: parsed.name,
-		...(parsed.version === undefined ? {} : { version: parsed.version }),
-		source: "local-import",
-		sourcePath: source,
-		installedAt,
-	};
+	const backupDir = join(stagingRoot(), `${parsed.name}.old-${process.pid}-${Date.now()}`);
+	let backedUp = false;
 	try {
-		writeFileSync(join(destDir, INSTALLED_META_FILE), `${JSON.stringify(metaFile, null, 2)}\n`, "utf8");
+		if (existing) {
+			renameSync(destDir, backupDir);
+			backedUp = true;
+		}
+		renameSync(stagingDir, destDir);
 	} catch (error) {
-		/*
-		 * 回滚而不是留下「有技能没元数据」的半装状态：半装后卡片永远缺来源/导入时间，
-		 * 且同名再来一次会被上面的「已存在」挡住 —— 用户除了手动删目录没有别的出路。
-		 * destDir 是本次刚建的（上面 existsSync 已挡掉同名），删掉即回到导入前的状态。
-		 */
-		rmSync(destDir, { recursive: true, force: true });
+		if (backedUp) renameSync(backupDir, destDir);
+		rmSync(stagingDir, { recursive: true, force: true });
 		const reason = error instanceof Error ? error.message : String(error);
-		throw new Error(`技能「${parsed.name}」复制完成但写入安装信息失败，已回滚本次导入：${reason}`);
+		throw new Error(`技能「${parsed.name}」安装失败，已恢复原状：${reason}`);
 	}
+	if (backedUp) rmSync(backupDir, { recursive: true, force: true });
 
 	return {
 		name: parsed.name,
@@ -216,4 +277,40 @@ export function importSkill(sourcePath: string): SkillInfo {
 		installedAt,
 		sourcePath: source,
 	};
+}
+
+/**
+ * 删除**模型创建**的技能（对齐 WorkBuddy `skill_manage(action="delete")` 的
+ * `agent_created` 判定：市场 / 内置 / 用户手工放置的技能都不在模型可删范围内，
+ * 它们该由用户自己在技能页处理）。
+ *
+ * 顺手清掉该技能残留的 `off` 覆盖：不清的话，将来重建同名技能会被那条陈旧记录
+ * **静默停用** —— 表现是「新建的技能在 / 菜单里消失」，没有任何提示。
+ */
+export function removeAgentSkill(name: string): { readonly name: string; readonly dir: string } {
+	if (!SKILL_NAME_PATTERN.test(name)) {
+		throw new Error(`技能名「${name}」不合法：只能用小写字母、数字和连字符（如 meeting-notes）`);
+	}
+	const dir = join(userSkillsDir(), name);
+	if (!existsSync(dir)) throw new Error(`用户技能目录里没有技能「${name}」（${dir}）`);
+	if (readInstalledMeta(dir)?.agentCreated !== true) {
+		throw new Error(
+			`技能「${name}」不是模型创建的，不能由模型删除 —— 内置、市场安装与用户手工放置的技能都要用户自己在技能页处理`,
+		);
+	}
+	rmSync(dir, { recursive: true, force: true });
+	clearSkillOverride(name);
+	return { name, dir };
+}
+
+/** 清掉某技能的用户级停用记录（缺省即启用，只有 "off" 一种表示 —— 同 setSkillEnabled）。 */
+function clearSkillOverride(name: string): void {
+	const preferences = readPreferences();
+	const overrides = preferences.skillOverrides;
+	if (overrides?.[name] === undefined) return;
+	const next: Record<string, SkillOverride> = { ...overrides };
+	delete next[name];
+	// 空对象与「没写过」在读取层都归一 undefined，写出后者才是唯一表示。
+	const { skillOverrides: _dropped, ...rest } = preferences;
+	writePreferences(Object.keys(next).length === 0 ? rest : { ...rest, skillOverrides: next });
 }

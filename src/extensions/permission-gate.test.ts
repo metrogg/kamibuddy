@@ -644,3 +644,53 @@ describe("区外读弹窗的 writeBackPath（路径写回资格）", () => {
 		expect(asked).toHaveLength(0);
 	});
 });
+
+/* ── 技能类工具的弹窗内容（extractFacts 的接线，spec: 知情同意） ── */
+
+describe("技能类工具的审批带出「动的是谁」", () => {
+	it("skill_install：details 是来源路径（用户要点允许时看得见装的是谁）", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		await call({ toolName: "skill_install", input: { sourcePath: "D:\\KamiBuddy\\hu-yan-luan-yu" } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.summary).toContain("安装技能");
+		expect(asked[0]?.details).toBe("D:\\KamiBuddy\\hu-yan-luan-yu");
+	});
+
+	it("skill_uninstall：details 是技能名", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		await call({ toolName: "skill_uninstall", input: { name: "hu-yan-luan-yu" } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.details).toBe("hu-yan-luan-yu");
+	});
+
+	it("两件技能工具都不走路径判定：从已装技能目录（configDir）再装一次不误拒", async () => {
+		/*
+		 * 来源路径在 configDir 里是**正常**场景（把一个已装技能再装一次/改完重装）。
+		 * 若 extractFacts 把 sourcePath 当 path 用，阶段 1 的 configDir 禁写会把它
+		 * 直接拦掉（连弹窗都没有）—— 这条就是那个耦合的端到端探针。
+		 */
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		const result = await call({
+			toolName: "skill_install",
+			input: { sourcePath: join(CONFIG, "skills", "demo") },
+		});
+
+		expect(result).toBeUndefined();
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.details).toBe(join(CONFIG, "skills", "demo"));
+	});
+
+	it("automation_* 没有可展示对象 → 不弹空详情条", async () => {
+		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });
+
+		await call({ toolName: "automation_create", input: { prompt: "每天早上汇总" } });
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.details).toBe("");
+	});
+});

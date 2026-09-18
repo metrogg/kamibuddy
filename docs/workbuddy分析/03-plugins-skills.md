@@ -297,4 +297,157 @@ CodeBuddy 接入了 MCP 官方 `io.modelcontextprotocol/ui` 扩展（ext-apps，
 
 ---
 
+## 七、我们的对齐决策（KamiBuddy 侧落地口径）
+
+### 决策 A：模型创建的技能走受校验安装通道，`agent_created` 语义落在 sidecar
+
+**结论（2026-09-18 定，已实现）**
+
+- WorkBuddy 的创建链路是「模型**直接写** `~/.workbuddy/skills/<name>/SKILL.md`」
+  （`skill-creator` 的 `init_skill.py <name> --path <用户技能目录>`；其
+  `main/fs-protection.js` 明确把 `skills/` 归为合法路径，不在保护哨兵里），
+  写完**立刻可用**，回复末尾再附一份 `package_skill.py` 打出的 `<name>.zip`。
+  这条链路**不经过市场** —— 市场（`marketplace-skill-installer` + `_skillhub_meta.json`）
+  只管第三方技能的分发。改/删自己建的技能由 `skill_manage(action=modify|delete)`
+  按 `agent_created` 判定放行（`cli/dist/codebuddy.js` 的 `validateAgentCreated`：
+  市场 / 内置 / 插件技能一律拒）。
+- 我们的落地：模型仍在**工作区**产出技能目录，经 `skill_install`（内部调
+  `core/skill-install.ts` 的 `importSkill`）落进 `<configDir>/skills`，装完立刻出现在技能页
+  与 `/` 菜单（`skillOverrides` 缺省启用）；同一工具顺带打出 `<工作区>/<name>.zip`
+  （布局照 `package_skill.py`：zip 内带技能目录名作根），交付走 `present_files`。
+  **改 = 把改好的目录重装一次**（覆盖），**删 = `skill_uninstall`**。
+- **授权边界落在 sidecar `_installed.json` 的 `agentCreated`**（只认 `true`）：只有模型装的
+  技能才允许被模型覆盖 / 删除；用户经技能页导入或手工放进来的一律走「已存在，请用户自己处理」
+  的拒绝分支。装 / 删在权限门都登记为 APP_DATA_MUTATING（询问），弹窗即 WorkBuddy
+  要求的「先跟用户确认」。
+
+**为什么不照抄「直接写盘」**：我们的权限门对 `<configDir>/skills` 只放开读（阶段 1 的结论：
+技能正文即提示词，`write`/`edit` 篡改 = 提示注入面）。照抄就得为写开口子，那会把
+「模型能改技能正文」变成一条无审批的常态路径 —— 与「装 / 删都要用户点头」直接冲突。
+落点、生效时机、用户可见效果与 WorkBuddy 一致，差别只是**中间多一次受校验的工具调用**。
+
+**为什么标记进 sidecar 而不是 SKILL.md 的 frontmatter**：技能元数据本来就有 sidecar 通道
+（`_installed.json`；卡片上的版本 / 来源 / 导入时间都读它），标记放这里是零新增机制；
+写 frontmatter 则要**重写用户给出的 YAML**（转义、块标量、既有键顺序都得自己保证），
+收益只是「用文本编辑器能看到那一行」。
+
+## 否决方案
+
+1. **照抄「模型直接写 `<configDir>/skills`」** —— 提示注入面 + 与审批档冲突（见上）。
+   将来要打开这条，前提是先把权限门阶段 1 的结论推翻，并另写一份决策记录。
+2. **frontmatter 里写 `agent_created: true`** —— 手改 YAML 的风险大于收益（见上）。
+   不影响与 WorkBuddy 的**行为**对齐：判定只认「谁装的」，不认标记写在哪个文件里。
+3. **在技能页加一个「模型创建」市场区 / 入口** —— WorkBuddy 的创建链路本就不经市场；
+   把创建出来的技能塞进市场、再要求用户开开关，是凭空加一道用户没要求的闸门。
+4. **让 `skill_uninstall` 也能删用户手工放的技能（靠弹窗兜底）** —— 删除不可逆，而
+   「这个技能是谁的」有确定性答案（sidecar 标记）。能用确定性判定拦住的事，不该交给用户
+   在弹窗里临场判断。
+5. **打包 zip 时把 sidecar 一并打进去**（WorkBuddy 的 `package_skill.py` 不过滤）——
+   `_installed.json` 记的是本机安装事实（含模型工作区的绝对路径），跟着 zip 分享出去
+   既无用又漏本机路径。这条是**有意偏离**，已在 `core/skill-pack.ts` 注释里标明。
+
+### 决策 B：技能作用域两层 + 工作区内技能根写入回归普通口径
+
+**结论（2026-09-18 定，已实现）**
+
+- **技能作用域分两层，按落点判、不按目录名猜。** 判定收进一个可单测的纯函数
+  `skillScopeOf(filePath, { builtinDirs, workspaceDir })` → `"builtin" | "project" | "user"`
+  （`src/core/skill-scope.ts`）：落在随包目录（`resources/skills`、`resources/plugins`）→
+  `builtin`；落在**当前工作区**内 → `project`；其余 → `user`（含 `<configDir>/skills`、
+  工作区外的 `~/.agents/skills`）。`SkillInfo.origin` 由两态扩为三态
+  （`src/shared/settings.ts`），`src/daemon/index.ts` 的 `listSkills` 改用它；
+  技能页 `sourceLabel` 四态（内置 / 本项目 / 导入 / 手工放置）。
+- **「配置即代码」判定加技能根例外**（`src/extensions/safe-commands.ts`）：相邻两段
+  `.pi`+`skills`、`.agents`+`skills`（任意层级）不再算配置即代码；同时从
+  `CONFIG_AS_CODE_DIR_PAIRS` 删除 `[".agents","skills"]`（现仅剩 `["node_modules",".bin"]`，
+  注释已改写成事实）。判据从「它在某个目录名下」收窄为「**该文件会被执行或改变加载行为**」
+  （写在 `isConfigAsCodePath` 的段头注释里）。写侧 `isConfigAsCodePath` 与命令文本闸
+  `commandTouchesConfigAsCode` 共用同一段判定，两侧同步：`Set-Content .pi\skills\x\SKILL.md y`
+  同样放行，而 `Set-Content .pi\settings.json y` 仍命中。`.pi` 的其余高危判定
+  （`extensions/**` 加载即执行、`settings.json` 改加载行为、`SYSTEM.md` 系统提示词落点）
+  与凭据目录 / `<configDir>` 禁区**一概不变**。
+- **例外的作用范围是刻意收窄的**：只豁免技能根那一段**自身**的整目录命中，
+  不是「路径/命令里出现技能根就整体放行」。理由：整体早退会给命令文本闸开一个
+  「提到技能根就放行」的新绕过口 —— `Copy-Item .pi\skills\x\SKILL.md .git\config`
+  仍应因 `.git/config` 段命中。例外还必须**相邻段**匹配：`foo.pi/skills`、
+  `.agents/notes/a.md` 不命中，各自按原名单处置。
+- **`skill-creator` 改成两层口径**（`resources/skills/skill-creator/SKILL.md` 与同目录
+  `README.md`）：默认产出**项目级** `<工作区>/.pi/skills/<name>/`，写完即被发现、无需安装、
+  不弹窗；用户要跨工作区时才用 `skill_install` 升级到用户级（入参仍是工作区里那个目录，
+  那一步询问一次并打出 zip）。
+
+**证据链**
+
+- **dsh**：可写根只有 workspace + temp（`开源项目/deepseek-harness/packages/sandbox/sandbox/src/roots.ts`
+  附近），项目级技能根 `<projectRoot>/.dsh/skills`、`.agents/skills` 在区内可写；
+  用户级 `<dshHome>/skills` 在区外，越权要 `sandbox_permissions` + justification
+  （`packages/sandbox/sandbox/src/escalation.ts`）。
+- **codex**：两层作用域 `<project>/.codex/skills`、`.agents/skills` 与 `$CODEX_HOME/skills`、
+  `~/.agents/skills`（`开源项目/codex/codex-rs/ext/skills/src/host_roots.rs`）；
+  且 codex 把 `.codex` / `.git` / `.agents` 设为可写根内的**只读子路径**，注释理由是
+  「改它们会提升 agent 权限」（`codex-rs/protocol/src/protocol.rs` 约 1117-1118 行；
+   `.git` / `.agents` / `.codex` 三个受保护常量与「可写根内默认只读子路径」的装配在
+   `codex-rs/protocol/src/permissions.rs` 约 27-29、821-823 行）—— 这与我们本次的做法**不同**：我们收窄到
+  「只保留会被执行 / 改变加载行为的路径」，没有把整个 `.pi` 设成只读。
+- **WorkBuddy 桌面端**：`~/.workbuddy/skills/` 直接进了沙箱 `filesystem.allowWrite` 白名单
+  （`docs/workbuddy分析/_research-workbuddy-sandbox.md` 约 422 行；同处附工作目录
+  `~/.workbuddy/plugins/`、`~/.claude/`、`~/.codex/`、`~/.agents/skills/`）。
+- **pi**：项目级技能根由 pi 自己发现，且 pi 自身就分 global / project 两个 scope ——
+  `开源项目/pi/packages/coding-agent/docs/skills.md`（Locations 节）写明：global 为
+  `~/.pi/agent/skills/`、`~/.agents/skills/`；**project 只在项目被信任后才加载**，
+  为 `.pi/skills/` 与 `.agents/skills/`（cwd 及祖先目录，到 git 仓库根）。
+  实现上 `<cwd>/.pi/skills` 是项目级默认根：
+  `node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js` 第 349-351 行的
+  `includeDefaults` 分支同时挂两个根 —— `join(resolvedAgentDir, "skills")` 标 `scope: "user"`、
+  `resolve(resolvedCwd, CONFIG_DIR_NAME, "skills")`（即 `<cwd>/.pi/skills`）标 `scope: "project"`；
+  工作区 `.agents/skills`（cwd 及祖先目录）走**另一条链**：发现逻辑在
+  `dist/core/package-manager.js`（约 1994 行 "Project skills from .agents/"，每个 root 自带 baseDir）
+  与 `dist/core/trust-manager.js`（约 159 行 `join(currentDir, ".agents", "skills")`），
+  且**项目级 `.agents/skills` 需要项目被信任**（用户级 `~/.agents/skills` 不在此列）。
+  资源层还自带一套 scope 优先级（`dist/core/package-manager.js` 约 51-59 行：
+  project+settings > project+auto > user+settings > user+auto > package）—— 与我们的
+  「按落点分三层」是同一件事的两种表述，我们只做展示用分类，不参与 pi 的冲突裁决。
+- **我们内部的一致性论据**：pi 会把工作区 `AGENTS.md` 当项目指令加载（pi `docs/extensions.md`
+  的 `contextFiles`），而写工作区 `AGENTS.md` 在我们的权限门里是**放行**的 —— 同一类
+  「会被读进上下文但不执行」的文本，`.pi/skills` 之前却被当高危拦，属于口径不一致。
+
+**残留风险（如实写）**
+
+- 项目级技能正文会成为**该项目后续会话**的提示注入持久落点。缓解有三条：① 作用域仅本项目；
+  ② 技能页可见（标「本项目」）；③ 技能里的脚本要执行，仍须过 shell / 受控运行时这条既有闸
+  （沙箱只约束写，读与网络不受约束，这条闸拦的是执行）。
+- 判据收窄不改变一个更基本的事实：高危名单本身**不完备**（`*.config.js`、编辑器约定……
+  是开放集合），它是**纵深防御的一层，不是可依赖的边界**。
+- **命令文本闸的字面量旁路（核验发现，已修）**：技能根例外最初写成"相邻两段即豁免"，
+  于是 `Set-Content .pi\skills\..\settings.json y` 这类**用 `..` 逃出技能根**的写法不再被文本闸命中
+  （写侧不受影响：权限门先 resolve 再判）。已改为「段序列里一旦出现 `..`，技能根例外一律不生效」——
+  宁可假阳性（`Set-Content .pi\skills\x\..\SKILL.md` 多弹一次高危），也不让文本闸形同虚设。
+  与既有残留一致：文本闸防**字面量**，防不住变量拼接（模块头注释已自陈）。
+- **项目级技能的发现 cwd 与会话 cwd 可能不同（已知边界，未修）**：`listSkills` 一直用**生效根**
+  （`getEffectiveWorkspaceRoot()`，注释写明是为了"用户改了默认存储路径后新根下的技能能被发现"），
+  而 pi 在会话里按**会话 cwd** 发现项目级技能。当两者不同（临时任务目录、显式切换 cwd 的会话）时，
+  `/` 菜单与技能清单段列的是**生效根那个项目**的技能，展开却按会话 cwd —— 属"三处同源"之外的
+  第四处差异。本次改动**首次让它可见**（以前只有内置与用户级技能，与 cwd 无关）。
+  修法是会话侧的 `listSkills` 传会话 cwd、技能页仍用生效根，需单独一轮（含"技能页该展示哪个项目"
+  的产品口径），本轮不做。
+
+## 否决方案（决策 B）
+
+1. **只做两层作用域、名单不动** —— 项目级技能虽然有了落点，但每写一个文件仍弹一次高危，
+   等于"能造技能但造得很痛"，体验比现状更差（多了一层可用落点，却每次都拦）。
+2. **技能根写入降为 medium 询问** —— 保留一次知情点，看似折中，但"写技能"本就是平常事，
+   把它按 medium 拦下仍是"拦平常事"；且 medium 可本会话记住，安全收益有限、打断成本确定，
+   与判据（会被执行 / 改加载行为）不符。
+3. **学 codex 把 `.pi` / `.agents` 整目录设只读子路径** —— 隔离更强，但会把"写技能"
+   变成必须越权申请（`sandbox_permissions` + justification 那条通道），把最平常的操作
+   推上最重的流程；且我们有权限门这一层，无需照抄 codex 的 ACL 子路径做法。
+4. **另开一个自定义技能根目录绕开 `.pi` 名单** —— 偏离 pi 原生约定（`.pi/skills`、`.agents/skills`
+   是 pi 的发现位置），用户与模型都要学一套私有目录，还要改 settings 注入才能让 pi 发现它，
+   为绕开一层名单引入一套长期维护成本，不划算。
+
+**决策 A 的「模型创建的技能走受校验安装通道」结论不受本决策影响**：用户级落点
+（`<configDir>/skills`）仍是受校验通道；本决策只动**工作区内**技能根的权限口径与作用域标注。
+
+---
+
 *证据路径前缀：`extracted/` = `c:\Program Files\WorkBuddy\_analysis\extracted\`。文档类证据均在 `extracted/cli/dist/web-ui/docs/cn/cli/`；插件实物证据均在 `extracted/resources/plugins/workbuddy-builtin/`。*

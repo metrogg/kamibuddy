@@ -25,9 +25,21 @@
  *     （工具定义不在 systemSegments 里）—— 分段逐段一致时只能如实说断点在提示词之前；
  *   - 上一轮台账没有分段指纹（旧台账）时，只有字符数可对照，判不出就说判不出。
  *
- * **瞬态注入项**（`TRANSIENT_INJECTION_CUSTOM_TYPES`：prompt-switch 的 `context`
- * 事件与 session-host 的 hidden context，两条都每请求现算、不落会话）在归因前
- * 被剔除，理由见 `dropTransient`。
+ * **上下文快照**（`kamibuddy-runtime-context` / `kamibuddy-hidden-context`）**是真历史、
+ * 不得剔除** —— 其差异就是真实断点。快照由 extensions/prompt-switch.ts 的
+ * `before_agent_start` handler 落成会话文件里的持久条目，落盘那一刻 id
+ * （`custom:<timestamp>`）与位置就定下，此后逐条 diff 看到的是**真实**的断点。
+ *
+ * **剔除史（留档，2026-09-18 / spec: persist-context-snapshots）**：改投递方式之前，
+ * 这两个通道是「每请求现算、不落会话」的尾部注入块（每个请求现算一条新的，id 轮轮
+ * 不同），归因前由 `dropTransient` 剔除（旧台账没有显式标记时退到「role 归 other 的
+ * 尾部条目」这条可判定条件）。当初的理由是「它每轮都在尾部换一条，参与逐条 diff 会
+ * **每一轮**造出一个假差异，把『其实历史全命中』的轮次误报成『断在最后一条』」。
+ * **这个判断是错的**：那根本不是假差异，那是**真实发生的重付** —— 实测 24 次调用里
+ * 尾部块被重注 24 次、provider 实收 58,094 token 未命中（占会话未命中 28.8%），
+ * 而剔除让它对诊断面板始终隐形（面板报「历史全命中」）。快照改为落盘后「尾部每轮换
+ * 一条」的前提消失，剔除只剩害处：把真实断点重新藏起来。`dropTransient` 与其旧台账
+ * 降级分支已一并删除。
  *
  * 依赖方向：本文件零运行时依赖（不 import pi、不 import electron），
  * 供 renderer 的诊断面板直接消费（AGENTS.md §1.3：renderer 只 import shared）。
@@ -114,36 +126,6 @@ export type CachePrefixBoundary =
 	| { readonly kind: "all_hit"; readonly hitCount: number; readonly uncertain: string | undefined }
 	/** 数据不足，给不出边界（旧台账没有逐条明细 / 本轮没有 cacheRead 上报）。 */
 	| { readonly kind: "unknown"; readonly note: string };
-
-/**
- * 剔除「每请求现算、不落会话」的瞬态注入项（`TRANSIENT_INJECTION_CUSTOM_TYPES`）。
- *
- * 为什么必须剔除：这类消息按设计追加在消息数组末尾、不在会话文件里，**每一个**
- * 请求都会现算一条新的（id 由 `custom:<timestamp>` 生成，轮轮不同）。让它参与
- * 逐条 diff，它就会**每一轮**在尾部造出一个假差异（「上一轮尾部那条没了 / 换成
- * 了另一条」），把「其实历史全命中」的轮次误报成「断在最后一条」—— 每轮误报
- * 一次，比不报还糟。它是**有意设计**（落在历史之后、每请求现算），不是故障。
- *
- * 两种判据，按台账的新旧选：
- *   1. **新台账**（名册里出现过显式标记）：只认 `transient === true`
- *      （写入端按 customType 集合判定，见 core/session-host.ts 的 buildMessageRefs）。
- *      不掺启发式 —— 没有标记的条目就是真历史，别误伤。
- *   2. **旧台账**（整个名册都没有这个字段）：退到「role 归为 other 的**尾部**条目」
- *      这一可判定条件。瞬态注入项按设计只落在最后一个历史条目之后，所以它在名册
- *      里永远是最后一条；而 other 桶里会落盘的那些（branchSummary /
- *      compactionSummary）出现在历史的头部或中段，不会落在尾部。判据里的「尾部」
- *      是必要条件：缺标记时**只认最后一条**。这条启发式对「旧台账 + 尾条恰是
- *      other」有误伤可能，但比放它进 diff 导致的每轮误报更可接受（旧台账的
- *      降级口径同 MessageRef.transient 的注释）。
- */
-function dropTransient(refs: readonly MessageRef[] | undefined): readonly MessageRef[] {
-	if (refs === undefined) return [];
-	if (refs.some((ref) => ref.transient !== undefined)) {
-		return refs.filter((ref) => ref.transient !== true);
-	}
-	const last = refs.length - 1;
-	return refs.filter((ref, index) => !(index === last && ref.role === "other"));
-}
 
 /**
  * 与上一轮逐条比对的**首个差异位置**（确定性，不含任何估算）：
@@ -306,18 +288,14 @@ export function inferCachePrefixBreak(args: {
 	}
 
 	const notes: string[] = [];
-	// 归因与命中遍历都在「去掉瞬态注入项」的名册上做（理由见 dropTransient）：
-	// 那条幽灵条目每轮都在尾部换一条，留着它等于每轮误报一次。
-	const previousReal = dropTransient(previous);
-	const currentReal = dropTransient(current);
-	// 差异位置是确定的（id + 指纹比对），估算对齐不是 —— 它既是归因依据，也是兜底。
-	const divergedAt = firstDivergence(previousReal, currentReal);
+	// 逐条 diff 直接在两轮**全量**名册上做 —— 不再剔除任何条目：快照是真实历史，
+	// 其差异就是真实断点（理由见文件头的剔除史）。
+	const divergedAt = firstDivergence(previous, current);
 
 	// 定标「消息之前那段前缀」：上一轮的真实 prompt token 总量 − 上一轮消息的估算
 	// 总量。差值里既有系统提示词与工具定义，也吸收了估算的系统性偏差，所以比
-	// 单独估算系统提示词更接近 provider 看到的口径。这里用**未剔除瞬态项**的上一轮
-	// 名册：billedInputTokens 是含它的真实总量，减掉全部消息（含瞬态那条）才等于
-	// 「消息之前」那段的量。
+	// 单独估算系统提示词更接近 provider 看到的口径。名册是全量的：billedInputTokens
+	// 是含快照条目在内的真实总量，减掉全部消息才等于「消息之前」那段的量。
 	let prefixTokens = 0;
 	if (previous !== undefined && previousPromptTokens !== undefined) {
 		const previousEstimated = previous.reduce((sum, ref) => sum + ref.tokens, 0);
@@ -341,7 +319,7 @@ export function inferCachePrefixBreak(args: {
 
 	let covered = 0;
 	let consumed = 0;
-	for (const message of currentReal) {
+	for (const message of current) {
 		if (prefixTokens + consumed + message.tokens > cacheRead) break;
 		consumed += message.tokens;
 		covered += 1;
@@ -353,16 +331,16 @@ export function inferCachePrefixBreak(args: {
 		notes.push("按 cacheRead 对齐出的边界落在与上一轮相同的那段之后，已收敛到首个差异处（token 估算偏差）。");
 	}
 
-	if (covered >= currentReal.length) {
+	if (covered >= current.length) {
 		return { kind: "all_hit", hitCount: covered, uncertain: joinNotes(notes) };
 	}
 
-	const message = currentReal[covered];
+	const message = current[covered];
 	if (message === undefined) {
-		// 上面的 covered < currentReal.length 已排除这种可能；留着是为了不用非空断言。
+		// 上面的 covered < current.length 已排除这种可能；留着是为了不用非空断言。
 		return { kind: "unknown", note: "逐条清单在断点处意外缺失。" };
 	}
-	const change = changeAt(previousReal, currentReal, covered);
+	const change = changeAt(previous, current, covered);
 	if (divergedAt === undefined) {
 		notes.push("台账里没有更早的一轮快照，无法比对变化原因。");
 	} else if (change === "unknown") {

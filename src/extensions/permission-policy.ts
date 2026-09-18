@@ -85,6 +85,16 @@ export interface ToolCallFacts {
 	readonly path: string | undefined;
 	/** shell 命令（bash / powershell 专用）。 */
 	readonly command: string | undefined;
+	/**
+	 * 改**应用自身数据**的工具所操作的对象，**仅供审批弹窗展示，不参与任何路径判定**：
+	 * 这类工具没有「将被写的路径」（automation_* 落 configDir，技能类动的是技能目录），
+	 * 但用户必须看见这次动的是哪个东西。混进 `path` 会让阶段 1/2 的路径判定误判 ——
+	 * 技能类工具那个入参是「来源路径 / 技能名」，不是「目标路径」。
+	 *
+	 * 可选：只有需要展示对象的工具才填（permission-gate 的 extractFacts 按工具名列举），
+	 * 其余（含旧调用点与探针脚本）不填也不影响任何判定。
+	 */
+	readonly appDataTarget?: string | undefined;
 }
 
 export interface PolicyPaths {
@@ -215,18 +225,30 @@ const SHELL = new Set(["bash", "powershell"]);
 const MCP_TOOL_PREFIX = "mcp__";
 
 /**
- * 改变 KamiBuddy 自身数据的工具（目前只有 automation_*，经 AutomationStore
- * 落 ~/.kamibuddy/automations.json，不经工具路径参数）。
+ * 改变 KamiBuddy 自身数据的工具（automation_*、skill_install / skill_uninstall）。
+ *
+ * - automation_*：经 AutomationStore 落 ~/.kamibuddy/automations.json，不经工具路径参数。
+ * - skill_install / skill_uninstall：技能的安装与删除（对话里的「模型创建技能」链路，
+ *   对齐 WorkBuddy 的 skill-creator + skill_manage）。它们改的是**提示词面**，
+ *   所以同样显式登记为询问而不是依赖末尾的 fail-safe —— 静默装进去/删掉等于让一条指令越过用户。
+ *   删的那条同样要问：它拿掉的是用户已经看得见的能力（与 automation_delete 对称）。
  *
  * 显式登记为询问，而不是依赖末尾「未知工具」的 fail-safe：两者今天的结果
  * 相同（medium 询问），但 fail-safe 的默认值将来若变动，不该静默改变
  * 这类工具的语义。定为询问而非放行：创建/删除定时任务改变应用自身数据，
  * 且任务会在后台无人值守地跑，默认从紧；用户可用审批弹窗的「记住」免除。
  *
- * 落盘文件在 configDir 内、阶段 1 本就禁写——那是 AutomationStore 的内部
- * 实现路径，不经过工具入参，所以这里不需要、也不许为阶段 1 开口子。
+ * 落盘文件在 configDir 内、阶段 1 本就禁写——那是 AutomationStore / skill-install
+ * 的内部实现路径，不经过工具入参（skill_install 的入参是**工作区**里的来源路径），
+ * 所以这里不需要、也不许为阶段 1 开口子：模型的 write/edit 依旧写不进技能目录，
+ * 安装只能走这条受校验的通道。
  */
-const APP_DATA_MUTATING = new Set(["automation_create", "automation_delete"]);
+const APP_DATA_MUTATING = new Map<string, string>([
+	["automation_create", "创建自动化任务"],
+	["automation_delete", "删除自动化任务"],
+	["skill_install", "安装技能（会改变模型可见的技能清单）"],
+	["skill_uninstall", "删除技能（会改变模型可见的技能清单）"],
+]);
 
 /**
  * 判断 target 是否在 base 之内（含 base 本身）。
@@ -388,8 +410,10 @@ function decideUnderMode(
 			 * 一刀切禁读会让用户安装的技能全部变成「列表里有但永不可用」的死技能。
 			 *
 			 * 只放开读：写仍拒。技能正文 = 提示词，write/edit 篡改即提示注入；
-			 * 安装走 daemon 的 skill-install 校验通道（frontmatter 校验 + 同名拒绝），
-			 * 不经工具层，所以这里不需要为写开任何口子。
+			 * 安装只走两条受校验的通道 —— 技能页的「导入技能」（IPC）与模型的
+			 * skill_install 工具（它内部调同一个 importSkill，入参是工作区里的来源路径）；
+			 * 删除同理只走 skill_uninstall（且只允许删模型自建的，见 core/skill-install.ts）。
+			 * 它们都不经这里的写判定，所以不必为写开任何口子。
 			 */
 			if (READ_ONLY.has(toolName) && isInside(join(paths.configDir, "skills"), target)) {
 				return { kind: "allow" };
@@ -608,6 +632,12 @@ function decideUnderMode(
 		 * 为什么排在 danger-full-access 之后：那个档位的语义是用户明示的
 		 * 「不再逐次询问」，与 appDir 判定同一位置、同一理由。
 		 *
+		 * 【2026-09-18 名单已收窄】工作区内的**技能根**（`<任意层级>/.pi/skills/**`、
+		 * `<任意层级>/.agents/skills/**`）不算配置即代码，不再进这条分支 ——
+		 * 技能正文不执行，与工作区的 `AGENTS.md` 同等处置（理由与残留风险见
+		 * safe-commands.ts 文件头）。`.pi` 的其余高危判定（`extensions/**`、
+		 * `settings.json`、`SYSTEM.md`）保持不变。
+		 *
 		 * **这不是完备的**：「配置即代码」是开放集合（还有 Makefile 的变体、
 		 * 各种 *.config.js、编辑器与 CI 的其他约定）。这里覆盖已知的高价值项，
 		 * 不声称穷尽 —— 所以它是纵深防御的一层，不是可以依赖的边界。
@@ -648,17 +678,24 @@ function decideUnderMode(
 	}
 
 	/*
-	 * 改变 KamiBuddy 自身数据的工具（automation_create / automation_delete）：
+	 * 改变 KamiBuddy 自身数据的工具（automation_* / skill_install / skill_uninstall）：
 	 * 显式询问档，理由见上方 APP_DATA_MUTATING 的登记注释。
 	 * 放在 read-only 拒绝（阶段 3）之后：只读档下它们同样被拒，语义自洽。
-	 * 无路径入参，details 没有可展示的目标，留空。
+	 *
+	 * details 给「这次动的是哪个东西」：技能类工具有一个可展示的对象（来源路径 /
+	 * 技能名，由 permission-gate 的 extractFacts 取进 appDataTarget），
+	 * automation_* 没有 —— 它们照旧留空。**这句话是知情同意的下限**：
+	 * 只写「安装技能（会改变模型可见的技能清单）」，用户点允许时并不知道装的是谁，
+	 * 而装进去的正文下一轮就会作为提示词被模型读到（对齐 codex 审批事件带 reason /
+	 * 可选决策、WorkBuddy 的 Edit 审批给 diff、dsh 要求 justification）。
 	 */
-	if (APP_DATA_MUTATING.has(toolName)) {
+	const appDataSummary = APP_DATA_MUTATING.get(toolName);
+	if (appDataSummary !== undefined) {
 		return {
 			kind: "ask",
 			risk: "medium",
-			summary: toolName === "automation_create" ? "创建自动化任务" : "删除自动化任务",
-			details: "",
+			summary: appDataSummary,
+			details: facts.appDataTarget ?? "",
 		};
 	}
 

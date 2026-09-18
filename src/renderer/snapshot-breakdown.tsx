@@ -99,13 +99,17 @@ export function SnapshotBreakdown({
 				</tbody>
 			</table>
 			{snapshot.hiddenContextChars !== undefined && (
-				// 单列一行而不是并进计数：hidden context 是**尾部一条独立注入消息**
-				// （2026-09-17 从「贴进最后一条 user 消息」改过来 —— 贴在 user 里会让
-				// 上一轮的 user 在下一轮变成差异点，把上一轮整段作废，实测轮边界
-				// 命中率掉到 21.5% / 65.6%），所以它计入下面的 other 计数，不拆出来看不出来。
+				// 单列一行而不是并进计数：hidden context 计入下面的 other 桶，不拆出来
+				// 就看不出一轮里这条快照占了多少。
+				// 口径（2026-09-18 订正，spec: persist-context-snapshots）：它已从
+				// 「每请求现算、不落盘的尾部注入块」改为 **pi 落盘的持久消息**
+				// （custom_message + display:false）—— 因此是历史里一条**真实条目**，
+				// 会参与缓存断点归因（不再是归因时被剔除的幽灵）。它对用户不可见
+				// （display:false），所以**用户可见条目数不变**，只有下面的 other 计数
+				// 会包含它。
 				<p className="stat-hint">
-					其中 hidden context 注入 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
-					（计入下面的 other 计数）
+					其中 hidden context 快照 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
+					（计入下面的 other 计数；该条目对用户不可见，用户可见条目数不受它影响）
 				</p>
 			)}
 		</div>

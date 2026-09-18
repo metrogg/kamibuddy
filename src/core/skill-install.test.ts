@@ -1,19 +1,23 @@
 /**
- * 技能导入的测试。重点钉住三类会造成「貌似装成功实际被忽略」的行为：
+ * 技能导入 / 删除的测试。重点钉住三类会造成「貌似装成功实际被忽略」的行为：
  *   1. frontmatter 缺 name / description → 拒（没有它们模型无法路由到该技能）
  *   2. 同名已存在 → 拒（目标可能是用户手工改过的，静默覆盖 = 丢改动）
  *   3. 非法技能名 → 拒（pi 按 name 注册 /skill:name 命令，名字错了命令也注册不上）
  *
  * 第二批是安装元数据（sidecar `_installed.json`）：卡片上的「版本 / 来源 / 导入时间」
  * 全靠它，写歪了不会报错、只会让卡片静默少一行，故形状与降级分支都要钉住。
+ *
+ * 第三批是**模型创建**那条链路的授权边界（对齐 WorkBuddy 的 `agent_created`）：
+ * 覆盖与删除只对模型自己装的技能放行，用户导入 / 手工放置的一律拒 ——
+ * 这条判反了就是「模型能改用户的技能」，所以正反两侧都要有断言。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writePreferences } from "./preferences.ts";
-import { importSkill, readInstalledMeta } from "./skill-install.ts";
+import { readPreferences, writePreferences } from "./preferences.ts";
+import { importSkill, readInstalledMeta, removeAgentSkill } from "./skill-install.ts";
 
 let dir: string;
 let source: string;
@@ -165,7 +169,7 @@ describe("安装元数据（_installed.json）", () => {
 		// 随后的 writeFileSync 必然失败 —— 这是不依赖权限/平台就能造出写失败的办法。
 		mkdirSync(join(folder, "_installed.json"), { recursive: true });
 
-		expect(() => importSkill(folder)).toThrow(/回滚/);
+		expect(() => importSkill(folder)).toThrow(/安装失败，技能目录未被改动/);
 		// 回滚 = 目标目录整体消失，用户重试一次仍然走得通。
 		expect(existsSync(join(configDir, "skills", "meeting-notes"))).toBe(false);
 	});
@@ -255,6 +259,7 @@ describe("readInstalledMeta 的降级分支", () => {
 			version: undefined,
 			sourcePath: undefined,
 			installedAt: undefined,
+			agentCreated: false,
 		});
 	});
 
@@ -264,6 +269,7 @@ describe("readInstalledMeta 的降级分支", () => {
 			version: "1.0.0",
 			sourcePath: undefined,
 			installedAt: undefined,
+			agentCreated: false,
 		});
 	});
 
@@ -276,6 +282,89 @@ describe("readInstalledMeta 的降级分支", () => {
 			version: "1.0.0",
 			sourcePath: "C:/tmp/good",
 			installedAt: 1750000000000,
+			agentCreated: false,
 		});
+	});
+
+	it("agentCreated 只认 true：写歪的值当没标记（授权判定上读不懂就是不给权限）", () => {
+		expect(readInstalledMeta(makeDir("string-true", '{"agentCreated": "true"}'))?.agentCreated).toBe(false);
+		expect(readInstalledMeta(makeDir("one", '{"agentCreated": 1}'))?.agentCreated).toBe(false);
+		expect(readInstalledMeta(makeDir("yes", '{"agentCreated": true}'))?.agentCreated).toBe(true);
+	});
+});
+
+describe("模型创建的技能（skill_install：agentCreated）", () => {
+	it("agentCreated 写进 sidecar，读回来是 true", () => {
+		importSkill(makeSkillFolder("weekly-report"), { agentCreated: true });
+		expect(readInstalledMeta(join(configDir, "skills", "weekly-report"))?.agentCreated).toBe(true);
+		// 用户经技能页导入（不传这个选项）→ 不带标记。
+		importSkill(makeSkillFolder("user-skill"));
+		expect(readInstalledMeta(join(configDir, "skills", "user-skill"))?.agentCreated).toBe(false);
+	});
+
+	it("模型自建的技能可以覆盖安装（改技能 = 重装一次）", () => {
+		const folder = makeSkillFolder("weekly-report");
+		importSkill(folder, { agentCreated: true });
+		// 改技能：正文改写后再装一次。
+		writeFileSync(join(folder, "SKILL.md"), "---\nname: weekly-report\ndescription: 改过的描述\n---\n# 新正文");
+
+		const imported = importSkill(folder, { agentCreated: true });
+		expect(imported.description).toBe("改过的描述");
+		expect(readText(imported.filePath)).toContain("# 新正文");
+		// 覆盖后标记仍在（下一次还能继续改）。
+		expect(readInstalledMeta(join(configDir, "skills", "weekly-report"))?.agentCreated).toBe(true);
+	});
+
+	it("覆盖是整体替换而不是合并：新版里删掉的文件不会残留在技能目录里", () => {
+		const folder = makeSkillFolder("weekly-report"); // 里面有 helpers.md
+		importSkill(folder, { agentCreated: true });
+		rmSync(join(folder, "helpers.md"));
+		importSkill(folder, { agentCreated: true });
+
+		expect(existsSync(join(configDir, "skills", "weekly-report", "helpers.md"))).toBe(false);
+	});
+
+	it("用户导入 / 手工放置的同名技能**不能**被模型覆盖（授权边界）", () => {
+		const folder = makeSkillFolder("meeting-notes");
+		importSkill(folder);
+		const target = join(configDir, "skills", "meeting-notes", "SKILL.md");
+		writeFileSync(target, "# 用户改过");
+
+		expect(() => importSkill(folder, { agentCreated: true })).toThrow(/已存在/);
+		expect(readText(target)).toBe("# 用户改过");
+
+		// 手工放置（连 sidecar 都没有）同样拒。
+		const manual = join(configDir, "skills", "hand-made");
+		mkdirSync(manual, { recursive: true });
+		writeFileSync(join(manual, "SKILL.md"), "---\nname: hand-made\ndescription: 手工放的\n---\n正文");
+		expect(() => importSkill(makeSkillFolder("hand-made"), { agentCreated: true })).toThrow(/已存在/);
+	});
+});
+
+describe("删除模型创建的技能（removeAgentSkill）", () => {
+	it("删掉整目录，并把该技能残留的停用记录一并清掉", () => {
+		importSkill(makeSkillFolder("weekly-report"), { agentCreated: true });
+		writePreferences({ activeModelKey: undefined, skillOverrides: { "weekly-report": "off", other: "off" } });
+
+		const removed = removeAgentSkill("weekly-report");
+		expect(removed.name).toBe("weekly-report");
+		expect(existsSync(join(configDir, "skills", "weekly-report"))).toBe(false);
+		// 清掉的只是这一个技能那条：残留会让将来重建的同名技能被静默停用。
+		expect(readPreferences().skillOverrides).toEqual({ other: "off" });
+	});
+
+	it("不是模型创建的技能 → 拒（内置 / 市场 / 用户手工都不许模型删）", () => {
+		importSkill(makeSkillFolder("meeting-notes"));
+		expect(() => removeAgentSkill("meeting-notes")).toThrow(/不是模型创建的/);
+		expect(existsSync(join(configDir, "skills", "meeting-notes"))).toBe(true);
+	});
+
+	it("名字不存在 → 拒（与「不是模型创建的」分开报，模型才能分辨）", () => {
+		expect(() => removeAgentSkill("no-such-skill")).toThrow(/没有技能/);
+	});
+
+	it("非法技能名 → 拒（不许用路径穿越的名字）", () => {
+		expect(() => removeAgentSkill("../secrets")).toThrow(/不合法/);
+		expect(() => removeAgentSkill("Bad_Name")).toThrow(/不合法/);
 	});
 });
