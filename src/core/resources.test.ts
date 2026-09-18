@@ -12,7 +12,8 @@ import { formatSkillsForPrompt, loadSkills } from "@earendil-works/pi-coding-age
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getBuiltinSkillDirs } from "./config-paths.ts";
 import { composePromptWithMeta } from "./prompt-composer.ts";
-import { loadResources, resolveStyle, toDescriptors, type StyleResource } from "./resources.ts";
+import { loadLanguagePrompt, loadResources, resolveStyle, toDescriptors, type StyleResource } from "./resources.ts";
+import { createSystemPromptComposerFromDefaults } from "./system-prompt-composer.ts";
 
 let dir: string;
 
@@ -20,6 +21,8 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "kami-res-"));
 	// styles/ 基线 fixture（理由见 writeStyle 注释）。
 	writeStyle();
+	// 输出语言规则同是「缺了启动即抛错」的必需成员（理由见 writeLanguage 注释）。
+	writeLanguage();
 });
 
 afterEach(() => {
@@ -50,6 +53,16 @@ function writeMode(id: string, tools = "[read]", body = "行为段"): void {
 function writeStyle(id = "professional", body = "风格正文"): void {
 	mkdirSync(join(dir, "styles"), { recursive: true });
 	writeFileSync(join(dir, "styles", `style-${id}.md`), body);
+}
+
+/**
+ * prompts/language.md 是**必需**资源（与 styles/ 同档），不是可选片段：
+ * 少了它产品会静默改用英文说话 —— 那正是 ARCHITECTURE §4.15 要修的 bug，
+ * 所以 loadResources 对它抛错而不是降级。测这条报错路径的用例自己清掉本基线。
+ */
+function writeLanguage(body = "输出语言规则正文"): void {
+	mkdirSync(join(dir, "prompts"), { recursive: true });
+	writeFileSync(join(dir, "prompts", "language.md"), body);
 }
 
 describe("正常加载", () => {
@@ -169,6 +182,43 @@ describe("风格加载", () => {
 		writeMode("craft");
 		writeStyle("professional", "  \n");
 		expect(() => loadResources(dir)).toThrow(/风格文件为空/);
+	});
+});
+
+describe("输出语言规则（prompts/language.md，§4.15）", () => {
+	it("缺失 → 抛错（**不**沿用片段「缺目录即空库」的宽容）", () => {
+		writeScene("work");
+		writeMode("craft");
+		rmSync(join(dir, "prompts", "language.md"), { force: true });
+		expect(() => loadResources(dir)).toThrow(/language\.md 缺失或为空/);
+	});
+
+	it("空文件（只有空白）→ 抛错（空段注入等于没有规则）", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeLanguage("  \n\n");
+		expect(() => loadResources(dir)).toThrow(/language\.md 缺失或为空/);
+	});
+
+	it("正常读取：正文原样返回，首尾空白已裁", () => {
+		writeScene("work");
+		writeMode("craft");
+		writeLanguage("\n  规则正文  \n");
+		expect(loadResources(dir).scenes).toHaveLength(1);
+		expect(loadLanguagePrompt(dir)).toBe("规则正文");
+	});
+
+	it("随应用分发的 language.md 存在且非空（资源缺失在这里拦，不靠运行时降级兜底）", () => {
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		const body = loadLanguagePrompt(realDir);
+		expect(body).toBeDefined();
+		// 两条关键条款：一条界定额度（管全部输出），一条解除英文材料的干扰。
+		expect(body).toContain("不只是最终回复");
+		expect(body).toContain("英文材料不决定你的输出语言");
+	});
+
+	it("loadLanguagePrompt 对不存在的目录返回 undefined（纯函数口径）", () => {
+		expect(loadLanguagePrompt(join(dir, "不存在"))).toBeUndefined();
 	});
 });
 
@@ -344,6 +394,58 @@ describe("真实 resources：过程叙述条款两个场景都在", () => {
 		const pythonEnv = fragments.get("python-env") ?? "";
 		expect(pythonEnv).toContain("托管解释器");
 		expect(pythonEnv).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\/|python\.exe|\.venv-html-to-docx/);
+	});
+});
+
+/**
+ * 输出语言段的**生产入口**回归（ARCHITECTURE §4.15）。
+ *
+ * 走 `createSystemPromptComposerFromDefaults` 而不是自己拼输入：这是 daemon
+ * 真正用的那一个入口，它同时验证了「默认 loader 有没有接上 language.md」——
+ * 用 `composePromptWithMeta` 手拼只能证明 composer 会排，证不了生产接线。
+ * 这也是本条 bug 的现场形态：规则**存在**但排在英文风格段之前，等于没有。
+ */
+describe("真实 resources：输出语言段经生产入口注入且排在风格段之后", () => {
+	const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+
+	async function composeReal(): Promise<{
+		readonly prompt: string;
+		readonly sources: readonly string[];
+	}> {
+		const compose = createSystemPromptComposerFromDefaults({
+			resourcesDir: realDir,
+			// 专家库与技能清单注入固定空值：两者都读用户数据，读进来提示词随机器变。
+			loadExperts: () => [],
+			enabledSkills: async () => [],
+			onStyleDrift: () => {},
+			// 偏好给空对象 = styleId 未配置 → resolveStyle 回落默认 professional 风格。
+			// 这正是真实默认形态（用户偏好里没有 styleId 时就是它），所以必须测到。
+			readPreferences: () => ({}) as never,
+		});
+		const composed = await compose({ sceneId: "work", interactionId: "craft", expertId: undefined });
+		return { prompt: composed.prompt, sources: composed.segments.map((s) => s.source) };
+	}
+
+	it("language 段存在，且**排在 style:professional 之后**", async () => {
+		const { sources } = await composeReal();
+		expect(sources, `段序：${sources.join(" → ")}`).toContain("style:professional");
+		expect(sources, `段序：${sources.join(" → ")}`).toContain("language");
+		expect(
+			sources.indexOf("language"),
+			`语言段跑到了风格段前面：${sources.join(" → ")}`,
+		).toBeGreaterThan(sources.indexOf("style:professional"));
+	});
+
+	it("正文里能读到规则本体，且旧的重复条款「用中文回复。」已从场景/片段里删净", async () => {
+		const { prompt } = await composeReal();
+		expect(prompt).toContain("一律用简体中文输出");
+		expect(prompt).toContain("不只是最终回复");
+		/*
+		 * 反向钉子：旧条款挂在 delivery-rules 的「最终回复」小节下，被模型读成
+		 * 「只管最终回复」—— 过程叙述因此飘成英文。删掉它、把规则收敛到 language
+		 * 一处，是为了不留第二个（更弱的）说法去稀释它。两个场景都不能再出现。
+		 */
+		expect(prompt).not.toContain("用中文回复。");
 	});
 });
 

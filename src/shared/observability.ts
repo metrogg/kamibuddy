@@ -222,6 +222,29 @@ export interface SessionStatCard {
 	 * 而单步自己没有足够信息判断 provider 是否支持缓存。
 	 */
 	readonly cacheReported: boolean;
+	/**
+	 * 本会话的**缓存浪费**合计（判定与 `ObservabilitySnapshot.cacheWaste` 同一处，
+	 * 只是按会话切分）：上次 prompt 已有、这次却没走缓存重计费的部分。
+	 *
+	 * **为什么必须按会话切分，而不是复用进程级那一份**：指标条挂在单个会话下方，
+	 * 拿全进程合计会在多会话并发时把别人的浪费记到这张卡上（同 cacheHitRate 的
+	 * 「口径按会话取」纪律）。
+	 *
+	 * **为什么命中率之外还要有这个数**（2026-09-18）：命中率 = 1 − 本步新增 ÷
+	 * 当前上下文，而「本步新增」是这一步读进来的新内容（上一步的输出 + 工具返回），
+	 * 它跟缓存机制好不好**无关** —— 实测一条 30 步会话命中 93.8%，逐轮拆开看
+	 * 90.9% 的未命中是真实新增内容、0 次前缀分家。所以命中率涨落读不出故障，
+	 * 这个数才涨得动警报：它一非零就只可能是提示词被改、注入快照每轮重发、
+	 * 工具集变化、换模型或空闲超时。
+	 *
+	 * 只有**超过缓存块噪声底线**（`core/observability.ts` 的
+	 * `CACHE_MISS_NOISE_FLOOR_TOKENS`）的 miss 才计入 —— 量级不到一个缓存块的
+	 * 差额是块对齐的必然结果（实测每轮 0–127 token，正好是 128 的块），
+	 * 计进来会让每个健康会话永远报一个非零值，警报就废了。
+	 */
+	readonly cacheMissedTokens: number;
+	/** 与 cacheMissedTokens 同一批判定的发生次数（0 = 本会话没出现过缓存失效）。 */
+	readonly cacheMissCount: number;
 	/** 最新一条台账条目的时刻，卡片排序（最近活跃在前）用。 */
 	readonly lastActiveAt: number;
 }

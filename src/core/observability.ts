@@ -284,6 +284,9 @@ interface MutableSessionStats {
 	 * 是会话的固有属性，不该被压缩抹掉。
 	 */
 	cacheReported: boolean;
+	/** 本会话的缓存浪费合计与发生次数（判定同 cacheWaste，只按会话切分）。 */
+	cacheMissedTokens: number;
+	cacheMissCount: number;
 	/** 缓存 fold 状态：当前 run 的模型（run_start 记账，llm_call 自身不带模型字段）。 */
 	currentRunModel: string | undefined;
 	prevRequest: PreviousRequest | undefined;
@@ -302,6 +305,8 @@ function mutableSessionStats(): MutableSessionStats {
 		usage: mutableUsage(),
 		lastActiveAt: 0,
 		cacheReported: false,
+		cacheMissedTokens: 0,
+		cacheMissCount: 0,
 		currentRunModel: undefined,
 		prevRequest: undefined,
 	};
@@ -565,6 +570,11 @@ export class ObservabilityStore {
 				this.cacheWaste.missedTokens += missedTokens;
 				this.cacheWaste.missedCost += cost;
 				this.cacheWaste.missCount += 1;
+				// 同一批判定另记一份到**会话级**（指标条挂在单个会话下方，
+				// 拿全进程合计会把别人的浪费记到这张卡上，见 shared 的字段注释）。
+				// 与上面三行共用这一个 if：拆成两次判定必然漂移。
+				stats.cacheMissedTokens += missedTokens;
+				stats.cacheMissCount += 1;
 				this.cacheMisses.unshift({
 					sessionId,
 					at: data.startedAt,
@@ -749,6 +759,8 @@ export class ObservabilityStore {
 			usage,
 			cacheReported: s.cacheReported,
 			cacheHitRate: cacheHitRate(usage, s.cacheReported),
+			cacheMissedTokens: s.cacheMissedTokens,
+			cacheMissCount: s.cacheMissCount,
 			lastActiveAt: s.lastActiveAt,
 		};
 	}

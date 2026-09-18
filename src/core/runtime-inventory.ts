@@ -34,6 +34,7 @@ import type {
 } from "../shared/runtimes.ts";
 import { readPreferences, writePreferences, type RuntimePrefs } from "./preferences.ts";
 import {
+	CANCELLED_PHASE,
 	RUNTIME_REGISTRY,
 	installRuntime,
 	resetRuntime,
@@ -334,6 +335,13 @@ export async function installManagedRuntime(
 				}),
 	});
 	if (outcome.status === "failed") {
+		/*
+		 * 相位是 cancelled ⇒ 用户自己取消了这次安装，**不是失败**：抛 AbortError 让调用方
+		 * 按「错在用户而不是环境」处理（不写审计）——与进下载之前就被取消的那条路同一口径。
+		 * 原先这里一律抛普通 Error，于是上面那句「daemon 据此分开上报」在下载中途取消时
+		 * 并不成立：调用方只看到一句「安装失败」（2026-09-18 修）。
+		 */
+		if (outcome.phase === CANCELLED_PHASE) throw runtimeInstallAbort(descriptor.label);
 		throw new Error(`安装「${descriptor.label}」失败（相位 ${outcome.phase}）：${outcome.error}`);
 	}
 	return collectRuntimeInventory(overrides);

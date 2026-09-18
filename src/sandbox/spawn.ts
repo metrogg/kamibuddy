@@ -81,18 +81,31 @@ export function buildCommandLine(program: string, args: readonly string[]): stri
  * **继承 process.env 后覆盖，不整体替换。** 整体替换会缺 SystemRoot 之类的
  * 基础变量，很多程序直接起不来（spike 里踩过：只传两个变量时必须手动补
  * SystemRoot）。我们只想改 TMP/TEMP，没理由动其余部分。
+ *
+ * **覆盖必须按大小写不敏感做**（2026-09-18 修，实测踩坑）：Windows 的环境变量名
+ * 不区分大小写，而 JS 对象的键区分 —— 于是基底的 `NPM_CONFIG_CACHE` 与覆盖项的
+ * `npm_config_cache` 会作为**两个键同时**进块，Windows 取哪一个取决于块里的先后顺序。
+ * 实测同一份代码：`npx tsx` 起的进程里我们赢、`npx vitest` 起的进程里继承值赢。
+ * 症状是沙箱里的 `npm install` 有时仍去写用户真实的 `%LOCALAPPDATA%\npm-cache` 而被拒
+ * （confinement.win.test.ts 的 npm 缓存用例就是这样变红的）。同一条路也威胁
+ * `PATH`：Windows 上 `process.env` 常见的是 `Path` 拼写，与注入层写的 `PATH` 撞成两份。
+ * 所以按小写名归并：同名（任意大小写形态）只留一份，且**留下的必须是覆盖项**。
  */
 export function buildEnvBlock(
 	overrides: Readonly<Record<string, string>>,
 	/** 环境块基底；缺省继承本进程的 process.env。诊断用自定义基底跑「最小环境」对照。 */
 	base: Readonly<Record<string, string | undefined>> = process.env,
 ): Buffer {
-	const merged: Record<string, string> = {};
+	/** 小写名 → 实际要写进块的 `[键, 值]`。Map 的 set 保留首次插入位置，但同名只留一份，位置无意义。 */
+	const merged = new Map<string, readonly [string, string]>();
+	const put = (key: string, value: string): void => {
+		merged.set(key.toLowerCase(), [key, value]);
+	};
 	for (const [key, value] of Object.entries(base)) {
-		if (value !== undefined) merged[key] = value;
+		if (value !== undefined) put(key, value);
 	}
-	for (const [key, value] of Object.entries(overrides)) merged[key] = value;
-	const parts = Object.entries(merged).map(([key, value]) => `${key}=${value}\0`);
+	for (const [key, value] of Object.entries(overrides)) put(key, value);
+	const parts = [...merged.values()].map(([key, value]) => `${key}=${value}\0`);
 	return Buffer.from(`${parts.join("")}\0`, "utf16le");
 }
 

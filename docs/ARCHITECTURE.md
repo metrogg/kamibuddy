@@ -702,6 +702,506 @@ workspace-write boundary**」（`docs/subsystems/sandbox.md:201-203`）是同一
    用户拿到一条 cwd 指向意外位置的会话，且不报错。`isAbsolute` 是三家参照物**共同**
    保留的唯一硬要求，也是唯一一条不含判断、纯事实的校验，保留成本为零。
 
+### 4.14 权限边界必须告诉模型，且不得写死在系统提示词里（2026-09-18）
+
+**触发**（PM 反馈，原话）：
+
+> AI 在权限为只读时并不知道自身的权限边界，导致持续反复试错。如何让模型感知当前权限
+> 边界（以及失败时如何给出更明确的解释），是个值得探索的方向。权限和模式的概念有些
+> 模糊：模式入口随时可以切换，权限入口只在会话开始后出现在顶部栏，而且模型并不知道
+> 当前的权限边界。可考虑的思路包括将提示词、工具、权限整合进同一个能力入口（模仿
+> Cursor），或将两者彻底分离并各自明确展示——两种方向各有取舍，待讨论。
+
+**根因不是「模型缺信息」，是系统提示词在主动骗它。** 三层提示词都把权限事实写死了：
+
+| 位置（改动前原文） | 只读档下 | 完全访问档下 |
+| --- | --- | --- |
+| `resources/modes/craft.md:8`「你可以**直接读写文件**、整理与生成内容。」 | **假** | 真 |
+| `resources/scenes/work/prompt.md:11`、`code/prompt.md:23`「你可以在当前工作目录内**读写文件**（运行命令）…」 | **假** | 真 |
+| `resources/scenes/work/prompt.md:16`、`code/prompt.md:29`「工作目录之外的操作会被系统拦截**并向用户确认**」 | 假（是**直接拒**） | **假**（`never` 档根本不再问） |
+| `resources/agents/worker.md:11`「你可以读写文件、执行命令」 | **假**（子代理继承主会话权限档） | 真 |
+
+叠加**第二层根因**：权限档位从来没进过模型的上下文。`compose(sceneId, interactionId,
+expertId, piContext)`（`extensions/prompt-switch.ts:207`）签名里没有权限；
+`buildPermissionInfo`（`daemon/index.ts:1317`）只喂设置页与 chip 的 hover 提示。
+所以模型的处境是「提示词说你能写 → 每次写都被拒 → 换个工具再试」。
+
+**为什么这个试错只发生在权限轴、不在模式轴**（两条轴的机制根本不同，这是本条的判据）：
+
+| 轴 | 实现 | 模型体验到什么 |
+| --- | --- | --- |
+| **交互模式** | 白名单经 `session.setActiveToolsByName(...)`（`core/session-host.ts:1080`） | ask/plan 档下 `write`/`edit` **不在工具表里** → 想试也没有那个工具，只能直接说明 |
+| **权限档位** | `permission-policy` 阶段 3（`extensions/permission-policy.ts:493-498`） | 工具**都在**，每次调用被拒 → **试错循环** |
+
+所以「反复试错」精确地只出现在「`craft` 模式 + 只读**预设**」这个组合上（PM 说的
+「权限为只读」指的是预设，不是问答/计划模式）。
+
+**顺带纠正 PM 的一个前提**：权限入口**不是**「会话开始后才出现在顶部栏」——
+`PermissionMenu` 首页就有，位置是 composer 下方 `.context-row`，与工作空间选择器并排
+（`renderer/home-view.tsx:441-452`），且权限是**全局**的（`daemon/index.ts:374` 的模块级
+`activePermissions`），不是会话级。真正的不对称是：模式（会话级）模型知道，
+权限（全局）**模型完全不知道**。
+
+**三家对照**（按 AGENTS.md §选型顺序第 2 条，机制三家都比）：
+
+| | 告诉模型吗 | 投递位置 | 切档时 |
+| --- | --- | --- | --- |
+| **dsh** | ✅ 报两个**旋钮值**；**预设名刻意不报**（`permission/preset` 是 log-only，`packages/interaction/permission-presets/src/index.ts:47-54`） | **追加在保留历史之后的 runtime-context 快照**（`packages/core/agent-loop/src/runtime-context.ts:64-75`，字节相同则不追加）；文本由 `renderPolicyContext` 生成（`packages/sandbox/sandbox-policy/src/index.ts:41-55`），审批档另有 `NEVER_SENTENCE`/`ASK_SENTENCE`（`packages/interaction/user-approval/src/index.ts:65-67`） | 沙箱档只追加事件；审批档**额外注入**「The approval policy changed from "X" to "Y" (changed by the user).」（`:195-201`） |
+| **codex** | ✅ `PermissionsInstructions` = 沙箱档 + 审批策略 + 可写根 + 禁读路径 | `developer` 角色的 `ContextualUserFragment`，标记 `<permissions instructions>`（`codex-rs/prompts/src/permissions_instructions.rs:176-196`）；**不在系统提示词里** | 走 `world_state.render_diff(previous)` —— 状态没变返回 `None`（`codex-rs/core/src/context/world_state/permissions.rs:88-124`），变了才追加 |
+| **WorkBuddy** | ❌ **完全不报** | `permissionMode` 是**进程参数**（`docs/WorkBuddy-reference/extracted/main/server.js:128599` 的 `args.push("--permission-mode", ...)`），不进任何提示词串——`promptOptions` 只含 mode/expertId/locale/modelId/cwd/conversationId/welcomeMode，**没有 permissionMode**（`tar.js:69647-69656`，它在 `:69663` 被单独算进 `result`）；桌面端还直接写死 `bypassPermissions` | 无 |
+
+**dsh 已经修过这个一模一样的 bug**，它的记录把现象写成了本条的 PM 原话
+（`开源项目/deepseek-harness/.agents/notes/implemented/feature/2026-07-30-current-sandbox-policy-context.md:9`）：
+
+> …**In a Web session under `read-only`, write and edit schemas remained visible, so the
+> model claimed it could write and learned otherwise only after a denied call.**
+
+**决策**（用户 2026-09-18 拍板「分离 + 补上告诉模型那一半」）：
+
+- **A. 两根轴保持分离，不合并成 Cursor 式单一能力入口。** 模式管工具可见性、权限管
+  强制力，两者是正交的两个状态机（且作用域不同：会话级 vs 全局）。合并会把它们压成
+  一个，并连带变形 `resources/modes/*.md` 那套「能力是数据」的白名单（顶 AGENTS.md §3）。
+  三家参照物**没有一家合并**：codex 的 `CollaborationModeState` 与 `PermissionsState`
+  是两个独立 world_state 段，dsh 的模式与 `permission-presets` 分离，WB 的模式与
+  `permissionMode` 也分离。**合并解决不了本问题** —— 本问题是「模型不知道边界」，
+  合并方案同样要解决它，合并只是顺带换了 UI。**状态：已定，不实施结构改动。**
+
+- **B. 系统提示词里不许出现权限事实**（场景 / 模式 / 子代理正文只讲**工具可见性**）。
+  已落地：`modes/craft.md:8`、`scenes/work/prompt.md:11,16`、`scenes/code/prompt.md:23,29`、
+  `agents/worker.md:11` 五处改写为可见性陈述或档位无关的事实，并在各文件 frontmatter
+  留了一行规则出处。**状态：已落地。**
+
+- **C. 权限边界进 hidden context 的新段 `permission_context`。** 落点是
+  `core/session-host.ts:2033` 的 `composeRunHiddenContext` 返回的 **`hidden` 那一半**
+  （2026-09-18 合并 origin/master 后该函数改为返回 `{ hidden, runTime }`：`current_time`
+  被拆成独立的第三条快照通道，spec: add-supersede-note-and-time-split；环境块与
+  `python_env` 段仍同属 `hidden`），与 `python_env` 段完全同构
+  （`getRuntimeInventory` 的注释已经把理由写好：`session-host.ts:449-467`「随机器变的
+  事实，进提示词就是该处之后的整段提示词与整段历史一起在 provider 前缀缓存里失配」——
+  **权限是逐次可变的事实，同一论证**）。取值走新增的 `getPermissions?: () => PermissionSettings`
+  注入口（与 `getExpertLabel` / `getRuntimeInventory` 同款 getter 口径）。白送的好处：
+  该段每 run 现读、按字节去重（三条通道各自独立去重），所以**用户中途切档，下一轮自动
+  追加一条新快照告诉模型新边界** —— 正是 dsh 的「快照在保留历史之后、字节相同不追加」
+  同构形态。**状态：方向已定，尚未落地。**
+
+- **D. 拒绝文案每档都要给「接下来怎么办」。** 已落地：`extensions/permission-gate.ts`
+  的 `APPROVAL_REFUSAL` 里 `rejected` / `cancelled` 原本只有「用户拒绝了这次操作。」
+  这类光秃秃一句，**不符合该 Record 上方注释自己写的规则**（「每档都要给一句『接下来
+  怎么办』：只说『被拒了』会诱导模型原样重试」）。现补齐为三段结构
+  「**别原样重试** → **要么换个更安全的做法** → **要么停下来交给用户决定**」，
+  该结构照 WorkBuddy 的 `PERMISSION_DENIED_GUIDANCE`（`开源项目/WorkBuddy/_analysis/
+  extracted/cli/dist/codebuddy.js:2408`）与 codex 的 `on_request.md:32,42` 同款。
+  这也补上了 `docs/试用前自查报告.md:76` 的验收项「拒绝后模型收到原因且不重试同一路径」。
+  **状态：已落地。**
+
+**知情接受的代价**：B 之后，模型在系统提示词里**不再被承诺任何写入能力** —— 只读档下
+它要到「C 落地」或撞到第一次拒绝才知道边界。这是**有意的方向**：宁可不承诺，
+也不承诺假的。C 落地前，D 是唯一兜底。
+
+#### 否决方案
+
+1. **否决：把权限档位嵌进系统提示词（模板变量参数化，或每档一份模式正文）。**
+   理由：① **dsh 已用实测数据否决过这条路** ——「Put current policy in a dynamic system
+   section. Rejected after real provider evidence showed that a first-time permission
+   switch **reduced cache reads to 256 tokens while roughly 14.7k input tokens missed**」
+   （`…/2026-07-30-current-sandbox-policy-context.md:43`）；② 系统提示词位于整段对话历史
+   **之前**，它一个字节变化让**其后的一切（含整段历史）**在 provider 前缀缓存里失配，
+   而权限是**用户可以随时切**的旋钮（切档一次就付一次全价）；③ 我们自己的实测同向
+   （`docs/可观测性清单.md` CACHE8：字节不变 93.2% / 变更一行 62.0%）。
+2. **否决：合并成一个 Cursor 式「能力入口」（PM 给的方向 a）。**
+   理由：① 见决策 A —— 两根轴正交且作用域不同，合并会把两个状态机压成一个；
+   ② 它会连带改掉 `resources/modes/*.md` 的 frontmatter 白名单契约（顶 AGENTS.md §3
+   「加一个模式应该是加一个文件，零行代码改动」）；③ **它不解决本问题**：边界仍要
+   以某种方式告诉模型，而投递机制的取舍（否决方案 1）一个字都不变，所以合并是
+   一个**额外的 UI 重构**，不是本问题的解；④ 三家参照物没有一家合并，而 PM 引的
+   Cursor 恰好也是「模式（Agent/Ask/Manual）」与「权限（allow/deny 规则）」分开的。
+3. **否决：照 WorkBuddy 的做法 —— 权限完全不告诉模型，只靠拒绝文案兜。**
+   理由：① WB 正是**有本 bug 的那一家**（三家对照表第三行：`permissionMode` 只是进程
+   参数，17 个 hidden-context 段里没有任何权限段 —— 已在我们自己树里逐个点名核对：
+   `docs/WorkBuddy-reference/extracted/main/tar.js:73388-73406`）；② 它的兜底依赖
+   「用户拒绝」这条消息，而只读档的拒绝是**系统拒**、不是用户拒，模型拿到的是
+   `SANDBOX PERMISSION DENIED` 之后才知道边界 —— 就是 PM 报的试错循环；
+   ③ WB 之所以看起来没事，是因为它在**模式层**给了 read-only 声明
+   （`workbuddy-ask-prompt.tpl` 的 `<current_mode>`），而那是**模式轴**、不是权限轴 ——
+   我们两根轴都有，所以这个巧合在我们这里不成立。
+4. **否决：给模型一个「申请提权」的工具参数（照 codex 的 `sandbox_permissions` +
+   `justification` / WB 的 `dangerouslyDisableSandbox` / dsh 的 `ESCALATION_TARGETS`）。**
+   这条**不是否决机制本身** —— dsh 的提权阶梯我们已经落了（`shared/permissions.ts` 的
+   `WIDER_MODES` / `canEscalate` / `validateEscalationArgs`，只挂在 `powershell` 上）。
+   **否决的是在本条里顺手把它扩到 write/edit**：那是「让模型能主动要权限」这个**另一个
+   决策**，要单独评估审批疲劳与提示注入面（注入可编造 justification 骗用户点允许，
+   而 §4.57 阶段 1 的凭据禁区正是靠「不给这个选项」守住的）。本条的射程是
+   「模型**知道**边界」，不是「模型能**改**边界」——两件事分开决策，别混成一件。
+
+### 4.15 输出语言规则：升格为顶层段，排在英文风格段之后（2026-09-18）
+
+**触发**（用户报的现象）：「你排查一下这个对话为什么有时候有一大段的英文输出」。
+截图里飘出来的是**过程叙述**——「Now dispatch 3 workers to fix the 6 overflowing pages…」
+「Let me write a script that: 1. Creates KWPP.Application COM object…」「Wait, actually
+more likely…」——出现在代码/COM API/路径（`KWPP.Application`、`dist-slides`、
+`Remove-Item Env:python`）周围，而同一条会话里**思考块（`◇ 深思考虑`）是中文**。
+
+**先排除**：不是思考内容错接成正文。delta 路由是干净的（`text_delta` → 正文、
+`thinking_delta` → 思考，`core/session-host.ts:1591-1595`），且截图里思考块本身是中文。
+所以飘出来的确实是 assistant 正文。
+
+**根因**（三条证据，全部取自真入口路径）：
+
+1. **默认生效了一份全英文的文体指令。** `resources/styles/style-professional.md`
+   整篇英文，其中 `### Language Patterns` 小节给的**范例句子全是英文**
+   （`"The root cause is..."`、`"There are three key factors:"`、`"This is a notably
+   effective approach."`）。该台机器的 `preferences.json` **没有 `styleId` 键**，而
+   `resolveStyle` 对 `undefined` 的处理是**回落默认风格**（`core/resources.ts:372-376`），
+   不是不注入。
+2. **它排在最后，且体量压过中文侧。** 风格段被 `splice` 到 **mode 段之后**
+   （`core/prompt-composer.ts:378`），其后只剩 skills / memory-system / pi-context
+   ——**再没有任何「怎么说人话」的指令**。台账 `logs/runs/01a0b3c7-….jsonl` 的
+   `request_snapshot` 实测该会话系统提示词 22,809 字符，其中
+   **`style:professional` = 2,182 字符（9.6%）**，是 `fragment:narration`（559）的 4 倍。
+3. **唯一的语言规则读起来只管「最终回复」。** `- 用中文回复。` 是
+   `prompts/fragments/delivery-rules.md` 的 `## 最终回复` 小节**最后一条**
+   （`scenes/code/prompt.md` 那份在 `# 交付` 下，前一句正是「最终回复必须自足」）。
+   而 `narration.md` 明确要求产出**过程叙述**（「每批工具前后各给一句」）、
+   `tool-discipline.md:20` 还专门提到「面向用户的回复与**状态描述**」——
+   **这两类输出一个字都没有语言约束**。
+
+**间歇性**因此可解释：短对话由中文用户消息 + 中文场景正文锚住；长 agentic 循环里
+紧邻上下文全是英文（工具输出、代码、报错、路径），英文风格指令就赢了。
+
+**旁证（本条的定性依据）**：WorkBuddy 发的是**同一批英文风格文件**（我们是 SHA256
+核对后原样搬的，`resources/styles/README.md`），但它配套了两样我们没搬的东西：
+
+- 主提示词模板**最末**的 `<response_language>` 块（`workbuddy-prompt.tpl:363-365`），
+  注入 `当前处于中文环境，使用简体中文回答 (Speak in Chinese).`（`tar.js:68316`）；
+- 一条硬条款（`workbuddy-craft-design-prompt.tpl:102-104`）：
+  「**Working language (mandatory)** … **Internally loaded English reference material
+  does not dictate your output language** … code identifiers may stay in English,
+  but **the surrounding sentence must be in the working language**」。
+
+它的英文分支甚至把这个现象直接写成了规则（`tar.js:68320`）：「Base your language
+decision solely on the natural language of the user's message, **not on technical
+content like code, paths, or logs**」。
+
+**决策**：
+
+- **A. 语言规则升格为顶层资源 `resources/prompts/language.md`，由组装器作为独立段
+  `language` 注入，位置排在 `style:<id>` 之后**（`ComposePromptInput.languageBody`；
+  先例是同样由组装器单独成段的 `prompts/memory-system.md`）。不接受把它留在场景/片段里：
+  骨架里的片段位置**都在**「`{{interaction}}` → 风格段」之前，规则会排在它要压制的
+  那个英文段**前面**，只能靠位置去赢一个 2,182 字符的英文段，赢不了。
+- **B. 删掉两处重复的 `- 用中文回复。`**（`delivery-rules.md`、`scenes/code/prompt.md`）。
+  同一件事不能有两个说法，而其中弱的那一个（挂在「最终回复」下）正是 bug 的来源。
+  规则唯一出处是 `prompts/language.md`。
+- **C. 子代理同注入**（`ComposeSubagentPromptInput.languageBody`，位序：agent 正文 →
+  工作目录 → 输出语言 → pi 上下文）。理由：子代理的中间报告与最终结论会**回到主会话
+  上下文**，用英文写就是往主会话灌英文材料 —— 正是 A 那条规则要挡的东西。
+- **D. 设置页提示词预览同步现读**（`PromptPreviewEnv`。`languageBody`）。预览少了这一段，
+  用户就看不到它排没排到「回复风格」之后——**位序正是本条要修的东西**，而预览是用户
+  唯一能自查位序的地方（`daemon/prompt-preview.ts` 既有注释：「预览不静默漂移」）。
+- **E. 资源缺失即启动抛错**（`loadResources` 校验 `prompts/language.md` 存在且非空，
+  不沿用 fragments 的「缺目录即空库」宽容）：少了它产品会静默改用英文说话，
+  不能让它以「资源缺失」的形式静默复发。
+
+**已知边界（如实记录）**：本条是**诊断驱动**的修复，**尚未做因果验证**——没有做
+「关掉风格前后对比」的 A/B。可证伪的验证路径已留给用户：设置里把回复风格关掉
+（`styleId` 置空串 → 不注入风格段）后跑一段同类的长任务，若英文照旧出现，则本条
+的根因判断不完整，需回头查该次请求的完整消息序列。
+
+**英文风格文件本体不动**：它们是 WorkBuddy 资产、README 记着 SHA256 一致，改了会破坏
+那条来源声明；WB 自己的解法也是「保留英文素材 + 加一条压过它的语言规则」，符合
+AGENTS.md §六。
+
+#### 否决方案
+
+1. **否决：把 7 份风格文件翻译成中文。**
+   理由：① 破坏 `resources/styles/README.md` 记的来源事实（「原样搬用自 WorkBuddy
+   5.5.4、未做内容改动、SHA256 逐一核对一致」），改完那句就成假的；② 资产置换是
+   AGENTS.md §六 明确的**上线前专人负责**的另一件事，不该顺手做；③ 翻译改变不了
+   结构问题——风格段**仍然排在语言规则该在的位置**，只是换了语言，而 WB 用英文风格
+   文件也没出这个 bug，说明问题在缺那条配对规则，不在风格文件的语种。
+2. **否决：把语言规则留在场景正文/片段里（只改措辞、不动组装器）。**
+   理由：骨架里 `{{> }}` 的位置**全在风格段之前**（风格段是 composer 在 mode 段之后
+   splice 进去的，见 `prompt-composer.ts:371-379`），所以规则在位置上**必然输给**
+   它要压制的那个英文段；要靠一句中文去赢 2,182 字符的英文风格指令，是拿位置换运气。
+   实测的失败形态就是本条 bug 本身。
+3. **否决：按当前权限档位/语言之类逐轮可变事实去参数化风格段或语言段。**
+   理由同 §4.14 否决方案 1：系统提示词位于整段历史之前，一个字节变化让其后**一切**
+   在 provider 前缀缓存里失配。语言规则是**会话内恒定**的，所以进系统提示词是安全的
+   ——这一条与「逐轮事实走注入」的纪律不冲突，不要混为一谈。
+4. **否决：只在「最终回复」那条上加强措辞（不新增段）。**
+   理由：① 这正是现状——`- 用中文回复。` 已经在那里了，而它**已经**没管住过程叙述；
+   ② 病根是「范围」而不是「语气」：模型把它读成只管最终回复，是因为它**确实**挂在
+   「最终回复」小节下，加强措辞不改变归属；③ 过程叙述的量级还不小（长任务里它是
+   用户读到的主要文本），值得一段独立的、明确覆盖「全部自然语言输出」的规则。
+5. **否决：给语言规则加一条「检测到英文就重写」的机械门禁（扫模型输出）。**
+   理由：① 语言判定是**语义**问题（代码块、路径、专有名词、引用原文都合法地是英文），
+   正则误判率不可接受，而误判的代价是**改写用户可见的正确输出**；② 我们的门禁传统是
+   钉「组装产物的结构」（段序、字节稳定、资源存在性），不是钉模型的自由文本；
+   ③ 真正该机械钉住的位序问题已经钉住了（`core/prompt-composer.test.ts` 的
+   「输出语言段必须排在风格段之后」+ `resources.test.ts` 的真实入口回归）。
+
+### 4.16 别让文案把可实现的事说成做不到：运行时清单、被拒之后的出路、包管理器缓存（2026-09-18）
+
+**触发**（用户两次原话）：
+
+> 啥意思啊，本机有都不让我，我还是感觉我们权限与沙箱这一块问题不小
+>
+> 模型遇到问题不行了他应该来问我啊我同意了就给他执行啊
+
+现场：模型在「做一个 PPT」这类任务里写出
+
+> 环境确认完毕：**系统内有 Node**（`C:\Program Files\nodejs`），**但托管运行时未装**……技能里依赖的
+> dev server + Playwright 截图路线**无法可靠跑通**。我改用更稳的路线……
+
+**它没有被拦，它是被劝退的。** 实测同一时刻（`collectRuntimeInventory` + `planRuntimeShellInjection` 的真实产物）：
+注入计划 `前置于 PATH 的目录：[]`、**未替换 PATH**（`injection.ts` 的 `prependPath` 是 `[...dirs, base]`）、
+进程 PATH 里存在 `node.exe` —— 系统那份 Node 一直可用。
+
+**三条根因（都在文案/文案级判据上，与权限判定无关）**：
+
+1. **运行时清单的抬头把实现选择写成了对模型的禁令。** 原文
+   「**不要用系统里同名的解释器 / 运行时**」。而这条禁令的真实出处是实现决策：
+   `injection.ts:83-84`「注入的是随包那一份，不是机器上可能存在的同名 node —— 与 spec 阶段 0
+   否决『复用系统已装』同因」。那条否决管的是**我们注入哪一份**（版本可控、可归因、注入路径可信），
+   **不是「系统那份不能用」**。四问的是「我们注入哪一份」，答的却是「你不许用」。
+2. **“未安装”被写成了能力不可用。** 每项的非就绪指引原文都是「缺这项能力时如实告诉用户并请他安装」
+   —— 模型据此把「我们这份副本没有」读成「这台机器做不到」。
+3. **「区外 → 询问」这条承诺在命令那条路上没兑现。** 默认档的文案是「要动工作空间之外的文件时询问你」
+   （`shared/permissions.ts:141`）。文件工具确实询问（`permission-policy` 阶段 4）；但 **powershell 门放行到
+   执行层**（`permission-policy.ts:571`），执行层的沙箱在 OS 层**直接拒绝**，**永远不会问**。
+   于是用户经历的不是「被问了然后被拒」，是**撞墙** —— 而模型看不到「你可以来问我」这条路。
+
+**dsh 的做法（本条的对照依据，四条都对得上）**：
+
+| 问题 | dsh | 出处 |
+| --- | --- | --- |
+| 别凭政策自己劝退 | 「**Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.**」 | `packages/sandbox/sandbox-policy/README.md:119` |
+| 模型可见文本不该枚举能力 | 「Tool schemas remain **the authority**… Tool results remain the authority for operation-specific denials and approved wider retries… The model no longer receives **a prose list of sandboxed capability families**.」 | `.agents/notes/implemented/simplification/2026-07-31-capability-neutral-sandbox-policy-context.md:19,35` |
+| 临时区域只做摘要、不列路径 | 各后端授予的临时区域不同、且在策略解析**之后**才选定，「无法如实枚举」；有测试钉「TMPDIR 变化时整段提示词逐字节稳定」 | `sandbox-policy/README.md:151`、`tests/policy.spec.ts:171` |
+| 默认档 | **fail-safe 默认 `read-only`**，要显式 opt-in 才给 `workspace-write` | `sandbox-policy/README.md:36` |
+
+**⚠ 同时更正 §4.16 起草过程中的一次判断失误（记下来免得重犯）**：起草本条时我先断言
+「我们只有 `writableDirs: [workspaceDir]`、临时区域一个都没给」，并据此提出「学 dsh 把 temp
+并进可写集」。**这是错的**：私有 temp 由沙箱层**内部**管理，不在调用方那个参数里 ——
+`sandbox/index.ts:433-435` 按工作区确定性派生 `<系统temp>\kamibuddy-sandbox\<16位摘要>`，
+`:406-419` 给它授专属 SID，`:520` 把 `TMP`/`TEMP` 指过去，`token.ts:240` 的受限 SID 列表里
+本来就有 temp SID，`confinement.win.test.ts` 也有「TMP/TEMP 指向已授权的私有目录且可写」。
+**我们不但早就对齐了 dsh 的 Windows 做法，还多做了确定性派生与「与工作区两向不相交」的守卫。**
+教训：`writableDirs` 是**调用方**给的清单，不是沙箱可写集的全貌 —— 断言「我们没有 X」之前要读全层。
+
+**决策**：
+
+- **A. 运行时清单不再下禁令，并明说状态不等于能力边界。**
+  `renderRuntimeEnvSection` 抬头改为「**系统里已有同名的解释器 / 工具时照常可用**，不需要非用我们
+  这一份；别因为下面某一项不是「就绪」就判定这件事做不到 —— 先动手试，被拒时按拒绝说明走」；
+  三条非就绪指引都补上「这**不代表这件事做不到**」。「不要自己安装」保留（托管运行时的安装是用户在
+  设置页的显式动作，与「系统那份能不能用」是两件事）。**状态：已落地。**
+- **B. 模型可见文本只给人话，细节留给界面。** 状态行从 `runtimeStatusText`（带 `status.detail`）
+  换成 `RUNTIME_STATUS_LABELS` 的标签 —— detail 里装的是内部相位与失败原文，其至包含一整条
+  GitHub release URL，对模型没用而每轮都要付 token。设置页与诊断仍走 `runtimeStatusText`。
+  **状态：已落地。**
+- **C. 包管理器缓存指进已被授权的私有 temp。** 新增 `packageManagerScratchEnv`（`sandbox/index.ts`），
+  在 `TMP`/`TEMP` 同一处注入 `npm_config_cache=<私有temp>\npm-cache`。npm 的缓存**不看 TMP**
+  （默认 `%LOCALAPPDATA%\npm-cache`，在工作区与私有 temp 之外），所以「工作区可写」这条承诺在
+  npm 这里会变成写不进去。WorkBuddy 的同一题是把它列 `inherit_user` 白名单（§4.4b 已记）；
+  我们改**落点**而不加白名单：缓存本就是可弃的临时数据，**边界一点没放宽**。
+  **状态：已落地**（`confinement.win.test.ts` 在真沙箱里验了「变量指向私有 temp 且落点可写」）。
+- **D. 被拒之后的出路要成为模型的基本常识。** `python-env.md` 删掉「不要去猜系统里那份」与
+  被错误类推的「同理不要 `npm install`」；`tool-discipline.md` 新增一条：**被拦下先读返回的那句话** ——
+  它区分「命令本身有问题」与「策略拒绝」，后者有正规出路（带 `sandbox_permissions` + `justification`
+  重试同一条命令一次，**由用户当场决定批不批**）；改写命令去绕不会通过。**状态：已落地。**
+  （提权链路本身早已完备：schema 广告字段、工具描述点明、撞墙当刻给 `DENIAL_MARKER` +
+  `ESCALATION_HINT`、只在真能提权时才给、批准后 `ESCALATED_NOTE` —— 缺的只是**让模型走到那一步**。）
+- **E. 顺带修「取消 ≠ 失败」。** 安装层原先两种情况都落盘写 `outcome: "failed"`
+  （`registry.ts` 的取件 catch），读侧只认 `outcome`，于是用户主动取消过一次下载，
+  下次采集清单时显示成「安装失败」，模型据此**催用户重试他自己的决定**。现新增
+  `outcome: "cancelled"`（两种取消形态都认：`DownloadCancelledError` 与 `AbortError`），
+  读侧继续只认 `failed` —— 该运行时于是回落「未安装」，文案随之准确；`runtime-inventory`
+  也据此抛 `AbortError` 而不是普通失败，让 daemon 那条「取消与失败分开上报、不写审计」的
+  既有意图第一次真正成立。**状态：已落地。**
+  这条也**更正了片段里一处理由错误**：`python-env.md` 原写「不要 `tempfile`（沙箱写不进那类目录）」——
+  沙箱**给**了私有 temp，Python 侧失败的真原因是 `mkdir(0o700)` 的 DACL 切断继承
+  （§4.4b 已知边界 8），与落点无关。
+
+**已知边界 / 未做**：
+- **文件工具（write/edit）没有提权通道**，也不需要：它们在权限门那一层就是「区外 → 询问」，
+  批准即执行。需要提权的是 shell（门不审命令、约束在执行层）。
+- **`pip` 在沙箱里仍然必失败**（DACL 洞，与缓存落点无关），出路是提权；没有给它设
+  `PIP_CACHE_DIR` —— 那是无效的安慰剂，`packageManagerScratchEnv` 的注释里写明了别加回来。
+- **默认档没有改**（见否决方案 1）。
+
+#### 否决方案
+
+1. **否决：把默认档从 `workspace-write + ask` 改成 `danger-full-access + ask`（「权限刚开始放开点」）。**
+   理由：① **peer 证据不支持** —— dsh 的默认是 **fail-safe 的 `read-only`**，要显式 opt-in
+   （`sandbox-policy/README.md:36`）；WorkBuddy 桌面端虽用 `bypassPermissions`，但它是
+   「**工作区这个域内不问**」+ `trustedDirectories`，也不是全局敞开（§4.4b 已记）。两家都不同意「全局放开」；
+   ② 本次投诉的**真身不是判定层**（实测：PATH 未被替换、系统 Node 可用、注入零目录），放开默认档
+   一个字节都解决不了「模型被文案劝退」；③ 它要付 2026-09-09 事故换来的防线（模型改工作区外文件）。
+2. **否决：把整个 `%TEMP%` 或包管理器缓存目录列进可写白名单（WorkBuddy 的 `inherit_user` 原样抄）。**
+   理由：① 那是 WB 的**用户态规则栈**才成立的做法，它的栈根本不覆盖 TEMP/TMP；我们的约束是
+   OS 级受限令牌，抄白名单等于把用户机器上一个**持久目录**纳进可写集 —— 换来的是同等的写入能力，
+   付出的是边界变大；② 私有 temp + 改缓存**落点**达到同样效果且不动边界（已实测可写）；
+   ③ §4.4b 已记「它的 temp 白名单照抄不过来」。
+3. **否决：删掉整段 `python_env` 清单（dsh 是「不枚举能力」，那我们也别给）。**
+   理由：dsh 不枚举的是**已挂载能力家族**（它没有「随应用按需安装的运行时副本」这个概念）；
+   而我们这几项带着**模型真正要用的绝对路径**（解释器、node、gitbash），删掉清单模型就
+   拿不到路径，只能去猜 —— 那是把 dsh 的结论套到它没有的场景上。真正的教训是**别下禁令、别把状态
+   说成能力边界**，不是「别给路径」。清单保留，抬头与指引按 A 改写。
+4. **否决：给模型一个「申请提权」的新工具/新字段（改 schema）。**
+   理由：字段已经在（`sandbox_permissions` + `justification`，`powershell-tool.ts:391-405`），
+   撞墙文案也已经带出路（`sandbox-runner.ts:140-142`），加新字段是重复建设。
+   本轮要修的是「模型走不到那一步」，属提示词范围。
+5. **否决：让沙箱在拒绝前先弹一次审批（「区外写就提前问」）。**
+   理由：shell 命令触碰哪些路径**事前不可判定** —— 这正是当初把 shell 的约束放到 OS 层、
+   门侧不审命令的理由（`permission-policy.ts:544-551`，对齐 dsh）。能做到「撞墙后申请、
+   用户批准即单次放行」已经兑现了「你来问我、我同意就执行」，且不需要预判命令语义。
+
+### 4.17 命中率不是缓存健康度：把「新增」与「缓存浪费」摆到界面上（2026-09-18）
+
+**触发**（用户两次原话）：
+
+> 你看我的正常使用命中率并不好
+>
+> 为什么中间缓存会掉这么多
+
+**实测结论：那个 93.8% 不是「不好」，它就是这个会话形态的算术结果。**
+台账 `01a0b4c4`（30 步 / 输入 2.99M / 命中 93.8%，与用户截图逐位对上）：
+
+- 逐次比对 30 次请求 `messageList` 的 id + 内容指纹：**前缀中途分家 0 次**（纯粹的追加式会话）。
+- 未命中 180,767 token 的构成：第 1 步**冷启动** 16,416（9.1%）+ 其余 29 步**真实新增内容** 164,351（**90.9%**）。
+- 那 164,351 是什么：107 条新消息 / 347,470 字符 —— assistant（**含工具调用参数**，即它写出去的文件内容）
+  163,443（47%）、toolResult 180,331（52%）、注入快照 3,581（1%）、**用户自己打的字 115（0.03%）**。
+- 应用自己的浪费归因器（`core/observability.ts` 的 `CACHE_MISS_NOISE_FLOOR_TOKENS = 1024`）对这条会话记
+  **0 次 miss**。
+
+**公式（可用截图自验）**：`命中率 = 上一步上下文 ÷ 本步上下文`。用户截图那两轮 7 步逐一对上，
+误差 0.1–0.9 个百分点（缓存块对齐）：
+
+| 轮 | 步 | t | 显示 | 上一步 t ÷ 本步 t |
+| --- | --- | --- | --- | --- |
+| 22:03 | #1 | 183.5K | 100% | （换 run 首调） |
+| | #2 | 194.4K | **94%** | 183.5 ÷ 194.4 = 94.4% |
+| | #3 | 197.0K | 99% | 194.4 ÷ 197.0 = 98.7% |
+| 21:56 | #3 | 163.6K | 98% | 159.8 ÷ 163.6 = 97.7% |
+| | #4 | 175.8K | **93%** | 163.6 ÷ 175.8 = 93.1% |
+
+掉得最凶的两处，起因都是**上一步的输出大**（22:03 #1 的 `↓10.8K`、21:56 #3 的 `↓12.1K`）——
+那是全新内容，必须全价付一次，付完就成为前缀的一部分、下一步又全命中。
+**所以这个锯齿是「上一步干了多少活」的签名，不是缓存漏了**：真漏的症状是实际命中低于上表右列且缺口稳定重复，
+而实测的平均缺口是 **−0.01 个百分点**（比预期还略高）。
+
+**dsh 对照（三条，决定「该学什么、不该学什么」）**：
+
+| | dsh | 我们 |
+| --- | --- | --- |
+| 命中率口径与位置 | `cacheReadTokens / billedInputTokens`（三桶分母），整份 durable log，footer StatsLine | **同口径**（`shared/observability.ts:101`）+ 同位置（`session-stats-line.tsx`） |
+| 反误读护栏 | `formatCacheHitPercent` 的契约原文「**without rounding a partial hit to 100%**」，且「partial hits that would round to 100 **automatically use enough additional precision**」（`packages/client/ui-chat/src/client/chat/token-format.ts:59-98`） | **无**（三处直接 `.toFixed(1)` / `Math.round`）——见「已知未搬」 |
+| miss / 浪费归因 | **全仓没有**（`cacheWaste` / `cacheMiss` / `missedTokens` 零命中；只有 DeepSeek 线协议字段 `prompt_cache_miss_tokens`） | **有**：`cacheWaste` + CACHE6 断点反推器 |
+| 缓存门禁 | **不变量**：真实 API e2e 断言「首调之后每次请求 `cacheReadTokens > 0`」（`packages/core/agent-loop/tests/request-cache.e2e.ts:94`）；外加每包 README 必填 `#### KV Cache effect` | 不变量：提示词字节稳定（`prompt-switch.test.ts`） |
+
+**dsh 从不用命中率阈值管缓存** —— 它用的是「不变量 + 每包前缀效应声明」。这正面支持本条的判断：
+命中率不是一个健康度指标。既然在「缓存健不健康」这件事上我们的工具比参考实现**多**（那三条归因它没有），
+要做的不是砍掉它，而是**把它显示出来**。
+
+**决策**：
+
+- **A. 步行显示「新增」（未命中输入）。** `task-diagnostics-panel.tsx` 的 `stepTokenReading`：
+  `↑194.4K 新增 11.0K ↓1.5K`。原来只给 ↑（上下文总量）与 ↓（模型输出），而**工具返回的正文**既不在 ↑ 里
+  （↑ 是总量）也不在 ↓ 里（↓ 只是模型输出），被整个藏住 —— 于是 94% 看起来像「缓存漏了 6%」。
+  摆出这个数，那一行就自解释：`命中率 = 1 − 新增 ÷ 上下文`。命名对齐 dsh：它账本里这一桶叫
+  `uncachedInputTokens`。
+- **B. 底栏显示「缓存浪费 + 次数」。** 数据 daemon 早就在算（`cacheWaste`），但 **renderer 从没显示过**
+  （诊断页有、底栏没有）；并且**进程级那一份不能直接用** —— 指标条挂在单个会话下方，多会话并发会把别人的
+  浪费记到这张卡上。所以新增**按会话切分**的累计：`SessionStatCard.cacheMissedTokens` / `cacheMissCount`
+  （与进程级共用 `core/observability.ts` 里**同一个 if**，拆成两次判定必然漂移）。
+  判读口径随之改变：**命中率不用管**（它被「每步读进多少新东西」支配），**只看缓存浪费** —— 它一非零就只可能是
+  提示词被改 / 注入快照每轮重发 / 工具集变化 / 换模型 / 空闲超时。
+- **沿用「缓存浪费」这个词，不新造「前缀重付」**：诊断页已用这个词且带定义句
+  （`diagnostics-view.tsx:591-593`「上次 prompt 已有、这次却没走缓存重计费的部分」）。
+  一件事在一个应用里两个名字，正是 AGENTS.md §4 要防的漂移。
+- **健康时显示 0 而不是整组消失**：与「没有数据的组整组消失」不冲突 —— 那条管的是**没有数据**，这里是
+  **有数据且值为 0**。告警读数若在正常时隐藏，就分不出「一切正常」与「这项没接上」。
+- **门控用 `cacheReported` 而不是「有计费」**：服务商从不上报缓存活动时这个数恒为 0，而 0 在那里会被读成
+  「没有浪费」，实际是「无从得知」—— 同命中率留空而不显示 0% 的既有判定。
+
+**已知未搬（用户本轮明确不做，留在此备用）**：dsh 的「不许把部分命中凑成 100%」格式化契约。
+现状三处各自四舍五入，实测 **99.8% 会显示成「100%」**（用户截图 22:05:36 那轮即此例，
+台账同一步是 99.8%）。
+
+**已知缺口**：「各会话浪费之和 = 进程级合计」这条关系没有门禁登记 —— `src/shared/observability.ts` 在
+`check-module-invariants` 里是豁免项，`core/observability.ts` 不在扫描范围。要补得先扩扫描范围。
+
+#### 否决方案
+
+1. **否决：既然命中率读不出健康度，就把它从界面撤掉。**
+   理由：它是**成本**读数（这个会话有多少输入走了缓存价），撤掉用户就看不出省钱效果；dsh 也保留它
+   （footer StatsLine）。要修的是「别把它当健康度用」，不是「别显示」—— 所以是**补一个能当健康度用的数**
+   （决策 B），而不是删。
+2. **否决：底栏直接把进程级 `cacheWaste` 塞进卡片（复用现成字段，不动 fold）。**
+   理由：口径错位 —— 指标条属于**单个会话**。已用测试钉住（`core/observability.test.ts` 的
+   「会话级浪费只算自己会话的，不串到别的会话」；把 `freezeSessionCard` 改回读进程级即变红）。
+3. **否决：把低于 1024 噪声地板的差额也计进「缓存浪费」。**
+   理由：① 手工逐轮相加得到的 1,867 token 里绝大部分是**缓存块对齐**的必然零头（实测每轮 0–127 token，
+   正好是 128 的块），不是失效；② 计进来会让**每个**健康会话永远报非零，告警读数直接失效；
+   ③ 噪声地板是已登记决定（注释标明「同 pi NOISE_FLOOR_TOKENS」），在 renderer 侧另立一套口径违反
+   「renderer 不二次计算」（`session-stats-line.tsx` 文件头）。
+4. **否决：把 ↑ 拆成「已缓存 / 新增」两列。**
+   理由：面板是 440px 窄栏（该文件头已记这条约束），四列会把行挤到换行；且「已缓存」= ↑ − 新增，
+   减一下就有，不必再占一列。
+5. **否决：给「缓存浪费」加颜色或图标警示（超阈值变红）。**
+   理由：DESIGN.md §2.4 状态色封顶 4 个，且没有可依据的阈值 —— 什么算「多」取决于会话规模
+   （同一份浪费在 10K 上下文与 1M 上下文里意义完全不同）。先出数，阈值等有实测分布再谈。
+
+### 4.18 Windows 环境变量名不区分大小写：环境块必须按小写名归并（2026-09-18）
+
+**触发**：§4.16 决策 B（把 npm 缓存指进私有 temp）的护栏用例
+（`confinement.win.test.ts`「npm 缓存被指到私有 temp 里，且那个落点写得进去」）在 `npm test` 下变红。
+
+**⚠ 先更正上一轮交付里的一次误判**：我当时把这条例外标成「并发负载下 flaky，单独跑是绿的」。
+**这是错的** —— 实测它单独跑也红（`npx vitest run src/sandbox/confinement.win.test.ts` 1 failed），
+是**确定性失败**，只是失败与否取决于**启动器**。教训：把一条红过的护栏归因成 flaky 之前，
+先在最小命令下复跑一次；否则会把真 bug 记成环境噪音。
+
+**证据（同一份脚本、同一个生产入口 `runSandboxed`，两种驱动方式两种结果）**：
+
+| 驱动方式 | 沙箱内 `$env:npm_config_cache` | 结果 |
+| --- | --- | --- |
+| `npx tsx`（临时探针） | `…\kamibuddy-sandbox\<hash>\npm-cache`（我们的） | exit 0 |
+| `npx vitest run`（护栏用例） | `C:\Users\…\AppData\Local\npm-cache`（继承来的） | 写被拒，exit 1 |
+
+**根因**：`spawn.ts` 的 `buildEnvBlock` 用 **JS 对象键**合并基底与覆盖项，而 **Windows 的环境变量名
+不区分大小写**。基底里的 `NPM_CONFIG_CACHE`（npm / pnpm 会设）与覆盖项里的 `npm_config_cache`
+是两个不同的 JS 键，于是**同时**进了环境块；Windows 取哪一个**取决于块内顺序**，
+而顺序随启动链变化 —— 这正是上面两条实跑读数不同的原因。
+
+**影响面比 npm 大得多**：`PATH` 同病。Windows 上 `process.env` 常见的是 **`Path`** 拼写，
+而运行时注入层写的是 `PATH`（`core/runtimes/injection.ts`）—— 两份同时进块意味着
+**「把托管运行时的目录前置进 PATH」这条路会偶发失效**，而它正是 §4.16 要保住的那条路。
+（模块不变量登记里 `shared/runtimes.ts` 那条「python_env 条目级断言」守的是**文本**，守不到这里。）
+
+**决策**：`buildEnvBlock` 按**小写名**归并 —— 同名（任意大小写形态）只留一份，且留下的必须是**覆盖项**。
+这是纯确定性修复，不改变任何既有语义（没提到的大小写变体照常继承）。
+
+护栏：`spawn.test.ts` 新增两条（「大小写不同的同名变量按同一个键覆盖」、
+「覆盖 PATH 时压过继承来的 Path 拼写」）；把 `key.toLowerCase()` 改回 `key` 即两条一起变红
+（实测输出里能直接看到 `['Path=基底', 'PATH=注入目录;基底']` 两份 PATH）。
+
+**与 §4.16 的关系**：结论不变（B 仍然是把 npm 缓存指进私有 temp），本条修的是它的**实现可靠性**。
+旧记录按「写完即冻结」保留原文，不就地改。
+
+#### 否决方案
+
+1. **否决：把注入键改成大写 `NPM_CONFIG_CACHE`（跟继承值同拼写就不撞了）。**
+   理由：治不了根 —— 下一次换个启动器可能是别的大小写形态，而 `PATH` / `Path` 那一对还在。
+   要钉的不变量是「同名只留一份」，不是「这次猜对了拼写」。
+2. **否决：在 npm 补丁里把大小写两份键都设上。**
+   理由：块里仍然是两份，Windows 取哪一个照旧由顺序决定；而且把「环境名不区分大小写」
+   这件事散到每一个调用点，漏一个就复发。
+3. **否决：改成整体替换环境块（只给我们要的那几个键）。**
+   理由：`buildEnvBlock` 的既有注释已记 —— 缺 `SystemRoot` 之类的进程直接起不来（spike 踩过）。
+   继承 + 覆盖仍是正确形态，问题只在「覆盖」的比较口径。
+
 ## 5. pi 能力边界（D1 验证结论）
 
 | 项                     | 结论                                                                                                          |

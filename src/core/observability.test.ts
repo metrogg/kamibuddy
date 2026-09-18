@@ -532,6 +532,48 @@ describe("缓存浪费归因（pi cache-stats 口径）", () => {
 		expect(snapshotOf(store).cacheWaste.missCount).toBe(0);
 	});
 
+	it("同一批判定另记一份到会话级（指标条挂在单个会话下方）", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldPair(store, CACHE_TTL_MS + 60_000);
+
+		expect(snapshotOf(store).sessions[0]).toMatchObject({
+			cacheMissedTokens: 5100,
+			cacheMissCount: 1,
+		});
+	});
+
+	it("会话级浪费只算自己会话的，不串到别的会话", () => {
+		// 这条钉的是「按会话切分」这个决定：把进程级合计塞进每张卡也能让上一条
+		// 变绿（只有一条会话时两者同值），但 s2 会凭空背上 s1 的浪费。
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldPair(store, CACHE_TTL_MS + 60_000);
+		store.foldLedgerEntry("s2", {
+			seq: 1,
+			at: 1000,
+			kind: "llm_call",
+			data: llmCall(0, 1000, 2000, promptUsage(100, 0, 5000)),
+		});
+
+		const cards = snapshotOf(store).sessions;
+		expect(cards.find((c) => c.sessionId === "s1")).toMatchObject({ cacheMissedTokens: 5100 });
+		expect(cards.find((c) => c.sessionId === "s2")).toMatchObject({
+			cacheMissedTokens: 0,
+			cacheMissCount: 0,
+		});
+	});
+
+	it("噪声底线以下不计进会话级浪费（否则健康会话永远报非零）", () => {
+		const store = new ObservabilityStore(() => 1_000_000);
+		foldPair(store, 60_000, { usage2: promptUsage(600, 4500, 0) });
+
+		// 实测每轮的块对齐差额是 0–127 token（provider 的 128 缓存块），
+		// 计进来会让「缓存浪费」在**每个**会话上都非零 —— 告警读数失效。
+		expect(snapshotOf(store).sessions[0]).toMatchObject({
+			cacheMissedTokens: 0,
+			cacheMissCount: 0,
+		});
+	});
+
 	it("服务商从未上报缓存活动时，零缓存轮不计 miss", () => {
 		const store = new ObservabilityStore(() => 1_000_000);
 		// 第一次也是零缓存（cacheWrite 0）→ reportedCache 不成立。

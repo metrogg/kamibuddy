@@ -150,6 +150,20 @@ export interface ComposePromptInput {
 	 */
 	readonly memorySystemBody?: string;
 	/**
+	 * 输出语言规则段（resources/prompts/language.md 正文，见 ARCHITECTURE §4.15）。
+	 *
+	 * **位置是本字段存在的唯一理由：它必须排在风格段之后。** 风格文件是搬用
+	 * WorkBuddy 的英文材料（7 份全英文、正文带英文范例句），是对「怎么说人话」
+	 * 的最后一条指令；语言规则排在它前面就要靠位置去赢一个 2,182 字符的英文段，
+	 * 赢不了 —— 实测后果是过程叙述飘成英文。WorkBuddy 同向：`<response_language>`
+	 * 在模板最末。所以它**不进 filled 的片段序**，而是在风格段 splice 之后
+	 * 直接 push，成为 core 的最后一段（风格段缺席时它就是 core 末尾，位序语义不变）。
+	 *
+	 * 与 style 不同，它**不受 expert 抑制**：绑定专家时风格段不注入，但语言规则
+	 * 仍要注入 —— 专家人格同样得用中文说话。
+	 */
+	readonly languageBody?: string;
+	/**
 	 * 片段解析回调：name → 片段内容；返回 undefined 表示片段缺失（组装抛错）。
 	 * composer 保持纯函数不读盘，resources/prompts/fragments/ → 本回调的映射
 	 * 是 loader 层的事。骨架含 {{> }} 而未提供本回调 → 抛错（不静默留洞）。
@@ -287,7 +301,8 @@ const MAX_FRAGMENT_DEPTH = 8;
  * 分段来源（provenance）。skeleton = 骨架的非片段部分；fragment:<名> = 片段内容；
  * mode:<id> = 交互模式行为段；skills / pi-context / expert 同名段落；
  * style:<id> = 回复风格段（注入点在交互段之后，见 composePromptWithMeta）；
- * memory-system = 记忆行为纪律段。
+ * memory-system = 记忆行为纪律段；language = 输出语言规则段
+ * （**排在 style 之后**，理由见 ComposePromptInput.languageBody）。
  *
  * **time / memory / personalization 不在这里**：它们是逐轮会变的事实，不进系统
  * 提示词 —— memory / personalization 由 formatRuntimeContext 组装成注入消息，
@@ -302,6 +317,7 @@ export type PromptSegmentSource =
 	| "pi-context"
 	| "expert"
 	| "memory-system"
+	| "language"
 	| `fragment:${string}`
 	| `mode:${string}`
 	| `style:${string}`;
@@ -386,6 +402,23 @@ export function composePromptWithMeta(input: ComposePromptInput): ComposedPrompt
 		const modeIdx = filled.findIndex((s) => s.source.startsWith("mode:"));
 		if (modeIdx === -1) filled.push(styleSeg);
 		else filled.splice(modeIdx + 1, 0, styleSeg);
+	}
+
+	/*
+	 * 输出语言段：**必须在风格段之后**（本函数里它是 core 的最后一段）。
+	 *
+	 * 为什么在这里而不是场景骨架的一个 {{> }} 槽位：骨架里的片段位置都在
+	 * 「{{interaction}} → 风格段」之前，而这条规则的作用对象恰恰是风格段 ——
+	 * 英文风格材料是对「怎么说话」的最后一条指令，语言规则只能排在它之后
+	 * 才有压过它的位置（WorkBuddy 的 `<response_language>` 同样在模板最末）。
+	 *
+	 * 不受 expert 抑制：风格段在绑定专家时不注入，语言规则不是风格的一部分，
+	 * 人格同样要用中文说话。走 filled 而不是 all，是为了与骨架/模式/风格段
+	 * 共享 finalizeCore 的按段压平 —— 「segments 拼接 == text」的等价性论证
+	 * 不必为它单开分支。
+	 */
+	if (input.languageBody !== undefined && input.languageBody.trim() !== "") {
+		filled.push({ source: "language", text: `\n\n${input.languageBody.trim()}` });
 	}
 
 	// 残留检查：任何 {{...}} 都不许活过组装（含片段/模式/风格正文里的笔误、{{> 残次写法）。
@@ -710,6 +743,16 @@ export interface ComposeSubagentPromptInput {
 	readonly cwd: string;
 	/** pi 已经加载好的上下文文件 / 工具提示，拼回最终提示词。 */
 	readonly piContext?: PromptContextOptions;
+	/**
+	 * 输出语言规则段（`resources/prompts/language.md` 正文，见 §4.15）。
+	 *
+	 * 子代理同样要注入：它写的中间报告与最终结论会**回到主会话的上下文里**，
+	 * 用英文写就等于往主会话灌英文材料 —— 正是主会话飘成英文的那个诱因
+	 * （`language.md` 里那条「英文材料不决定输出语言」要挡的东西）。
+	 * 位置与主会话一致：agent 正文 + 工作目录之后、pi 上下文（AGENTS.md 类，
+	 * 可能是英文）之前。
+	 */
+	readonly languageBody?: string;
 }
 
 /**
@@ -730,7 +773,18 @@ export interface ComposeSubagentPromptInput {
  * hidden context `current_time` 送达（与用户会话同一条路径）。
  */
 export function composeSubagentPrompt(input: ComposeSubagentPromptInput): string {
-	return appendPiContext(`${input.agentBody.trim()}\n\n当前工作目录：${input.cwd}`, input);
+	const head = `${input.agentBody.trim()}\n\n当前工作目录：${input.cwd}`;
+	/*
+	 * 输出语言段接在 head 之后、pi 上下文之前（不是整篇最后）：pi 上下文是
+	 * AGENTS.md 类项目指令文件，内容随用户项目而变、可能是英文，由
+	 * appendPiContext 追加在末位。位序与主会话一致 —— 语言规则排在「怎么说人话」
+	 * 的指令之后、项目内容之前（§4.15；主会话那边同序，见 languageBody 注释）。
+	 */
+	const body =
+		input.languageBody === undefined || input.languageBody.trim() === ""
+			? head
+			: `${head}\n\n${input.languageBody.trim()}`;
+	return appendPiContext(body, input);
 }
 
 /**

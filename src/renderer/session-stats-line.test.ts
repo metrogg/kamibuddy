@@ -1,15 +1,19 @@
 /**
  * 会话指标条的行为测试（分组与门控对齐 dsh 的 StatsLine）。
  *
- * 钉住三件事：
+ * 钉住四件事：
  *   1. 格式化档位（秒/分、tok/s 的小数位）
  *   2. 分组门控 —— 没有数据的组**整组消失**，绝不显示 0
  *   3. 整行为空的判定（一组都没有时返回空数组，组件据此不渲染；
  *      空读数条看起来像「这里本该有东西没加载出来」）
+ *   4. 缓存浪费组（2026-09-18 加）—— 它是**告警**读数，所以健康时显示 0
+ *      而不是整组消失；服务商从不上报缓存活动时两组一起消失（0 在那里
+ *      会被读成「没有浪费」，实际是「无从得知」）
  *
  * 第 3 个 describe 里的期望值直接取自 dsh 真实会话的一行读数，
  * 全字段与截图逐字对齐（1 轮 · 27 步 / LLM 1m8s · 工具调用 1m10s /
  * 首 token 平均 1.1s · 241 tok/s / 缓存命中 95.0% / 输入 1.5M tok · 输出 8.9K tok）。
+ * 缓存浪费组是本项目在 dsh 之外的追加（dsh 没有 miss 归因）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -31,6 +35,8 @@ function card(overrides: Partial<SessionStatCard> = {}): SessionStatCard {
 		usage: emptyUsage(),
 		cacheHitRate: undefined,
 		cacheReported: true,
+		cacheMissedTokens: 0,
+		cacheMissCount: 0,
 		lastActiveAt: 0,
 		...overrides,
 	};
@@ -71,7 +77,7 @@ describe("sessionStatsGroups", () => {
 		expect(sessionStatsGroups(card({ runs: 1, turns: 27 }))).toEqual(["1 轮 · 27 步"]);
 	});
 
-	it("完整卡按 dsh 的顺序产出五组", () => {
+	it("完整卡按 dsh 的顺序产出六组（缓存浪费紧随命中率之后）", () => {
 		const groups = sessionStatsGroups(
 			card({
 				runs: 1,
@@ -96,6 +102,7 @@ describe("sessionStatsGroups", () => {
 			"LLM 1m8s · 工具调用 1m10s",
 			"首 token 平均 1.1s · 241 tok/s",
 			"缓存命中 95.0%",
+			"缓存浪费 0 tok · 0 次",
 			"输入 1.5M tok · 输出 8.9K tok",
 		]);
 	});
@@ -117,5 +124,48 @@ describe("sessionStatsGroups", () => {
 			card({ runs: 1, turns: 1, usage: { ...emptyUsage(), output: 10 } }),
 		);
 		expect(groups).toContain("输入 0 tok · 输出 10 tok");
+	});
+
+	it("缓存浪费非零时如实报出（这是唯一能涨得动的缓存告警）", () => {
+		const groups = sessionStatsGroups(
+			card({
+				runs: 1,
+				turns: 30,
+				usage: { ...emptyUsage(), input: 180_767, cacheRead: 2_755_712 },
+				cacheHitRate: 0.938,
+				cacheMissedTokens: 20_480,
+				cacheMissCount: 3,
+			}),
+		);
+		expect(groups).toContain("缓存浪费 20.5K tok · 3 次");
+	});
+
+	it("健康会话显示「0 tok · 0 次」，不整组消失", () => {
+		// 与上面「没有数据的组整组消失」不冲突：那条管的是**没有数据**。
+		// 告警读数在正常时隐藏，就分不出「一切正常」与「这项没接上」。
+		const groups = sessionStatsGroups(
+			card({
+				runs: 1,
+				turns: 30,
+				usage: { ...emptyUsage(), input: 180_767, cacheRead: 2_755_712 },
+				cacheHitRate: 0.938,
+			}),
+		);
+		expect(groups).toContain("缓存浪费 0 tok · 0 次");
+	});
+
+	it("服务商从不上报缓存活动时，命中率与缓存浪费两组一起消失", () => {
+		// 这个数在没有缓存上报的服务商那里恒为 0，而 0 会被读成「没有浪费」，
+		// 实际是「无从得知」—— 同命中率留空而不是显示 0% 的既有判定。
+		const groups = sessionStatsGroups(
+			card({
+				runs: 1,
+				turns: 4,
+				usage: { ...emptyUsage(), input: 50_000, output: 800 },
+				cacheHitRate: undefined,
+				cacheReported: false,
+			}),
+		);
+		expect(groups.some((group) => group.includes("缓存"))).toBe(false);
 	});
 });

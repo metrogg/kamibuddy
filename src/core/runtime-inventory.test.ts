@@ -259,6 +259,50 @@ describe("模型可见文案（shared/runtimes.ts）", () => {
 	it("清单为空 ⇒ 整段正文为空（调用方据此跳过注入，不留空壳）", () => {
 		expect(renderRuntimeEnvSection({ master: true, items: [] })).toBe("");
 	});
+
+	it("抬头不把「我们注入哪一份」写成对模型的禁令，且明说系统里已装的照常可用（§4.16）", () => {
+		/*
+		 * 曾经这句是「不要用系统里同名的解释器 / 运行时」——它把一个**实现选择**
+		 * （注入的那份由我们钉版本）写成了普遍禁令。后果是本机明明有可用 Node，
+		 * 模型看到「我们这份未安装」就报能力不可用、放弃整条技术路线
+		 * （用户原话：「本机有都不让我」）。
+		 */
+		const text = renderRuntimeEnvSection(inventoryFixture());
+		expect(text).not.toContain("不要用系统里同名的");
+		// 正面：必须说清「系统里有就能用」，以及「我们的状态不等于你的能力边界」。
+		expect(text.split("\n")[0]).toContain("系统里已有同名的解释器 / 工具时照常可用");
+		expect(text).toContain("不代表这件事做不到");
+	});
+
+	it("失败项的 status.detail（内部相位 + 下载 URL）不进模型可见文本", () => {
+		/*
+		 * detail 是给界面与诊断看的（失败相位、底层错误原文，含完整的 GitHub release
+		 * URL）。模型要做的是把用户引到设置页的诊断，不是在提示词里读下载链接 ——
+		 * 而那条 URL 每轮都要付 token。分工：细节归界面，人话归模型。
+		 */
+		const text = renderRuntimeEnvSection({
+			master: true,
+			items: [
+				{
+					id: "gitbash",
+					label: "Git Bash",
+					purpose: "提供 bash 与常用 unix 工具",
+					version: "2.55.0.5",
+					enabled: true,
+					status: {
+						kind: "failed",
+						detail:
+							"相位 cancelled：已取消下载：https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/PortableGit.7z.exe",
+					},
+					downloadSizeHint: "下载约 56 MB，解压后约 389 MB",
+				},
+			],
+		});
+
+		expect(text).toContain("gitbash 2.55.0.5 · 安装失败 · 提供 bash 与常用 unix 工具");
+		expect(text).not.toContain("https://");
+		expect(text).not.toContain("相位");
+	});
 });
 
 describe("诊断/重置入口的入参把关", () => {

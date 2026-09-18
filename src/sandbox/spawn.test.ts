@@ -95,6 +95,33 @@ describe("buildEnvBlock", () => {
 		expect(matched).toEqual([`${key}=new`]);
 	});
 
+	it("大小写不同的同名变量按同一个键覆盖（Windows 环境名不区分大小写）", () => {
+		/*
+		 * 实测踩坑（2026-09-18）：npm / pnpm 会在环境里放 `NPM_CONFIG_CACHE`，而我们往沙箱
+		 * 注入的是小写的 `npm_config_cache`。两者是**不同的 JS 键**，于是同时进了环境块，
+		 * 而 Windows 取哪一个取决于块内顺序 —— 同一份代码 `npx tsx` 起进程时我们赢、
+		 * `npx vitest` 起进程时继承值赢。症状：沙箱里的 `npm install` 有时仍去写用户真实的
+		 * `%LOCALAPPDATA%\npm-cache` 而被拒（confinement.win.test.ts 的 npm 缓存用例即因此变红）。
+		 * 同一条路也威胁 `PATH`：Windows 上 `process.env` 常见 `Path` 拼写，与注入层的 `PATH` 撞两份。
+		 */
+		const entries = parse(
+			buildEnvBlock(
+				{ npm_config_cache: "私有temp\\npm-cache" },
+				{ NPM_CONFIG_CACHE: "用户真实缓存", Path: "C:\\Windows" },
+			),
+		);
+		expect(entries).toHaveLength(2);
+		expect(entries).toContain("npm_config_cache=私有temp\\npm-cache");
+		// 覆盖项没提到的键照常继承（大小写变体不误伤其它变量）。
+		expect(entries).toContain("Path=C:\\Windows");
+	});
+
+	it("覆盖 PATH 时压过继承来的 Path 拼写（两份 PATH 会让注入失效）", () => {
+		const entries = parse(buildEnvBlock({ PATH: "注入目录;基底" }, { Path: "基底" }));
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toBe("PATH=注入目录;基底");
+	});
+
 	it("UTF-16 编码——CREATE_UNICODE_ENVIRONMENT 与它配对", () => {
 		// 不置那个标志时 Win32 会按 ANSI 解释这块内存并回 ERROR_INVALID_PARAMETER，
 		// 这正是 dsh 误判为「显式环境块不可用」的根因
