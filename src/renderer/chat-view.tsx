@@ -2570,6 +2570,22 @@ export function ChatView({
 							enableHistory
 							streaming={streaming}
 							onAbort={onAbort}
+							/*
+								模型 chip 走 trailing（右组）而不是 children（左组）：
+								WB 底行是「左：+ / 权限，右：模型 / 麦克风 / 发送」，
+								首页早就按 trailing 传了，对话页此前误放在左组 →
+								与首页位置不一致，也挤在权限 chip 旁边。
+								（2026-09-18 用户实测指出「+号模型应该在右侧」。）
+							*/
+							trailing={
+								<ModelMenu
+									modelId={conversation.state.modelId}
+									thinkingLevel={conversation.state.thinkingLevel}
+									availableThinkingLevels={conversation.state.availableThinkingLevels}
+									onOpenSettings={onOpenSettings}
+									onError={onError}
+								/>
+							}
 						>
 							{/*
 				「+」菜单：添加文件（原图片/文档选择流程挪进菜单项，经 composerRef
@@ -2615,19 +2631,6 @@ export function ChatView({
 							{currentExpert !== undefined && (
 								<ExpertChip expert={currentExpert} onClear={() => onSelectExpert(undefined)} />
 							)}
-							{/*
-					模型快捷切换：与首页同一组件、同一数据源（setModel 后 daemon
-					推 session_state 单向刷新，无本地回写）。紧跟 PermissionMenu ——
-					两者都是切换器。弹层方向在 CSS 按 composer-bar 场景覆写为
-					向上、左对齐（与 PermissionMenu 同一理由：贴右放溢出窗口右缘）。
-				*/}
-							<ModelMenu
-								modelId={conversation.state.modelId}
-								thinkingLevel={conversation.state.thinkingLevel}
-								availableThinkingLevels={conversation.state.availableThinkingLevels}
-								onOpenSettings={onOpenSettings}
-								onError={onError}
-							/>
 							{/*
 					语音输入按钮已移除（2026-09-17 试用前自查）：可见按钮点了只
 					toast「待做」，宣讲演示里观感比没有更差。能力落地时再放回

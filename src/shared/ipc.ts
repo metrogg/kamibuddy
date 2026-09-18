@@ -289,6 +289,15 @@ export const INVOKE = {
 	 * 发一个最小非流式请求，回答网络通不通 / Key 认不认 / 模型在不在。
 	 */
 	testModel: "settings:test-model",
+	/**
+	 * 测试**表单里还没保存**的服务商配置（自定义服务商表单右下角的「测试」按钮）。
+	 *
+	 * 与 testModel 的区别：那条从**已保存的目录**里解析模型，表单里刚填的
+	 * baseUrl / 模型 id 在保存前不在目录里 —— 用 testModel 一律报
+	 * 「目录里找不到该模型」。这条直接拿表单的当前值构造探测，所以用户能
+	 * 「填完就试」，不必先存一遍再回来改。
+	 */
+	testDraftModel: "settings:test-draft-model",
 	/** 读回联网搜索配置（不含 key，只给 provider + 是否已配）。 */
 	getWebSearchConfig: "settings:get-web-search-config",
 	/** 保存联网搜索配置（服务商 + API Key，Key 落偏好文件）。 */
@@ -1001,6 +1010,26 @@ export interface InvokeMap {
 	[INVOKE.addProviderModel]: { args: [providerId: string, model: CustomModelInput]; result: void };
 	[INVOKE.refreshCatalog]: { args: []; result: void };
 	[INVOKE.testModel]: { args: [modelKey: string]; result: ModelProbeResult };
+	/**
+	 * testDraftModel 的入参：表单当前值的一个子集（只取探测真正要用的三个键）
+	 * + 要测的模型 id + 可选的表单内 Key。
+	 *
+	 * `providerId` 与 `apiKey` 的分工：apiKey 是用户在表单里刚敲的那个（优先）；
+	 * 留空时 daemon 用 providerId 去读已存的凭据 —— 编辑既有服务商时不必重打密钥。
+	 */
+	[INVOKE.testDraftModel]: {
+		args: [
+			draft: {
+				readonly providerId: string;
+				readonly api: string;
+				readonly baseUrl: string;
+				readonly authHeader?: boolean;
+			},
+			modelId: string,
+			apiKey?: string,
+		];
+		result: ModelProbeResult;
+	};
 	[INVOKE.getWebSearchConfig]: { args: []; result: WebSearchConfigInfo };
 	[INVOKE.setWebSearchConfig]: { args: [input: WebSearchConfigInput]; result: void };
 	[INVOKE.clearWebSearchConfig]: { args: []; result: void };

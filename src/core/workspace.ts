@@ -1,70 +1,74 @@
 /**
  * 工作空间的目录守卫与目录操作。
  *
- * 为什么这层必须是硬校验：权限门对工作空间内的写操作**直接放行**
- * （permission-policy.ts），所以「把哪个目录设为工作空间」本身就是安全边界。
- * 这里挡掉的每一类，都是「一旦放行就等于把钥匙交出去」的目录：
+ * `validateWorkspacePath` 是「这个路径能不能当工作空间」的**唯一判定入口**，
+ * 口径 = **绝对路径 + 存在时必须是可访问的目录**。不做任何目录黑名单。
  *
- *   - 配置目录（~/.kamibuddy）：里面有 auth.json 密钥。
- *     其祖先也要拒——设为用户目录等于整个家目录都放行。
- *   - 应用所在目录（config-paths.ts 的 getAppDir()：由主进程用 app.getAppPath()
- *     精准传入，dev 是项目仓库、打包后是 app.asar）。让 AI 自由改写应用自身，
- *     两边都不可接受。**刻意不读 process.cwd()** —— daemon 的 cwd 是继承来的
- *     启动目录，值会漂（见 getAppDir 的注释），安全边界不能建在漂移值上。
- *   - 文件系统根 / 相对路径：明显的误操作。
+ * ## 为什么没有黑名单（2026-09-18 决策，推翻原先三项禁令）
  *
- * 机制参考 WorkBuddy（workspace = 目录路径、默认根下建同名子目录），
- * 但校验规则是我们自己的：它只查可写性，我们把「不许指向哪」显式化。
+ * 原实现拒绝配置目录 / 应用目录 / 文件系统根，理由是「工作空间内的写操作被权限门
+ * 直接放行，所以选目录就是选安全边界」。该理由本身成立，但**那三项不是边界、是
+ * 一张没写完的清单**：它拦 `C:\`、配置目录、应用目录，却放行 `C:\Windows\System32`
+ * 这类同样「模型无提示即可写」的目录 —— 拦的不是风险，是随手想到的三个例子。
+ * 而**真正保护密钥的那一层根本不在这里**：
+ * `extensions/permission-policy.ts` 阶段 1 对配置目录与凭据目录**禁读禁写、任何档位
+ * 都不放行**，且它**按路径判定、先于工作区放行、与 cwd 无关** —— 所以工作空间指向
+ * 配置目录，也不会让 read/write/edit 碰到 `auth.json`。
+ *
+ * 横向对照：codex / dsh / WorkBuddy **三家都不限制 cwd**，全部只校验
+ * 「绝对路径 + 存在且可用」：
+ *   - dsh：`docs/subsystems/persistence.md:98`「validated **absolute** cwd」；
+ *     `docs/subsystems/workspace.md:56,74`（invalid cwd / 必须解析到存在的目录），
+ *     且 `:122` 明写 cwd 无效的历史会话「stay **Ungrouped**」——不成组，**不拒绝**。
+ *   - codex：`codex-rs/protocol/src/permissions.rs:2051`「cwd root must be an absolute
+ *     path」；`app-server` 只拒**相对** cwd；`cli/src/doctor.rs:1604` 把「cwd does not
+ *     exist」列为诊断项而非阻断。
+ *   - WorkBuddy：`main/server.js:117508` 的 `assertSessionCwdUsable` 只查
+ *     `stat` / `isDirectory` / `R_OK|X_OK`。
+ *
+ * 代价（知情接受）：cwd 同时是沙箱的写边界（`daemon/sandbox-runner.ts` 的
+ * `writableDirs: [workspaceDir]`），这与 dsh 的「A session cwd is its
+ * workspace-write boundary」（`docs/subsystems/sandbox.md:201-203`）是同一模型，
+ * 不是我们独有的缺陷。黑名单给不了边界、只给用户添堵（症状：会话建得了打不开），
+ * 故撤掉；要收紧就收紧**沙箱的授权范围**，那是完整规则，不是三项清单。
  *
  * 纯 Node、不 import pi 与 electron（AGENTS.md §1），可脱离宿主单测。
  */
 
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { isAbsolute, join, parse, resolve, sep } from "node:path";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { autoSessionDirName } from "../shared/workspace.ts";
-import { isWorktreePath } from "./worktree.ts";
-
-export interface WorkspaceGuards {
-	readonly configDir: string;
-	readonly appDir: string;
-}
-
-/** child 是否等于 parent 或位于其内部。Windows 路径大小写不敏感。 */
-function sameOrInside(parent: string, child: string): boolean {
-	const normalize = (p: string): string => {
-		const resolved = resolve(p);
-		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-	};
-	const p = normalize(parent);
-	const c = normalize(child);
-	return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
-}
 
 /**
  * 校验候选工作空间路径。返回 undefined 表示可用，否则返回给用户看的原因。
  * 返回原因而非抛错：调用方（daemon）要把它变成 IPC 错误消息。
+ *
+ * 只判三件事，不做目录黑名单（理由与横向对照见文件头）：
+ *   1. 必须是绝对路径 —— 三家参照物共同的硬要求；
+ *   2. 已经存在时必须是**目录** —— 指到一个文件上，随后的 mkdirSync 会以
+ *      ENOTDIR/EEXIST 之类的原生错误冒出来，给一句人话比让用户猜好；
+ *   3. 已经存在时必须可访问（R_OK|X_OK，对齐 WorkBuddy 的 `assertSessionCwdUsable`）。
+ *
+ * **不存在是合法的**：调用方随后 `mkdirSync(recursive)` 建出来（选工作空间、
+ * 保存定时任务、恢复历史会话三处同口径 —— 历史目录被用户删掉后补建，不报错）。
+ * 这也是本函数与 WorkBuddy 唯一的有意差异：它 `stat` 失败即抛，我们补建。
  */
-export function validateWorkspacePath(path: string, guards: WorkspaceGuards): string | undefined {
+export function validateWorkspacePath(path: string): string | undefined {
 	if (!isAbsolute(path)) return "工作空间必须是绝对路径";
-	if (parse(resolve(path)).root === resolve(path)) return "不能把文件系统根目录设为工作空间";
-	if (sameOrInside(guards.configDir, path) || sameOrInside(path, guards.configDir)) {
-		/*
-		 * 例外：worktree 副本根之下（`<配置目录>/worktrees/...`）。
-		 *
-		 * 副本里只有某个仓库的工作树快照，凭据不在其中（auth.json 在配置目录根，
-		 * 不在 worktrees/ 子目录），而这是代码场景的**正常会话目录**
-		 *（对齐清单 C22/L27）—— 不放行的话，副本会话 resume 一律报
-		 *「会话的工作目录不可用」，功能直接不可用。
-		 *
-		 * 口子只开在副本根之内：配置目录本身、它的祖先、以及 worktrees 下的
-		 * 非副本路径照旧拒绝（两向判定都还在，只是多了一个精确的例外）。
-		 */
-		if (!isWorktreePath(path)) {
-			return "不能把配置目录（含密钥）或其上层目录设为工作空间";
-		}
+
+	let stats;
+	try {
+		stats = statSync(path);
+	} catch {
+		// 不存在（含父目录不存在）：合法，调用方 mkdir。真属权限问题会在下面
+		// accessSync 或调用方的 mkdir 处响亮失败，不在这里吞掉。
+		return undefined;
 	}
-	if (sameOrInside(guards.appDir, path) || sameOrInside(path, guards.appDir)) {
-		return "不能把应用目录设为工作空间";
+	if (!stats.isDirectory()) return "该路径已存在且不是目录";
+	try {
+		accessSync(path, constants.R_OK | constants.X_OK);
+	} catch {
+		return "该路径不可访问（权限不足）";
 	}
 	return undefined;
 }

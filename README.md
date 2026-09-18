@@ -103,7 +103,7 @@ scripts/       冒烟测试、依赖方向校验、启动包装器
 | 文档                                           | 内容                                         |
 | -------------------------------------------- | ------------------------------------------ |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构与决策记录：每条都写了为什么这么定、否掉了什么                 |
-| [docs/workbuddy对齐清单.md](docs/workbuddy对齐清单.md) | 对标 WorkBuddy 的能力对齐清单，189 条逐项可勾选            |
+| [docs/workbuddy对齐清单.md](docs/workbuddy对齐清单.md) | 对标 WorkBuddy 的能力对齐清单，212 条逐项可勾选            |
 | [docs/mcp-connector.md](docs/mcp-connector.md) | MCP 连接器的使用与配置说明                           |
 | [AGENTS.md](AGENTS.md)                       | 开发约定（人和 AI 共同遵守）                           |
 | [docs/workbuddy分析/](docs/workbuddy分析/)       | WorkBuddy 逆向调研笔记（内部参考）                     |

@@ -1,11 +1,14 @@
 /**
  * 工作空间的路径守卫与目录操作。
  *
- * 背景：工作空间目录内的写操作会被权限门**直接放行**（permission-policy.ts），
- * 所以「把哪个目录设为工作空间」就是安全边界本身。这里必须挡住：
- *   - 配置目录（~/.kamibuddy 里有 auth.json 密钥）及其祖先/内部
- *   - 应用所在目录（生产是安装目录，开发是本项目仓库）及其祖先/内部
- *   - 文件系统根、相对路径
+ * 契约（2026-09-18 决策，推翻原先的目录黑名单）：`validateWorkspacePath` = **绝对路径
+ * + 存在时必须是可访问的目录**，**不限制用户选哪个目录**。原先拒绝配置目录 / 应用目录
+ * / 文件系统根，理由是「工作空间内写操作被权限门放行，选目录即选边界」；但那张名单
+ * 拦配置目录却放行 `C:\Windows\System32`，不是边界而是没写完的清单，而真正保护密钥的
+ * 是 `permission-policy` 阶段 1（按路径、与 cwd 无关）。横向对照见 core/workspace.ts 头注释。
+ *
+ * 本文件把**新契约**逐条钉住 —— 包括「原先被拒的那几类现在必须放行」，
+ * 否则这次放宽会被后人当成 bug 改回去。
  */
 
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -15,42 +18,62 @@ import { afterEach, describe, expect, it } from "vitest";
 import { autoSessionDirName, isAutoSessionDirName } from "../shared/workspace.ts";
 import { createSessionDir, createWorkspace, listWorkspaces, validateWorkspacePath } from "./workspace.ts";
 
-const GUARDS = {
-	configDir: "C:\\Users\\test\\.kamibuddy",
-	appDir: "E:\\project\\kamibuddy",
-} as const;
-
 describe("validateWorkspacePath", () => {
-	it("拒绝相对路径", () => {
-		expect(validateWorkspacePath("docs/reports", GUARDS)).toMatch(/绝对路径/);
+	/** 本组用的临时目录，逐个登记、跑完统一删（与下面 createSessionDir 组同风格）。 */
+	const roots: string[] = [];
+	afterEach(() => {
+		for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("拒绝文件系统根", () => {
-		expect(validateWorkspacePath("C:\\", GUARDS)).toMatch(/根目录/);
+	it("拒绝相对路径（三家参照物共同的硬要求）", () => {
+		expect(validateWorkspacePath("docs/reports")).toMatch(/绝对路径/);
+		expect(validateWorkspacePath(".\\x")).toMatch(/绝对路径/);
 	});
 
-	it("拒绝配置目录本身、其祖先与其内部", () => {
-		expect(validateWorkspacePath("C:\\Users\\test\\.kamibuddy", GUARDS)).toMatch(/配置目录/);
-		// 祖先：设为这里等于整个用户目录都放行
-		expect(validateWorkspacePath("C:\\Users\\test", GUARDS)).toMatch(/配置目录/);
-		// 内部子目录同样不行
-		expect(validateWorkspacePath("C:\\Users\\test\\.kamibuddy\\sub", GUARDS)).toMatch(/配置目录/);
+	it("**放行**配置目录及其祖先与内部（原被拒，2026-09-18 起放开）", () => {
+		const home = mkdtempSync(join(tmpdir(), "kami-ws-home-"));
+		roots.push(home);
+		const configDir = join(home, ".kamibuddy");
+		mkdirSync(configDir, { recursive: true });
+		mkdirSync(join(configDir, "sub"), { recursive: true });
+
+		expect(validateWorkspacePath(configDir)).toBeUndefined();
+		expect(validateWorkspacePath(home)).toBeUndefined();
+		expect(validateWorkspacePath(join(configDir, "sub"))).toBeUndefined();
 	});
 
-	it("拒绝应用所在目录及其祖先", () => {
-		expect(validateWorkspacePath("E:\\project\\kamibuddy", GUARDS)).toMatch(/应用目录/);
-		expect(validateWorkspacePath("E:\\project", GUARDS)).toMatch(/应用目录/);
-		expect(validateWorkspacePath("E:\\project\\kamibuddy\\src", GUARDS)).toMatch(/应用目录/);
+	it("**放行**应用目录及其祖先与内部（原被拒，2026-09-18 起放开）", () => {
+		const appDir = mkdtempSync(join(tmpdir(), "kami-ws-app-"));
+		roots.push(appDir);
+		mkdirSync(join(appDir, "src"), { recursive: true });
+
+		expect(validateWorkspacePath(appDir)).toBeUndefined();
+		expect(validateWorkspacePath(join(appDir, "src"))).toBeUndefined();
+		expect(validateWorkspacePath(tmpdir())).toBeUndefined();
 	});
 
-	it("Windows 下大小写不敏感", () => {
-		expect(validateWorkspacePath("c:\\users\\test\\.kamibuddy", GUARDS)).toMatch(/配置目录/);
-		expect(validateWorkspacePath("e:\\PROJECT\\kamibuddy", GUARDS)).toMatch(/应用目录/);
+	it("**放行**文件系统根（原被拒，2026-09-18 起放开；与 codex/dsh/WorkBuddy 一致）", () => {
+		expect(validateWorkspacePath("C:\\")).toBeUndefined();
+	});
+
+	it("不存在的目录合法 —— 调用方随后 mkdir（与 WorkBuddy「stat 失败即抛」的有意差异）", () => {
+		// 三处调用方（选工作空间 / 保存定时任务 / 恢复历史会话）都在校验后 mkdirSync，
+		// 所以「历史目录被用户删掉」必须继续可用。
+		expect(validateWorkspacePath(join(tmpdir(), "kami-ws-does-not-exist-98765"))).toBeUndefined();
+	});
+
+	it("已存在但不是目录 → 拒（否则随后的 mkdirSync 会抛原生错误）", () => {
+		const root = mkdtempSync(join(tmpdir(), "kami-ws-file-"));
+		roots.push(root);
+		const filePath = join(root, "a.txt");
+		writeFileSync(filePath, "x", "utf8");
+		expect(validateWorkspacePath(filePath)).toMatch(/不是目录/);
 	});
 
 	it("接受普通目录", () => {
-		expect(validateWorkspacePath("D:\\work\\reports", GUARDS)).toBeUndefined();
-		expect(validateWorkspacePath("C:\\Users\\test\\KamiBuddy", GUARDS)).toBeUndefined();
+		const dir = mkdtempSync(join(tmpdir(), "kami-ws-plain-"));
+		roots.push(dir);
+		expect(validateWorkspacePath(dir)).toBeUndefined();
 	});
 });
 

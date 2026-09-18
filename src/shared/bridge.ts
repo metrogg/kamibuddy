@@ -220,6 +220,20 @@ export interface KamiBridge {
 	readonly refreshCatalog: () => Promise<void>;
 	/** 测试某个模型（`provider/model`）的连通性，结果直接展示在卡片上。 */
 	readonly testModel: (modelKey: string) => Promise<ModelProbeResult>;
+	/**
+	 * 测**表单里还没保存**的配置（自定义服务商表单的「测试」按钮）。
+	 * 与 testModel 的差别：这条不查已保存的目录，直接用表单当前值探测。
+	 */
+	readonly testDraftModel: (
+		draft: {
+			readonly providerId: string;
+			readonly api: string;
+			readonly baseUrl: string;
+			readonly authHeader?: boolean;
+		},
+		modelId: string,
+		apiKey?: string,
+	) => Promise<ModelProbeResult>;
 
 	/* ── 联网搜索 ─────────────────────────────────────────────────── */
 

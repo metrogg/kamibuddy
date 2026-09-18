@@ -38,14 +38,27 @@ const NAV_ITEMS = [
 
 type SettingsPage = (typeof NAV_ITEMS)[number]["id"];
 
+/** 供深链使用（首页引导条的「去配置模型」要指名 "models"）。 */
+export type { SettingsPage };
+
 interface SettingsViewProps {
 	readonly onClose: () => void;
 	/** 「关于」页的诊断入口：诊断是独立 view，跳转让 App 的 view 状态机做。 */
 	readonly onOpenDiagnostics: () => void;
+	/**
+	 * 深链：打开时落在哪一页，缺省「通用」。
+	 *
+	 * 存在的理由：首页引导条说「还没有可用模型」时，把用户丢到设置首页等于让他
+	 * 自己找「模型」那一栏 —— 而那时他连「模型」是什么都还不知道。同 skills-view
+	 * 的 `initialTab`（当初修「+」菜单死入口时加的同一个东西）。
+	 * 只是**初值**，之后翻页由本组件的 page 状态自管（不再受 prop 变化牵动，
+	 * 否则用户手动翻页后父组件一重渲就会被拽回去）。
+	 */
+	readonly initialPage?: SettingsPage;
 }
 
-export function SettingsView({ onClose, onOpenDiagnostics }: SettingsViewProps): React.JSX.Element {
-	const [page, setPage] = useState<SettingsPage>("general");
+export function SettingsView({ onClose, onOpenDiagnostics, initialPage }: SettingsViewProps): React.JSX.Element {
+	const [page, setPage] = useState<SettingsPage>(initialPage ?? "general");
 	const [snapshot, setSnapshot] = useState<SettingsSnapshot | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 	const [busy, setBusy] = useState(false);

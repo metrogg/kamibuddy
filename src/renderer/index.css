@@ -1004,6 +1004,39 @@ textarea:focus-visible {
 	width: 100%;
 }
 
+/*
+ * 首页「还不能开始对话」引导条（spec: 首页引导）。
+ * 走 DESIGN.md §3.3 的**卡片级别**（不是新开一个组件级别）：底 --bg、
+ * 1px --border、圆角 --radius-md、内边距 --space-4，内部文字按「卡片标题
+ * --text-body + 600 / meta --text-meta + --text-secondary」两档。
+ * 常驻在输入卡上方，不遮不挡（判据不成立时组件返回 null，元素不存在）。
+ */
+.home-guide {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+	padding: var(--space-4);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.home-guide-icon {
+	display: flex;
+	/* 图标是提示性的，不参与主文字层级（同 §3.4 行内 icon 用次文色）。 */
+	color: var(--text-secondary);
+	flex: none;
+}
+
+.home-guide-text {
+	font-size: var(--text-body);
+	font-weight: 600;
+	/* 文案可能较长，允许收缩到省略，避免把右侧按钮挤出容器。 */
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
 /* WorkBuddy 首页输入框的外层渐变槽（.wb-home-composer__input-slot 原值）：
    灰白渐变底 + 24px 圆角 + 上/左右 2px、下 4px 内边距 —— 白卡与下方的
    工作空间/权限 chips 都坐在这一层浅灰渐变上（WB 注释：灰色由外层渐变透出）。
@@ -1058,6 +1091,17 @@ textarea:focus-visible {
 	box-shadow: var(--shadow-input-focus);
 }
 
+/*
+ * 占位符走次文色（三级灰）—— **首页与对话页同一档**。
+ *
+ * 【2026-09-18 订正】本处一度改成 `--text`（理由是 WB 的
+ * `[data-slate-placeholder] { color: var(--cr-text-primary) !important }`，
+ * lib-chat-ui-Co_VI_pZ.css:12781-12783）。**那条是会话页 slate 编辑器的规则，
+ * 套不到首页**：首页路由的样式表（home-KqE7jadI.css）通篇只有布局与滚动条，
+ * 没有任何占位符规则。用户实测明确要求首页占位符是灰的，故回到次文色。
+ * 教训：WB 的规则几乎都带作用域（.conversation-input__box / .wb-home-route /
+ * .cr-input-toolbar__left），抄之前先确认作用域，否则「按 WB 改」会改错页。
+ */
 .composer-card textarea::placeholder {
 	color: var(--text-secondary);
 }
@@ -1409,6 +1453,30 @@ textarea:focus-visible {
 	padding: var(--space-2) var(--space-3);
 }
 
+/*
+ * 模型 chip 是**主文色**（黑），不是 .bar-btn 的默认次文灰（2026-09-18 对齐 WB）。
+ *
+ * WB 的 .cr-model-selector__trigger（lib-chat-ui-Co_VI_pZ.css:16155-16174）：
+ *   color: var(--cr-text-primary);          ← 黑，与 .bar-btn 的次文灰不同
+ *   font-size: 13px;                        ← 与本类一致（--text-list）
+ *   hover / --open: background-color: var(--cr-bg-hover);   ← **填底色，不改字色**
+ * 我们此前只有基类的「hover 变黑」，于是常态是灰的 —— 用户实测指出
+ * 「右边的模型字体应该是黑的」「对话界面模型也是黑色」。
+ *
+ * **只改颜色，不动尺寸**（有意）：WB 那一行的挂件统一 32 高，而我们的 `+` 是
+ * .bar-btn 的 28（padding 6 + 16 图标）。单把模型 chip 抬到 32 会让同一行左矮右高；
+ * 要对齐 32 就得连 `+` 与左组 chip 一起改，那是另一处改动，不在本次范围内。
+ */
+.bar-btn-text.model-chip {
+	color: var(--text);
+}
+
+/* WB 的 hover 只填底色、字色不动（与 .bar-btn 的「hover 加深字色」不同）。 */
+.bar-btn-text.model-chip:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 /* 右上角的面板开关组（App 层渲染，只在对话视图出现；成员：任务诊断 + 产物面板）。
 
    为什么是「组 + 容器定位」：这两个按钮是 .app 的直接子节点、absolute 脱离 flex 流
@@ -1475,12 +1543,22 @@ textarea:focus-visible {
    它只是个灰着的死按钮，插队能力已由队列条的 ↑ 承担（见 composer.tsx 的注释）。 */
 
 .send-btn:hover {
-	opacity: 0.88;
+	opacity: 0.8;
 }
 
+/*
+ * 禁用态（对齐 WB 2026-09-18）：WB 的发送键是一枚 32×32 的圆形 SVG，
+ * 颜色由 `--cr-internal-send-button-fill*` 一族驱动，三档分别是
+ *   fill rgba(0,0,0,.9) / fill-stop rgba(0,0,0,.9) / fill-disabled rgba(0,0,0,.2)
+ *   （lib-chat-ui-Co_VI_pZ.css:36420-36422）
+ * 即**禁用是 20% 黑的一枚实心圆**，不是我们此前的 --border(#e6e6e6≈10%) + 灰图标
+ * ——那个太淡，禁用与可用几乎分不出来。这里取 --text-faint(30%) 作最接近的既有档
+ * （语义就是「禁用」），图标用 --primary-text 与可用态同形（WB 的箭形是从圆里挖出来的，
+ * 呈现为白）。不新增第 4 档灰。
+ */
 .send-btn:disabled {
-	background: var(--border);
-	color: var(--text-secondary);
+	background: var(--text-faint);
+	color: var(--primary-text);
 	cursor: default;
 	opacity: 1;
 }
@@ -1718,12 +1796,14 @@ textarea:focus-visible {
 	padding: 0 var(--space-4);
 }
 
-/* WB workspace-picker / permission-setting chip 原值：高 32、padding 0 8、
-   胶囊圆角、透明底、三级灰 14/20。
-   偏离 WB 的一处（有意）：原实现 hover「加深字色 + 字重 500」，字重过渡每帧触发布局
-   与文字重排（DESIGN.md §5.1 禁止过渡布局属性），且 500↔400 的字宽变化会推挤同排
-   的相邻 chip。改成只过渡 color：--text-secondary(.5) → --text(纯黑) 本身已是明显的
-   加重信号，不需要字重参与（WB 的 500 在 14px 下与 400 的差别肉眼几乎不可辨）。 */
+/* WB 挂件按钮基类（.cr-input-footer-item，lib-chat-ui-Co_VI_pZ.css:19066-19136）原值：
+   高 32、padding 0 8、胶囊圆角、透明底、三级灰、**字号 13**、行高 20。
+   【2026-09-18 订正】此处原写「三级灰 14/20」——字号抄错了：WB 的
+   `.cr-input-footer-item__label` 是 font-size 13px（同文件 :19124），
+   不是 14。我们按 --text-body(14) 写了一年，比 WB 大 1px。
+   hover 口径仍偏离 WB 一处（有意）：它 hover「加深字色 + 字重 500」，字重过渡每帧
+   触发布局与文字重排（DESIGN.md §5.1 禁止过渡布局属性），且 500↔400 的字宽变化会
+   推挤同排的相邻 chip。改成只过渡 color：--text-secondary(.5) → --text(纯黑)。 */
 .context-chip {
 	display: flex;
 	align-items: center;
@@ -1731,10 +1811,54 @@ textarea:focus-visible {
 	height: 32px;
 	padding: 0 var(--space-3);
 	border-radius: var(--radius-full);
-	font-size: var(--text-body);
+	font-size: var(--text-list);
 	line-height: 20px;
 	color: var(--text-secondary);
 	transition: color var(--dur-fast) ease;
+}
+
+/*
+ * 权限那颗**只在对话页**被提亮成主文色；首页保持三级灰（2026-09-18 订正）。
+ *
+ * WB 的两层，**作用域是关键**：
+ *   - 基类 .cr-input-footer-item → tertiary 灰（lib-chat-ui:19075）
+ *   - 覆盖 **只在会话输入框内**：
+ *       .conversation-input__box .cr-permission-setting:not(--danger):not(:disabled) {
+ *         color: var(--wb-color-text-primary, rgba(0,0,0,0.9)); }
+ *       （ui-docs-viewer-D8SBBSEE.css:54074-54076）
+ *   首页路由的样式表里没有这条（home-KqE7jadI.css 通篇只有布局与滚动条）。
+ * 所以 WB 是**分页**的：对话页权限黑、首页权限灰。
+ *
+ * 【订正记录】本规则原先写成 `.permission-menu-zone .context-chip`（不带页面作用域），
+ * 把首页也一起提亮了 —— 用户实测指出「新建任务页权限那里该是灰色」。现在按容器收窄：
+ *   - 对话页：PermissionMenu 由 Composer 的 children 注入 → 落在 .composer-bar（卡内）
+ *   - 首页：PermissionMenu 在 .context-row（卡下方那行挂件）
+ * 与 WB 的「会话输入框内 / 首页路由」是同一个区分，不是凑选择器。
+ */
+.composer-bar .permission-menu-zone .context-chip {
+	color: var(--text);
+}
+
+/* 首页那颗仍是基类的三级灰 —— 显式写出来，避免后人以为漏了规则又去「补」一条。 */
+.context-row .permission-menu-zone .context-chip {
+	color: var(--text-secondary);
+}
+
+/*
+ * 「允许完全访问」档的整颗红字（WB 的 buttonDanger → `--cr-permission-danger`）。
+ *
+ * 出处：lib-chat-ui-Co_VI_pZ.css:15622-15624（`.cr-permission-setting--danger` 用
+ * `--cr-permission-danger`），其亮色值在同文件 :36450 是 **#b42c3f**。
+ * 这里用我们的 `--danger`(#f64041) 而不是照抄 #b42c3f：两者同族，
+ * 但 #b42c3f 不在 tokens.css 的档位里，硬写会被 check:tokens 拦下（也会破「状态色
+ * 只有 4 个」的收敛）。语义一致，色相略亮一档 —— 要对到逐值就改 token，不在这里写死。
+ *
+ * 选择器权重说明：本条与上面的页面级规则同为 (0,3,0)，靠源码顺序取胜 ——
+ * 所以它必须排在那两条**之后**，否则首页/对话页的提亮会把它盖掉。
+ */
+.permission-menu-zone .context-chip.permission-chip-danger,
+.permission-menu-zone .context-chip.permission-chip-danger:hover {
+	color: var(--danger);
 }
 
 .context-chip:hover {
@@ -5985,33 +6109,17 @@ textarea:focus-visible {
 	cursor: pointer;
 }
 
-.api-options {
-	display: flex;
-	gap: var(--space-3);
-	flex-wrap: wrap;
-}
+/* 接口协议已改用 select-field.tsx 的下拉（2026-09-18：三张卡片占竖向空间，
+   而这个字段多数用户不改）。原 .api-options / .api-option 三条规则随之删除。 */
 
-.api-option {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding: var(--space-3) var(--space-4);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	background: var(--bg);
-	text-align: left;
-	font-size: var(--text-meta);
-	flex: 1 1 170px;
-}
-
-.api-option:hover {
-	/* 同 .model-card:hover：描边加深走 --text-faint，不用次文色当边框。 */
-	border-color: var(--text-faint);
-}
-
-.api-option.active {
-	border-color: var(--primary);
-	background: var(--bg-raised);
+/*
+ * 自定义服务商表单里「测试」的结果行：直接复用 .model-card-probe 的字号与
+ * 成功/失败配色，只补一条 flex 收缩 —— 那句错误文案可能很长（服务商返回的原文），
+ * 不收缩会把同一行右侧的取消/保存挤出容器。
+ */
+.form-actions .model-card-probe {
+	flex: 0 1 auto;
+	min-width: 0;
 }
 
 .model-row {
@@ -6614,15 +6722,24 @@ textarea:focus-visible {
 /* ── 停止生成 ─────────────────────────────────────────────────── */
 
 /*
- * 停止键占据发送键的位置，颜色改为警示色。
- * 同一位置切换语义比另加一个按钮好：流式期间发送本来就不该是主动作。
+ * 停止键占据发送键的位置（同一位置切换语义比另加一个按钮好：流式期间发送本来
+ * 就不该是主动作）——**但颜色不动，仍是主色黑**。
+ *
+ * 【2026-09-18 订正】此处原写 `background: var(--danger)`（红色警示），是把
+ * 「停止＝危险」的直觉当了真。WB 不是这么做的：它的发送与停止共用一个变量值 ——
+ *   --cr-internal-send-button-fill:      rgba(0, 0, 0, 0.9);
+ *   --cr-internal-send-button-fill-stop: rgba(0, 0, 0, 0.9);   ← 同一个黑
+ *   （lib-chat-ui-Co_VI_pZ.css:36420-36421；
+ *     语义切换靠 `--cr-send-button--stop` 只换图标，:12642-12646）
+ * 用户实测指出的正是这处：「任务在运行的时候右下角的按钮颜色是黑色」。
+ * 好处也说得通：红色在这套黑白图标体系里太跳，且「停止」是常规操作而非危险操作。
  */
 .send-btn.stop {
-	background: var(--danger);
+	background: var(--primary);
 }
 
 .send-btn.stop:hover {
-	opacity: 0.88;
+	opacity: 0.8;
 }
 
 /* 停止二次确认的待确认态：按钮内容换成 Esc 徽章 —— 同时提示「再按一次 Esc 也行」。 */
@@ -6921,18 +7038,21 @@ textarea:focus-visible {
 
 /* ── 对话页 composer 区的 ModelMenu ───────────────────────────── */
 /*
- * ModelMenu 的默认定位服务首页（向下展开、右对齐）；对话页 composer-bar
- * 在窗口底部，必须向上展开、左对齐 —— 与 PermissionMenu 同一理由：
- * 弹层贴右放会溢出窗口右缘被裁掉。只覆写定位，条目版式不动。
+ * ModelMenu 在对话页底栏的定位。
+ *
+ * 与 PermissionMenu 的差别（2026-09-18 改）：模型 chip 已挪到底栏**右组**
+ * （trailing，与首页同位置），所以弹层要**向上 + 右对齐** —— 触发按钮贴着
+ * 窗口右缘，若仍左对齐（left: 0）弹层会从按钮左缘向右铺开、溢出窗口右缘被裁掉。
+ * 反过来也成立：这正是它此前放左组时用左对齐的原因，位置一挪，对齐必须跟着翻。
  */
 .composer-bar .model-menu {
 	top: auto;
-	right: auto;
 	bottom: calc(100% + 8px);
-	left: 0;
-	/* 定位镜像到「触发按钮上方、左对齐」→ origin 跟着从右上角改到左下角，
-	   否则弹层会从窗口底部方向的错误一角生长（与本文件所有弹层同一规则）。 */
-	transform-origin: bottom left;
+	left: auto;
+	right: 0;
+	/* 定位镜像到「触发按钮上方、右对齐」→ origin 从右下角生长
+	    （与本文件所有弹层同一规则）。 */
+	transform-origin: bottom right;
 }
 
 /* ── 对话页「+」菜单 ─────────────────────────────────────────── */
@@ -8886,9 +9006,15 @@ textarea:focus-visible {
 /* 图标按钮（小控件，DESIGN.md §3.1：active 叠 scale(.96)）。 */
 .bar-btn:active:not(:disabled),
 .entry-icon-btn:active:not(:disabled),
-.task-op-btn:active:not(:disabled),
-.send-btn:active:not(:disabled) {
+.task-op-btn:active:not(:disabled) {
 	transform: scale(0.96);
+}
+
+/* 发送键的按下态单独一档：WB 是 `transform: scale(0.93)`（.cr-send-button:active，
+   lib-chat-ui-Co_VI_pZ.css:12631-12633），比上面那组 .96 更实 —— 它是圆形实心键，
+   同样的缩放比例在圆上不如在方按钮上显眼，所以 WB 给得更深。 */
+.send-btn:active:not(:disabled) {
+	transform: scale(0.93);
 }
 
 /* 常规按钮与 chip / tab 胶囊（DESIGN.md §3.1：active 叠 scale(.98)）。 */

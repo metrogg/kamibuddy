@@ -33,6 +33,7 @@ import type { PromptContextOptions } from "../core/prompt-composer.ts";
 import type { LoadedResources } from "../core/resources.ts";
 import { SessionHost } from "../core/session-host.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
+import { validateWorkspacePath } from "../core/workspace.ts";
 import { createDocReadTool } from "../extensions/doc-read-tool.ts";
 import { createDocxConvertTool } from "../extensions/docx-convert-tool.ts";
 import { createDocxExtractTool } from "../extensions/docx-extract-tool.ts";
@@ -132,7 +133,20 @@ export function createAutomationRunExecutor(
 				throw new Error("选中的模型当前不可用，请到设置里检查 API Key 或重新选择模型");
 			}
 
+			/*
+			 * 任务 cwd 在**建会话之前**过与其余入口同一条判定（绝对路径 + 存在时要是
+			 * 可访问的目录）—— 这是三类会话入口里原先唯一没有校验的一处
+			 *（2026-09-18 补）：不校验时，一个非法 cwd 会先被 mkdirSync 当成
+			 * 「相对 daemon cwd 的路径」静默建出来、或建出一条**恢复时打不开**的会话
+			 *（PM 报的「建得了、却打不开」正是这个形状）。此刻失败即 run 失败，
+			 * 错误落进运行记录，会话一条都不产生 —— 比造出打不开的会话诚实。
+			 *
+			 * 内联任务（「记忆整理」）的 cwd 是配置目录：**合法**，判定不拦它
+			 *（目录黑名单已于同日撤销，理由见 core/workspace.ts 头注释）。
+			 */
 			const cwd = task.cwd;
+			const cwdError = validateWorkspacePath(cwd);
+			if (cwdError !== undefined) throw new Error(`任务的工作目录不可用：${cwdError}`);
 			mkdirSync(cwd, { recursive: true });
 
 			let runError: string | undefined;

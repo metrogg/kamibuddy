@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PermissionInfo, PermissionPreset } from "@shared/permissions.ts";
 import { CUSTOM_PRESET, PERMISSION_PRESETS, findPreset, presetIdFor } from "@shared/permissions.ts";
-import { IconCheck, IconChevronDown } from "./icons.tsx";
+import { IconCheck, IconChevronDown, IconShieldDanger, IconShieldSecured } from "./icons.tsx";
 import { ErrorState, LoadingState } from "./state-views.tsx";
 
 interface PermissionMenuProps {
@@ -102,17 +102,28 @@ export function PermissionMenu({ onOpenSettings, onError }: PermissionMenuProps)
 		effectiveId === undefined || effectiveId === CUSTOM_PRESET
 			? (info?.enforcementNote ?? "权限策略")
 			: (findPreset(effectiveId)?.description ?? "权限策略");
+	/**
+	 * 「允许完全访问」是危险档：WB 把**图标字形**与**红字**绑在同一个
+	 * `isFullAccess` 分支里（ui-docs-viewer-C2jT2eXi.js:289607 的 buttonDanger
+	 * 与 :289620 的 ShieldDangerIcon），我们照同一条件分叉 ——
+	 * 只换图标不换色、或只换色不换图标，都会让那一档「看着不严重」。
+	 * 「自定义」档旋钮可能落在 full-access 上，但它的权威是组合而非预设，
+	 * 故只在命中 full 预设时判危险（与 chipLabel 同一口径）。
+	 */
+	const isFullAccess = effectiveId === "full";
 
 	return (
 		<div className="permission-menu-zone">
 			<button
 				type="button"
-				className="context-chip"
+				className={`context-chip${isFullAccess ? " permission-chip-danger" : ""}`}
 				title={chipTitle}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={toggle}
 			>
+				{/* 图标槽：与 WB 的 [icon][label][chevron] 三段同构（同文件 :289616-289623）。 */}
+				{isFullAccess ? <IconShieldDanger size={15} /> : <IconShieldSecured size={15} />}
 				{chipLabel}
 				<IconChevronDown size={12} />
 			</button>
