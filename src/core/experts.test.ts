@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 function load(): ReturnType<typeof loadExperts> {
-	return loadExperts(builtinDir, userDir, globalSkillsDir);
+	return loadExperts(builtinDir, userDir, [globalSkillsDir]);
 }
 
 /** 取抛错信息，没抛错则让测试响亮失败（直接 expect(...).toThrow 拿不到文案）。 */
@@ -120,7 +120,7 @@ describe("正常加载", () => {
 
 	it("用户目录不存在 = 空，只返回内置", () => {
 		writeBuiltin("work-report");
-		const experts = loadExperts(builtinDir, join(root, "不存在的目录"), globalSkillsDir);
+		const experts = loadExperts(builtinDir, join(root, "不存在的目录"), [globalSkillsDir]);
 		expect(experts.map((e) => e.name)).toEqual(["work-report"]);
 	});
 
@@ -188,7 +188,7 @@ describe("私有技能收集", () => {
 
 describe("报错路径", () => {
 	it("内置目录缺失 → 抛错（打包错误）", () => {
-		expect(() => loadExperts(join(root, "没有"), userDir, globalSkillsDir)).toThrow(/内置专家目录缺失/);
+		expect(() => loadExperts(join(root, "没有"), userDir, [globalSkillsDir])).toThrow(/内置专家目录缺失/);
 	});
 
 	it("内置目录为空 → 抛错", () => {
@@ -344,7 +344,11 @@ describe("真实 resources/experts/ 的回归约束", () => {
 	 * 并行跑测试时会顶到别的用例的 5s 超时线（实测 doc-extract 因此偶发超时）。
 	 * 写在 describe 体里 = 只在收集期付一次。
 	 */
-	const realExperts = loadExperts(realBuiltin, noUserDir, realSkills);
+	const realExperts = loadExperts(realBuiltin, noUserDir, [
+		realSkills,
+		// 生产里全局技能有两个根（我们自己写的 + 照搬的插件），重名校验要按真实形态跑。
+		resolve(realBuiltin, "..", "plugins"),
+	]);
 
 	it("内置十四员齐全（目录布局），身份字段与 WorkBuddy 专家包一致", () => {
 		// 后 9 员是「最佳实践案例」绑定的专家，从 WorkBuddy 专家中心照搬

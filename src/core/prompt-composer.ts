@@ -790,15 +790,19 @@ function toPiSkill(
 }
 
 /**
- * 会话技能加载路径：内置技能目录在前，绑定的专家私有技能目录在后（未绑定不追加）。
+ * 会话技能加载路径：随包预装的技能根在前（`resources/skills/` 我们自己写的、
+ * `resources/plugins/` 照搬的市场插件），绑定的专家私有技能目录在后（未绑定不追加）。
  * 只决定「喂给 pi loadSkills 哪些根目录」，不读盘 —— 与 daemon 的实际加载分离，
  * 便于单测（spec: 专家私有技能预加载）。专家的专业技能因此只在该专家被绑定时可见。
  *
  * 顺序即优先级：pi loadSkills 对同名技能「先注册者胜出」，全局技能因此天然压过
  * 专家私有技能（重名本已在 core/experts.ts 加载期响亮拦下，此序只作兜底）。
  */
-export function sessionSkillPaths(globalSkillsDir: string, expertSkillsDir?: string): string[] {
-	return expertSkillsDir === undefined ? [globalSkillsDir] : [globalSkillsDir, expertSkillsDir];
+export function sessionSkillPaths(
+	builtinSkillsDirs: readonly string[],
+	expertSkillsDir?: string,
+): string[] {
+	return expertSkillsDir === undefined ? [...builtinSkillsDirs] : [...builtinSkillsDirs, expertSkillsDir];
 }
 
 /**

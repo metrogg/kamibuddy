@@ -5,11 +5,12 @@
  * （回落到 pi 的 coding assistant 提示词）。每条报错路径都有测试压着。
  */
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { formatSkillsForPrompt, loadSkills } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getBuiltinSkillDirs } from "./config-paths.ts";
 import { composePromptWithMeta } from "./prompt-composer.ts";
 import { loadResources, resolveStyle, toDescriptors, type StyleResource } from "./resources.ts";
 
@@ -563,6 +564,16 @@ describe("真实 resources/ 的回归约束", () => {
 		const expertDirs = new Set(readdirSync(join(realDir, "experts")));
 		for (const item of welcome.cases) {
 			expect(expertDirs.has(item.expert), `案例 ${item.id} 绑定的专家「${item.expert}」应存在`).toBe(true);
+		}
+	});
+
+	it("随包技能根只有一处定义，且两个根都真实存在", () => {
+		// 技能有两个消费面（pi 的加载器 / daemon 的 listSkills），路径必须同源 ——
+		// 这条钉住「唯一真源就是这两个根」，也钉住它们在产物里都真实存在。
+		const realDir = resolve(import.meta.dirname, "..", "..", "resources");
+		expect(getBuiltinSkillDirs()).toEqual([join(realDir, "skills"), join(realDir, "plugins")]);
+		for (const dir of getBuiltinSkillDirs()) {
+			expect(existsSync(dir), `${dir} 应存在（缺一个就少一批技能）`).toBe(true);
 		}
 	});
 

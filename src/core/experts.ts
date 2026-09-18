@@ -237,19 +237,21 @@ function loadExpertsDir(dir: string, source: "builtin" | "user"): LoadedExpert[]
 }
 
 /**
- * 全局技能（resources/skills/）的技能名与 SKILL.md 路径，供重名校验。
+ * 全局技能（随包预装的全部技能根）的技能名与 SKILL.md 路径，供重名校验。
  *
- * 没有 SKILL.md 的子目录跳过——那是技能加载模块的职责，这里不越界报错
- * （skill 目录里还有 agents/ engines/ 这类非技能子目录）。
+ * 用 pi 的加载器发现，而不是自己扫目录：技能根不止一个（`resources/skills/` 是我们
+ * 自己写的，`resources/plugins/` 是照搬的市场插件，层级为 `<市场>/<插件>/<版本>/skills/…`），
+ * 且「哪个目录算一个技能」这套递归规则由 pi 定；两边同一套发现规则，
+ * 重名校验拦的才是「模型真会同时看到的两个同名技能」。
  */
-function loadGlobalSkills(globalSkillsDir: string): readonly SkillRef[] {
-	if (!existsSync(globalSkillsDir)) return [];
-	return readdirSync(globalSkillsDir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-		.map((entry) => join(globalSkillsDir, entry.name, SKILL_FILE))
-		.filter((file) => existsSync(file))
-		.map((file) => ({ name: requireString(parseFrontmatter(readFileSync(file, "utf8"), file), "name", file), file }))
-		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+function loadGlobalSkills(globalSkillsDirs: readonly string[]): readonly SkillRef[] {
+	const refs: SkillRef[] = [];
+	for (const dir of globalSkillsDirs) {
+		if (!existsSync(dir)) continue;
+		const { skills } = loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
+		for (const skill of skills) refs.push({ name: skill.name, file: skill.filePath });
+	}
+	return refs;
 }
 
 /**
@@ -257,12 +259,14 @@ function loadGlobalSkills(globalSkillsDir: string): readonly SkillRef[] {
  *
  * @param resourcesExpertsDir 内置目录（resources/experts），缺失或为空抛错
  * @param userExpertsDir 用户级目录（getConfigDir()/experts），不存在视为空
- * @param globalSkillsDir 全局技能目录（resources/skills），用于私有技能重名校验
+ * @param globalSkillsDirs 全局技能根（resources/skills + resources/plugins），
+ *   用于私有技能重名校验 —— 传全部而不是只传第一个，否则专家技能可能撞上
+ *   预装插件里的同名技能而不被发现（那两个根是同一个会话里同时加载的）
  */
 export function loadExperts(
 	resourcesExpertsDir: string,
 	userExpertsDir: string,
-	globalSkillsDir: string,
+	globalSkillsDirs: readonly string[],
 ): readonly ExpertDefinition[] {
 	if (!existsSync(resourcesExpertsDir)) {
 		throw new Error(`内置专家目录缺失：${resourcesExpertsDir}。这是打包错误——没有内置专家，专家模式无可用人格`);
@@ -290,7 +294,7 @@ export function loadExperts(
 	// 否决方案：把重名技能只留一份、另一处不复制。否掉的理由就是自包含 ——
 	// 绑定 market-researcher 时它的 sector-overview 会凭空消失。
 	const claimed = new Map<string, string>();
-	for (const ref of loadGlobalSkills(globalSkillsDir)) claimed.set(ref.name, ref.file);
+	for (const ref of loadGlobalSkills(globalSkillsDirs)) claimed.set(ref.name, ref.file);
 	for (const loaded of byName.values()) {
 		for (const ref of loaded.skills) {
 			const other = claimed.get(ref.name);
