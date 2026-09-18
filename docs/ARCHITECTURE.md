@@ -940,6 +940,123 @@ AGENTS.md §六。
    ③ 真正该机械钉住的位序问题已经钉住了（`core/prompt-composer.test.ts` 的
    「输出语言段必须排在风格段之后」+ `resources.test.ts` 的真实入口回归）。
 
+### 4.16 别让文案把可实现的事说成做不到：运行时清单、被拒之后的出路、包管理器缓存（2026-09-18）
+
+**触发**（用户两次原话）：
+
+> 啥意思啊，本机有都不让我，我还是感觉我们权限与沙箱这一块问题不小
+>
+> 模型遇到问题不行了他应该来问我啊我同意了就给他执行啊
+
+现场：模型在「做一个 PPT」这类任务里写出
+
+> 环境确认完毕：**系统内有 Node**（`C:\Program Files\nodejs`），**但托管运行时未装**……技能里依赖的
+> dev server + Playwright 截图路线**无法可靠跑通**。我改用更稳的路线……
+
+**它没有被拦，它是被劝退的。** 实测同一时刻（`collectRuntimeInventory` + `planRuntimeShellInjection` 的真实产物）：
+注入计划 `前置于 PATH 的目录：[]`、**未替换 PATH**（`injection.ts` 的 `prependPath` 是 `[...dirs, base]`）、
+进程 PATH 里存在 `node.exe` —— 系统那份 Node 一直可用。
+
+**三条根因（都在文案/文案级判据上，与权限判定无关）**：
+
+1. **运行时清单的抬头把实现选择写成了对模型的禁令。** 原文
+   「**不要用系统里同名的解释器 / 运行时**」。而这条禁令的真实出处是实现决策：
+   `injection.ts:83-84`「注入的是随包那一份，不是机器上可能存在的同名 node —— 与 spec 阶段 0
+   否决『复用系统已装』同因」。那条否决管的是**我们注入哪一份**（版本可控、可归因、注入路径可信），
+   **不是「系统那份不能用」**。四问的是「我们注入哪一份」，答的却是「你不许用」。
+2. **“未安装”被写成了能力不可用。** 每项的非就绪指引原文都是「缺这项能力时如实告诉用户并请他安装」
+   —— 模型据此把「我们这份副本没有」读成「这台机器做不到」。
+3. **「区外 → 询问」这条承诺在命令那条路上没兑现。** 默认档的文案是「要动工作空间之外的文件时询问你」
+   （`shared/permissions.ts:141`）。文件工具确实询问（`permission-policy` 阶段 4）；但 **powershell 门放行到
+   执行层**（`permission-policy.ts:571`），执行层的沙箱在 OS 层**直接拒绝**，**永远不会问**。
+   于是用户经历的不是「被问了然后被拒」，是**撞墙** —— 而模型看不到「你可以来问我」这条路。
+
+**dsh 的做法（本条的对照依据，四条都对得上）**：
+
+| 问题 | dsh | 出处 |
+| --- | --- | --- |
+| 别凭政策自己劝退 | 「**Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.**」 | `packages/sandbox/sandbox-policy/README.md:119` |
+| 模型可见文本不该枚举能力 | 「Tool schemas remain **the authority**… Tool results remain the authority for operation-specific denials and approved wider retries… The model no longer receives **a prose list of sandboxed capability families**.」 | `.agents/notes/implemented/simplification/2026-07-31-capability-neutral-sandbox-policy-context.md:19,35` |
+| 临时区域只做摘要、不列路径 | 各后端授予的临时区域不同、且在策略解析**之后**才选定，「无法如实枚举」；有测试钉「TMPDIR 变化时整段提示词逐字节稳定」 | `sandbox-policy/README.md:151`、`tests/policy.spec.ts:171` |
+| 默认档 | **fail-safe 默认 `read-only`**，要显式 opt-in 才给 `workspace-write` | `sandbox-policy/README.md:36` |
+
+**⚠ 同时更正 §4.16 起草过程中的一次判断失误（记下来免得重犯）**：起草本条时我先断言
+「我们只有 `writableDirs: [workspaceDir]`、临时区域一个都没给」，并据此提出「学 dsh 把 temp
+并进可写集」。**这是错的**：私有 temp 由沙箱层**内部**管理，不在调用方那个参数里 ——
+`sandbox/index.ts:433-435` 按工作区确定性派生 `<系统temp>\kamibuddy-sandbox\<16位摘要>`，
+`:406-419` 给它授专属 SID，`:520` 把 `TMP`/`TEMP` 指过去，`token.ts:240` 的受限 SID 列表里
+本来就有 temp SID，`confinement.win.test.ts` 也有「TMP/TEMP 指向已授权的私有目录且可写」。
+**我们不但早就对齐了 dsh 的 Windows 做法，还多做了确定性派生与「与工作区两向不相交」的守卫。**
+教训：`writableDirs` 是**调用方**给的清单，不是沙箱可写集的全貌 —— 断言「我们没有 X」之前要读全层。
+
+**决策**：
+
+- **A. 运行时清单不再下禁令，并明说状态不等于能力边界。**
+  `renderRuntimeEnvSection` 抬头改为「**系统里已有同名的解释器 / 工具时照常可用**，不需要非用我们
+  这一份；别因为下面某一项不是「就绪」就判定这件事做不到 —— 先动手试，被拒时按拒绝说明走」；
+  三条非就绪指引都补上「这**不代表这件事做不到**」。「不要自己安装」保留（托管运行时的安装是用户在
+  设置页的显式动作，与「系统那份能不能用」是两件事）。**状态：已落地。**
+- **B. 模型可见文本只给人话，细节留给界面。** 状态行从 `runtimeStatusText`（带 `status.detail`）
+  换成 `RUNTIME_STATUS_LABELS` 的标签 —— detail 里装的是内部相位与失败原文，其至包含一整条
+  GitHub release URL，对模型没用而每轮都要付 token。设置页与诊断仍走 `runtimeStatusText`。
+  **状态：已落地。**
+- **C. 包管理器缓存指进已被授权的私有 temp。** 新增 `packageManagerScratchEnv`（`sandbox/index.ts`），
+  在 `TMP`/`TEMP` 同一处注入 `npm_config_cache=<私有temp>\npm-cache`。npm 的缓存**不看 TMP**
+  （默认 `%LOCALAPPDATA%\npm-cache`，在工作区与私有 temp 之外），所以「工作区可写」这条承诺在
+  npm 这里会变成写不进去。WorkBuddy 的同一题是把它列 `inherit_user` 白名单（§4.4b 已记）；
+  我们改**落点**而不加白名单：缓存本就是可弃的临时数据，**边界一点没放宽**。
+  **状态：已落地**（`confinement.win.test.ts` 在真沙箱里验了「变量指向私有 temp 且落点可写」）。
+- **D. 被拒之后的出路要成为模型的基本常识。** `python-env.md` 删掉「不要去猜系统里那份」与
+  被错误类推的「同理不要 `npm install`」；`tool-discipline.md` 新增一条：**被拦下先读返回的那句话** ——
+  它区分「命令本身有问题」与「策略拒绝」，后者有正规出路（带 `sandbox_permissions` + `justification`
+  重试同一条命令一次，**由用户当场决定批不批**）；改写命令去绕不会通过。**状态：已落地。**
+  （提权链路本身早已完备：schema 广告字段、工具描述点明、撞墙当刻给 `DENIAL_MARKER` +
+  `ESCALATION_HINT`、只在真能提权时才给、批准后 `ESCALATED_NOTE` —— 缺的只是**让模型走到那一步**。）
+- **E. 顺带修「取消 ≠ 失败」。** 安装层原先两种情况都落盘写 `outcome: "failed"`
+  （`registry.ts` 的取件 catch），读侧只认 `outcome`，于是用户主动取消过一次下载，
+  下次采集清单时显示成「安装失败」，模型据此**催用户重试他自己的决定**。现新增
+  `outcome: "cancelled"`（两种取消形态都认：`DownloadCancelledError` 与 `AbortError`），
+  读侧继续只认 `failed` —— 该运行时于是回落「未安装」，文案随之准确；`runtime-inventory`
+  也据此抛 `AbortError` 而不是普通失败，让 daemon 那条「取消与失败分开上报、不写审计」的
+  既有意图第一次真正成立。**状态：已落地。**
+  这条也**更正了片段里一处理由错误**：`python-env.md` 原写「不要 `tempfile`（沙箱写不进那类目录）」——
+  沙箱**给**了私有 temp，Python 侧失败的真原因是 `mkdir(0o700)` 的 DACL 切断继承
+  （§4.4b 已知边界 8），与落点无关。
+
+**已知边界 / 未做**：
+- **文件工具（write/edit）没有提权通道**，也不需要：它们在权限门那一层就是「区外 → 询问」，
+  批准即执行。需要提权的是 shell（门不审命令、约束在执行层）。
+- **`pip` 在沙箱里仍然必失败**（DACL 洞，与缓存落点无关），出路是提权；没有给它设
+  `PIP_CACHE_DIR` —— 那是无效的安慰剂，`packageManagerScratchEnv` 的注释里写明了别加回来。
+- **默认档没有改**（见否决方案 1）。
+
+#### 否决方案
+
+1. **否决：把默认档从 `workspace-write + ask` 改成 `danger-full-access + ask`（「权限刚开始放开点」）。**
+   理由：① **peer 证据不支持** —— dsh 的默认是 **fail-safe 的 `read-only`**，要显式 opt-in
+   （`sandbox-policy/README.md:36`）；WorkBuddy 桌面端虽用 `bypassPermissions`，但它是
+   「**工作区这个域内不问**」+ `trustedDirectories`，也不是全局敞开（§4.4b 已记）。两家都不同意「全局放开」；
+   ② 本次投诉的**真身不是判定层**（实测：PATH 未被替换、系统 Node 可用、注入零目录），放开默认档
+   一个字节都解决不了「模型被文案劝退」；③ 它要付 2026-09-09 事故换来的防线（模型改工作区外文件）。
+2. **否决：把整个 `%TEMP%` 或包管理器缓存目录列进可写白名单（WorkBuddy 的 `inherit_user` 原样抄）。**
+   理由：① 那是 WB 的**用户态规则栈**才成立的做法，它的栈根本不覆盖 TEMP/TMP；我们的约束是
+   OS 级受限令牌，抄白名单等于把用户机器上一个**持久目录**纳进可写集 —— 换来的是同等的写入能力，
+   付出的是边界变大；② 私有 temp + 改缓存**落点**达到同样效果且不动边界（已实测可写）；
+   ③ §4.4b 已记「它的 temp 白名单照抄不过来」。
+3. **否决：删掉整段 `python_env` 清单（dsh 是「不枚举能力」，那我们也别给）。**
+   理由：dsh 不枚举的是**已挂载能力家族**（它没有「随应用按需安装的运行时副本」这个概念）；
+   而我们这几项带着**模型真正要用的绝对路径**（解释器、node、gitbash），删掉清单模型就
+   拿不到路径，只能去猜 —— 那是把 dsh 的结论套到它没有的场景上。真正的教训是**别下禁令、别把状态
+   说成能力边界**，不是「别给路径」。清单保留，抬头与指引按 A 改写。
+4. **否决：给模型一个「申请提权」的新工具/新字段（改 schema）。**
+   理由：字段已经在（`sandbox_permissions` + `justification`，`powershell-tool.ts:391-405`），
+   撞墙文案也已经带出路（`sandbox-runner.ts:140-142`），加新字段是重复建设。
+   本轮要修的是「模型走不到那一步」，属提示词范围。
+5. **否决：让沙箱在拒绝前先弹一次审批（「区外写就提前问」）。**
+   理由：shell 命令触碰哪些路径**事前不可判定** —— 这正是当初把 shell 的约束放到 OS 层、
+   门侧不审命令的理由（`permission-policy.ts:544-551`，对齐 dsh）。能做到「撞墙后申请、
+   用户批准即单次放行」已经兑现了「你来问我、我同意就执行」，且不需要预判命令语义。
+
 ## 5. pi 能力边界（D1 验证结论）
 
 | 项                     | 结论                                                                                                          |

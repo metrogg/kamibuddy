@@ -213,6 +213,29 @@ describe.skipIf(!isWindows)("受限令牌写约束", () => {
 	);
 
 	it(
+		"npm 缓存被指到私有 temp 里，且那个落点写得进去（否则 npm install 必失败）",
+		async () => {
+			/*
+			 * 私有 temp 只覆盖 TMP/TEMP，而 **npm 的缓存不看 TMP**：它默认落在
+			 * `%LOCALAPPDATA%\npm-cache` —— 工作区与私有 temp 之外，于是被写约束拒掉。
+			 * 症状是 `npm install` 直接失败，而模型的结论会变成「这条技术路线跑不通」，
+			 * 一条本来能走的路线被放弃（用户原话：「本机有都不让我」）。
+			 * 这里守两件事：变量指到了私有 temp 下，且那个落点真的可写。
+			 */
+			const outcome = await runScript(
+				`$c = $env:npm_config_cache; New-Item -ItemType Directory -Path $c -Force -ErrorAction Stop | Out-Null; Set-Content -Path (Join-Path $c 'probe.txt') -Value 'cache-ok' -ErrorAction Stop; $c`,
+				{ workspace },
+			);
+			expect(outcome.exitCode, `stderr: ${outcome.stderr}`).toBe(0);
+			const reported = outcome.stdout.trim();
+			const temp = await sandboxPrivateTempDir(workspace);
+			expect(reported.toLowerCase().startsWith(temp.toLowerCase())).toBe(true);
+			expect(existsSync(join(reported, "probe.txt"))).toBe(true);
+		},
+		CASE_TIMEOUT_MS,
+	);
+
+	it(
 		"probeSandbox 幂等且缓存",
 		async () => {
 			resetSandboxProbeForTest();

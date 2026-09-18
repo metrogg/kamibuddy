@@ -33,7 +33,8 @@ import {
 	writeCurrent,
 	writeManifest,
 } from "../runtime-store.ts";
-import { appendRuntimeEvent, renderRuntimeDiagnostics } from "./diagnostics.ts";
+import { appendRuntimeEvent, readLastRuntimeFailure, renderRuntimeDiagnostics } from "./diagnostics.ts";
+import { CANCELLED_PHASE } from "./registry.ts";
 import {
 	createPythonRuntime,
 	defaultPythonRuntimeOptions,
@@ -506,6 +507,23 @@ describe("诊断报告", () => {
 		expect(text).toContain("UV_INDEX_URL"); // 无外网/私有化的兜底引导
 		expect(report.logPath).toContain(PYTHON_RUNTIME_ID); // 落盘日志的位置
 		expect(existsSync(report.logPath)).toBe(true);
+	});
+
+	it("用户取消**不算失败**：写 cancelled 之后「最近一次失败」为空（§4.16）", () => {
+		/*
+		 * 取消 ≠ 失败（download.test.ts 把这条当设计原则钉着）。安装层原先两种情况都落盘写
+		 * `failed`，于是下次采集清单时「用户取消过」变成「安装失败」，模型据此去催用户
+		 * 「重试安装」——催的是用户自己的决定。这条守卫钉住读侧：只认 failed。
+		 */
+		const options = optionsFor("diagnostics-cancelled");
+		appendRuntimeEvent(createPythonRuntime(options), {
+			kind: "runtime_install",
+			outcome: "cancelled",
+			phase: CANCELLED_PHASE,
+			error: "已取消下载：https://example.test/PortableGit.7z.exe",
+		});
+
+		expect(readLastRuntimeFailure(createPythonRuntime(options))).toBeUndefined();
 	});
 
 	it("版本不符也能指名（wrong-version 带当前版本）", async () => {

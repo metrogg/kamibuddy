@@ -267,8 +267,24 @@ export async function installRuntime(
 		// 取件失败（校验不过 / 离线 / 取消）：暂存目录整份丢掉 —— 校验不过的产物**不许**进位。
 		removeDir(staging);
 		const message = error instanceof Error ? error.message : String(error);
-		const phase = error instanceof DownloadCancelledError ? CANCELLED_PHASE : ACQUIRE_PHASE;
-		appendRuntimeEvent(descriptor, { kind: "runtime_install", outcome: "failed", phase, error: message });
+		/*
+		 * 取消 ≠ 失败（download.test.ts 把这条当设计原则钉着）。两种取消形态都要认：
+		 *   - `DownloadCancelledError`：下载中途取消（download.ts 抛的）；
+		 *   - `AbortError`：进下载**之前**就已被取消 —— 调用方（runtime-inventory 的
+		 *     guardSpawn）抛的就是它，name 是它唯一的标记，所以这里按 name 认。
+		 * 认出来之后落盘写 `cancelled`：写 `failed` 会让「用户取消过」在下次采集清单时
+		 * 变成「安装失败」，模型据此催用户重试他自己的决定（2026-09-18 修）。
+		 */
+		const cancelled =
+			error instanceof DownloadCancelledError ||
+			(error instanceof Error && error.name === "AbortError");
+		const phase = cancelled ? CANCELLED_PHASE : ACQUIRE_PHASE;
+		appendRuntimeEvent(descriptor, {
+			kind: "runtime_install",
+			outcome: cancelled ? "cancelled" : "failed",
+			phase,
+			error: message,
+		});
 		return { status: "failed", phase, error: message };
 	}
 	/*

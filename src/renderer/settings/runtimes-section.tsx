@@ -18,8 +18,12 @@
  *
  * 数据只有一个来源：daemon 的 runtimesSnapshot（core/runtime-inventory.ts 的
  * collectRuntimeInventory）。本页不做任何二次判断 —— 状态文案经
- * shared/runtimes.ts 的 runtimeStatusText 渲染，与模型侧 `python_env` 段同一句
- * （「已被用户禁用」不可能在这里显示成「找不到」，未安装也不可能显示成「自动准备」）。
+ * shared/runtimes.ts 的 runtimeStatusText 渲染（**带 status.detail**：失败相位与底层
+ * 错误原文，例如下载 URL，这是用户排查要看的），而模型侧的 `python_env` 段只用
+ * RUNTIME_STATUS_LABELS 的**标签**、不带 detail（细节归界面，人话归模型；
+ * 见 renderRuntimeEnvSection 的注释与 ARCHITECTURE §4.16）。
+ * 两侧共用同一份判据（classify），所以「已被用户禁用」不可能在这边显示成「找不到」，
+ * 未安装也不可能显示成「自动准备」—— 变的只是细节的详略，不是判定。
  *
  * 本页只 import @shared（AGENTS.md §1.3），一个 pi 概念都不认识。
  */

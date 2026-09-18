@@ -28,10 +28,16 @@ import type { RuntimeDescriptor, RuntimeInspectResult, RuntimeSource } from "./r
  * 2026-09-18 加 `warning`：按需下载里有些实情不致命但必须留痕（如「官方校验文件没取到，
  * 本次仅按代码内固定 sha256 校验」）；把它记成 `failed` 会让一次成功的安装在界面上
  * 显示成「安装失败」——`readLastRuntimeFailure` 只认 `failed`，这条区分是刻意的。
+ *
+ * 2026-09-18 再加 `cancelled`：**用户主动取消不是失败**（下载层本来就把这句当设计原则，
+ * 见 download.test.ts 的「取消 ≠ 失败」），但安装层原先两种情况都写 `failed`
+ * （registry.ts 的取件 catch），于是下次采集清单时「用户取消过」变成「安装失败」，
+ * 模型据此去催用户「重试安装」——催的是用户自己的决定。同理只认 `failed`
+ * 的读侧因此自动把它当「未安装」，文案也随之准确。
  */
 export interface RuntimeLogEvent {
 	readonly kind: "runtime_install" | "runtime_reset" | "runtime_ensure" | "runtime_rollback";
-	readonly outcome: "installed" | "started" | "published" | "warning" | "failed";
+	readonly outcome: "installed" | "started" | "published" | "warning" | "cancelled" | "failed";
 	readonly phase?: string;
 	readonly error?: string;
 	readonly source?: RuntimeSource;

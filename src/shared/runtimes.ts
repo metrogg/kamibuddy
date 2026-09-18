@@ -129,20 +129,32 @@ export interface RuntimeInstallProgress {
 /**
  * 状态的动作指引（模型可执行的那一句；就绪为空串）。
  *
- * 三种非就绪状态各给**唯一一条**该走的路：禁用 → 请用户去开启；未安装 → 请用户到设置页
- * 点安装（不会自动下载）；失败 → 说出原因并请用户看诊断或重试安装。
- * 三种都不许「自己装」—— 那条纪律的由来见片段 python-env.md（pip 在写入沙箱里必失败）。
+ * 三种非就绪状态各给**唯一一条**该走的路，且**都必须说清「这不等于这件事做不到」**
+ * （2026-09-18 改，ARCHITECTURE §4.16）：这三种状态说的都是**我们这份副本**的情况，
+ * 不是模型的能力边界。原先每一条都只写「告诉用户并请他安装」，模型据此把
+ * 「我们的 node 没装」读成「这台机器不能用 Node」——而系统里明明有可用的一份，
+ * 于是它放弃了一条本来能跑的路线。用户的原话是「本机有都不让我」。
+ *
+ * 照着 dsh 的写法对齐（`sandbox-policy` 的模型可见文案）：「Do not refuse a required
+ * modification from this policy alone: try an available tool normally and follow any
+ * denial and escalation guidance it returns.」——**别凭一段政策文本自己判定做不到**。
+ *
+ * 「不要自己安装」仍然保留：托管运行时的安装是用户在设置页的显式动作（不自动下载），
+ * 这条纪律与「系统里那份能不能用」是两件事，不要混。
+ *
+ * 禁用与未就绪必须仍是两句不同的话（门禁 scripts/check-module-invariants.ts 登记的关系）：
+ * 两句话合并成一句「不可用」，模型就只能猜自己该做什么。
  */
 export function runtimeStatusHint(status: RuntimeStatus): string {
 	switch (status.kind) {
 		case "ready":
 			return "";
 		case "disabled":
-			return "该运行时已被用户禁用：不要调用它、不要尝试安装；确实需要时如实告诉用户「这个运行时已被你在设置里关掉」，并请他到「设置 → 内置运行时」重新打开。";
+			return "该运行时已被用户禁用：不要调用它、也不要尝试安装它（系统里若有同名的解释器 / 工具，照常可用）。确实需要我们这一份时，如实告诉用户「这个运行时已被你在设置里关掉」，并请他到「设置 → 内置运行时」重新打开。";
 		case "missing":
-			return "该运行时尚未安装（不会自动下载）：需要用户在「设置 → 内置运行时」点「安装」（需联网，按界面提示的体积下载）。缺这项能力时如实告诉用户并请他安装；不要自己安装。";
+			return "该运行时尚未安装（不会自动下载）—— 这**只说明我们这份副本没有，不代表这件事做不到**：系统里已有同名的解释器 / 工具时照常可用，先动手试。确实需要我们这一份（版本可控）时，告诉用户在「设置 → 内置运行时」点「安装」（需联网）；不要自己安装。";
 		case "failed":
-			return "该运行时上次安装失败：如实告诉用户失败原因，并请他在「设置 → 内置运行时」点「诊断」看完整报告、或点「重试安装」；不要自己安装。";
+			return "该运行时上次安装没有装完（含用户主动取消，那不是故障）—— 同样**不代表这件事做不到**，系统里已有同名工具时照常可用。要装我们这一份，请用户在「设置 → 内置运行时」看「诊断」或点「重试安装」；不要自己安装。";
 	}
 }
 
@@ -156,19 +168,30 @@ export function runtimeStatusText(status: RuntimeStatus): string {
  * 渲染 `python_env` 段的正文（**模型可见文本只由这一处生成**；见门禁
  * scripts/check-module-invariants.ts 的登记）。
  *
- * 文案口径：
- *   - 抬头交代「这些是系统内置运行时、不要用系统里的同名工具、也不要自己安装」；
+ * 文案口径（2026-09-18 改，ARCHITECTURE §4.16）：
+ *   - 抬头交代「这些是随应用提供的钉版副本」**并且说清「系统里已有同名的照常可用」**
+ *     —— 原先那句「不要用系统里同名的解释器 / 运行时」把「我们注入哪一份」这个实现
+ *     选择写成了对模型的普遍禁令，于是在「本机有、我们这份没装」时模型报出假阴性；
  *   - 每个运行时一行「id 版本 · 状态 · 用途」，就绪时补齐目录与可执行文件那一行；
  *   - 非就绪项的下一行是它**唯一**该走的路（runtimeStatusHint）。
  * 条目顺序即清单顺序（注册表顺序，稳定 ⇒ 同一台机器上逐字节可复现）。
+ *
+ * **状态行只给标签、不给人话以外的细节**（`runtimeStatusText` 的 detail 不进来）：
+ * detail 装的是内部相位与失败原文 —— 例如一条完整的 GitHub release URL。它对模型
+ * 没有用处（模型要做的是把用户引到设置页的诊断，不是在提示词里读下载链接），
+ * 而每一轮都要为它付 token。界面与诊断报告仍走 `runtimeStatusText`，两边分工是
+ * 「细节归界面，人话归模型」。
  */
 export function renderRuntimeEnvSection(inventory: RuntimeInventory): string {
 	if (inventory.items.length === 0) return "";
 	const lines: string[] = [
-		"托管运行时（随应用提供，但需用户按需安装、不会自动下载；不要用系统里同名的解释器 / 运行时，也不要自己安装）：",
+		"托管运行时（随应用提供的**钉版副本**，按需安装、不会自动下载）：" +
+			"**系统里已有同名的解释器 / 工具时照常可用**，不需要非用我们这一份；" +
+			"别因为下面某一项不是「就绪」就判定这件事做不到 —— 先动手试，被拒时按拒绝说明走。",
 	];
 	for (const item of inventory.items) {
-		lines.push(`- ${item.id} ${item.version} · ${runtimeStatusText(item.status)} · ${item.purpose}`);
+		const label = RUNTIME_STATUS_LABELS[item.status.kind];
+		lines.push(`- ${item.id} ${item.version} · ${label} · ${item.purpose}`);
 		if (item.status.kind !== "disabled") {
 			if (item.activeDir !== undefined) lines.push(`  目录：${item.activeDir}`);
 			if (item.executable !== undefined) {

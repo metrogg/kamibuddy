@@ -15,7 +15,7 @@
  *   5. **合规义务被机械钉住**（许可文本在必备文件里，缺了不许进位）。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,7 +44,7 @@ import {
 	type RuntimeEnsureOutcome,
 } from "./registry.ts";
 import { partFileFor, type HttpOpener, type HttpResponse } from "./download.ts";
-import { collectRuntimeDiagnostics } from "./diagnostics.ts";
+import { collectRuntimeDiagnostics, runtimeLogDir } from "./diagnostics.ts";
 import { defaultPythonRuntimeOptions } from "./python.ts";
 import {
 	createNodeRuntime,
@@ -305,6 +305,12 @@ describe("校验不过不许进位", () => {
 		assertNothingPromoted(options);
 		// 续传点：已收到的字节留着（用户再点一次安装就不必从头下）。
 		expect(existsSync(partFileFor(ARTIFACT(options)))).toBe(true);
+		/*
+		 * 落盘写 `cancelled` 而不是 `failed`（§4.16）：写 failed 会让「用户取消过」在
+		 * 下一次采集清单时读成「安装失败」，模型据此去催用户「重试安装」——催的是用户
+		 * 自己的决定。读侧只认 failed（守卫在 python.test.ts 的诊断组）。
+		 */
+		expect(lastInstallOutcome(options)).toBe("cancelled");
 	});
 });
 
@@ -430,4 +436,17 @@ function assertNothingPromoted(options: Options): void {
 	expect(listStaging(options.root, NODE_RUNTIME_ID)).toEqual([]);
 	expect(existsSync(INSTANCE(options))).toBe(false);
 	expect(readCurrent(options.root, NODE_RUNTIME_ID)).toBeUndefined();
+}
+
+/** 最近一条 runtime_install 落盘事件的 outcome（读真实日志文件，不读内存）。 */
+function lastInstallOutcome(options: Options): string | undefined {
+	const dir = runtimeLogDir(createNodeRuntime(options));
+	if (!existsSync(dir)) return undefined;
+	const lines = readdirSync(dir)
+		.filter((name) => name.endsWith(".jsonl"))
+		.flatMap((name) => readFileSync(join(dir, name), "utf8").split("\n"))
+		.filter((line) => line.includes('"runtime_install"'));
+	const last = lines[lines.length - 1];
+	if (last === undefined) return undefined;
+	return (JSON.parse(last) as { outcome?: string }).outcome;
 }

@@ -446,6 +446,33 @@ export async function sandboxPrivateTempDir(workspaceDir: string): Promise<strin
 	return privateTempDir(api, workspaceDir);
 }
 
+/**
+ * 语言包管理器的缓存落点：指到**本次已被授权的私有 temp** 里。
+ *
+ * 为什么必须有这一层（2026-09-18 修的实测缺口）：私有 temp 只覆盖 `TMP`/`TEMP`，
+ * 而 **npm 的缓存不看 TMP** —— 它默认落在 `%LOCALAPPDATA%\npm-cache`，那里既在
+ * 工作区之外、也在私有 temp 之外，于是被写约束拒掉。用户看到的症状是
+ * 「`npm install` 直接失败」，而模型的结论会变成「这条技术路线跑不通」，
+ * 于是一条本来能走的路线被放弃（用户原话：「本机有都不让我」）。
+ *
+ * WorkBuddy 的同一题是把它列进 `inherit_user` 白名单（ARCHITECTURE §4.4b 已记）。
+ * 我们改**落点**而不是加白名单：缓存本来就是可弃的临时数据，指进会话自己的私有
+ * temp 既满足写入，又不必把用户机器上一个持久目录纳进可写集 —— 边界一点没放宽。
+ *
+ * 为什么只列 npm：`pip` 也在同一类失败里，但它失败的原因是 `tempfile.mkdtemp` 用
+ * `mkdir(0o700)` 建目录、那份 DACL 切断了继承（ARCHITECTURE §4.4b 已知边界 8），
+ * **与缓存落在哪无关**，所以给它设 `PIP_CACHE_DIR` 是无效的安慰剂 —— 那条路走提权。
+ * 别为了「看起来对称」把它加回来。
+ */
+function packageManagerScratchEnv(scratchDir: string): Readonly<Record<string, string>> {
+	/*
+	 * `npm_config_*` 是 npm 读环境变量的固定前缀（大小写不敏感）。只给 cache：
+	 * npm 的临时目录走 `os.tmpdir()`，而 `TMP`/`TEMP` 已经被指向同一个私有 temp，
+	 * 再设 `npm_config_tmp` 就是同一件事说两遍。
+	 */
+	return { npm_config_cache: join(scratchDir, "npm-cache") };
+}
+
 /* ── 执行 ────────────────────────────────────────────────────────── */
 
 /**
@@ -513,11 +540,16 @@ export async function runSandboxed(request: SandboxRunRequest): Promise<SandboxR
 			cwd: request.cwd,
 			token: restricted,
 			/*
-			 * 只覆盖 TMP/TEMP 与调用方给的注入补丁，其余继承 —— 不改本进程环境
-			 * （那会污染整个 daemon）。私有 temp 放在最后：补丁若也带 TMP/TEMP，
-			 * 必须被沙箱自己的、已被授权的那个目录压过。
+			 * 只覆盖 TMP/TEMP、包管理器缓存与调用方给的注入补丁，其余继承 —— 不改本进程
+			 * 环境（那会污染整个 daemon）。私有 temp 与其派生的缓存落点放在最后：
+			 * 补丁若也带这些键，必须被沙箱自己的、已被授权的那个目录压过。
 			 */
-			env: { ...request.env, TMP: tempDir, TEMP: tempDir },
+			env: {
+				...request.env,
+				TMP: tempDir,
+				TEMP: tempDir,
+				...packageManagerScratchEnv(tempDir),
+			},
 		});
 
 		// 必须与等待并发：管道缓冲填满时子进程会阻塞在写上，
