@@ -273,8 +273,9 @@ function Fold({
  *     计数（系统分段 + 消息组成 + hidden context 快照字数）；
  *   - 「系统提示词全文」= prompt:preview 同一条组装路径现算（不含 pi 上下文段，
  *     页脚口径同设置页预览）；
- *   - 「hidden context 快照」= 宿主最近一次冻结、已落进会话文件的那条快照全文
- *     （run 结束仍可看）。
+ *   - 「hidden context 快照」= 宿主最近一次冻结、已落进会话文件的**两条**快照全文
+ *     （环境块 + 时间块，按注入顺序拼接；spec: add-supersede-note-and-time-split 起时间
+ *     独立成 `kamibuddy-run-time` 一条，daemon 展示口把它接在环境块之后；run 结束仍可看）。
  */
 function ContextSection({
 	detail,
@@ -329,7 +330,7 @@ function ContextSection({
 			/>
 			<Fold
 				label="hidden context 快照"
-				hint="最近一次 · 落盘快照（在本轮用户消息之后，内容未变则不追加）"
+				hint="最近一次 · 环境块 + 时间块（两条落盘快照，在本轮用户消息之后，内容未变则不追加）"
 				emptyText="还没有跑过任何一轮 —— 快照随第一次发送出现。"
 				resetKey={sessionId}
 				onLoad={() => window.kami.hiddenContext()}

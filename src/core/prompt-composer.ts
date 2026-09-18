@@ -77,6 +77,9 @@ import { dirname } from "node:path";
  */
 import type { BuildSystemPromptOptions, Skill } from "@earendil-works/pi-coding-agent";
 import type { ExpertDefinition } from "./experts.ts";
+// 取代声明从 shared 的**单点常量**取（三条快照通道共用）：本文件不再另写一份字面量，
+// 措辞与容器块的声明不会漂移（AGENTS.md §4）。
+import { SNAPSHOT_SUPERSEDE_NOTE } from "../shared/hidden-context.ts";
 
 type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -257,6 +260,12 @@ export interface RuntimeContextInput {
  *
  * 另：注入不改系统提示词、也不落会话文件（`context` 事件的返回值只在本次
  * provider 请求生效），因此不存在会话日志无界增长。
+ *
+ * **取代声明在正文第一行**（spec: add-supersede-note-and-time-split 的 A）：画像/
+ * 个性化是 append-only 的 —— 内容一变就追加一条新的，旧的原样留档（画像里写着
+ * 「最后更新：…」这类会过期的事实），而模型此前没有任何依据判断以哪条为准。声明是
+ * 常量、从 shared 的 `SNAPSHOT_SUPERSEDE_NOTE` 取，不引入逐轮差异（不破坏去重）。
+ * 无内容时仍返回空串：零 token 不注入，空段不白发一句声明出去。
  */
 export function formatRuntimeContext(input: RuntimeContextInput = {}): string {
 	const blocks: string[] = [];
@@ -267,7 +276,8 @@ export function formatRuntimeContext(input: RuntimeContextInput = {}): string {
 		const personalization = formatPersonalizationSection(input.personalization);
 		if (personalization !== "") blocks.push(personalization);
 	}
-	return blocks.join("\n\n");
+	if (blocks.length === 0) return "";
+	return `${SNAPSHOT_SUPERSEDE_NOTE}\n\n${blocks.join("\n\n")}`;
 }
 
 const SLOT = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;

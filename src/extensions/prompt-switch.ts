@@ -32,7 +32,7 @@
  * hidden context `workspace_context` 每 run 提供（pi 内置的那行 `cwd` 随整串替换
  * 一起没了，所以骨架里也不能再手写一行）。
  *
- * ## 逐 run 会变的事实怎么投递（两条快照通道，spec: persist-context-snapshots）
+ * ## 逐 run 会变的事实怎么投递（三条快照通道，spec: persist-context-snapshots / add-supersede-note-and-time-split）
  *
  * 投递方式是「**落盘的持久消息 + 只在内容真变时追加**」，三个判据按序：
  *   (a) 绝不改动系统提示词：provider 的前缀缓存比的是最长公共前缀，而系统
@@ -51,16 +51,23 @@
  *       快照逐字节不同」时才追加一条（dsh 的「只在变化时记录」纪律，
  *       shared/hidden-context.ts 的 shouldAppendSnapshot）。判据 (c) 早先正是
  *       「不落盘」的辩护理由，现在由去重来满足 —— 落盘与不膨胀不再互斥。
+ *   (d) 每条快照正文以取代声明开头（shared/hidden-context.ts 的
+ *       SNAPSHOT_SUPERSEDE_NOTE）：追加是 append-only 的，同一通道会并存多份
+ *       （时间每分钟一条），必须告诉模型冲突时以最新那条为准。
  *
- * 两条通道**各自独立去重、各自追加**（不拼成一条消息）：
+ * 三条通道**各自独立去重、各自追加**（不拼成一条消息）：
  *   - runtime context（记忆内容 + 个性化）—— 变化罕见（记忆被写才变）；
- *   - hidden context（工作目录 / python_env / 记忆指针 / 当前时间）——
- *     `current_time` 每 run 必变，但它占全文的比例小（3,463 / 4,593 字符，
- *     73% 是稳定内容）。
- * 合并成一条会让稳定那 73% 跟着每 run 重发（spec 否决方案 ④）。
+ *   - hidden context（工作目录 / python_env / 记忆指针）—— 环境事实，几乎不变；
+ *   - run time（当前时间）—— 按分钟变，但只在跨分钟时追加一条时间块；实测该块
+ *     150 字符 / 61 estTokens，其中真新信息只有时间戳 26 字符 ≈11 est，其余是取代声明
+ *     （≈26 est）与容器/标签（≈25 est）（构成与口径见 shared/hidden-context.ts 的契约段）。
+ * 合并成一条会让稳定那部分跟着时间每 run 重发（spec: persist-context-snapshots
+ * 否决方案 ④）；而「时间与环境块共处一条」的形态（上一版）会让 1,046 字符里
+ * 真正变的那 20 字符把整条带上 —— 按新证据改掉（spec:
+ * add-supersede-note-and-time-split）。
  *
- * 时间只在 hidden context 里：它由 session-host 在 run 开始冻结（`current_time`），
- * 同一类事实只有一个来源 —— 两边都注入还会让两份时间的值漂移。
+ * 时间只在 run time 通道里：它由 session-host 在 run 开始冻结（`current_time`，
+ * 单独一个读口），同一类事实只有一个来源 —— 两边都注入还会让两份时间的值漂移。
  *
  * 错误语义（写在这里免得后人误以为异常会响亮）：pi 对 before_agent_start handler
  * 的异常是**吞掉并记扩展错误日志**（runner.js 的 emitBeforeAgentStart try/catch，
@@ -72,13 +79,16 @@
  * 运行时仍只依赖注入的回调，同 permission-gate 的做法，便于脱离宿主测试。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 三个通道 —— ① `before_agent_start` 返回**整串 systemPrompt**（pi 把它写成
- * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② / ③ 两条**持久快照消息**：
- * 逐 run 可变事实（记忆内容 / 个性化）与 hidden context（工作目录 / python_env / 记忆指针 / 当前时间），
- * 都是 role:"custom" + 具名 customType + display:false，落在**本轮用户消息之后**、写进会话文件，
- * 内容与上一条同类型快照逐字节相同时**不追加**。
- * Token effect: 系统提示词每请求全量付（常驻在请求头部，与历史长度无关）；快照每个 run 最多付一次，
- * 内容没变则一次都不付（不追加）；沉积进历史后按普通消息参与后续每轮前缀（命中价）。
+ * What the model sees: 四个 `before_agent_start` handler —— ① 返回**整串 systemPrompt**（pi 把它写成
+ * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② / ③ / ④ 三条**持久快照消息**：
+ * 逐 run 可变事实（记忆内容 / 个性化）、hidden context 环境块（工作目录 / python_env / 记忆指针）、
+ * 当前时间（`kamibuddy-run-time`），都是 role:"custom" + 具名 customType + display:false，正文以取代
+ * 声明开头，落在**本轮用户消息之后**、写进会话文件，内容与上一条**同 customType** 快照逐字节相同时
+ * **不追加**（注册顺序固定 ⇒ 消息在请求体里的相对顺序跨调用稳定）。
+ * Token effect: 系统提示词每请求全量付（常驻在请求头部，与历史长度无关）；每条快照每个 run 最多付一次，
+ * 内容没变则一次都不付（不追加）；时间跨分钟时只有时间块重付（实测 150 字符 / 61 estTokens，
+ * 其中真新信息只有时间戳 26 字符 ≈11 est），环境块不重付；沉积进历史后
+ * 按普通消息参与后续每轮前缀（命中价）。
  * KV Cache effect: 系统提示词是缓存前缀的**头部** —— 它内部一个字节变化就让其后的一切（含整段历史）
  * 失配（实测：字节不变 93.2% / 变更一行 62.0%，见 docs/可观测性清单.md CACHE8）；快照落点固定
  * （本轮用户消息之后、历史的正常一员）且按需追加 ⇒ 前缀不被它截断，也不再每轮重付。
@@ -88,16 +98,17 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { shouldAppendSnapshot } from "../shared/hidden-context.ts";
 import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
+	RUN_TIME_CUSTOM_TYPE,
 	RUNTIME_CONTEXT_CUSTOM_TYPE,
 } from "../shared/observability.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 
 /*
- * 两条快照通道的自定义类型（pi 的 CustomMessage.customType）住在
+ * 三条快照通道的自定义类型（pi 的 CustomMessage.customType）住在
  * shared/observability.ts（`RUNTIME_CONTEXT_CUSTOM_TYPE` /
- * `HIDDEN_CONTEXT_CUSTOM_TYPE`）：消费点不止本扩展（会话导出 / 翻译过滤 /
- * request_snapshot 都按它认条目），而 core 不许 import extensions（AGENTS.md §1）
- * —— 常量放 shared 才是唯一实现处，这里 import 用。
+ * `HIDDEN_CONTEXT_CUSTOM_TYPE` / `RUN_TIME_CUSTOM_TYPE`）：消费点不止本扩展
+ * （会话导出 / 翻译过滤 / request_snapshot 都按它认条目），而 core 不许 import
+ * extensions（AGENTS.md §1）—— 常量放 shared 才是唯一实现处，这里 import 用。
  */
 
 export interface PromptSwitchOptions {
@@ -134,16 +145,30 @@ export interface PromptSwitchOptions {
 	 */
 	readonly composeRuntimeContext: () => string;
 	/**
-	 * 第二条快照通道：hidden context 块（工作目录 / 托管运行时 / 记忆指针 /
-	 * 当前时间）。内容由宿主在 run 开始冻结，daemon 经
+	 * 第二条快照通道：hidden context **环境块**（工作目录 / 托管运行时 / 记忆指针）。
+	 * 内容由宿主在 run 开始冻结，daemon 经
 	 * `SessionHost.peekHiddenContext()` 接进来（时序见那个方法的注释）。
 	 *
 	 * **必填**：这个口子漏接 = 模型看不到工作目录与运行时路径（且不会响亮失败），
 	 * 所以由类型强制每个宿主都给出取法（子代理 / run 会话同样有 hidden context）。
 	 *
+	 * 时间**不在**这里（上一版在这里，spec: add-supersede-note-and-time-split 拆掉了）：
+	 * 它按分钟变、环境块几乎不变，共处一条会让分钟一变整条重发。
+	 *
 	 * 返回 undefined / 空白 = 本 run 不注入。
 	 */
 	readonly composeHiddenContext: () => string | undefined;
+	/**
+	 * 第三条快照通道：hidden context **时间块**（当前时间，`kamibuddy-run-time`）。
+	 * 与 `composeHiddenContext` 同源同一次冻结，只是另一个读口
+	 * （`SessionHost.peekRunTime()`）。
+	 *
+	 * **必填**：漏接 = 模型看不到「现在几点」（系统提示词里已不含时间，这是唯一来源），
+	 * 且同样不会响亮失败。
+	 *
+	 * 返回 undefined / 空白 = 本 run 不注入。
+	 */
+	readonly composeRunTime: () => string | undefined;
 }
 
 /**
@@ -209,21 +234,29 @@ export function createPromptSwitch(options: PromptSwitchOptions) {
 		});
 
 		/*
-		 * 两条快照通道各注册一个 handler。pi 的单次 before_agent_start 里每个
+		 * 三条快照通道各注册一个 handler。pi 的单次 before_agent_start 里每个
 		 * handler 只能返回**一条** message，而 runner 会遍历同一扩展注册的**全部**
 		 * before_agent_start handler、把它们各自的 message 依次收进 messages 数组
 		 * （dist/core/extensions/runner.js 的 emitBeforeAgentStart：
 		 * `for (const handler of handlers) … messages.push(result.message)`；
-		 * loader.js 的 `on` 也是 push 进数组而非覆盖）。所以「两个 handler」就是
-		 * 「两条独立快照」——不必把两块正文拼成一条（合并的代价见文件头）。
+		 * loader.js 的 `on` 也是 push 进数组而非覆盖）。所以「三个 handler」就是
+		 * 「三条独立快照」——不必把几块正文拼成一条（合并的代价见文件头）。
 		 *
-		 * 两条通道各自去重、各自追加：各自读自己的 customType 基线，互不影响。
+		 * **注册顺序固定**（systemPrompt → runtime-context → hidden-context →
+		 * run-time）：handler 的返回按注册序收进 messages 数组，于是三条快照在
+		 * 请求体与会话文件里的**相对顺序跨调用稳定** —— 顺序一变就是位置变化，
+		 * 缓存前缀在那里断掉。调整顺序等于改模型可见的形态，须同步本文件头的契约段。
+		 *
+		 * 三条通道各自去重、各自追加：各自读自己的 customType 基线，互不影响。
 		 */
 		pi.on("before_agent_start", (_event, ctx) =>
 			snapshotMessage(ctx, RUNTIME_CONTEXT_CUSTOM_TYPE, options.composeRuntimeContext()),
 		);
 		pi.on("before_agent_start", (_event, ctx) =>
 			snapshotMessage(ctx, HIDDEN_CONTEXT_CUSTOM_TYPE, options.composeHiddenContext()),
+		);
+		pi.on("before_agent_start", (_event, ctx) =>
+			snapshotMessage(ctx, RUN_TIME_CUSTOM_TYPE, options.composeRunTime()),
 		);
 	};
 }

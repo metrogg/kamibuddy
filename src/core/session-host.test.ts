@@ -17,7 +17,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { conversationReducer, currentRunStartIndex, initialConversation, lastUserEntryIndex } from "../shared/conversation.ts";
-import { HIDDEN_CONTEXT_MARKER } from "../shared/hidden-context.ts";
+import { HIDDEN_CONTEXT_MARKER, SNAPSHOT_SUPERSEDE_NOTE } from "../shared/hidden-context.ts";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -2098,7 +2098,7 @@ describe("流式 delta 合批（16ms 窗口）", () => {
 });
 
 describe("hidden context（run 冻结 + 快照通道的取口，F5）", () => {
-	it("prompt 冻结注入块：workspace_context + 专家 + current_time（通道送的就是这份全文）", async () => {
+	it("prompt 冻结两份正文：环境块（workspace_context + 专家）与时间块各一份，时间不在环境块里", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger } = createFakeLedger();
 		const { session } = createLedgerSession();
@@ -2109,18 +2109,28 @@ describe("hidden context（run 冻结 + 快照通道的取口，F5）", () => {
 		/*
 		 * 投递已换成 prompt-switch 的 before_agent_start 快照通道（落盘、按需追加，
 		 * spec: persist-context-snapshots），本文件能验的是**冻结点**：组装产物就是
-		 * 通道要送的那份全文（daemon 经 host.peekHiddenContext() 取它）。
+		 * 各通道要送的那份全文（daemon 经 host.peekHiddenContext() / peekRunTime() 取）。
 		 * 「送出后 pi 怎么写成会话条目」属 pi 的行为 —— 形态由 prompt-switch.test.ts
-		 * 钉（两条通道各自的 message），端到端由真实装配的用例钉。
+		 * 钉（三条通道各自的 message），端到端由真实装配的用例钉。
 		 */
 		const content = host.peekHiddenContext() ?? "";
 		expect(content).toContain("工作目录：C:\\test");
 		expect(content).toContain("专家：前端开发");
-		expect(content).toContain("<current_time>");
-		// 容器顺序仍是 composeHiddenContext 的渲染字节（user-context 在前）。
-		expect(content.indexOf('data-role="user-context"')).toBeLessThan(
-			content.indexOf('data-role="additional-data"'),
-		);
+		// 时间**不在**环境块里（spec: add-supersede-note-and-time-split 把 additional-data
+		// 拆成独立一条）：它随分钟变，挤在这里会让逐字节没变的整块跟着重发。
+		expect(content, "环境块里还带着时间 ⇒ 分钟一变整块重发").not.toContain("<current_time>");
+		expect(content).not.toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+		// 容器契约不变 + 取代声明在容器内第一行。
+		expect(content).toContain('data-role="user-context"');
+		expect(content).toContain(`data-role="user-context">\n${SNAPSHOT_SUPERSEDE_NOTE}\n`);
+
+		// 时间块是**另一份**冻结正文（`kamibuddy-run-time` 通道的取口）。
+		const runTime = host.peekRunTime() ?? "";
+		expect(runTime).toContain("<current_time>");
+		expect(runTime).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+		expect(runTime).toContain('data-role="additional-data"');
+		expect(runTime).toContain(`data-role="additional-data">\n${SNAPSHOT_SUPERSEDE_NOTE}\n`);
+		expect(runTime, "时间块里混进了环境段").not.toContain("<workspace_context>");
 	});
 
 	it("python_env 段：运行时清单（id/版本/状态/用途）经注入送达，「被禁用」与「找不到」可区分", async () => {
@@ -2250,7 +2260,7 @@ describe("hidden context（run 冻结 + 快照通道的取口，F5）", () => {
 		expect("hiddenContextChars" in lastSnapshot()).toBe(false);
 	});
 
-	it("peekHiddenContext：run 结束后仍可读最近一次冻结全文（展示语义 + daemon 读口）", async () => {
+	it("peekHiddenContext / peekRunTime：run 结束后仍可读最近一次冻结的两份正文（展示语义 + daemon 读口）", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger } = createFakeLedger();
 		const { session } = createLedgerSession();
@@ -2258,17 +2268,24 @@ describe("hidden context（run 冻结 + 快照通道的取口，F5）", () => {
 		const host = createLedgerHost(session, (e) => events.push(e), ledger);
 		// 还没跑过任何一轮：undefined
 		expect(host.peekHiddenContext()).toBeUndefined();
+		expect(host.peekRunTime()).toBeUndefined();
 
 		await host.prompt("你好");
 		const frozen = host.peekHiddenContext();
+		const frozenRunTime = host.peekRunTime();
 		expect(frozen).toBeDefined();
 		expect(frozen).toContain("workspace_context");
+		expect(frozenRunTime).toBeDefined();
+		expect(frozenRunTime).toContain("current_time");
 
 		runStarted(host);
 		agentEnd(host, false);
-		// pendingHidden 已清（run 期的账），但展示口仍在：任务诊断面板与
-		// daemon 的 composeHiddenContext 都从这个口取。
+		// pendingHidden 已清（run 期的账：它只服务台账 request_snapshot.hiddenContextChars 的
+		// 写入），但展示口仍在：任务诊断面板与 daemon 的 composeHiddenContext / composeRunTime
+		// 都从这两个口取。时间块**没有**「pending」那一半（台账里没有单列时间块的字段 ⇒ 没有
+		// run 期的账要清，注入读口 peekRunTime() 与展示口同源），所以这里只清 pendingHidden。
 		expect(host.peekHiddenContext()).toBe(frozen);
+		expect(host.peekRunTime()).toBe(frozenRunTime);
 	});
 
 	it("request_snapshot：hiddenContextChars 与冻结全文同源，且快照条目字符数归 other 不并进 user", async () => {

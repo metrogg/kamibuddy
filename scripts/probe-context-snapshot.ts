@@ -445,6 +445,9 @@ const host = await SessionHost.create({
 				}),
 			// 真实读路径：宿主在 run 开始冻结的那份 hidden context（时序见 peekHiddenContext 注释）。
 			composeHiddenContext: () => hostRef.current?.peekHiddenContext(),
+			// 时间快照（`kamibuddy-run-time`）：同一次 freeze 的另一半，与上面那条分开去重
+			// （spec: add-supersede-note-and-time-split）。
+			composeRunTime: () => hostRef.current?.peekRunTime(),
 		}),
 	],
 });
