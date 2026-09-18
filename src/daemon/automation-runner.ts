@@ -243,8 +243,11 @@ function buildRunExtensions(
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
 			compose: (sceneId, interactionId, _expertId, piContext) =>
 				deps.compose(cwd, sceneId, interactionId, piContext),
-			// 时间/记忆内容/个性化按 run 的 cwd 每请求现读（提示词里已不含它们）。
+			// 记忆内容/个性化按 run 的 cwd 现读，内容未变则不追加（提示词里已不含它们）。
 			composeRuntimeContext: () => deps.composeRuntimeContext(cwd),
+			// hidden context 快照取本 run 冻结的那份全文（时序见
+			// session-host.peekHiddenContext 的注释：freeze 在 session.prompt() 之前）。
+			composeHiddenContext: () => getHost()?.peekHiddenContext(),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

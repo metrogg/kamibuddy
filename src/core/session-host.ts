@@ -19,13 +19,20 @@
  *    用它会把工具耗时算进模型耗时（settleLlmCall 有完整根因）。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 的三段格式；改行为要同步改这里）──
- * What the model sees: 每次模型调用前在请求尾部追加 hidden context（本文件
- * composeRunHiddenContext）：工作目录 / **托管运行时清单与状态**（`python_env` 段，
- * 含被用户禁用与未就绪的分句）/ 记忆与技能指针 / 当前时间。界面上不显示，也不落会话文件。
- * Token effect: 每次模型调用都付这一段（常量级：段数固定，运行时清单为条目数 × 两三行）。
- * KV Cache effect: 注入落在所有已落盘历史之后、不改写任何既有消息
- * （shared/hidden-context.ts 的尾部独立消息）；运行时清单逐轮可变（开关 / 重建 venv）
- * 只影响这一段自身，历史前缀不受影响。**系统提示词里绝不放这些随机器变的事实**。
+ * What the model sees: 每个 run 一次，把 hidden context（本文件 composeRunHiddenContext：
+ * 工作目录 / **托管运行时清单与状态**（`python_env` 段，含被用户禁用与未就绪的分句）/
+ * 记忆与技能指针 / 当前时间）交给 extensions/prompt-switch.ts 的 before_agent_start
+ * handler，由 pi 落成一条**持久快照消息**（role:"custom" + customType
+ * `kamibuddy-hidden-context` + display:false），落在本轮用户消息之**后**；
+ * 内容与活分支上最后一条同类型快照逐字节相同时**不追加**（shared/hidden-context.ts
+ * 的 shouldAppendSnapshot）。界面上不显示（本文件 translate 只认 user / assistant；
+ * 会话导出正文按 pi 模板的 `entry.display` 过滤，见 session-rebuild.ts 文件头）。
+ * Token effect: 每个 run 最多付**一次**，内容没变则一次都不付（不追加）；
+ * 沉积进历史后按普通消息参与后续每轮的前缀（命中价），不重复全价。
+ * KV Cache effect: 落点固定（本轮用户消息之后、历史的正常一员）、内容不变就不追加
+ * ⇒ 前缀不被它截断。反例（2026-09-18 实测，spec: persist-context-snapshots）：
+ * 早先「每请求现算、不落盘」的尾部注入形态下 `cacheRead_N = prompt_{N-1} − 2,423…2,615`，
+ * 23 轮白付 58,094 token（占会话未命中 28.8%）。**系统提示词里绝不放这些随机器变的事实**。
  */
 
 import type {
@@ -46,7 +53,6 @@ import { generatingLabel } from "../shared/session-events.ts";
 import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
 import {
-	appendHiddenContext,
 	composeHiddenContext,
 	formatRunTime,
 	type HiddenSection,
@@ -68,7 +74,6 @@ import { summarizeArgs, toTokenUsage } from "./session-rebuild.ts";
 import { estimateTokens } from "./observability.ts";
 import {
 	contentFingerprint,
-	TRANSIENT_INJECTION_CUSTOM_TYPES,
 	type CompactionShadow,
 	type MessageClass,
 	type MessageRef,
@@ -611,23 +616,25 @@ export class SessionHost {
 	 */
 	private pendingCompaction: { readonly lock: string | null; readonly reason: CompactionReason } | undefined;
 	/**
-	 * 本 run 的 hidden context（F5，对齐 WorkBuddy 的 composeUserPrompt）。
+	 * 本 run 的 hidden context（F5，对齐 WorkBuddy 的 composeUserPrompt）全文。
 	 *
-	 * **按 run 冻结**（prompt() 时算一次，agent_end 清）：transformContext 每次
-	 * 模型调用都触发，注入内容若含每秒都变的时钟，每一跳都会从最后一条 user
-	 * 消息处打断提示词缓存 —— 长任务的缓存命中全废。时间取 run 开始时刻。
+	 * **按 run 冻结**（prompt() 时算一次，agent_end 清）。注入本身由
+	 * extensions/prompt-switch.ts 的 before_agent_start handler 取这份全文、
+	 * 经 pi 的持久 `message` 落进会话文件（内容未变则不追加，见
+	 * shared/hidden-context.ts 的 shouldAppendSnapshot）—— 冻结在这里是因为
+	 * 时间要取 run 开始时刻，且「同一类事实只有一个来源」。
 	 *
 	 * steer / followUp 不刷新本字段：排队消息落进的是**当前 run**，run 的
-	 * 冻结内容理应保持不变。
+	 * 冻结内容理应保持不变（它们也不触发 before_agent_start）。
 	 */
 	private pendingHidden: string | undefined;
 	/**
-	 * 最近一次注入的块全文（与 pendingHidden 同时写，但 agent_end **不清**）。
+	 * 最近一次冻结的块全文（与 pendingHidden 同时写，但 agent_end **不清**）。
 	 *
-	 * pendingHidden 是 run 期的账（run 终即清，防压缩调用误注入）；
+	 * pendingHidden 是 run 期的账（run 终即清，防压缩调用等非 run 请求误注入）；
 	 * 这个是「最近一次注入了什么」的展示语义 —— 任务诊断面板的
-	 * 「hidden context 注入块」靠它：run 结束后用户仍该能看到刚才
-	 * 注入的内容。下一次 freeze 覆盖。
+	 * 「hidden context 快照」靠它：run 结束后用户仍该能看到刚才冻结并落盘的
+	 * 快照内容。下一次 freeze 覆盖。
 	 */
 	private lastHiddenContext: string | undefined;
 
@@ -642,9 +649,6 @@ export class SessionHost {
 		private readonly skills: readonly SkillDescriptor[],
 	) {
 		this.ledger = options.createLedger?.(session.sessionId);
-		// 注入层先装、快照层后装：快照包住注入后的结果，request_snapshot 记到的
-		// 就是模型真正看到的上下文（含 hidden context），不是注入前的残影。
-		this.installHiddenContext();
 		if (this.ledger !== undefined) this.installRequestSnapshot();
 	}
 
@@ -822,8 +826,9 @@ export class SessionHost {
 			this.pendingHidden = this.composeRunHiddenContext();
 			this.lastHiddenContext = this.pendingHidden;
 		} catch (error) {
-			// 组装失败 = 本 run 无注入（原始 prompt 直送）。与 installHiddenContext
-			// 的 must-not-throw 同纪律：hidden context 是增强不是门槛。
+			// 组装失败 = 本 run 无注入（原始 prompt 直送）。与 hidden context 一贯的
+			// 「增强不是门槛」同纪律：read 侧的取口（peekHiddenContext）与 daemon 的
+			// composeHiddenContext 都会如实拿到 undefined，不编一个空块。
 			this.pendingHidden = undefined;
 			this.ledger?.reportFailure(
 				`hidden context 组装失败：${error instanceof Error ? error.message : String(error)}`,
@@ -832,8 +837,15 @@ export class SessionHost {
 	}
 
 	/**
-	 * 最近一次注入的 hidden context 全文（任务诊断面板的展示口）。
-	 * 还没有过 prompt（或组装一直失败）为 undefined。
+	 * 最近一次冻结的 hidden context 全文。还没有过 prompt（或组装一直失败）为 undefined。
+	 *
+	 * 两个用途，值在同一次 freeze 里取定、不会分叉：
+	 *   1. 任务诊断面板的展示口（run 结束后仍可读，见 lastHiddenContext 注释）；
+	 *   2. **daemon 的注入读口** —— extensions/prompt-switch.ts 的
+	 *      `composeHiddenContext` 回调接的就是它。时序成立：`before_agent_start`
+	 *      只在 pi 的 `session.prompt()` 里 emit，而本类的 prompt()（两个非流式入口）
+	 *      在调 `session.prompt()` **之前**同步调过 freezeHiddenContext()，
+	 *      所以该事件触发时本读口必然已是本 run 的冻结值（不是上一轮的残留）。
 	 */
 	peekHiddenContext(): string | undefined {
 		return this.lastHiddenContext;
@@ -1364,8 +1376,9 @@ export class SessionHost {
 				});
 			}
 			this.toolCards.clear();
-			// 本 run 的 hidden context 账清掉：transformContext 注入的是 run 期
-			// 瞬态，run 已终就不该再出现在（可能的）压缩调用等后续模型请求里。
+			// 本 run 的 hidden context 账清掉：这份全文只在 run 开始时冻结、由
+			// before_agent_start 取一次，run 已终就不该再被（可能的）压缩调用等
+			// 非 run 请求当成当前事实读走。
 			this.pendingHidden = undefined;
 				/*
 				 * pi 没有独立的「已取消」事件：abort() 后 agent 循环照常走
@@ -1524,6 +1537,21 @@ export class SessionHost {
 						at: message.timestamp,
 					});
 				}
+				/*
+				 * 其余角色（自定义角色 —— 含两条**上下文快照**消息）不产出任何条目。
+				 *
+				 * 这一条以前是「反正不会有别的角色」的隐含假设，现在必须显式钉住：
+				 * 快照改为 before_agent_start 返回的持久 message 后，pi 的 agent-loop
+				 * 对**每个 prompt 逐条**发 message_start / message_end
+				 * （开源项目/pi/packages/agent/src/agent-loop.ts 的 runAgentLoop），
+				 * 于是这两类事件第一次带着 role:"custom" 到达本文件。它们只是环境
+				 * 事实的投递载体，不是对话内容（spec: persist-context-snapshots Task 3）。
+				 * 刻意**不**改成「按 customType 白名单过滤」：role 判定已是充分
+				 * 条件（custom 永远不上屏），加白名单只会多一处需要随通道增减
+				 * 同步的常量（原先那组通道常量已因零消费者删除，YAGNI）。防回归
+				 * 断言见 session-host.test.ts
+				 * 的「上下文快照的 message 事件不产出聊天条目」。
+				 */
 				return;
 			}
 
@@ -1575,6 +1603,10 @@ export class SessionHost {
 				// 否则最后一批 delta 会晚于 assistant_done 到达，拼接结果与顺序都错。
 				this.flushDeltas();
 				const message = event.message;
+				// 非 assistant 一律不再往下走：其中 role:"custom" 就是两条上下文快照
+				// 消息走的同一出口（它们的 message_start 见上一分支的注释）—— 在这里
+				// 早退，既不产出聊天条目，也不结账 llm_call（台账的模型调用只认
+				// assistant，见 settleLlmCall）。
 				if (message.role !== "assistant") return;
 
 				// 台账 llm_call 在助手消息完成这一刻结算（不是 turn_end）——
@@ -1939,53 +1971,9 @@ export class SessionHost {
 	}
 
 	/**
-	 * 挂 pi 的 transformContext 钩子注入 hidden context（F5）。
-	 *
-	 * transformContext 是 agent-loop 每次模型调用前的官方改写口，且**返回值
-	 * 即入模内容、不落会话文件**（agent-loop.ts 局部变量，state.messages 不回写）
-	 * —— 所以这里每次调用都注入（WorkBuddy 的 every_turn 同语义），run 结束
-	 * 后自然消失，不需要任何卸载逻辑。工作目录/场景/专家这类常态内容也必须
-	 * 每轮重注入：不落盘的东西不注入就等于模型看不见。
-	 *
-	 * **注入形态是「尾部追加一条独立消息」而不是「贴进最后一条 user 消息」**
-	 * （与 installRequestSnapshot 之下的 prompt-switch `context` 事件同构）
-	 * —— 理由与实测代价见 shared/hidden-context.ts 文件头：贴进 user 消息时
-	 * 注入落在**已落盘历史内部**，下一轮该条恢复原文、差异就在上一轮的 user
-	 * 消息上，缓存最长公共前缀在那里断掉、上一轮整段全价重付。
-	 *
-	 * 包一层而不是替换（同 installRequestSnapshot）：先调原钩子（含全部扩展
-	 * 的改写），对改写结果注入。钩子契约 must-not-throw：注入失败经台账上报
-	 * 通道进 event-log，消息原样入模 —— hidden context 是增强不是门槛。
-	 */
-	private installHiddenContext(): void {
-		const agent = this.session.agent;
-		// agent 对象缺席就没处挂钩子（生产路径不会发生；测试桩会话没有它）——
-		// 跳过注入而不是炸构造：hidden context 是增强不是门槛。
-		if (agent === undefined) return;
-		const inner = agent.transformContext?.bind(agent);
-		agent.transformContext = async (messages, signal) => {
-			let transformed = inner === undefined ? messages : await inner(messages, signal);
-			const block = this.pendingHidden;
-			if (block !== undefined) {
-				try {
-					// spread 一次：pi 的钩子签名要可变数组，注入函数按纪律返回只读。
-					// timestamp 取注入时刻：这条消息按设计每请求现算、标了瞬态
-					// （见 buildMessageRefs），它的 id 不参与跨轮比对。
-					transformed = [...appendHiddenContext(transformed, block, Date.now())];
-				} catch (error) {
-					this.ledger?.reportFailure(
-						`hidden context 注入失败：${error instanceof Error ? error.message : String(error)}`,
-					);
-				}
-			}
-			return transformed;
-		};
-	}
-
-	/**
 	 * 组装本 run 的 hidden context：四个 section（对齐 WorkBuddy 逆向笔记 §6
-	 * 第一批的范围，"first_turn + 变更重发"简化为每 run 重注入 —— 我们的注入
-	 * 不落会话文件，不重注入就等于丢失）：
+	 * 第一批的范围；WorkBuddy 的 "first_turn + 变更重发" 在我们的形态下就是
+	 * 「每 run 冻结一次 + 内容未变则不追加」，见 shared/hidden-context.ts）：
 	 *
 	 *   1. workspace_context（user-context）—— cwd + 场景 + 交互模式 + 专家。
 	 *      **cwd 的唯一来源（用户会话）**：系统提示词里已经没有它了（骨架那行随 spec:
@@ -2005,8 +1993,8 @@ export class SessionHost {
 	 *   3. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
 	 *   4. current_time（additional-data）—— run 冻结时刻，一次性容器。
-	 *      **时间的唯一来源**：逐轮注入块（prompt-switch 的 `context` 事件）
-	 *      已不带时间，模型看「现在」只靠这一段。
+	 *      **时间的唯一来源**：逐 run 快照通道（prompt-switch 的 runtime-context）
+	 *      不带时间，模型看「现在」只靠这一段。
 	 *
 	 * 全部段都空返回 undefined（新用户 + 无记忆 + 不可能：时间永远有 ——
 	 * 实际上本函数恒有值，undefined 分支只是 composeHiddenContext 契约的如实透传）。
@@ -2085,7 +2073,7 @@ export class SessionHost {
 	 * **不记正文**（口径钉住）：消息正文在会话 JSONL 已有，台账只记
 	 * 「这轮往模型里送了什么结构」——分段来源、各类条数/字符数、以及每条消息的
 	 * 稳定标识与体量（LOG13）。正文双写既膨胀又会与会话 JSONL 漂移，所以逐条
-	 * 也只落 id / 字符数 / token 估算 / 内容指纹（+ 瞬态注入项的标记），不落文本。
+	 * 也只落 id / 字符数 / token 估算 / 内容指纹，不落文本。
 	 *
 	 * 类别聚合由逐条清单累加而来（同一次循环、同一份文本）：两处各统计一遍
 	 * 必然漂移，而这两个数字在面板上是并排显示的。
@@ -2107,9 +2095,10 @@ export class SessionHost {
 			...(this.ledgerRunId === undefined ? {} : { runId: this.ledgerRunId }),
 			turnIndex: this.ledgerTurnIndex - 1,
 			...(segments === undefined ? {} : { systemSegments: segments }),
-			// 快照在注入之后记录（钩子包装顺序见构造器）。hidden context 现在是
-			// 尾部那条独立消息（role: custom），它的字符数计入 messages.other ——
-			// 这里把它单独亮出，成分视图好单列一行（口径见 RequestSnapshotData）。
+			// 快照在注入之后记录（钩子包装顺序见构造器）。hidden context 快照是
+			// pi 落盘的普通历史条目（custom_message，落在本轮用户消息之后），它的
+			// 字符数计入 messages.other —— 这里把它单独亮出，成分视图好单列一行
+			// （口径见 RequestSnapshotData）。
 			...(this.pendingHidden === undefined
 				? {}
 				: { hiddenContextChars: this.pendingHidden.length }),
@@ -2353,22 +2342,14 @@ function messageIdBase(message: unknown, rawRole: string): string {
  *      同角色消息理论上可能（steer + followUp 同时落地）。按**出现序**加后缀消歧：
  *      第 1 次出现不加、第 2 次起 `#2`、`#3`…… 后缀随出现序分配，而底层消息序列是
  *      append-only，所以后缀在相邻请求里同样稳定（新增的同基名消息只会排到最后）。
- *   2. **内容被改写**（工具结果被截断重写、hidden context 注入/撤下导致同一条 user
- *      消息文本变化）：**id 不变、fp 变** —— 这正是需要的语义：「同一条消息的内容
+ *   2. **内容被改写**（工具结果被截断重写、上游改动同一条消息的正文）：
+ *      **id 不变、fp 变** —— 这正是需要的语义：「同一条消息的内容
  *      变了」而不是「换了一条消息」。缓存断点归因据此说「内容已变」。
  *   3. **位置变了**（压缩后历史整体前移、中间插入一条）：id 不变、下标变 —— 归因
  *      「位置变了」。id 不带位置正是为了这一条。
  *   4. **同一条消息在序列里出现两次**（pi 理论上不做，但流式态下 partial 消息与
  *      终态消息共用同一 timestamp 时可能出现）：按 1 的后缀规则区分，两者都不与
  *      别的消息撞名。
- *   5. **瞬态注入项**（`TRANSIENT_INJECTION_CUSTOM_TYPES`：prompt-switch 的
- *      `context` 事件与 session-host 的 hidden context，两条都每请求现算、
- *      不落会话）：标记 `transient: true`。它们每轮都是新的一条（id 由
- *      `custom:<timestamp>` 生成，轮轮不同），不标记的话缓存断点归因
- *      **每一轮都会**把它们当成「上一轮尾部那条没了 / 换了」的假差异 —— 那是设计
- *      如此（见 shared/cache-prefix.ts 的 dropTransient），不是故障。
- *      判据认**一组** customType（常量集在 shared/observability.ts，唯一实现处）：
- *      将来加第三个注入通道时只需往那个集合里加一项。
  */
 export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 	const refs: MessageRef[] = [];
@@ -2379,19 +2360,12 @@ export function buildMessageRefs(messages: readonly unknown[]): MessageRef[] {
 		const occurrence = (occurrences.get(base) ?? 0) + 1;
 		occurrences.set(base, occurrence);
 		const text = messageText(message, rawRole);
-		// 只在瞬态条目上写标记：真历史条目写 `transient: false` 会白白撑大落盘体积
-		// （一条几十字节 × 每轮几十条），而缺席的语义就是「不是瞬态」（消费方的旧台账
-		// 降级判据见 shared/cache-prefix.ts 的 dropTransient）。
-		const customType = (message as { customType?: unknown }).customType;
 		refs.push({
 			id: occurrence === 1 ? base : `${base}#${occurrence}`,
 			role: messageClassOf(rawRole),
 			chars: text.length,
 			tokens: estimateTokens(text),
 			fp: contentFingerprint(text),
-			...(typeof customType === "string" && TRANSIENT_INJECTION_CUSTOM_TYPES.includes(customType)
-				? { transient: true }
-				: {}),
 		});
 	}
 	return refs;

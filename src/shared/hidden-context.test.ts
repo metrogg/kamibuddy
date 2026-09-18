@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { HIDDEN_CONTEXT_CUSTOM_TYPE } from "./observability.ts";
 import {
-	appendHiddenContext,
 	composeHiddenContext,
 	formatRunTime,
 	HIDDEN_CONTEXT_MARKER,
+	shouldAppendSnapshot,
 	wrapHiddenContextXml,
 	type HiddenSection,
 } from "./hidden-context.ts";
@@ -69,136 +68,38 @@ describe("formatRunTime", () => {
 	});
 });
 
-describe("appendHiddenContext", () => {
-	const block = '<system-reminder data-role="user-context">\nx\n</system-reminder>';
-
-	it("作为尾部独立消息追加：形态与 prompt-switch 的 context 注入同构", () => {
-		const messages = [
-			{ role: "user", content: "第一条" },
-			{ role: "assistant", content: "回复" },
-			{ role: "user", content: "第二条" },
-		];
-		const out = appendHiddenContext(messages, block, 1000);
-		expect(out).toHaveLength(4);
-		expect(out[3]).toEqual({
-			role: "custom",
-			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
-			content: block,
-			display: false,
-			timestamp: 1000,
-		});
+/**
+ * 追加判据（spec: persist-context-snapshots Task 1.3）。
+ *
+ * 快照要「落盘 + 按需追加」才有缓存意义：内容没变还追加一条，双倍代价里
+ * 只解决了一半（位置固定了，但每 run 仍多付一条）。这里的两种形态就是判据的全部。
+ */
+describe("shouldAppendSnapshot", () => {
+	it("会话里还没有同类型快照（previous === undefined）→ 追加", () => {
+		// 新会话、或上一轮那条被压缩遮蔽 —— 模型这一轮看不到任何基线。
+		expect(shouldAppendSnapshot(undefined, "")).toBe(true);
+		expect(shouldAppendSnapshot(undefined, "任意内容")).toBe(true);
 	});
 
-	it("不改写任何既有消息：逐条同一引用、内容逐字节不变", () => {
-		// 这是跨轮 cache 不变量的前提：注入落在所有已落盘内容之后，
-		// 上一轮的 user 消息在下一轮请求里逐字节不变（否则前缀在那里断掉）。
-		const messages = [
-			{ role: "user", content: "第一条" },
-			{ role: "assistant", content: "回复" },
-			{ role: "user", content: "第二条" },
-		];
-		const out = appendHiddenContext(messages, block, 1000);
-		for (let i = 0; i < messages.length; i += 1) expect(out[i]).toBe(messages[i]);
-		expect(out[2]?.content).toBe("第二条");
+	it("与上一条逐字节相同 → 不追加（这正是每 run 重付的止血点）", () => {
+		const block = '<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：D:\\proj\n</workspace_context>\n</system-reminder>';
+		expect(shouldAppendSnapshot(block, block)).toBe(false);
 	});
 
-	it("数组 content（带图片的 user 消息）同样一个字节都不动", () => {
-		const parts = [{ type: "image", mimeType: "image/png", data: "aa" }];
-		const messages = [{ role: "user", content: parts }];
-		const out = appendHiddenContext(messages, block, 1);
-		expect(out[0]).toBe(messages[0]);
-		expect((out[0] as { content: unknown }).content).toBe(parts);
-	});
-
-	it("没有 user 消息也能注入（尾部追加不依赖任何锚点）", () => {
-		const messages = [{ role: "assistant", content: "hi" }];
-		const out = appendHiddenContext(messages, block, 1);
-		expect(out).toHaveLength(2);
-		expect(out[0]).toBe(messages[0]);
-	});
-
-	it("已含标记就不再注入（防 pi 未来持久化注入结果）", () => {
-		const injected = { role: "user", content: `${block}\n\n原文` };
-		const messages = [injected];
-		expect(appendHiddenContext(messages, block, 1)).toBe(messages);
-	});
-
-	it("标记判定用共享常量，两处不会漂移", () => {
-		expect(HIDDEN_CONTEXT_MARKER).toContain('data-role="');
+	it("有任何字节差异 → 追加（含仅时间变了这种最常见的形态）", () => {
+		expect(shouldAppendSnapshot("2026-09-18 10:00", "2026-09-18 10:01")).toBe(true);
+		// 空串 vs 有内容：内容其实变了，必须追加。
+		expect(shouldAppendSnapshot("", "x")).toBe(true);
+		// 只差一个空白字符也是差异 —— provider 的前缀缓存比的是字节。
+		expect(shouldAppendSnapshot("a b", "a  b")).toBe(true);
 	});
 });
 
-/**
- * 回归钉子（spec: 待决策「hidden context 的插入位置让上一轮整段每轮重付」）。
- *
- * 只断言「块被追加了」拦不住回归：早先的实现把块前置进**最后一条 user 消息的
- * 正文**，形状上同样「注入成功」，代价是下一轮那条消息恢复原文、缓存最长公共
- * 前缀在上一轮内部断掉（实测会话级命中率 94.6% vs 本应 97.1%）。这里直接断言
- * **相邻两轮请求的首条差异落在上一轮尾部那条注入上** —— 改回贴 user 消息必红。
- */
-describe("跨轮缓存不变量：首条差异不在上一轮的已落盘消息里", () => {
-	const block = (turn: number): string =>
-		`<system-reminder data-role="user-context">\n第 ${turn} 轮\n</system-reminder>`;
-
-	/** 两个请求的首条差异下标（-1 = 逐条相同）；用 JSON 表达「逐字节」。 */
-	function firstDifference(a: readonly unknown[], b: readonly unknown[]): number {
-		const shared = Math.min(a.length, b.length);
-		for (let i = 0; i < shared; i += 1) {
-			if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) return i;
-		}
-		return a.length === b.length ? -1 : shared;
-	}
-
-	/** 第 1 轮请求：已落盘历史（多轮会话里轮边界处的真实形态），注入追加在其后。 */
-	const history1 = [
-		{ role: "user", content: "第一问", timestamp: 1 },
-		{ role: "assistant", content: "回答一", timestamp: 2 },
-		{
-			role: "toolResult",
-			toolCallId: "c1",
-			toolName: "read",
-			content: [{ type: "text", text: "文件一" }],
-			isError: false,
-			timestamp: 3,
-		},
-		{ role: "user", content: "第二问", timestamp: 4 },
-	];
-	const turn1 = appendHiddenContext(history1, block(1), 1000);
-
-	/**
-	 * 第 2 轮请求的历史：transformContext 的返回值不落会话，所以第 1 轮那条注入
-	 * 不在其中；落盘的是助手回复、工具结果与新一条 user。
-	 */
-	const history2 = [
-		...history1,
-		{ role: "assistant", content: "回答二", timestamp: 5 },
-		{
-			role: "toolResult",
-			toolCallId: "c2",
-			toolName: "write",
-			content: [{ type: "text", text: "文件二" }],
-			isError: false,
-			timestamp: 6,
-		},
-		{ role: "user", content: "第三问", timestamp: 7 },
-	];
-	const turn2 = appendHiddenContext(history2, block(2), 2000);
-
-	it("上一轮所有已落盘消息在下一轮请求里逐字节不变", () => {
-		for (let i = 0; i < history1.length; i += 1) {
-			expect(turn1[i]).toBe(history1[i]);
-			expect(turn2[i]).toBe(history1[i]);
-			expect(JSON.stringify(turn2[i])).toBe(JSON.stringify(turn1[i]));
-		}
-	});
-
-	it("首条差异 = 上一轮尾部那条注入（命中前缀覆盖上一轮整段）", () => {
-		// turn1 = [历史…, hidden1]，turn2 = [同样历史…, a2, t2, u3, hidden2]：
-		// 首个差异落在 hidden1 的位置，说明历史（含上一轮那条 user）全部命中缓存。
-		// 「贴进最后一条 user 消息」的旧形态下这里会是 history1.length - 2 —— 红。
-		expect(firstDifference(turn1, turn2)).toBe(turn1.length - 1);
-		// 与「前缀到上一轮最后一条已落盘消息为止」等价：差异点必须是那条注入，
-		// 不是任何已落盘的历史条目。
-		expect(turn1[turn1.length - 1]?.role).toBe("custom");
+describe("HIDDEN_CONTEXT_MARKER", () => {
+	it("标记即容器前缀（导出过滤与测试钉子共用同一份常量）", () => {
+		expect(HIDDEN_CONTEXT_MARKER).toContain('data-role="');
+		expect(composeHiddenContext([{ tag: "t", role: "additional-data", body: "x" }])).toContain(
+			HIDDEN_CONTEXT_MARKER,
+		);
 	});
 });

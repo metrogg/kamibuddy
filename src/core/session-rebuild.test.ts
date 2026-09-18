@@ -19,6 +19,11 @@ import type {
 	ToolCard,
 	UserMessage,
 } from "../shared/session-events.ts";
+import { HIDDEN_CONTEXT_MARKER } from "../shared/hidden-context.ts";
+import {
+	HIDDEN_CONTEXT_CUSTOM_TYPE,
+	RUNTIME_CONTEXT_CUSTOM_TYPE,
+} from "../shared/observability.ts";
 import {
 	buildConversationEntries,
 	countSkippedLines,
@@ -563,6 +568,87 @@ describe("buildConversationEntries · 跳过项", () => {
 		} as unknown as SessionEntry;
 		const out = buildConversationEntries([header, userEntry("u1", "hi")]);
 		expect(out).toHaveLength(1);
+	});
+});
+
+/* ── 上下文快照条目（spec: persist-context-snapshots Task 3.2）────────────── */
+
+/**
+ * 回归门禁：**快照条目被跳过，而不是被当成用户消息**。
+ *
+ * 危险是真实的、不是假想：pi 的 `buildSessionContext()`
+ * （session-manager.js 的 `sessionEntryToContextMessages`）把 `custom_message`
+ * 转成 `role:"custom"` 的消息，`convertToLlm`（core/messages.js case "custom"）
+ * 再把它转成 **`role:"user"`** —— 也就是说「快照在模型侧就是一条用户消息」。
+ * 只要哪条重建路径改用**入模后**的消息数组（或有人按角色而不是按条目类型判），
+ * 快照就会当成用户消息上屏 / 导出（正文是工作目录、运行时路径、记忆内容）。
+ *
+ * 本模块吃的是 `buildContextEntries()` 的**条目**（不是入模消息），快照因此走
+ * 「非 message 条目」那条路被跳过。断言钉的就是这个结果：用户 / 助手 / 工具结果的
+ * 条数与内容与不含快照时**逐条相等**。
+ */
+describe("buildConversationEntries · 上下文快照条目（custom_message）", () => {
+	const HIDDEN = `${HIDDEN_CONTEXT_MARKER}user-context">\n<workspace_context>\n工作目录：C:\\work\n</workspace_context>\n</system-reminder>`;
+	const RUNTIME = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+
+	/** pi 落盘的形状：appendCustomMessageEntry → type:"custom_message" + display:false。 */
+	function snapshotEntry(id: string, customType: string, content: string): SessionEntry {
+		return {
+			type: "custom_message",
+			id,
+			parentId: null,
+			timestamp: TS,
+			customType,
+			content,
+			display: false,
+		};
+	}
+
+	/** 一次带工具调用的助手消息（工具结果要能配对成卡，才谈得上「数量与内容不受影响」）。 */
+	function assistantWithCall(): AssistantContent {
+		return [
+			{ type: "text", text: "读一下" },
+			{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.md" } },
+		];
+	}
+
+	it("被跳过：产出与不含快照时逐条相等，快照正文一个字都不上屏", () => {
+		const withSnapshots = buildConversationEntries(
+			[
+				userEntry("u1", "帮我写个周报"),
+				snapshotEntry("s1", HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN),
+				assistantEntry("a1", assistantWithCall()),
+				toolResultEntry("r1", "c1", "文件内容"),
+				snapshotEntry("s2", RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME),
+				userEntry("u2", "换个口径"),
+			],
+			restoredToolLabel,
+		);
+		const withoutSnapshots = buildConversationEntries(
+			[
+				userEntry("u1", "帮我写个周报"),
+				assistantEntry("a1", assistantWithCall()),
+				toolResultEntry("r1", "c1", "文件内容"),
+				userEntry("u2", "换个口径"),
+			],
+			restoredToolLabel,
+		);
+
+		// 用户 2 条 / 助手 1 条 / 工具卡 1 张；与不含快照时**逐条相等**（含 id、文本、usage）。
+		expect(withSnapshots.map((entry) => entry.role)).toEqual([
+			"user",
+			"assistant",
+			"tool",
+			"user",
+		]);
+		expect(withSnapshots).toEqual(withoutSnapshots);
+		expect(withSnapshots.filter((entry) => entry.role === "user")).toHaveLength(2);
+
+		// 快照正文与标记一个字都不在重建结果里（改坏时先红的就是这几条）。
+		const json = JSON.stringify(withSnapshots);
+		expect(json).not.toContain(HIDDEN_CONTEXT_MARKER);
+		expect(json).not.toContain("表格呈现数据");
+		expect(json).not.toContain("工作目录：C:\\work");
 	});
 });
 

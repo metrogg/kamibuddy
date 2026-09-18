@@ -16,7 +16,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { conversationReducer, initialConversation } from "../shared/conversation.ts";
+import { conversationReducer, currentRunStartIndex, initialConversation, lastUserEntryIndex } from "../shared/conversation.ts";
+import { HIDDEN_CONTEXT_MARKER } from "../shared/hidden-context.ts";
 import type { ImagePart } from "../shared/image.ts";
 import type { SessionEvent } from "../shared/session-events.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
@@ -1863,58 +1864,48 @@ describe("request_snapshot 的逐条标识（LOG13）", () => {
 		expect(JSON.stringify(snap)).not.toContain("文件内容");
 	});
 
-	it("瞬态注入项标 transient（其余条目不带该字段），且仍不落正文", async () => {
+	it("上下文快照条目是普通历史：没有 transient 标记，且仍不落正文", async () => {
 		const { ledger, calls } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
 		createLedgerHost(session, () => { }, ledger);
 
-		const injected = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+		/*
+		 * 两条快照通道（prompt-switch 的 before_agent_start 落的 custom 消息）。
+		 * 它们**不再**被标成瞬态（spec: persist-context-snapshots）：落盘后 id 稳定、
+		 * 位置固定，差异就是真实断点 —— 再剔除只会把真实断点藏在面板之外
+		 * （上一轮实测「面板说历史全命中、provider 实收 58,094 token 未命中」）。
+		 */
+		const runtimeBlock = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+		const hiddenBlock = '<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：C:\\test\n</workspace_context>\n</system-reminder>';
 		const { list } = await refsOf(agent, calls, [
 			...CONVERSATION,
 			{
 				role: "custom",
 				customType: RUNTIME_CONTEXT_CUSTOM_TYPE,
-				content: injected,
+				content: runtimeBlock,
 				display: false,
 				timestamp: 500,
 			},
-		]);
-
-		// 它是 prompt-switch 的 context 事件每请求现算、不落会话的那条 —— 归因时
-		// 必须认得出（否则「上一轮尾部有、这一轮没了」会被当成缓存断点原因）。
-		expect(list.at(-1)?.id).toBe("custom:500");
-		expect(list.at(-1)?.transient).toBe(true);
-		// 真历史条目**不带**这个字段（缺席 = 不是瞬态；消费方的旧台账降级判据
-		// 见 shared/cache-prefix.ts 的 dropTransient）。
-		expect(list.slice(0, -1).every((m) => m.transient === undefined)).toBe(true);
-		// 不落正文：注入块的文本一个字都不进台账。
-		const snap = calls.find((c) => c.kind === "request_snapshot")?.data;
-		expect(JSON.stringify(snap)).not.toContain(injected);
-		expect(JSON.stringify(snap)).not.toContain("表格呈现");
-	});
-
-	it("hidden context 注入（第二条瞬态通道）同样按同一集合标 transient", async () => {
-		const { ledger, calls } = createFakeLedger();
-		const { session, agent } = createLedgerSession();
-		createLedgerHost(session, () => { }, ledger);
-
-		// 台账判定认的是一组 customType（常量集在 shared/observability.ts）——
-		// 只认 runtime context 那一个的话，hidden context 会在每轮尾部造一个假差异。
-		const { list } = await refsOf(agent, calls, [
-			...CONVERSATION,
 			{
 				role: "custom",
 				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
-				content: "工作目录：C:\\test",
+				content: hiddenBlock,
 				display: false,
 				timestamp: 600,
 			},
 		]);
 
+		expect(list.at(-2)?.id).toBe("custom:500");
 		expect(list.at(-1)?.id).toBe("custom:600");
-		expect(list.at(-1)?.role).toBe("other");
-		expect(list.at(-1)?.transient).toBe(true);
-		expect(list.slice(0, -1).every((m) => m.transient === undefined)).toBe(true);
+		// custom 角色归 other 桶（口径与改动前一致）。
+		expect(list.slice(-2).every((m) => m.role === "other")).toBe(true);
+		// 「瞬态」概念退役：逐条清单里没有任何这类字段（改了会红）。
+		expect(JSON.stringify(list)).not.toContain("transient");
+		// 不落正文：注入块的文本一个字都不进台账。
+		const snap = calls.find((c) => c.kind === "request_snapshot")?.data;
+		expect(JSON.stringify(snap)).not.toContain(runtimeBlock);
+		expect(JSON.stringify(snap)).not.toContain("表格呈现");
+		expect(JSON.stringify(snap)).not.toContain("工作目录：C:\\test");
 	});
 });
 
@@ -2106,55 +2097,30 @@ describe("流式 delta 合批（16ms 窗口）", () => {
 	});
 });
 
-describe("hidden context（transformContext 注入，F5）", () => {
-	/** 两个请求的首条差异下标（-1 = 逐条相同）；用 JSON 表达「逐字节」。 */
-	function firstMessageDifference(a: readonly unknown[], b: readonly unknown[]): number {
-		const shared = Math.min(a.length, b.length);
-		for (let i = 0; i < shared; i += 1) {
-			if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) return i;
-		}
-		return a.length === b.length ? -1 : shared;
-	}
-
-	it("prompt 冻结注入块：workspace_context + 专家 + current_time 作为尾部独立消息追加", async () => {
+describe("hidden context（run 冻结 + 快照通道的取口，F5）", () => {
+	it("prompt 冻结注入块：workspace_context + 专家 + current_time（通道送的就是这份全文）", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger } = createFakeLedger();
-		const { session, agent } = createLedgerSession();
+		const { session } = createLedgerSession();
 		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
 		const host = createLedgerHost(session, (e) => events.push(e), ledger, undefined, "前端开发");
 		await host.prompt("你好");
 
-		const hooked = agent.transformContext;
-		expect(hooked).toBeDefined();
-		const original = [
-			{ role: "user", content: "早前的对话", timestamp: 1 },
-			{ role: "assistant", content: "回复", timestamp: 2 },
-			{ role: "user", content: "你好", timestamp: 3 },
-		];
-		const out = (await hooked?.([...original])) as {
-			role: string;
-			content: unknown;
-			customType?: string;
-			display?: boolean;
-		}[];
-
-		// 形态与 prompt-switch 的 context 注入同构（role/customType/display），
-		// 正文仍是 composeHiddenContext 的产物（两块 system-reminder 不变）。
-		expect(out).toHaveLength(4);
-		const injected = out[3];
-		expect(injected?.role).toBe("custom");
-		expect(injected?.customType).toBe(HIDDEN_CONTEXT_CUSTOM_TYPE);
-		expect(injected?.display).toBe(false);
-		const content = String(injected?.content);
-		expect(content.indexOf('data-role="user-context"')).toBeLessThan(
-			content.indexOf('data-role="additional-data"'),
-		);
+		/*
+		 * 投递已换成 prompt-switch 的 before_agent_start 快照通道（落盘、按需追加，
+		 * spec: persist-context-snapshots），本文件能验的是**冻结点**：组装产物就是
+		 * 通道要送的那份全文（daemon 经 host.peekHiddenContext() 取它）。
+		 * 「送出后 pi 怎么写成会话条目」属 pi 的行为 —— 形态由 prompt-switch.test.ts
+		 * 钉（两条通道各自的 message），端到端由真实装配的用例钉。
+		 */
+		const content = host.peekHiddenContext() ?? "";
 		expect(content).toContain("工作目录：C:\\test");
 		expect(content).toContain("专家：前端开发");
 		expect(content).toContain("<current_time>");
-		// 既有消息逐条原样（注入不改写任何已落盘内容 —— 跨轮缓存命中的前提）
-		expect(out[0]).toBe(original[0]);
-		expect(out[2]?.content).toBe("你好");
+		// 容器顺序仍是 composeHiddenContext 的渲染字节（user-context 在前）。
+		expect(content.indexOf('data-role="user-context"')).toBeLessThan(
+			content.indexOf('data-role="additional-data"'),
+		);
 	});
 
 	it("python_env 段：运行时清单（id/版本/状态/用途）经注入送达，「被禁用」与「找不到」可区分", async () => {
@@ -2205,15 +2171,12 @@ describe("hidden context（transformContext 注入，F5）", () => {
 			],
 		};
 		const { ledger } = createFakeLedger();
-		const { session, agent } = createLedgerSession();
+		const { session } = createLedgerSession();
 		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
 		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, inventory);
 		await host.prompt("你好");
 
-		const out = (await agent.transformContext?.([
-			{ role: "user", content: "你好", timestamp: 1 },
-		])) as { role: string; content: unknown }[];
-		const content = String(out[1]?.content);
+		const content = host.peekHiddenContext() ?? "";
 		expect(content).toContain("<python_env>");
 		expect(content).toContain("Python 解释器：" + PYTHON_PATH);
 		// 就绪项给落点与用途
@@ -2229,17 +2192,13 @@ describe("hidden context（transformContext 注入，F5）", () => {
 		// 与「运行时清单」无关的段不受影响（同一容器里的 workspace_context 仍在）。
 		expect(content).toContain("<workspace_context>");
 
-		// 不注入（子代理 / 成员会话的宿主不给这条取值函数）：整段缺席，不留空壳。
-		// 换一套 session/agent：同一个 agent 上再包一层会让上面那次的注入也出现在
-		// 返回值里（两层 transformContext 包装），断言就测不到「不注入」。
+		// 宿主不给运行时清单取值函数时（子代理 / 成员会话）：python_env 整段缺席，
+		// 不留空壳 —— workspace_context 仍在（cwd 与 run 时刻对谁都有意义）。
 		const bareSession = createLedgerSession();
 		(bareSession.session as { prompt?: () => Promise<void> }).prompt = async () => {};
 		const bare = createLedgerHost(bareSession.session, () => {}, ledger);
 		await bare.prompt("你好");
-		const bareOut = (await bareSession.agent.transformContext?.([
-			{ role: "user", content: "你好", timestamp: 1 },
-		])) as { role: string; content: unknown }[];
-		const bareContent = String(bareOut[1]?.content);
+		const bareContent = bare.peekHiddenContext() ?? "";
 		expect(bareContent).toContain("<workspace_context>");
 		expect(bareContent).not.toContain("python_env");
 	});
@@ -2260,93 +2219,38 @@ describe("hidden context（transformContext 注入，F5）", () => {
 			],
 		};
 		const { ledger } = createFakeLedger();
-		const { session, agent } = createLedgerSession();
+		const { session } = createLedgerSession();
 		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
 		const host = createLedgerHost(session, () => {}, ledger, undefined, undefined, inventory);
 		await host.prompt("你好");
-		const out = (await agent.transformContext?.([
-			{ role: "user", content: "你好", timestamp: 1 },
-		])) as { role: string; content: unknown }[];
-		const content = String(out[1]?.content);
+		const content = host.peekHiddenContext() ?? "";
 		// 用途/状态还在（模型知道「有这么个运行时、但被关掉了」），路径不在。
 		expect(content).toContain("python 3.12 · 已被用户禁用 · 文档转换（docx 引擎的解释器）");
 		expect(content).not.toContain("Python 解释器：");
 	});
 
-	it("相邻两轮：首条差异落在上一轮尾部那条注入上（上一轮整段仍在命中前缀里）", async () => {
-		// spec 待决策项的回归钉子：早先「贴进最后一条 user 消息」的注入形态下，
-		// 首条差异落在上一轮那条 user 消息上 ⇒ 上一轮整段（user + 助手回复 +
-		// 全部工具结果）在下一轮被全价重付。改回那种形态本用例必红。
-		const { ledger } = createFakeLedger();
+	it("agent_end 清账：run 结束后这份全文不再算进后续请求的快照（pendingHidden 已清）", async () => {
+		const { ledger, calls } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
 		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
 		const host = createLedgerHost(session, () => {}, ledger);
+		const lastSnapshot = (): { hiddenContextChars?: number } =>
+			(calls.filter((c) => c.kind === "request_snapshot").at(-1)?.data ?? {}) as {
+				hiddenContextChars?: number;
+			};
 
-		// 第 1 轮：已落盘历史（多轮会话里轮边界处的真实形态），注入追加在其后。
-		const history1 = [
-			{ role: "user", content: "第一问", timestamp: 1 },
-			{ role: "assistant", content: "回答一", timestamp: 2 },
-			{
-				role: "toolResult",
-				toolCallId: "c1",
-				toolName: "read",
-				content: [{ type: "text", text: "文件一" }],
-				isError: false,
-				timestamp: 3,
-			},
-			{ role: "user", content: "第二问", timestamp: 4 },
-		];
-		await host.prompt("第二问");
-		runStarted(host);
-		const turn1 = (await agent.transformContext?.([...history1])) as readonly unknown[];
-		agentEnd(host, false);
-
-		// 第 2 轮：上一步的返回值不落会话，新落盘的是助手回复、工具结果与新一条 user。
-		const history2 = [
-			...history1,
-			{ role: "assistant", content: "回答二", timestamp: 5 },
-			{
-				role: "toolResult",
-				toolCallId: "c2",
-				toolName: "write",
-				content: [{ type: "text", text: "文件二" }],
-				isError: false,
-				timestamp: 6,
-			},
-			{ role: "user", content: "第三问", timestamp: 7 },
-		];
-		await host.prompt("第三问");
-		runStarted(host);
-		const turn2 = (await agent.transformContext?.([...history2])) as readonly unknown[];
-
-		// 上一轮所有已落盘消息在下一轮请求里逐字节不变（且是同一引用）。
-		for (let i = 0; i < history1.length; i += 1) {
-			expect(turn2[i]).toBe(history1[i]);
-			expect(JSON.stringify(turn2[i])).toBe(JSON.stringify(turn1[i]));
-		}
-		// 首条差异 = 上一轮尾部那条注入 ⇒ 命中前缀 = 上一轮最后一条已落盘消息为止。
-		// （「贴进最后一条 user 消息」的旧形态下这里会是 history1.length - 2 —— 红。）
-		expect(firstMessageDifference(turn1, turn2)).toBe(turn1.length - 1);
-	});
-
-	it("agent_end 清账：run 结束后同一钩子不再注入", async () => {
-		const events: SessionEvent[] = [];
-		const { ledger } = createFakeLedger();
-		const { session, agent } = createLedgerSession();
-		(session as { prompt?: () => Promise<void> }).prompt = async () => {};
-		const host = createLedgerHost(session, (e) => events.push(e), ledger);
 		await host.prompt("你好");
-		runStarted(host);
-		agentEnd(host, false);
+		// run 内：快照记下 hidden 块的字符数（诊断面板据此单列一行）。
+		await refsOf(agent, calls, [{ role: "user", content: "你好", timestamp: 1 }]);
+		expect(lastSnapshot().hiddenContextChars).toBeGreaterThan(0);
 
-		const out = (await agent.transformContext?.([
-			{ role: "user", content: "你好", timestamp: 1 },
-		])) as { role: string; content: string }[];
-		expect(out).toHaveLength(1);
-		expect(out[0]?.content).toBe("你好");
+		agentEnd(host, false);
+		// run 终即清账：后续（压缩等）非 run 请求不再把这份全文当成当前事实。
+		await refsOf(agent, calls, [{ role: "user", content: "你好", timestamp: 1 }]);
+		expect("hiddenContextChars" in lastSnapshot()).toBe(false);
 	});
 
-	it("peekHiddenContext：run 结束后仍可读最近一次注入全文（展示语义，不随 pendingHidden 清账）", async () => {
+	it("peekHiddenContext：run 结束后仍可读最近一次冻结全文（展示语义 + daemon 读口）", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger } = createFakeLedger();
 		const { session } = createLedgerSession();
@@ -2362,11 +2266,12 @@ describe("hidden context（transformContext 注入，F5）", () => {
 
 		runStarted(host);
 		agentEnd(host, false);
-		// pendingHidden 已清（transformContext 不再注入），但展示口仍在
+		// pendingHidden 已清（run 期的账），但展示口仍在：任务诊断面板与
+		// daemon 的 composeHiddenContext 都从这个口取。
 		expect(host.peekHiddenContext()).toBe(frozen);
 	});
 
-	it("request_snapshot：hiddenContextChars 与注入块同源，且字符数归 other 不并进 user", async () => {
+	it("request_snapshot：hiddenContextChars 与冻结全文同源，且快照条目字符数归 other 不并进 user", async () => {
 		const events: SessionEvent[] = [];
 		const { ledger, calls } = createFakeLedger();
 		const { session, agent } = createLedgerSession();
@@ -2375,11 +2280,19 @@ describe("hidden context（transformContext 注入，F5）", () => {
 			{ source: "skeleton", chars: 10 },
 		]);
 		await host.prompt("你好");
-		// run 进行中记快照（真实时序：transformContext 发生在 agent_start 之后）
+		// 快照通道落的条目会成为历史的一员 —— 这里按模型实际看到的消息数组喂：
+		// 用户消息 + 那条快照（hidden context 通道的产物）。
 		runStarted(host);
-		const out = (await agent.transformContext?.([
+		await refsOf(agent, calls, [
 			{ role: "user", content: "你好", timestamp: 1 },
-		])) as readonly unknown[];
+			{
+				role: "custom",
+				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+				content: host.peekHiddenContext(),
+				display: false,
+				timestamp: 2,
+			},
+		]);
 
 		const snapshot = calls.find((c) => c.kind === "request_snapshot")?.data as
 			| {
@@ -2390,12 +2303,10 @@ describe("hidden context（transformContext 注入，F5）", () => {
 			| undefined;
 		expect(snapshot).toBeDefined();
 		expect(snapshot?.hiddenContextChars).toBeGreaterThan(0);
-		// 新形态的自然结果：注入是尾部那条 custom 消息，字符数计入 other 桶，
-		// user 桶只剩用户正文（早先贴着 user 消息时是并进 user 计数的）。
+		// 口径与改动前一致：快照条目归 other 桶，user 桶只剩用户正文。
 		expect(snapshot?.messages?.user).toEqual({ count: 1, chars: "你好".length });
 		expect(snapshot?.messages?.other.chars).toBe(snapshot?.hiddenContextChars);
 		expect(snapshot?.messageList?.at(-1)?.role).toBe("other");
-		expect(String((out[1] as { content: unknown }).content)).toBe(host.peekHiddenContext());
 	});
 });
 
@@ -2563,5 +2474,118 @@ describe("id 代际命名空间（跨宿主重建不撞名）", () => {
 		const keys = view.entries.map((entry) => entry.id);
 		expect(keys).toHaveLength(4);
 		expect(new Set(keys).size).toBe(keys.length);
+	});
+});
+
+/* ── 上下文快照不进用户可见面（spec: persist-context-snapshots Task 3.1）── */
+
+/**
+ * 回归门禁：**快照只落会话文件，不产出任何聊天条目**。
+ *
+ * 现场（本次改动的直接后果）：快照从「每请求现算、不落盘的尾部注入」改成
+ * `before_agent_start` 返回的**持久 message** 之后，pi 的 agent-loop 会对**每个
+ * prompt 逐条**发 `message_start` / `message_end`（实测源码：
+ * `开源项目/pi/packages/agent/src/agent-loop.ts` 的 runAgentLoop —— agent_start →
+ * turn_start → `for (const prompt of prompts) { message_start; message_end }`）。
+ * 以前这两类事件根本不会带着 `role:"custom"` 到达本文件，所以 translate 里
+ * 「只认 user / assistant」是一句隐含假设；现在它是一条必须被钉住的不变量
+ * （快照正文是工作目录 / 运行时路径 / 记忆内容，漏上屏就是把用户的机器事实印进聊天流）。
+ *
+ * 本组把「用户可见面与不注入快照时逐一相等」拆成三条可断言的事实：
+ *   1. 事件流逐条相等（id 代际段归一后）；快照正文一个字都没进事件流；
+ *   2. 折叠后的 entries 与不注入时同一份（恰一条 user + 一条 assistant，内容同）；
+ *   3. 轮切分 / 轮计时的指纹不变 —— turnTimings 的键、lastUserEntryIndex、
+ *      currentRunStartIndex（后两者是轮折叠与页脚 token 窗口的唯一实现处）。
+ */
+describe("上下文快照的 message 事件不产出聊天条目", () => {
+	const USER_TEXT = "帮我看下这段代码";
+	/** 两条通道的正文形态与真实注入一致（hidden 那条带真的标记前缀）。 */
+	const RUNTIME_BLOCK = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+	const HIDDEN_BLOCK = `${HIDDEN_CONTEXT_MARKER}user-context">\n<workspace_context>\n工作目录：C:\\test\n</workspace_context>\n</system-reminder>`;
+
+	/**
+	 * 抹掉 id 里的代际段（`-g<代际>-`）：两代宿主的代际号必然不同，其余字段必须
+	 * 逐字节相等 —— 那才叫「用户可见面完全没变」。序号段一并保留在比较里：
+	 * 快照若偷偷占掉一个 id（如按 user 消息上屏），序号错位会让比较立刻红。
+	 */
+	function withoutGeneration(events: readonly SessionEvent[]): unknown {
+		return JSON.parse(JSON.stringify(events).replace(/-g\d+-/g, "-g-"));
+	}
+
+	/** 一次完整 run：事件序照 pi 的 runAgentLoop（prompt 逐条 message_start/end）。 */
+	function emitRun(host: SessionHost, withSnapshots: boolean): void {
+		runStarted(host);
+		translate(host, { type: "turn_start" } as unknown as AgentSessionEvent);
+		const user = { role: "user", content: USER_TEXT, timestamp: 100 };
+		translate(host, { type: "message_start", message: user } as unknown as AgentSessionEvent);
+		translate(host, { type: "message_end", message: user } as unknown as AgentSessionEvent);
+		if (withSnapshots) {
+			for (const [customType, content] of [
+				[RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK],
+				[HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK],
+			] as const) {
+				const snapshot = { role: "custom", customType, content, display: false, timestamp: 200 };
+				translate(host, { type: "message_start", message: snapshot } as unknown as AgentSessionEvent);
+				translate(host, { type: "message_end", message: snapshot } as unknown as AgentSessionEvent);
+			}
+		}
+		assistantStart(host);
+		assistantEnd(host, "stop", { text: "好的" });
+		translate(host, { type: "turn_end" } as unknown as AgentSessionEvent);
+		agentEnd(host, false, []);
+	}
+
+	/** 跑一遍并把事件出口收成数组（两个宿主各自一代，比较时归一掉代际段）。 */
+	function runOf(withSnapshots: boolean): readonly SessionEvent[] {
+		const events: SessionEvent[] = [];
+		emitRun(createHost(createFakeSession(), (e) => events.push(e)), withSnapshots);
+		return events;
+	}
+
+	it("事件流逐条相等；快照正文一个字都没进事件流", () => {
+		const withSnapshots = runOf(true);
+		const baseline = runOf(false);
+
+		expect(withoutGeneration(withSnapshots)).toEqual(withoutGeneration(baseline));
+
+		// 单独再钉一次（不靠上面的整体比较读结论）：恰一条用户消息，就是用户那句。
+		const users = withSnapshots.filter((e) => e.type === "user_message");
+		expect(users).toHaveLength(1);
+		expect(users[0]?.message.text).toBe(USER_TEXT);
+
+		// 快照正文与标记一个字都不在事件流里（改坏时先红的就是这两条）。
+		const stream = JSON.stringify(withSnapshots);
+		expect(stream).not.toContain(HIDDEN_CONTEXT_MARKER);
+		expect(stream).not.toContain("表格呈现数据");
+		expect(stream).not.toContain("工作目录：C:\\test");
+	});
+
+	it("折叠后只有 user + assistant；轮切分与轮计时指纹不变", () => {
+		const events = runOf(true);
+		const view = events.reduce(
+			(acc, event) => conversationReducer(acc, { type: "event", event }),
+			initialConversation,
+		);
+
+		// 1) 用户可见条目：恰两条，内容与不注入快照时同一份。
+		expect(view.entries).toHaveLength(2);
+		const [first, second] = view.entries;
+		expect(first?.role).toBe("user");
+		expect(first?.role === "user" ? first.text : "").toBe(USER_TEXT);
+		expect(second?.role).toBe("assistant");
+		expect(second?.role === "assistant" ? second.text : "").toBe("好的");
+		// 页脚的 usage 取样仍挂在那条 assistant 条目上（快照若插进条目流会把它挤走）。
+		expect(second?.role === "assistant" ? second.usage?.input : undefined).toBe(1);
+
+		// 2) 回合计时的键只认那条真实用户消息（快照上屏会多出一个键）。
+		const userMessageIds = events
+			.filter((e) => e.type === "user_message")
+			.map((e) => e.message.id);
+		expect(Object.keys(view.turnTimings ?? {})).toEqual(userMessageIds);
+
+		// 3) 轮切分 / 页脚窗口的唯一实现处（shared/conversation.ts）：
+		//    「最后一条用户消息」与「当前 run 的窗口起点」都还是那条真实用户消息（下标 0）。
+		expect(lastUserEntryIndex(view.entries)).toBe(0);
+		expect(currentRunStartIndex(view.entries)).toBe(0);
 	});
 });

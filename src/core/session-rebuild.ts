@@ -11,8 +11,19 @@
  *
  * 跳过项的理由（它们属于上下文机制，不是展示内容）：
  * - compaction / model_change / thinking_level_change / label / session_info /
- *   custom / custom_message 条目：压缩、切模型、书签、命名、扩展状态 ——
- *   影响发给模型的上下文，但聊天视图不渲染它们。
+ *   custom 条目：压缩、切模型、书签、命名、扩展状态 —— 影响发给模型的上下文，
+ *   但聊天视图不渲染它们。
+ * - **custom_message 条目**：两条上下文快照通道（`kamibuddy-runtime-context` /
+ *   `kamibuddy-hidden-context`，`display:false`）落的就是这个类型，**必须跳过**
+ *   （spec: persist-context-snapshots Task 3）。为什么不能「按角色认」：pi 的
+ *   `buildSessionContext()` 把它转成 `role:"custom"`、`convertToLlm`
+ *   （core/messages.js 的 `case "custom"`）再转成 **`role:"user"`** 入模 ——
+ *   也就是说快照在模型侧就是一条用户消息；任何改成吃**入模消息**的重建路径都会
+ *   把它当用户消息上屏（正文是工作目录 / 运行时路径 / 记忆内容）。
+ *   会话导出的**聊天正文**不靠这里：pi 的导出模板对 custom_message 有
+ *   `&& entry.display` 门槛，`display:false` 天然不进正文。
+ *   两组回归断言：本文件的「上下文快照条目（custom_message）」与
+ *   session-host.test.ts 的「上下文快照的 message 事件不产出聊天条目」。
  * - role 为 toolResult / bashExecution / custom / branchSummary /
  *   compactionSummary 的 message 条目：toolResult 已被配对消费进 ToolCard.detail；
  *   bashExecution 是 pi CLI 的 ! 命令残留；branchSummary / compactionSummary

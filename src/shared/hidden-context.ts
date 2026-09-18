@@ -1,9 +1,8 @@
 /**
  * hidden context（对齐清单 F5）的契约与纯函数层。
  *
- * 每次模型调用前，程序在请求的消息数组**末尾**追加一段用户看不见的隐藏说明——
- * 模型每轮都能看到，但不出现在界面上、不需要用户打字。逆向依据：
- * docs/workbuddy分析/11-hidden-context.md（WorkBuddy 的
+ * 程序把一段用户看不见的隐藏说明交给模型——模型每轮都能看到，但不出现在界面上、
+ * 不需要用户打字。逆向依据：docs/workbuddy分析/11-hidden-context.md（WorkBuddy 的
  * WorkbuddyUserPromptService + prompt-context-xml 全套机制）。
  *
  * **容器契约就是 data-role 属性本身**（压缩协议挂在它上面）：
@@ -12,59 +11,59 @@
  *
  * 剥离本身是尚未动工的「第二批」（对齐清单 F5：压缩时按 data-role 剥离
  * additional-data）；**本仓库现在没有消费这份协议的实现** —— 读它的只有本文件、
- * `core/session-host.ts` 的组装/注入与诊断面板的展示。所以下面这次注入位置的
- * 变化不牵动任何压缩逻辑。
+ * `core/session-host.ts` 的组装与诊断面板的展示，所以下面这次投递方式的变化
+ * 不牵动任何压缩逻辑。
  *
  * 与 WorkBuddy 的另一处有意差异：它把 additional_data 作为子块插在唯一一个
- * user-context 块内的「原顺序位置」（占位法）；我们直接输出**两个独立块**
- * ——注入不落会话文件（pi transformContext 的返回值只在本次模型调用生效），
- * 不需要保序拼接，两个块各自按 data-role 剥离反而更简单。
+ * user-context 块内的「原顺序位置」（占位法）；我们直接输出**两个独立块** ——
+ * 压缩按 data-role 整体剥离时，两个块各自剥离比保序拼接更简单。
  *
- * ## 为什么是「尾部独立消息」而不是「贴进用户消息」（本条是有意偏离 WorkBuddy）
+ * ## 为什么落盘 + 只在内容真变时追加（本条是有意偏离 WorkBuddy 的阅读顺序）
  *
- * WorkBuddy 把隐藏块**前置在用户消息正文之前**（模型先读环境说明再读用户正文），
- * 我们早先照做。代价是提示词前缀缓存：注入经 pi 的 transformContext 生效、
- * **返回值不落会话文件**，所以下一轮那条 user 消息恢复原文、隐藏块改贴到新的
- * 最后一条 user —— **差异落在上一轮那条 user 消息内部**，provider 的最长公共
- * 前缀就在那里断掉，上一轮整段（user + 助手回复 + 全部工具结果）在下一轮被
- * 全价重计费。
+ * 早先的形态是「每请求现算、追加在消息数组末尾的瞬态注入」：注入经 pi 的
+ * transformContext / `context` 事件生效、**返回值不落会话文件**。当时的论证是
+ * 「不落盘 ⇒ 不沉积成历史节点 ⇒ 不按序列重复付」。2026-09-18 实测证明那条**是错的**
+ * （spec: persist-context-snapshots），根因是投递方式而不是内容：
  *
- * 实测（3 轮 / 45 步真实会话台账）：轮 2 首步 cacheRead 只占 prompt 的 21.5%
- * （上一步 96.6%），轮 3 首步 65.6%（上一步 99.7%），合计约 102K tokens 从命中价
- * 掉成全价，把会话级命中率从本应约 97.1% 压到实测 94.6%（轮内 13 步仍连续
- * 99.7~99.9%，所以断点只在轮边界）。
+ *   台账 01a0b2b3-….jsonl（24 次模型调用）里，两块注入在每个 run 内**逐字节完全相同**
+ *   （run 1 的 10 次调用指纹全同、run 2 的 14 次全同），却被注入了 24 次。
+ *   `cacheRead_N` 恒等于 `prompt_{N-1} − 2,423…2,615`，23 轮合计 **58,094 token**
+ *   —— 占全会话未命中（201,908）的 **28.8%**；注入还钉在续写点（上一轮请求的最后
+ *   一个 token 位置）上，provider 的前缀缓存只能覆盖到它之前（同题 dsh 拿到 19,915
+ *   token 续写命中，我们全程 0）。
  *
- * 改成「**作为尾部独立消息追加**」后：请求 N 的数组尾部是
- * `[…已落盘历史…, hidden_N]`，请求 N+1 是
- * `[…同样历史…, a_N, t_N, u_{N+1}, hidden_{N+1}]` —— 首个差异落在 hidden_N 与
- * a_N 之间，命中前缀 = 上一轮最后一条**已落盘**消息之前，上一轮整段回收。轮内
- * 行为不变（差异仍落在新增内容处，那些本来就是要新付的）。
+ * 不落盘的尾巴每轮都是一条**新的**尾部消息、位置每轮后移 ⇒ 每轮都是一次 miss。
+ * 修法对齐 dsh 的 `RuntimeContextProjection.project()`（其 README：cache-safe
+ * counterpart）：把注入**落进会话文件**（pi 的 before_agent_start 返回的持久
+ * `message`，落位在本轮用户消息之后），并且**只在内容逐字节变化时才追加一条** ——
+ * 位置固定 ⇒ 它成为缓存前缀的一部分；内容没变 ⇒ 一个字节都不重付。判据就是本文件的
+ * `shouldAppendSnapshot`（纯函数，零运行时依赖）。
  *
- * 「贴进用户消息」的唯一好处是 WorkBuddy 的阅读顺序（环境说明在读用户正文之前），
- * 我们用它换掉的是每轮作废上一轮整段的代价 —— 这笔账不值得，故有意偏离。
- * 形态与 `extensions/prompt-switch.ts` 的 `context` 事件注入**同构**
- * （`role:"custom"` + 具名 `customType` + `display:false`），渲染字节不变。
+ * 阅读顺序的代价（承认，不掩盖）：WorkBuddy 把隐藏块前置在用户消息**正文之前**
+ * （模型先读环境说明再读用户正文），我们的注入落在用户消息**之后**（由 pi 保证）。
+ * 与上一轮 spec 的一致偏离，换来的是不再每轮重付上一轮整段。
  *
- * 依赖方向：本文件零运行时依赖（消息按结构匹配，不 import pi 类型），
- * core 与 shared 的测试都能直接跑。
+ * 依赖方向：本文件零运行时依赖（消息按结构匹配，不 import pi 类型、也不 import
+ * 同层其它模块），core 与 shared 的测试都能直接跑。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 每次模型调用前在请求消息数组**末尾**追加一段
+ * What the model sees: 每个 run 开始、用户消息之后追加一条
  * `<system-reminder data-role="user-context|additional-data">` 文本（工作目录 / 托管 Python 路径 /
- * 记忆与技能提醒 / 当前时间）；模型每轮都读到，界面上不显示（display:false），也不落会话文件。
- * Token effect: 每次模型调用都付这一段（常量级：段数与各段正文长度都固定在小范围内），
- * 它不从历史里累积 —— 上一轮的注入副本不出现在下一轮请求里。
- * KV Cache effect: 落点在**所有已落盘历史之后**且不改写任何既有消息（逐条引用与字节都不变）
- * ⇒ 它自身逐轮变化不破坏前缀。反例（2026-09-17 实测）：早先贴进最后一条 user 消息内部时，
- * 差异落在已落盘消息内部，上一轮整段被全价重计费，会话级命中率由本应约 97.1% 掉到 94.6%
- * （见 docs/提示词前缀缓存契约.md §2 与 docs/可观测性清单.md CACHE8）。
+ * 记忆与技能提醒 / 当前时间）作为**落进会话文件的持久消息**；模型每轮都读到它（它是历史的一员，
+ * 不是尾巴），界面上不显示（display:false），也不进会话导出。
+ * Token effect: 每个 run 最多付**一次**，且与上一条同类型快照逐字节相同时**连一次都不付**
+ * （不追加）；沉积进历史后按普通消息参与后续每轮的前缀（命中价），不重复全价。
+ * KV Cache effect: 落点固定（本轮用户消息之后、历史的正常一员），内容不变就不追加 ⇒ 前缀不被它
+ * 截断。反例（2026-09-18 实测）：早先「每请求现算、不落盘」的尾巴形态下
+ * `cacheRead_N = prompt_{N-1} − 2,423…2,615`，23 轮白付 58,094 token（占会话未命中 28.8%）。
  */
-
-import { HIDDEN_CONTEXT_CUSTOM_TYPE } from "./observability.ts";
 
 export type HiddenContextRole = "user-context" | "additional-data";
 
-/** 防御重复注入的标记前缀：目标消息里已含它就不再包一层。 */
+/**
+ * 隐藏块的标记前缀：判定一段文本里有没有隐藏块（会话导出过滤、测试钉子的共同依据）。
+ * 片段本身由 `composeHiddenContext` 产出，这里只钉前缀，避免两处各写一遍。
+ */
 export const HIDDEN_CONTEXT_MARKER = `<system-reminder data-role="`;
 
 /** 一个隐藏说明段：渲染成 `<tag>\nbody\n</tag>`，body 为空串则整段跳过。 */
@@ -120,51 +119,21 @@ export function formatRunTime(date: Date): string {
 }
 
 /**
- * 把隐藏块作为**尾部一条独立消息**追加到消息数组末尾（形态与 prompt-switch 的
- * `context` 事件注入同构：`role:"custom"` + 具名 `customType` + `display:false`）。
+ * 该不该追加一条新快照：内容与基线**逐字节**相同时不追加（append-only 去重）。
  *
- * 为什么是追加而不是改写最后一条 user 消息 —— 见文件头「为什么是尾部独立消息」：
- * 改写发生在**已落盘的历史消息内部**，而注入不落盘 ⇒ 下一轮该条恢复原文，
- * 缓存的最长公共前缀就在那里断掉，上一轮整段作废。追加在所有已落盘内容之后，
- * 它落在（跨轮也稳定的）历史之后，且 **不触碰任何既有消息**（逐条引用不变、
- * 内容逐字节不变）—— 这是缓存命中的前提。
+ * 判据只有一条 —— `previous === undefined`（会话活分支上还没有同类型的快照：
+ * 新会话，或被压缩遮蔽了）⇒ 追加；否则逐字节不等才追加。不做归一化、不比字符数、
+ * 不看时间戳：provider 的前缀缓存比的就是字节，任何「看起来差不多」的宽松判据都会
+ * 让内容其实变了的快照被吞掉 —— 那会让模型这一轮读到旧的环境事实，且**无声**。
  *
- * 不改写既有消息带来的另一个结果：pi 的 UserMessage.content 是
- * `string | (TextContent | ImageContent)[]`（带图片时是数组），本函数不必再
- * 分两种形态处理，也不需要「找不到 user 消息」这种锚点假设。
+ * 为什么必须有这条判据：追加是 append-only 的（既有那条的字节与位置不变），
+ * 没有去重的话每次 run 都会多一条快照（hidden context 的 `current_time` 每 run 必变，
+ * runtime context 却往往不变）—— 会话文件无界增长，且新追加的每一条都在下一轮
+ * 变成一次真实的全价新增。
  *
- * 防御：数组里已有任何一条含 HIDDEN_CONTEXT_MARKER 就原样返回 —— pi 的
- * transformContext 返回值不落会话文件，正常情况下每次调用都是未注入的原文；
- * 这层防御只防「pi 未来把改写结果持久化」之类的行为变化导致的双重注入。
- *
- * `timestamp` 由调用方给（本文件是纯函数层，不读时钟）：它进的是 pi 的
- * 消息 id（`custom:<timestamp>`），而这条消息标了瞬态、不参与缓存断点归因
- * （见 shared/observability.ts 的 `TRANSIENT_INJECTION_CUSTOM_TYPES`）。
+ * 调用方（extensions/prompt-switch.ts）的基线取自 `sessionManager.buildContextEntries()`
+ * 的**活分支**，不许做进程内缓存：resume / 新进程必须靠会话文件本身判定。
  */
-export function appendHiddenContext<T extends { readonly role: unknown }>(
-	messages: readonly T[],
-	block: string,
-	timestamp: number,
-): readonly T[] {
-	if (messages.some(containsHiddenContextMarker)) return messages;
-	const injected = {
-		role: "custom",
-		customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
-		content: block,
-		// 不上界面：注入块是实现细节不是会话内容（它也不落会话文件）。
-		display: false,
-		timestamp,
-	};
-	return [...messages, injected as unknown as T];
-}
-
-/** 这条消息的文本里是否已有隐藏块标记（string 正文与数组正文的 text 块都看）。 */
-function containsHiddenContextMarker(message: unknown): boolean {
-	const content = (message as { content?: unknown }).content;
-	if (typeof content === "string") return content.includes(HIDDEN_CONTEXT_MARKER);
-	if (!Array.isArray(content)) return false;
-	return content.some((part) => {
-		const text = (part as { text?: unknown }).text;
-		return typeof text === "string" && text.includes(HIDDEN_CONTEXT_MARKER);
-	});
+export function shouldAppendSnapshot(previous: string | undefined, current: string): boolean {
+	return previous === undefined || previous !== current;
 }

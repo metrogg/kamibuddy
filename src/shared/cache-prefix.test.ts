@@ -7,9 +7,13 @@ function ref(id: string, tokens: number, fp = 1): MessageRef {
 	return { id, role: "user", chars: tokens * 4, tokens, fp };
 }
 
-/** 造一条瞬态注入项（prompt-switch 的 context 事件那条，写入端会标 transient）。 */
-function transient(id: string, tokens: number): MessageRef {
-	return { ...ref(id, tokens, 99), role: "other", transient: true };
+/**
+ * 造一条上下文快照条目（pi 落的持久 `custom_message`，role 归 other）。
+ * 快照落盘那一刻 id（`custom:<timestamp>`）与位置就定下，相邻两轮同一条快照
+ * 得到同一个 id；内容变了才在末尾追加一条新的（append-only）。
+ */
+function snapshotRef(id: string, tokens: number): MessageRef {
+	return { ...ref(id, tokens, 99), role: "other" };
 }
 
 /** 造一个系统提示词分段（fp 缺省给「同一段内容」的稳定值）。 */
@@ -303,61 +307,65 @@ describe("inferCachePrefixBreak 的系统提示词分段 diff（CACHE6 的 befor
 	});
 });
 
-describe("inferCachePrefixBreak 对瞬态注入项的处理（不许每轮误报一次）", () => {
-	/*
-	 * prompt-switch 的 context 事件每请求注入一条 kamibuddy-runtime-context
-	 * （不落会话，下一轮请求里就不在了）。它在 messageList 里表现为「上一轮尾部
-	 * 有一条、这一轮换成了另一条」—— 若参与 diff，每轮都会把「其实历史全命中」
-	 * 说成「断在最后一条」。这里的用例就是钉住它不被算成断点。
-	 */
-	it("新台账（有显式 transient 标记）：幽灵条目被剔除，真历史全命中就是 all_hit", () => {
-		// 两轮的真历史逐条相同，只有尾部那条瞬态注入项换了一条（每请求现算的必然结果）。
-		const previous = [ref("u:1", 100), ref("a:2", 50), transient("custom:111", 50)];
-		const current = [ref("u:1", 100), ref("a:2", 50), transient("custom:222", 60)];
+describe("inferCachePrefixBreak 对上下文快照条目的归因（不得再掩盖尾部失配）", () => {
+	it("断点落在快照条目上：如实报「末尾这条新增」，不再因剔除尾部 other 而误报历史全命中", () => {
+		// 上一轮末尾已有当时那条快照（custom:111）；本轮快照内容变了 → append-only
+		// 又在末尾追加一条新的（custom:222）。两轮的真历史部分逐条相同。
+		const previous = [ref("u:1", 100), ref("a:2", 50), snapshotRef("custom:111", 80)];
+		const current = [
+			ref("u:1", 100),
+			ref("a:2", 50),
+			snapshotRef("custom:111", 80),
+			snapshotRef("custom:222", 80),
+		];
 		const boundary = inferCachePrefixBreak({
 			previous,
-			// 前缀 = 300 − (100 + 50 + 50) = 100（定标用含瞬态项的上一轮名册）。
-			previousPromptTokens: 300,
+			// 前缀 = 380（上一轮真实 prompt 总量）− 230（上一轮消息估算）= 150。
+			previousPromptTokens: 380,
+			// 前缀 150 + 前三条消息 230 = 380：上一轮 prompt 全部命中，断在本轮新增的快照上。
 			current,
-			cacheRead: 250, // 前缀 100 + u:1 100 + a:2 50 = 250
+			cacheRead: 380,
 		});
 
-		// 不剔除幽灵条目的话，边界会落在尾部那条（id 每轮都不同）→ 被说成「第 3 条新增」。
+		// 旧实现把尾部 other 条目（custom:222）剔掉后会返回 all_hit —— 正是本次要修的盲区。
+		expect(boundary).toEqual({
+			kind: "message",
+			hitCount: 3,
+			message: snapshotRef("custom:222", 80),
+			change: "appended",
+			uncertain: undefined,
+		});
+	});
+
+	it("快照 id 稳定（落盘后不再变）：两轮逐条相同就是真命中，不是被剔除的假象", () => {
+		const previous = [ref("u:1", 100), snapshotRef("custom:111", 80)];
+		const current = [ref("u:1", 100), snapshotRef("custom:111", 80)];
+		const boundary = inferCachePrefixBreak({
+			previous,
+			previousPromptTokens: 300, // 前缀 = 300 − 180 = 120
+			current,
+			cacheRead: 300,
+		});
+
 		expect(boundary).toEqual({ kind: "all_hit", hitCount: 2, uncertain: undefined });
 	});
 
-	it("旧台账（没有 transient 字段）：退到「role 归 other 的尾部条目」剔除", () => {
-		const legacyGhost = (id: string, tokens: number): MessageRef => ({
-			...ref(id, tokens, 99),
-			role: "other",
-		});
-		const previous = [ref("u:1", 100), ref("a:2", 50), legacyGhost("custom:111", 50)];
-		const current = [ref("u:1", 100), ref("a:2", 50), legacyGhost("custom:222", 60)];
+	it("中段/头部的快照条目照常参与 diff（不被当成尾部幽灵误伤）", () => {
+		const previous = [ref("u:1", 100), snapshotRef("custom:111", 50), ref("a:2", 50)];
+		const current = [ref("u:1", 100), snapshotRef("custom:111", 50), ref("a:2", 50, 7)];
 		const boundary = inferCachePrefixBreak({
 			previous,
-			previousPromptTokens: 300,
+			previousPromptTokens: 300, // 前缀 = 300 − 200 = 100
+			// 前缀 100 + 前两条 150 = 250：命中 2 条，断在内容变了的 a:2 上。
 			current,
 			cacheRead: 250,
 		});
 
-		expect(boundary).toMatchObject({ kind: "all_hit", hitCount: 2 });
-	});
-
-	it("真历史条目不会被误伤（新台账里没有标记的条目照常参与 diff）", () => {
-		const previous = [ref("u:1", 100), transient("custom:111", 50)];
-		const current = [ref("u:1", 100), ref("a:2", 50, 7), transient("custom:222", 60)];
-		const boundary = inferCachePrefixBreak({
-			previous,
-			previousPromptTokens: 300,
-			current,
-			cacheRead: 200, // 前缀 150 + u:1 100 = 250 > 200 → 只够前缀 + 一部分
-		});
-
-		// 边界落在 u:1（命中 0 条），不是尾部那条幽灵。
 		expect(boundary).toMatchObject({
 			kind: "message",
-			hitCount: 0,
-			message: { id: "u:1" },
+			hitCount: 2,
+			message: { id: "a:2" },
+			change: "changed",
 		});
 	});
 });

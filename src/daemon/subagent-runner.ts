@@ -343,11 +343,18 @@ export function buildSubagentExtensions(
 			compose: (_sceneId, _interactionId, _expertId, piContext) =>
 				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
 			/*
-			 * 逐轮可变事实**一律不注入子代理**（恒空串 → `context` handler 不产生
-			 * 任何消息）：记忆内容与个性化看的是用户侧设定，注入等于把用户/产品身份
-			 * 灌进子代理（composeSubagentPrompt 的注释）；时间不进提示词（进了就
-			 * 逐轮断前缀），它由子代理/成员会话自己那个 SessionHost 的 hidden
-			 * context `current_time` 送达（与用户会话同一条路径）。
+			 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文（时序见
+			 * session-host.peekHiddenContext 的注释）。**子代理 / 成员会话与用户会话
+			 * 同一条通道** —— 它的 workspace_context / current_time 是子代理自己
+			 * 那份（cwd 与 run 冻结时刻），不是用户侧设定。
+			 */
+			composeHiddenContext: () => getHost()?.peekHiddenContext(),
+			/*
+			 * 逐 run 可变事实（记忆内容与个性化）**一律不注入子代理**（恒空串 →
+			 * runtime-context 通道不产生任何消息）：记忆内容与个性化看的是用户侧设定，
+			 * 注入等于把用户/产品身份灌进子代理（composeSubagentPrompt 的注释）；
+			 * 时间不进提示词（进了就逐 run 断前缀），它由上面那条 hidden context
+			 * 快照的 `current_time` 送达（与用户会话同一条路径）。
 			 */
 			composeRuntimeContext: () => "",
 		}),

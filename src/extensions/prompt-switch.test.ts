@@ -1,11 +1,13 @@
 /**
  * 提示词切换扩展的胶水测试（仿 permission-gate.test 的假 ExtensionAPI）。
  *
- * 策略本体在 prompt-composer / resources 里测过了，这里钉两类东西：
- *   1. 接缝：before_agent_start 被注册、每次触发都带「当时的两轴」去 compose、
- *      compose 的返回值原样成为 systemPrompt；以及逐轮可变事实的 context 注入
- *      （追加在消息末尾、不落盘、空串不注入）。
- *   2. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
+ * 策略本体在 prompt-composer / resources 里测过了，这里钉三类东西：
+ *   1. 接缝：before_agent_start 被注册三个 handler（systemPrompt + 两条快照
+ *      通道）、每次触发都带「当时的两轴」去 compose、compose 的返回值原样成为
+ *      systemPrompt；
+ *   2. 快照通道：两条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
+ *      独立追加（内容未变不返回 message ⇒ pi 不追加条目），空内容不注入；
+ *   3. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
  *      相等 —— 组装**走生产入口**（core/system-prompt-composer.ts 的
  *      createSystemPromptComposerFromDefaults，与 daemon 同一个函数），用**真实
  *      resources/**（两个场景 × 三个模式全组合）来证（spec: stabilize-prompt-prefix）。
@@ -25,37 +27,65 @@ import {
 	type SystemPromptComposer,
 	type SystemPromptComposerDefaults,
 } from "../core/system-prompt-composer.ts";
-import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "../shared/observability.ts";
+import {
+	HIDDEN_CONTEXT_CUSTOM_TYPE,
+	RUNTIME_CONTEXT_CUSTOM_TYPE,
+} from "../shared/observability.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
 
-type Handler = (event: {
+type HandlerEvent = {
 	readonly systemPromptOptions: {
 		contextFiles?: PromptContextOptions["contextFiles"];
 		toolSnippets?: PromptContextOptions["toolSnippets"];
 		promptGuidelines?: PromptContextOptions["promptGuidelines"];
 	};
-}) => Promise<{ systemPrompt?: string } | undefined>;
+};
 
-/** context 事件的最小形状：消息数组 + 返回值里的 messages。 */
-interface InjectMessage {
-	readonly role: string;
-	readonly customType?: string;
-	readonly content?: unknown;
-	readonly display?: boolean;
+/** 快照 message 的形状（pi 的 CustomMessage 子集：customType / content / display）。 */
+interface SnapshotMessage {
+	readonly customType: string;
+	readonly content: string;
+	readonly display: boolean;
 }
-type ContextHandler = (event: {
-	readonly messages: readonly InjectMessage[];
-}) => { readonly messages: readonly InjectMessage[] } | undefined;
+
+type HandlerResult = { readonly systemPrompt?: string; readonly message?: SnapshotMessage } | undefined;
+
+/** 假 ExtensionContext：本扩展只用到 sessionManager.buildContextEntries()。 */
+interface FakeCtx {
+	readonly sessionManager: { readonly buildContextEntries: () => readonly unknown[] };
+}
+
+type Handler = (event: HandlerEvent, ctx?: FakeCtx) => Promise<HandlerResult> | HandlerResult;
 
 interface Mounted {
+	/** 第 1 个 handler：整串 systemPrompt。 */
 	readonly handler: Handler;
-	readonly context: ContextHandler;
+	/** 第 2 个 handler：runtime-context 快照通道。 */
+	readonly runtime: Handler;
+	/** 第 3 个 handler：hidden-context 快照通道。 */
+	readonly hidden: Handler;
+	/** 传给两个快照 handler 的假 ctx（buildContextEntries 由用例给定）。 */
+	readonly ctx: FakeCtx;
 }
 
-const EMPTY_EVENT = { systemPromptOptions: {} } as Parameters<Handler>[0];
-const USER_MESSAGE = { role: "user", content: "你好" };
-/** 注入块样例：现在只有记忆内容 / 个性化走这条路径（时间走 hidden context）。 */
+const EMPTY_EVENT: HandlerEvent = { systemPromptOptions: {} };
+/** 注入块样例：runtime-context 通道只有记忆内容 / 个性化（时间走 hidden context）。 */
 const RUNTIME_BLOCK = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
+const HIDDEN_BLOCK =
+	'<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：D:\\proj\n</workspace_context>\n</system-reminder>';
+
+/**
+ * 假 ctx 的默认基线：没有同类型快照（新会话）。
+ * `entries` 给出「会话活分支的条目列表」，用例据此模拟 resume / 去重。
+ */
+function ctxWith(entries: readonly unknown[]): FakeCtx {
+	return { sessionManager: { buildContextEntries: () => entries } };
+}
+
+/** 造一条会话里的快照条目（pi 的 custom_message 形状）。 */
+function snapshotEntry(customType: string, content: string): unknown {
+	return { type: "custom_message", customType, content, display: false };
+}
 
 function mount(options: {
 	readonly axes: { sceneId: string; interactionId: string; expertId?: string };
@@ -66,13 +96,13 @@ function mount(options: {
 		piContext: PromptContextOptions,
 	) => Promise<string>;
 	readonly runtimeContext?: () => string;
+	readonly hiddenContext?: () => string | undefined;
+	readonly entries?: readonly unknown[];
 }): Mounted {
-	let handler: Handler | undefined;
-	let context: ContextHandler | undefined;
+	const handlers: Handler[] = [];
 	const fakePi = {
 		on: (event: string, value: unknown) => {
-			if (event === "before_agent_start") handler = value as Handler;
-			if (event === "context") context = value as ContextHandler;
+			if (event === "before_agent_start") handlers.push(value as Handler);
 		},
 	} as unknown as ExtensionAPI;
 
@@ -80,11 +110,16 @@ function mount(options: {
 		getCurrent: () => options.axes,
 		compose: options.compose,
 		composeRuntimeContext: options.runtimeContext ?? (() => ""),
+		composeHiddenContext: options.hiddenContext ?? (() => undefined),
 	})(fakePi);
 
-	if (handler === undefined) throw new Error("没有注册 before_agent_start 处理器");
-	if (context === undefined) throw new Error("没有注册 context 处理器");
-	return { handler, context };
+	// 三个 handler 是编排契约的一部分（一个换提示词、两个各管一条快照通道）：
+	// 少了任何一个都说明「通道被并进别的 handler」或「通道被删」—— 直接炸。
+	const [handler, runtime, hidden] = handlers;
+	if (handlers.length !== 3 || handler === undefined || runtime === undefined || hidden === undefined) {
+		throw new Error(`before_agent_start 处理器注册数不对：${handlers.length}（应为 3）`);
+	}
+	return { handler, runtime, hidden, ctx: ctxWith(options.entries ?? []) };
 }
 
 describe("before_agent_start 接缝", () => {
@@ -174,72 +209,162 @@ describe("before_agent_start 接缝", () => {
 	});
 });
 
-describe("context 接缝：逐轮可变事实的消息注入", () => {
-	it("注入块追加在消息数组末尾（落在对话历史之后，不会让前缀失配）", () => {
-		const { context } = mount({
+/**
+ * 两条快照通道（spec: persist-context-snapshots Task 2）。
+ *
+ * 形态级断言只有一条是关键的：**内容没变就不返回 message**。pi 的
+ * emitBeforeAgentStart 只把返回了的 message 收进 messages 数组
+ * （runner.js），所以「不返回」就等于「不追加条目」—— 这正是每 run 重付
+ * 58,094 token 的止血点。去重基线取会话活分支（`buildContextEntries()`），
+ * 不做进程内缓存，所以 resume / 新进程同样正确。
+ */
+describe("快照通道：两条通道各自独立去重、各自追加", () => {
+	it("首次 run（活分支上没有同类型快照）→ 两条通道各返回一条 message，形态为持久 custom 消息", async () => {
+		const { runtime, hidden, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
+			hiddenContext: () => HIDDEN_BLOCK,
 		});
-		const result = context({ messages: [USER_MESSAGE] });
-		expect(result?.messages).toHaveLength(2);
-		// 原有消息原样在前（含本次的用户消息）——注入块只能在它们之后。
-		expect(result?.messages[0]).toBe(USER_MESSAGE);
-		expect(result?.messages[1]).toMatchObject({
-			role: "custom",
-			customType: RUNTIME_CONTEXT_CUSTOM_TYPE,
-			content: RUNTIME_BLOCK,
-			display: false,
+
+		const runtimeResult = await runtime(EMPTY_EVENT, ctx);
+		const hiddenResult = await hidden(EMPTY_EVENT, ctx);
+
+		expect(runtimeResult).toEqual({
+			message: {
+				customType: RUNTIME_CONTEXT_CUSTOM_TYPE,
+				content: RUNTIME_BLOCK,
+				display: false,
+			},
+		});
+		// 两块正文各自成一条（不拼成一条）：合并会让 73% 的稳定内容跟着每 run 重发。
+		expect(hiddenResult).toEqual({
+			message: {
+				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+				content: HIDDEN_BLOCK,
+				display: false,
+			},
 		});
 	});
 
-	it("原消息顺序不变：注入只追加在末尾，历史逐条原样（含对象引用）", () => {
-		// 「追加在末尾」是缓冲不变量的一半：注入块自己逐轮都变，但它落在历史之后，
-		// 所以不可能让系统提示词与既有历史失配。重排、插到中间、就地改写任何一条
-		// 原消息都会破坏这条 —— 所以这里钉的是「只追加」，不只是「注入存在」。
-		const history = [
-			{ role: "user", content: "第一轮提问" },
-			{ role: "assistant", content: "第一轮回复" },
-			{ role: "tool", content: "工具结果" },
-			{ role: "user", content: "第二轮提问" },
-		];
-		const { context } = mount({
+	it("内容与活分支上最后一条同类型快照逐字节相同 → 不返回 message（run 2 不追加条目）", async () => {
+		// resume / 第二个 run 的形态：上一条快照已经在会话文件里（同内容）。
+		const { runtime, hidden, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
+			hiddenContext: () => HIDDEN_BLOCK,
+			entries: [
+				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
+				{ type: "message", message: { role: "user", content: "上一轮提问" } },
+				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+			],
 		});
-		const result = context({ messages: history });
-		expect(result?.messages).toHaveLength(history.length + 1);
-		history.forEach((message, index) => {
-			expect(result?.messages[index]).toBe(message);
-		});
-		expect(result?.messages.at(-1)).toMatchObject({
-			role: "custom",
-			customType: RUNTIME_CONTEXT_CUSTOM_TYPE,
-		});
+
+		expect(await runtime(EMPTY_EVENT, ctx)).toBeUndefined();
+		expect(await hidden(EMPTY_EVENT, ctx)).toBeUndefined();
 	});
 
-	it("每次模型调用都现读注入块（run 内的后续回合也要拿到最新事实）", () => {
-		let text = "第一版";
-		const { context } = mount({
+	it("只变了一条时另一条照旧不追加（两条通道各自读自己的基线，互不串台）", async () => {
+		const changedHidden = `${HIDDEN_BLOCK}\n<current_time>\n2026-09-18 11:00（周五，GMT+8）\n</current_time>`;
+		const { runtime, hidden, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
-			runtimeContext: () => text,
+			runtimeContext: () => RUNTIME_BLOCK,
+			hiddenContext: () => changedHidden,
+			entries: [
+				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
+				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+			],
 		});
-		const first = context({ messages: [USER_MESSAGE] });
-		text = "第二版";
-		const second = context({ messages: [USER_MESSAGE] });
-		expect(first?.messages[1]?.content).toBe("第一版");
-		expect(second?.messages[1]?.content).toBe("第二版");
+
+		expect(await runtime(EMPTY_EVENT, ctx)).toBeUndefined();
+		expect(await hidden(EMPTY_EVENT, ctx)).toEqual({
+			message: {
+				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+				content: changedHidden,
+				display: false,
+			},
+		});
 	});
 
-	it("注入块为空串 → 不注入（零 token 口径，消息原样返回）", () => {
-		const { context } = mount({
+	it("基线只认同 customType 的条目：别的快照 / 真历史都不算基线", async () => {
+		const { hidden, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			hiddenContext: () => HIDDEN_BLOCK,
+			// 活分支上有一条 runtime-context 快照（内容恰好相同）+ 用户消息，
+			// 但没有 hidden-context 快照 ⇒ 本通道必须追加。
+			entries: [
+				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				{ type: "message", message: { role: "user", content: HIDDEN_BLOCK } },
+			],
+		});
+
+		expect(await hidden(EMPTY_EVENT, ctx)).not.toBeUndefined();
+	});
+
+	it("内容非字符串的同类型末条按「没有基线」处理 ⇒ 追加（不静默丢掉环境事实）", async () => {
+		const { hidden, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			hiddenContext: () => HIDDEN_BLOCK,
+			entries: [
+				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				{
+					type: "custom_message",
+					customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+					content: [{ type: "text", text: HIDDEN_BLOCK }],
+					display: false,
+				},
+			],
+		});
+
+		expect(await hidden(EMPTY_EVENT, ctx)).not.toBeUndefined();
+	});
+
+	it("空内容不注入（runtime 空白串 / hidden undefined → 该通道不产生消息）", async () => {
+		const { runtime, hidden, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => "  \n ",
+			hiddenContext: () => undefined,
 		});
-		expect(context({ messages: [USER_MESSAGE] })).toBeUndefined();
+
+		expect(await runtime(EMPTY_EVENT, ctx)).toBeUndefined();
+		expect(await hidden(EMPTY_EVENT, ctx)).toBeUndefined();
+	});
+
+	it("读会话失败 → 降级为「没有基线」⇒ 追加，且不抛错（pi 的 must-not-throw 契约）", async () => {
+		const { runtime, hidden } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			runtimeContext: () => RUNTIME_BLOCK,
+			hiddenContext: () => HIDDEN_BLOCK,
+		});
+		const broken: FakeCtx = {
+			sessionManager: {
+				buildContextEntries: () => {
+					throw new Error("会话读不出来");
+				},
+			},
+		};
+
+		expect(await runtime(EMPTY_EVENT, broken)).not.toBeUndefined();
+		expect(await hidden(EMPTY_EVENT, broken)).not.toBeUndefined();
+	});
+
+	it("只读活分支：被压缩遮蔽掉的快照不算基线（下一次 run 按需重新追加）", async () => {
+		// buildContextEntries 的返回值就是「compaction-aware 的活条目」——
+		// 用例直接模拟它的结论：文件里有那条快照，但活分支上没有。
+		const { hidden, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			hiddenContext: () => HIDDEN_BLOCK,
+			entries: [{ type: "message", message: { role: "user", content: "你好" } }],
+		});
+
+		expect(await hidden(EMPTY_EVENT, ctx)).not.toBeUndefined();
 	});
 });
 

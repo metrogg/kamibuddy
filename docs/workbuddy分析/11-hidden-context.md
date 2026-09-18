@@ -4,9 +4,12 @@
 > `extracted/main/server.js`（SessionManager / conversation-prompt-preparer 桥接）。
 > 结论先行：**可以照抄整套**，注入点用 pi 的 `transformContext`（查证见同日日志），不卡 pi 能力。
 >
-> **落地状态（2026-09-16）**：第一批已实现 —— `shared/hidden-context.ts`（wrap/compose/
-> prepend 纯函数）、`core/memory.ts memoryReminder`（短指针段）、`core/session-host.ts`
-> `installHiddenContext` + `freezeHiddenContext`（按 run 冻结）、daemon `getExpertLabel` 回调。
+> **落地状态（2026-09-16；投递方式 2026-09-18 被取代）**：第一批已实现 —— `shared/hidden-context.ts`（wrap/compose/
+> `shouldAppendSnapshot` 纯函数）、`core/memory.ts memoryReminder`（短指针段）、`core/session-host.ts`
+> `freezeHiddenContext`（按 run 冻结）、daemon `getExpertLabel` 回调。
+> **2026-09-18**：投递方式由「`transformContext` 每请求现算、返回值**不落会话文件**」改为
+> 「`before_agent_start` 返回的**持久快照消息**（落盘、落在本轮用户消息之后、按内容逐字节去重）」，
+> `installHiddenContext` 已退役 —— 结论以 `.trae/specs/persist-context-snapshots/spec.md` 为准。
 > **完整上下文组成预览落在任务诊断面板 ②**（两个可折叠成分块：占用与分类=现在·估算 /
 > 最近一次入模拆分=当时·真实计数，`request_snapshot` 带了 `hiddenContextChars`）。
 > 曾短暂把 hidden 预览加进设置页、同日按用户决定回退 —— 设置页只管系统提示词，
@@ -118,3 +121,10 @@ wrapHiddenContextXml(xml, role = "user-context")
 因此 user-context 桶（workspace_context / memory 提醒）**每个 run 都注入**（内容按 run
 冻结，成本 = 每轮几行文本），first_turn 判定与 alreadyInjected 去重标记在 v1 一并省去
 —— 等「注入块跟随消息持久化」的需求出现（例如遥测要还原用户原话）再补。
+
+> **状态：被取代（2026-09-18，spec: persist-context-snapshots）** —— 本节的前提
+> 「我们的注入点在 `transformContext`、返回值不落会话文件 ⇒ first_turn 注入的内容到第二个
+> run 就消失了」已作废：注入改为 `before_agent_start` 返回的**持久快照消息**（落盘，落在
+> 本轮用户消息之后）。结论「user-context 桶每个 run 都注入」仍成立，但理由由「不落盘会消失」
+> 改为「按内容逐字节去重后按需追加」——「注入跟随消息持久化」这个条件已经满足（去重由
+> `shouldAppendSnapshot` 承担）。

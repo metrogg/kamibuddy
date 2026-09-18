@@ -2299,10 +2299,20 @@ async function createHost(
 					bucket.systemPromptSegments = composed.segments;
 					return composed.prompt;
 				},
-				// 逐轮可变事实（记忆内容/个性化）的注入块：每请求现读本会话 cwd。
+				// 逐 run 可变事实（记忆内容/个性化）的快照通道：每 run 现读本会话 cwd，
+				// 内容与上一条同类型快照相同时不追加（去重判据在扩展侧）。
 				// 提示词里已不含它们（见 composeSystemPrompt 注释）；时间不走这里，
 				// 由本会话 SessionHost 的 hidden context `current_time` 送达。
 				composeRuntimeContext: () => buildRuntimeContext(cwd),
+				/*
+				 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文。
+				 * 时序成立 —— before_agent_start 只在 pi 的 session.prompt() 里触发，
+				 * 而 host.prompt() 在调它之前已同步 freeze（见
+				 * session-host.peekHiddenContext 的注释）。这里用 `host` 是
+				 * 「扩展工厂先于宿主建成、闭包在事件触发时才求值」的既有范式
+				 * （subagent-runner / member-runner 同形），事件触发时 host 必已赋值。
+				 */
+				composeHiddenContext: () => host.peekHiddenContext(),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
