@@ -343,20 +343,25 @@ export function buildSubagentExtensions(
 			compose: (_sceneId, _interactionId, _expertId, piContext) =>
 				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
 			/*
-			 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文（时序见
+			 * hidden context 快照通道：取本 run 在宿主里冻结的那份**环境块**全文（时序见
 			 * session-host.peekHiddenContext 的注释）。**子代理 / 成员会话与用户会话
-			 * 同一条通道** —— 它的 workspace_context / current_time 是子代理自己
-			 * 那份（cwd 与 run 冻结时刻），不是用户侧设定。
+			 * 同一条通道** —— 它的 workspace_context 是子代理自己那份（自己的 cwd），
+			 * 不是用户侧设定。
 			 */
 			composeHiddenContext: () => getHost()?.peekHiddenContext(),
 			/*
 			 * 逐 run 可变事实（记忆内容与个性化）**一律不注入子代理**（恒空串 →
 			 * runtime-context 通道不产生任何消息）：记忆内容与个性化看的是用户侧设定，
 			 * 注入等于把用户/产品身份灌进子代理（composeSubagentPrompt 的注释）；
-			 * 时间不进提示词（进了就逐 run 断前缀），它由上面那条 hidden context
-			 * 快照的 `current_time` 送达（与用户会话同一条路径）。
+			 * 时间不进提示词（进了就逐 run 断前缀），它由下面那条时间快照送达
+			 * （与用户会话同一条路径）。
 			 */
 			composeRuntimeContext: () => "",
+			/*
+			 * 时间快照通道（`kamibuddy-run-time`）**子代理同样有**：`current_time` 是
+			 * 子代理自己那份 run 冻结时刻，与环境块分开去重。
+			 */
+			composeRunTime: () => getHost()?.peekRunTime(),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

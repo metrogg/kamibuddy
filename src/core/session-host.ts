@@ -19,15 +19,19 @@
  *    用它会把工具耗时算进模型耗时（settleLlmCall 有完整根因）。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 的三段格式；改行为要同步改这里）──
- * What the model sees: 每个 run 一次，把 hidden context（本文件 composeRunHiddenContext：
- * 工作目录 / **托管运行时清单与状态**（`python_env` 段，含被用户禁用与未就绪的分句）/
- * 记忆与技能指针 / 当前时间）交给 extensions/prompt-switch.ts 的 before_agent_start
- * handler，由 pi 落成一条**持久快照消息**（role:"custom" + customType
- * `kamibuddy-hidden-context` + display:false），落在本轮用户消息之**后**；
- * 内容与活分支上最后一条同类型快照逐字节相同时**不追加**（shared/hidden-context.ts
+ * What the model sees: 每个 run 一次，把 hidden context 的**两份正文**（本文件
+ * composeRunHiddenContext：环境块 = 工作目录 / **托管运行时清单与状态**（`python_env`
+ * 段，含被用户禁用与未就绪的分句）/ 记忆与技能指针；时间块 = 当前时间）交给
+ * extensions/prompt-switch.ts 的 before_agent_start handler，由 pi 各落成一条**持久
+ * 快照消息**（role:"custom" + customType `kamibuddy-hidden-context` /
+ * `kamibuddy-run-time` + display:false），落在本轮用户消息之**后**；各条与活分支上
+ * 最后一条**同 customType** 快照逐字节相同时**不追加**（shared/hidden-context.ts
  * 的 shouldAppendSnapshot）。界面上不显示（本文件 translate 只认 user / assistant；
  * 会话导出正文按 pi 模板的 `entry.display` 过滤，见 session-rebuild.ts 文件头）。
- * Token effect: 每个 run 最多付**一次**，内容没变则一次都不付（不追加）；
+ * Token effect: 每条通道每个 run 最多付**一次**，内容没变则一次都不付（不追加）；
+ * 时间按分钟变时只有时间块重付（**实测 150 字符 / 61 estTokens**：真新信息只有时间戳
+ * 26 字符 ≈11 est，其余是取代声明 ≈26 est 与容器/标签 ≈25 est），逐字节没变的环境块
+ * （约 1,046 字符）不重付；
  * 沉积进历史后按普通消息参与后续每轮的前缀（命中价），不重复全价。
  * KV Cache effect: 落点固定（本轮用户消息之后、历史的正常一员）、内容不变就不追加
  * ⇒ 前缀不被它截断。反例（2026-09-18 实测，spec: persist-context-snapshots）：
@@ -53,7 +57,7 @@ import { generatingLabel } from "../shared/session-events.ts";
 import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
 import {
-	composeHiddenContext,
+	composeHiddenBlock,
 	formatRunTime,
 	type HiddenSection,
 } from "../shared/hidden-context.ts";
@@ -616,7 +620,7 @@ export class SessionHost {
 	 */
 	private pendingCompaction: { readonly lock: string | null; readonly reason: CompactionReason } | undefined;
 	/**
-	 * 本 run 的 hidden context（F5，对齐 WorkBuddy 的 composeUserPrompt）全文。
+	 * 本 run 的 hidden context **环境块**（F5，对齐 WorkBuddy 的 composeUserPrompt）全文。
 	 *
 	 * **按 run 冻结**（prompt() 时算一次，agent_end 清）。注入本身由
 	 * extensions/prompt-switch.ts 的 before_agent_start handler 取这份全文、
@@ -629,7 +633,7 @@ export class SessionHost {
 	 */
 	private pendingHidden: string | undefined;
 	/**
-	 * 最近一次冻结的块全文（与 pendingHidden 同时写，但 agent_end **不清**）。
+	 * 最近一次冻结的环境块全文（与 pendingHidden 同时写，但 agent_end **不清**）。
 	 *
 	 * pendingHidden 是 run 期的账（run 终即清，防压缩调用等非 run 请求误注入）；
 	 * 这个是「最近一次注入了什么」的展示语义 —— 任务诊断面板的
@@ -637,6 +641,15 @@ export class SessionHost {
 	 * 快照内容。下一次 freeze 覆盖。
 	 */
 	private lastHiddenContext: string | undefined;
+	/**
+	 * 最近一次冻结的时间块全文（`kamibuddy-run-time` 通道的注入读口 + 展示语义）。
+	 *
+	 * **没有 pending 那一半**（与 pendingHidden 不同）：`pendingHidden` 存在的理由是
+	 * 「`request_snapshot` 的 `hiddenContextChars` 只该记 run 内的那次冻结」—— 环境块
+	 * 有台账消费者，时间块没有（台账里没有单列它的字段，加字段属另一件事）。所以这里
+	 * 一个字段同时服务注入与展示，run 结束也不清（语义同 lastHiddenContext）。
+	 */
+	private lastRunTime: string | undefined;
 
 	private constructor(
 		private readonly session: Awaited<
@@ -817,18 +830,21 @@ export class SessionHost {
 	}
 
 	/**
-	 * 冻结本 run 的 hidden context（prompt 的两个非流式入口共用这一个写点）。
+	 * 冻结本 run 的两份快照正文（prompt 的两个非流式入口共用这一个写点）。
 	 * steer / followUp（流式分支）不经过这里：排队消息落进的是当前 run，
 	 * run 的冻结内容不变（见 pendingHidden 注释）。
 	 */
 	private freezeHiddenContext(): void {
 		try {
-			this.pendingHidden = this.composeRunHiddenContext();
-			this.lastHiddenContext = this.pendingHidden;
+			const frozen = this.composeRunHiddenContext();
+			this.pendingHidden = frozen.hidden;
+			this.lastHiddenContext = frozen.hidden;
+			this.lastRunTime = frozen.runTime;
 		} catch (error) {
 			// 组装失败 = 本 run 无注入（原始 prompt 直送）。与 hidden context 一贯的
-			// 「增强不是门槛」同纪律：read 侧的取口（peekHiddenContext）与 daemon 的
-			// composeHiddenContext 都会如实拿到 undefined，不编一个空块。
+			// 「增强不是门槛」同纪律：read 侧的取口（peekHiddenContext / peekRunTime）
+			// 与 daemon 的 composeHiddenContext / composeRunTime 都会如实拿到
+			// undefined，不编一个空块。
 			this.pendingHidden = undefined;
 			this.ledger?.reportFailure(
 				`hidden context 组装失败：${error instanceof Error ? error.message : String(error)}`,
@@ -837,7 +853,7 @@ export class SessionHost {
 	}
 
 	/**
-	 * 最近一次冻结的 hidden context 全文。还没有过 prompt（或组装一直失败）为 undefined。
+	 * 最近一次冻结的 hidden context **环境块**全文。还没有过 prompt（或组装一直失败）为 undefined。
 	 *
 	 * 两个用途，值在同一次 freeze 里取定、不会分叉：
 	 *   1. 任务诊断面板的展示口（run 结束后仍可读，见 lastHiddenContext 注释）；
@@ -849,6 +865,17 @@ export class SessionHost {
 	 */
 	peekHiddenContext(): string | undefined {
 		return this.lastHiddenContext;
+	}
+
+	/**
+	 * 最近一次冻结的 hidden context **时间块**全文（`kamibuddy-run-time` 通道的读口）。
+	 *
+	 * 与环境块分开读：两条通道各自去重（判定按各自的 customType 读基线），
+	 * 合并成一个读口就又回到「分钟一变整块重发」那件事上。
+	 * 时序约束与 peekHiddenContext 相同（freeze 在 session.prompt() 之前）。
+	 */
+	peekRunTime(): string | undefined {
+		return this.lastRunTime;
 	}
 
 	/**
@@ -1376,9 +1403,9 @@ export class SessionHost {
 				});
 			}
 			this.toolCards.clear();
-			// 本 run 的 hidden context 账清掉：这份全文只在 run 开始时冻结、由
-			// before_agent_start 取一次，run 已终就不该再被（可能的）压缩调用等
-			// 非 run 请求当成当前事实读走。
+			// 本 run 的环境块账清掉：它只在 run 开始时冻结、由 before_agent_start 取一次，
+			// run 已终就不该再被（可能的）压缩调用等非 run 请求当成当前事实读走
+			// （时间块没有 run 期的账 —— 见 lastRunTime 的注释）。
 			this.pendingHidden = undefined;
 				/*
 				 * pi 没有独立的「已取消」事件：abort() 后 agent 循环照常走
@@ -1971,9 +1998,10 @@ export class SessionHost {
 	}
 
 	/**
-	 * 组装本 run 的 hidden context：四个 section（对齐 WorkBuddy 逆向笔记 §6
-	 * 第一批的范围；WorkBuddy 的 "first_turn + 变更重发" 在我们的形态下就是
-	 * 「每 run 冻结一次 + 内容未变则不追加」，见 shared/hidden-context.ts）：
+	 * 组装本 run 的快照正文：**按 role 各产一个块**（环境块 / 时间块），
+	 * 对齐 WorkBuddy 逆向笔记 §6 第一批的 section 范围（WorkBuddy 的
+	 * "first_turn + 变更重发" 在我们的形态下就是「每 run 冻结一次 + 内容未变则不追加」，
+	 * 见 shared/hidden-context.ts）：
 	 *
 	 *   1. workspace_context（user-context）—— cwd + 场景 + 交互模式 + 专家。
 	 *      **cwd 的唯一来源（用户会话）**：系统提示词里已经没有它了（骨架那行随 spec:
@@ -1993,13 +2021,16 @@ export class SessionHost {
 	 *   3. memory_and_skills_reminder（user-context）—— 记忆三层短指针
 	 *      （core/memory.ts memoryReminder），全空则整段缺席。
 	 *   4. current_time（additional-data）—— run 冻结时刻，一次性容器。
-	 *      **时间的唯一来源**：逐 run 快照通道（prompt-switch 的 runtime-context）
-	 *      不带时间，模型看「现在」只靠这一段。
 	 *
-	 * 全部段都空返回 undefined（新用户 + 无记忆 + 不可能：时间永远有 ——
-	 * 实际上本函数恒有值，undefined 分支只是 composeHiddenContext 契约的如实透传）。
+	 * **两个 role 各出一条消息**（spec: add-supersede-note-and-time-split）：时间
+	 * 按分钟变、其余三段的字节几乎不变，挤在同一条消息里会让分钟一变整条重发
+	 * （实测每条 1,066 字符里只有约 20 字符是真新信息）。拆开后两条消息各自按
+	 * 各自的 customType 去重。
+	 *
+	 * 每个 role 没有非空段时该值为 undefined（调用方零成本跳过该通道）——
+	 * 实际上时间恒有值，环境块在子代理之外的会话也恒有 workspace_context。
 	 */
-	private composeRunHiddenContext(): string | undefined {
+	private composeRunHiddenContext(): { hidden: string | undefined; runTime: string | undefined } {
 		const scene = this.options.resources.scenes.find((s) => s.id === this.sceneId);
 		const mode = this.options.resources.modes.find((m) => m.id === this.interactionId);
 		// sessionCwd 是 string（不是 undefined）：create() 里必然赋值，但构造后
@@ -2035,7 +2066,10 @@ export class SessionHost {
 			role: "additional-data",
 			body: formatRunTime(new Date()),
 		});
-		return composeHiddenContext(sections);
+		return {
+			hidden: composeHiddenBlock(sections, "user-context"),
+			runTime: composeHiddenBlock(sections, "additional-data"),
+		};
 	}
 
 	/**
@@ -2098,7 +2132,8 @@ export class SessionHost {
 			// 快照在注入之后记录（钩子包装顺序见构造器）。hidden context 快照是
 			// pi 落盘的普通历史条目（custom_message，落在本轮用户消息之后），它的
 			// 字符数计入 messages.other —— 这里把它单独亮出，成分视图好单列一行
-			// （口径见 RequestSnapshotData）。
+			// （口径见 RequestSnapshotData）。**只算环境块**：时间已独立成
+			// `kamibuddy-run-time` 一条，不并进本字段。
 			...(this.pendingHidden === undefined
 				? {}
 				: { hiddenContextChars: this.pendingHidden.length }),

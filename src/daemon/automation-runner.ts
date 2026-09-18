@@ -248,6 +248,9 @@ function buildRunExtensions(
 			// hidden context 快照取本 run 冻结的那份全文（时序见
 			// session-host.peekHiddenContext 的注释：freeze 在 session.prompt() 之前）。
 			composeHiddenContext: () => getHost()?.peekHiddenContext(),
+			// 时间快照（`kamibuddy-run-time`）：同一次 freeze 的另一半，
+			// 与上面那条分开去重（spec: add-supersede-note-and-time-split）。
+			composeRunTime: () => getHost()?.peekRunTime(),
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

@@ -132,18 +132,15 @@
         ——同口径对照见 spec 的「未达成 / 需注意」①；② 单次会话读数，非统计样本；③ 压缩路径仍未实测
   - **依赖**：Task 2…Task 5
 
-- [ ] Task 8（**延后，需用户裁决**）：导出 HTML 的侧边树与搜索索引泄漏快照正文
-  - **现象（已核 pi 源码）**：导出模板对 `custom_message` 只在**正文**上尊重 `display`
-    （`dist/core/export-html/template.js:1309` 的 `&& entry.display`），而**侧边树标签**（`:691-693`）
-    与**搜索索引**（`:344-347`，`parts.push` 全文、不截断）都不看 `display` ⇒ 快照正文
-    （含用户长期记忆 / 个人画像 / 工作目录 / 解释器路径）会进入导出文件。
-  - **为什么本次没做**：`SessionHost.exportHtml` → pi 的 `exportToHtml(outputPath, {themeName})` **没有条目过滤参数**。
-    两条可行路都不干净 ——（a）对 pi 生成的 HTML 解 base64、剔条目、重写：依赖模板内部标记，
-    pi 一改格式整条导出链路变脆；（b）改走公开的 `exportFromFile(filteredJsonl)`：会**丢掉扩展工具卡的
-    自定义渲染**（`toolRenderer` 是 pi 内部件），属功能倒退。按 `AGENTS.md`「不写防御性兜底、能借力不自研」，两条都不是现在该做的。
-  - **留给用户裁决**：① 接受现状（导出是用户自己触发的本地产物，正文面已干净）；
-    ② 认领 (a) 或 (b) 的代价；③ 上游提 issue 让 `display:false` 在树与搜索里也生效（最干净，但要等）。
-  - 记录见 `spec.md` 的 `## 已知偏离`。
+- [x] Task 8（**已裁决：接受现状，无需改动**）：导出 HTML 的侧边树与搜索索引含快照正文
+  - **用户决定（2026-09-18）**：「导出 html 泄露正文无所谓，我挺喜欢的，我巴不得这里面的东西更细。」
+    ⇒ 这不是缺陷，**维持现状**；`## 已知偏离` 的 ① 由「待裁决」改为「已接受」。
+  - **现象（已核 pi 源码，留档备查）**：导出模板对 `custom_message` 只在**正文**上尊重 `display`
+    （`dist/core/export-html/template.js:1309`），侧边树标签（`:691-693`）与搜索索引（`:344-347`，全文不截断）不看 `display`。
+  - **反方向的需求（若以后要做，另开改动）**：用户希望导出里的信息**更细**——
+    可做的方向是让 `runtime-context` / `hidden-context` 在导出里以**可见条目**呈现（把 `display` 置为 `true`），
+    或给这两条快照补 `details` 让树标签显示更完整的摘要。当前 `display:false` 是「不上聊天界面」的取舍，
+    与导出可见性可以分开决策。**本轮不做**。
 
 - [x] Task 9（独立验证后追加）：压缩路径夹具 —— 让「被遮蔽的快照会被重新追加」变成会变红的断言
   - `src/extensions/prompt-switch-session.test.ts` 新增 describe + 用例 6.1，走**真实 `AgentSession.compact()`**
@@ -185,3 +182,7 @@
   增加 200–400KB 量级；写入路径与 dsh 相同，未做额外压缩。
 - **旧台账的归因会变**：`transient` 标记退役后，历史 run 的面板可能从「历史全命中」变为「断在尾部」——
   对那些 run 而言这是事实（当时确实每轮断在尾部）。
+- **2026-09-18 后续改动（事实性更新，结论见该 spec）**：时间已从环境块拆成**独立的第三条通道**
+  `kamibuddy-run-time`，每条快照正文另加常量取代声明；因此上面「每个 run 最多追加 2 条」的上限
+  变为 3（`runtime-context` + 环境块 + 时间块），`kamibuddy-hidden-context` 也不再含 `current_time`。
+  见 `.trae/specs/add-supersede-note-and-time-split/spec.md`（本 spec 的结论不变，仅此事实性路径更新）。

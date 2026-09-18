@@ -107,9 +107,12 @@ export function SnapshotBreakdown({
 				// 会参与缓存断点归因（不再是归因时被剔除的幽灵）。它对用户不可见
 				// （display:false），所以**用户可见条目数不变**，只有下面的 other 计数
 				// 会包含它。
+				// **只算环境块**（spec: add-supersede-note-and-time-split 起）：时间已
+				// 独立成 `kamibuddy-run-time` 一条，不在本字段内 —— 本数字回答的是
+				// 环境块那条多大，时间块是 messageList 里的另一条（两者都计入 other）。
 				<p className="stat-hint">
-					其中 hidden context 快照 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
-					（计入下面的 other 计数；该条目对用户不可见，用户可见条目数不受它影响）
+					其中 hidden context 环境块 {snapshot.hiddenContextChars.toLocaleString("en-US")} 字符
+					（不含独立的时间块；计入下面的 other 计数；该条目对用户不可见，用户可见条目数不受它影响）
 				</p>
 			)}
 		</div>

@@ -15,8 +15,10 @@
  * 不牵动任何压缩逻辑。
  *
  * 与 WorkBuddy 的另一处有意差异：它把 additional_data 作为子块插在唯一一个
- * user-context 块内的「原顺序位置」（占位法）；我们直接输出**两个独立块** ——
- * 压缩按 data-role 整体剥离时，两个块各自剥离比保序拼接更简单。
+ * user-context 块内的「原顺序位置」（占位法）；我们把每个 role **各出一条消息**
+ * （`composeHiddenBlock` 按 role 一次只产一个块，调用方各拿各的）—— 压缩按
+ * data-role 整体剥离时，剥掉一条消息比在一条消息里抠块更简单。时间散在各 run
+ * 的同一块里会让分钟一变整块重发（spec: add-supersede-note-and-time-split）。
  *
  * ## 为什么落盘 + 只在内容真变时追加（本条是有意偏离 WorkBuddy 的阅读顺序）
  *
@@ -47,14 +49,21 @@
  * 同层其它模块），core 与 shared 的测试都能直接跑。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 每个 run 开始、用户消息之后追加一条
- * `<system-reminder data-role="user-context|additional-data">` 文本（工作目录 / 托管 Python 路径 /
- * 记忆与技能提醒 / 当前时间）作为**落进会话文件的持久消息**；模型每轮都读到它（它是历史的一员，
- * 不是尾巴），界面上不显示（display:false），也不进会话导出。
- * Token effect: 每个 run 最多付**一次**，且与上一条同类型快照逐字节相同时**连一次都不付**
- * （不追加）；沉积进历史后按普通消息参与后续每轮的前缀（命中价），不重复全价。
- * KV Cache effect: 落点固定（本轮用户消息之后、历史的正常一员），内容不变就不追加 ⇒ 前缀不被它
- * 截断。反例（2026-09-18 实测）：早先「每请求现算、不落盘」的尾巴形态下
+ * What the model sees: 每个 run 开始、用户消息之后追加**按 role 各一条**的
+ * `<system-reminder data-role="user-context|additional-data">` 文本（环境块：工作目录 /
+ * 托管 Python 路径 / 记忆与技能提醒；时间块：当前时间），每条以取代声明开头；它们都是
+ * **落进会话文件的持久消息**，模型每轮都读到（历史的一员，不是尾巴），界面上不显示
+ * （display:false），也不进会话导出。
+ * Token effect: 每条消息各自去重 —— 与上一条**同 customType** 快照逐字节相同时不追加（连一次都
+ * 不付；本层 role 与通道一一对应：`user-context`→`kamibuddy-hidden-context`、
+ * `additional-data`→`kamibuddy-run-time`）；
+ * 时间块随分钟变时只重发时间块（**实测 150 字符 / 61 estTokens**：真新信息只有时间戳
+ * 26 字符 ≈11 est，其余是取代声明 26 字符 ≈26 est —— 即 A 的代价 —— 加容器与
+ * `<current_time>` 标签 ≈25 est），逐字节没变的环境块（约 1,046 字符）一个字节都不重发
+ * （改动前时间与环境块同一条：每跨分钟 run 重发整块 513 estTokens；现为 61，−452）。
+ * 沉积进历史后按普通消息参与后续每轮的前缀（命中价），不重复全价。
+ * KV Cache effect: 落点固定（本轮用户消息之后、历史的正常一员），内容不变就不追加 ⇒ 前缀
+ * 不被它截断。反例（2026-09-18 实测）：早先「每请求现算、不落盘」的尾巴形态下
  * `cacheRead_N = prompt_{N-1} − 2,423…2,615`，23 轮白付 58,094 token（占会话未命中 28.8%）。
  */
 
@@ -62,9 +71,25 @@ export type HiddenContextRole = "user-context" | "additional-data";
 
 /**
  * 隐藏块的标记前缀：判定一段文本里有没有隐藏块（会话导出过滤、测试钉子的共同依据）。
- * 片段本身由 `composeHiddenContext` 产出，这里只钉前缀，避免两处各写一遍。
+ * 片段本身由 `composeHiddenBlock` 产出，这里只钉前缀，避免两处各写一遍。
  */
 export const HIDDEN_CONTEXT_MARKER = `<system-reminder data-role="`;
+
+/**
+ * 每条快照正文开头的「取代」声明（**单点常量**，三条快照通道共用）。
+ *
+ * 为什么必须有：追加是 append-only 的 —— 内容一变就**追加一条新的**、旧的原样留档
+ * （`shouldAppendSnapshot`）。于是同一会话里会并存多份同类快照：实测探针会话里
+ * hidden context 落了 3 条（`current_time` 跨了 3 个分钟），画像里还写着
+ * 「最后更新：2026-09-18」这类**会过期**的事实 —— 而此前没有任何一句话告诉模型
+ * 以最新那条为准。dsh 每条运行时快照都自带同义的一句
+ *（`This snapshot supersedes earlier runtime-context snapshots.`）。
+ *
+ * 为什么必须是常量：它逐字节稳定才不破坏去重 —— 声明若随 run 变，同通道内容
+ * 没变也会被判定为「变了」，去重（每 run 重付的止血点）当场失效。三条通道从
+ * 同一处取，措辞也不会漂移。
+ */
+export const SNAPSHOT_SUPERSEDE_NOTE = "本条快照取代此前所有同类快照；内容冲突时以本条为准。";
 
 /** 一个隐藏说明段：渲染成 `<tag>\nbody\n</tag>`，body 为空串则整段跳过。 */
 export interface HiddenSection {
@@ -82,22 +107,30 @@ export function wrapHiddenContextXml(xml: string, role: HiddenContextRole = "use
 }
 
 /**
- * 组装一次注入的完整文本：按 role 分两桶（user-context 在前、additional-data
- * 在后），桶内保持传入顺序；两桶全空返回 undefined（调用方零成本跳过注入）。
+ * 按 role 组装**一个**隐藏块：只取该 role 的非空段、桶内保持传入顺序；该 role 下
+ * 一个非空段都没有时返回 undefined（调用方零成本跳过注入）。
+ *
+ * 为什么按 role 一次只产一个块（spec: add-supersede-note-and-time-split）：早先的形态
+ * 是一次返回「user-context 块 + additional-data 块」拼接的整串，于是随分钟变的时间块
+ * 与逐字节没变的环境块挤在**同一条消息**里 —— 时间一变整条重发（实测每条 1,066 字符里
+ * 只有约 20 字符是真的新信息，其余约 510 token 是重复内容）。拆开之后两条消息各自
+ * 去重：分钟一变只追加时间块（**实测 150 字符 / 61 estTokens** —— 真新信息只有时间戳
+ * 26 字符 ≈11 est，其余是取代声明 26 字符 ≈26 est（本文件 A 的代价）+ 容器与
+ * `<current_time>` 标签 ≈25 est），环境块那一条一个字节都不重发。
+ *
+ * 取代声明落在**容器内第一行**（紧接开标签）—— 它是常量，不引入逐 run 差异，
+ * 因而不会让去重失效。
  */
-export function composeHiddenContext(sections: readonly HiddenSection[]): string | undefined {
-	const render = (role: HiddenContextRole): string =>
-		sections
-			.filter((s) => s.role === role && s.body.trim() !== "")
-			.map((s) => `<${s.tag}>\n${s.body.trim()}\n</${s.tag}>`)
-			.join("\n");
-
-	const userContext = render("user-context");
-	const additionalData = render("additional-data");
-	const blocks: string[] = [];
-	if (userContext !== "") blocks.push(wrapHiddenContextXml(userContext, "user-context"));
-	if (additionalData !== "") blocks.push(wrapHiddenContextXml(additionalData, "additional-data"));
-	return blocks.length === 0 ? undefined : blocks.join("\n");
+export function composeHiddenBlock(
+	sections: readonly HiddenSection[],
+	role: HiddenContextRole,
+): string | undefined {
+	const body = sections
+		.filter((s) => s.role === role && s.body.trim() !== "")
+		.map((s) => `<${s.tag}>\n${s.body.trim()}\n</${s.tag}>`)
+		.join("\n");
+	if (body === "") return undefined;
+	return wrapHiddenContextXml(`${SNAPSHOT_SUPERSEDE_NOTE}\n\n${body}`, role);
 }
 
 /**
@@ -127,12 +160,12 @@ export function formatRunTime(date: Date): string {
  * 让内容其实变了的快照被吞掉 —— 那会让模型这一轮读到旧的环境事实，且**无声**。
  *
  * 为什么必须有这条判据：追加是 append-only 的（既有那条的字节与位置不变），
- * 没有去重的话每次 run 都会多一条快照（hidden context 的 `current_time` 每 run 必变，
- * runtime context 却往往不变）—— 会话文件无界增长，且新追加的每一条都在下一轮
- * 变成一次真实的全价新增。
+ * 没有去重的话每次 run 都会多一条快照（时间块随分钟变、环境块却往往不变）——
+ * 会话文件无界增长，且新追加的每一条都在下一轮变成一次真实的全价新增。
  *
  * 调用方（extensions/prompt-switch.ts）的基线取自 `sessionManager.buildContextEntries()`
- * 的**活分支**，不许做进程内缓存：resume / 新进程必须靠会话文件本身判定。
+ * 的**活分支**，且**按各自的 customType 各读各的**；不许做进程内缓存：resume / 新进程
+ * 必须靠会话文件本身判定。
  */
 export function shouldAppendSnapshot(previous: string | undefined, current: string): boolean {
 	return previous === undefined || previous !== current;

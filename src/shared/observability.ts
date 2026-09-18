@@ -538,17 +538,30 @@ export function contentFingerprint(text: string): number {
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "kamibuddy-runtime-context";
 
 /**
- * hidden context（F5）**上下文快照**消息的自定义类型，同样由
+ * hidden context（F5）**环境块**上下文快照消息的自定义类型，同样由
  * extensions/prompt-switch.ts 的 before_agent_start handler 产出
- * （内容来自 SessionHost 在 run 开始冻结的那份全文）。
+ * （内容来自 SessionHost 在 run 开始冻结的那份**环境块**全文）。
  *
  * 与 runtime context 同住一个文件、同一套投递机制：两者都是「落进会话文件、
  * 只在内容变化时追加一条」的持久快照消息，去重与追加由 extensions/prompt-switch.ts
  * 各按自己的 customType 判定。
- * 分两条通道而不是合并成一条：hidden context 因 `current_time` 每 run 必变，
- * 合并会让稳定的那部分跟着每 run 重发（spec: persist-context-snapshots 否决方案 ④）。
+ * 分多条通道而不是合并：内容里任何一处变化都让整条重发，而各部分的真实变化频率
+ * 差着几个数量级（时间每分钟变、环境事实几乎不变、画像偶尔变）—— 合并的代价见
+ * spec: persist-context-snapshots 否决方案 ④。
  */
 export const HIDDEN_CONTEXT_CUSTOM_TYPE = "kamibuddy-hidden-context";
+
+/**
+ * 当前时间（`additional-data` 块）**上下文快照**消息的自定义类型，同样是
+ * extensions/prompt-switch.ts 的 before_agent_start handler 的产出
+ * （内容来自 SessionHost 在 run 开始冻结的那份时间块）。
+ *
+ * 为什么独立成条而不并进 hidden context（spec: add-supersede-note-and-time-split）：
+ * 实测 `hidden-context` 每条 1,066 字符里只有 `<current_time>` 那 20 字符是真的新信息，
+ * 其余（工作目录 / 运行时清单 / 记忆指针）逐字节没变却跟着分钟一起重发 —— 每 run 白付
+ * ~510 token。时间按分钟变、环境事实几乎不变，两者按各自的 customType 独立去重。
+ */
+export const RUN_TIME_CUSTOM_TYPE = "kamibuddy-run-time";
 
 /** 系统提示词一个分段的 provenance（source 来自 prompt-composer 的 PromptSegmentSource）。 */
 export interface SystemSegmentStat {
@@ -635,6 +648,10 @@ export interface RequestSnapshotData {
 	 *
 	 * 为什么仍单列一个字段：它混在 other 桶里分不出来，而面板要能回答「这条快照多大」。
 	 * 内容不变就不会追加新条目，故同一 run 内各轮读到的是同一个数。
+	 *
+	 * **只算环境块**（spec: add-supersede-note-and-time-split 起）：时间已独立成
+	 * `kamibuddy-run-time` 一条，不再是本字段的一部分（本字段的取值来源是宿主冻结的
+	 * 环境块，不改口径以免面板与真实条目对不上）。
 	 *
 	 * 缺席 = 该次调用没有注入（run 已清账后的压缩调用等）。
 	 */

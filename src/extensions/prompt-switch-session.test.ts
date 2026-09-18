@@ -22,9 +22,11 @@
  *     message_end → sessionManager.appendCustomMessageEntry）、SessionManager 的
  *     落盘与 buildContextEntries()、扩展本体（createPromptSwitch）。
  * 桩：① 模型端点（HTTP 层的假 OpenAI 兼容服务，返回脚本化 SSE）；
- *     ② 扩展的三个**输入**（compose / composeRuntimeContext / composeHiddenContext）——
- *     生产里它们分别是 daemon 的提示词组装与宿主冻结的 hidden context，
- *     对「快照怎么投递、去不去重、落不落盘」而言是输入而不是被测对象。
+ *     ② 扩展的四个**输入**（compose / composeRuntimeContext / composeHiddenContext /
+ *     composeRunTime）—— 生产里它们分别是 daemon 的提示词组装与宿主冻结的两份
+ *     hidden context 正文，对「快照怎么投递、去不去重、落不落盘」而言是输入
+ *     而不是被测对象（**输入本身仍用生产纯函数拼**：见 `productionInputs`，
+ *     所以「时间被拼回环境块」这类形态变化照样能让本文件变红）。
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -41,8 +43,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ModelCatalog } from "../core/model-catalog.ts";
+import { formatRuntimeContext } from "../core/prompt-composer.ts";
+import {
+	composeHiddenBlock,
+	formatRunTime,
+	HIDDEN_CONTEXT_MARKER,
+	SNAPSHOT_SUPERSEDE_NOTE,
+	type HiddenSection,
+} from "../shared/hidden-context.ts";
 import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
+	RUN_TIME_CUSTOM_TYPE,
 	RUNTIME_CONTEXT_CUSTOM_TYPE,
 } from "../shared/observability.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
@@ -140,16 +151,53 @@ const PROVIDER = "snapshot-probe";
 const MODEL_ID = "snapshot-model";
 const MODEL_KEY = `${PROVIDER}/${MODEL_ID}`;
 
-/** 两条快照通道的输入（可变：跨 run 改内容就是改它）。 */
+/** 三条快照通道的输入（可变：跨 run 改内容就是改它）。 */
 interface SnapshotInputs {
 	runtimeContext: string;
-	hiddenContext: string;
+	hiddenContext: string | undefined;
+	runTime: string | undefined;
 }
 
 const RUNTIME_BLOCK = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
 const HIDDEN_A =
 	'<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：D:\\proj\n</workspace_context>\n</system-reminder>';
-const HIDDEN_B = `${HIDDEN_A}\n<system-reminder data-role="additional-data">\n<current_time>\n2026-09-18 11:01（周五，GMT+8）\n</current_time>\n</system-reminder>`;
+/** 环境事实变了（换了工作目录）—— 去重用例拿它当「内容真的变了」的形态。 */
+const HIDDEN_B =
+	'<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：D:\\proj2\n</workspace_context>\n</system-reminder>';
+/** 时间块正文（`kamibuddy-run-time` 通道）。 */
+const RUN_TIME_A =
+	'<system-reminder data-role="additional-data">\n<current_time>\n2026-09-18 11:01（周五，GMT+8）\n</current_time>\n</system-reminder>';
+
+/**
+ * 与 `SessionHost.composeRunHiddenContext` **同一份 section 名单**的输入构造
+ * （workspace_context + current_time，用生产的两个纯函数渲染）。
+ *
+ * 为什么输入也要走生产纯函数：本文件要钉的是「时间不再和环境块同一条消息」
+ * （spec: add-supersede-note-and-time-split 的 B）。若输入是手写字符串，
+ * 「把时间拼回环境块」这种形态回退就只改生产代码、测试照绿 —— 那正是 §8
+ * 「护栏要先会红」要堵的洞。这里输入的形状由生产函数决定，回退立刻反映到
+ * 会话文件里的字节上。
+ */
+function hiddenSections(cwd: string, at: Date): readonly HiddenSection[] {
+	return [
+		{ tag: "workspace_context", role: "user-context", body: `工作目录：${cwd}` },
+		{ tag: "current_time", role: "additional-data", body: formatRunTime(at) },
+	];
+}
+
+/** 由 section 名单产出三条通道的正文（时间块与环境块各一条）。 */
+function productionInputs(opts: {
+	readonly cwd: string;
+	readonly at: Date;
+	readonly memory: string | undefined;
+}): SnapshotInputs {
+	const sections = hiddenSections(opts.cwd, opts.at);
+	return {
+		runtimeContext: formatRuntimeContext({ memoryContent: opts.memory }),
+		hiddenContext: composeHiddenBlock(sections, "user-context"),
+		runTime: composeHiddenBlock(sections, "additional-data"),
+	};
+}
 
 async function openSession(opts: {
 	readonly cwd: string;
@@ -171,6 +219,7 @@ async function openSession(opts: {
 				compose: async () => "系统提示词（本钉子不关心其内容）",
 				composeRuntimeContext: () => opts.inputs.runtimeContext,
 				composeHiddenContext: () => opts.inputs.hiddenContext,
+				composeRunTime: () => opts.inputs.runTime,
 			}),
 		],
 	});
@@ -350,7 +399,11 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 			endpoint.setReply((index) =>
 				index === 0 ? sseToolCall("call_note", "read", { path: "note.txt" }) : sseText("读过了。"),
 			);
-			const inputs: SnapshotInputs = { runtimeContext: RUNTIME_BLOCK, hiddenContext: HIDDEN_A };
+			const inputs: SnapshotInputs = {
+				runtimeContext: RUNTIME_BLOCK,
+				hiddenContext: HIDDEN_A,
+				runTime: RUN_TIME_A,
+			};
 			const manager = SessionManager.create(cwd, sessionsDir);
 			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
 			try {
@@ -367,21 +420,28 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 				// ① 落盘 + 每通道恰好 1 条 + display:false + 正文逐字节
 				const runtime = snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE);
 				const hidden = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				const runTime = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
 				expect(runtime).toHaveLength(1);
 				expect(hidden).toHaveLength(1);
+				expect(runTime).toHaveLength(1);
 				expect(runtime[0]?.content).toBe(RUNTIME_BLOCK);
 				expect(hidden[0]?.content).toBe(HIDDEN_A);
+				expect(runTime[0]?.content).toBe(RUN_TIME_A);
 				expect(runtime[0]?.display).toBe(false);
 				expect(hidden[0]?.display).toBe(false);
+				expect(runTime[0]?.display).toBe(false);
 
-				// ② 落位在**本轮用户消息之后**（按文件行序；失败信息里给出实际顺序）
+				// ② 落位在**本轮用户消息之后**（按文件行序；失败信息里给出实际顺序）；
+				//    三条通道的相对顺序由 handler 的注册顺序固定（runtime → hidden → run-time），
+				//    跨调用稳定 —— 顺序一变就是位置变化，缓存前缀在那里断。
 				const kinds = lineKinds(file);
 				const userAt = kinds.indexOf("message:user");
 				expect(userAt, `实际顺序：${kinds.join(" → ")}`).toBeGreaterThanOrEqual(0);
-				expect(kinds.slice(userAt, userAt + 3), `实际顺序：${kinds.join(" → ")}`).toEqual([
+				expect(kinds.slice(userAt, userAt + 4), `实际顺序：${kinds.join(" → ")}`).toEqual([
 					"message:user",
 					`custom_message:${RUNTIME_CONTEXT_CUSTOM_TYPE}`,
 					`custom_message:${HIDDEN_CONTEXT_CUSTOM_TYPE}`,
+					`custom_message:${RUN_TIME_CUSTOM_TYPE}`,
 				]);
 
 				// ③ 第 2 次模型调用的消息数组里能读到它，且它不在尾巴上
@@ -389,17 +449,24 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 				const second = requestMessages(endpoint.requests[1]);
 				const runtimeAtFirst = indexOfText(first, RUNTIME_BLOCK);
 				const hiddenAtFirst = indexOfText(first, HIDDEN_A);
+				const runTimeAtFirst = indexOfText(first, RUN_TIME_A);
 				expect(runtimeAtFirst, "第 1 次调用没看到 runtime-context 快照").toBeGreaterThan(0);
 				expect(hiddenAtFirst, "第 1 次调用没看到 hidden-context 快照").toBeGreaterThan(0);
+				expect(runTimeAtFirst, "第 1 次调用没看到 run-time 快照").toBeGreaterThan(0);
+				// 三条快照在请求体里的相对顺序与注册顺序一致（runtime → hidden → run-time）。
+				expect(hiddenAtFirst).toBeLessThan(runTimeAtFirst);
 
 				const runtimeAtSecond = indexOfText(second, RUNTIME_BLOCK);
 				const hiddenAtSecond = indexOfText(second, HIDDEN_A);
+				const runTimeAtSecond = indexOfText(second, RUN_TIME_A);
 				expect(runtimeAtSecond, "第 2 次调用没看到 runtime-context 快照").toBeGreaterThan(0);
 				expect(hiddenAtSecond, "第 2 次调用没看到 hidden-context 快照").toBeGreaterThan(0);
+				expect(runTimeAtSecond, "第 2 次调用没看到 run-time 快照").toBeGreaterThan(0);
 				// 位置在相邻两次调用之间**逐位不变** —— 它不是「每轮新加在末尾的尾巴」，
 				// 而是历史的一员（缓存前缀不变量的直接含义）。
 				expect(runtimeAtSecond).toBe(runtimeAtFirst);
 				expect(hiddenAtSecond).toBe(hiddenAtFirst);
+				expect(runTimeAtSecond).toBe(runTimeAtFirst);
 				// 后面还有本轮的工具调用与工具结果 ⇒ 它不是尾巴。
 				expect(hiddenAtSecond).toBeLessThan(second.length - 1);
 			} finally {
@@ -413,7 +480,11 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 		"5.2 跨 run：内容没变不追加；内容变了追加一条且既有那条逐字节/位置不变；再次相同（与末条相同、与首条不同）仍不追加",
 		async () => {
 			endpoint.setReply(() => sseText("收到。"));
-			const inputs: SnapshotInputs = { runtimeContext: RUNTIME_BLOCK, hiddenContext: HIDDEN_A };
+			const inputs: SnapshotInputs = {
+				runtimeContext: RUNTIME_BLOCK,
+				hiddenContext: HIDDEN_A,
+				runTime: RUN_TIME_A,
+			};
 			const manager = SessionManager.create(cwd, sessionsDir);
 			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
 			try {
@@ -423,10 +494,11 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 				expect(after1).toHaveLength(1);
 				expect(after1[0]?.content).toBe(HIDDEN_A);
 
-				// run 2：两通道内容都逐字节相同 ⇒ 都不追加。
+				// run 2：三条通道内容都逐字节相同 ⇒ 都不追加。
 				await session.prompt("第二轮");
 				expect(snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
 				expect(snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
+				expect(snapshotLines(file, RUN_TIME_CUSTOM_TYPE)).toHaveLength(1);
 
 				// run 3：hidden 变了 ⇒ 追加一条；既有那条的**原始 JSON 行与行号**逐字节不变。
 				inputs.hiddenContext = HIDDEN_B;
@@ -435,8 +507,9 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 				expect(after3).toHaveLength(2);
 				expect(after3[0], "追加不许动既有那条（append-only）").toEqual(after1[0]);
 				expect(after3[1]?.content).toBe(HIDDEN_B);
-				// runtime 通道没变 ⇒ 仍只有一条（两通道各自独立去重）。
+				// runtime 与 run-time 通道都没变 ⇒ 各自仍只有一条（三条通道各自独立去重）。
 				expect(snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
+				expect(snapshotLines(file, RUN_TIME_CUSTOM_TYPE)).toHaveLength(1);
 
 				/*
 				 * run 4：内容与**最后一条**相同、与第一条不同 ⇒ 仍不追加。
@@ -458,7 +531,11 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 		"5.3 resume：会话文件已含快照条目，重建会话（SessionManager.open）后同内容不重复追加",
 		async () => {
 			endpoint.setReply(() => sseText("好。"));
-			const inputs: SnapshotInputs = { runtimeContext: RUNTIME_BLOCK, hiddenContext: HIDDEN_A };
+			const inputs: SnapshotInputs = {
+				runtimeContext: RUNTIME_BLOCK,
+				hiddenContext: HIDDEN_A,
+				runTime: RUN_TIME_A,
+			};
 			const manager = SessionManager.create(cwd, sessionsDir);
 			const first = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
 			let file: string;
@@ -487,6 +564,7 @@ describe("上下文快照真的落进会话（真实 pi 会话 + 真实 createPr
 				await resumed.prompt("resume 后的第一轮");
 				expect(snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
 				expect(snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
+				expect(snapshotLines(file, RUN_TIME_CUSTOM_TYPE)).toHaveLength(1);
 			} finally {
 				resumed.dispose();
 			}
@@ -541,7 +619,11 @@ describe("上下文压缩的可见面：被遮蔽的快照会被重新追加（�
 				return sseText("收到。");
 			});
 
-			const inputs: SnapshotInputs = { runtimeContext: RUNTIME_BLOCK, hiddenContext: HIDDEN_A };
+			const inputs: SnapshotInputs = {
+				runtimeContext: RUNTIME_BLOCK,
+				hiddenContext: HIDDEN_A,
+				runTime: RUN_TIME_A,
+			};
 			const manager = SessionManager.create(cwd, sessionsDir);
 			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
 			try {
@@ -552,11 +634,77 @@ describe("上下文压缩的可见面：被遮蔽的快照会被重新追加（�
 				const file = sessionFileOf(manager);
 				const oldRuntime = snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE);
 				const oldHidden = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
-				// 压缩之前两通道各恰好 1 条（内容没变就不追加 —— 5.2 已钉）。
+				const oldRunTime = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
+				// 压缩之前三条通道各恰好 1 条（内容没变就不追加 —— 5.2 已钉）。
 				expect(oldRuntime).toHaveLength(1);
 				expect(oldHidden).toHaveLength(1);
+				expect(oldRunTime).toHaveLength(1);
 
+				// 压缩前记下三条通道的条数与请求数：下面要与压缩之后对照。
+				const countsBeforeCompact = [
+					oldRuntime.length,
+					oldHidden.length,
+					oldRunTime.length,
+				];
+				const requestsBeforeCompact = endpoint.requests.length;
 				await session.compact();
+
+				/* ── 压缩路径**不注入**快照（本次补的覆盖缺口）────────────────────────
+				 * 此前「compact 不经 before_agent_start ⇒ 压缩期间不会注入时间块」只有静态
+				 * 推理，这里把它升级成有牙齿的断言。pi 侧机制（可核）：
+				 *   - `emitBeforeAgentStart` 只出现在 `session.prompt()` 内
+				 *     （agent-session.js:915，grep -c = 1）；
+				 *   - `compact()` → `_runDefaultCompaction` → 低层 `compact()` 自己
+				 *     `convertToLlm` 后直接调 `streamFn`（compaction.js:609），既不 emit
+				 *     before_agent_start，也不经 agent-loop 的 transformContext。
+				 * 于是「压缩期间没有快照注入」是**结构性**保证；下面的断言把它钉在可观察
+				 * 产物上（请求体 + 会话文件行），将来若有注入点挂到压缩路径上立刻变红。
+				 *
+				 * 口径（别读错）：压缩请求里**可以**出现时间快照 —— 那是**历史里被摘要的
+				 * 那一条**（run 1 落的），不是压缩现场注入的。所以判据是「不超过压缩前最后
+				 * 一次 run 请求里的条数」，而不是「一次都没有」。
+				 */
+				const timeBlocksIn = (body: Record<string, unknown> | undefined): number =>
+					requestMessages(body)
+						.map((message) => messageText(message))
+						.join("\n")
+						.split("<current_time>").length - 1;
+				const requestsDuringCompact = endpoint.requests.slice(requestsBeforeCompact);
+				expect(
+					requestsDuringCompact.length,
+					"夹具坏了：compact() 没产生模型请求（下面两条断言会空转通过）",
+				).toBeGreaterThan(0);
+				const blocksInLastRun = timeBlocksIn(endpoint.requests[requestsBeforeCompact - 1]);
+				expect(
+					blocksInLastRun,
+					"夹具坏了：压缩前那次 run 请求里应当有且只有 1 条时间快照",
+				).toBe(1);
+
+				// ① 请求体：压缩期间的每个请求都没有多出「压缩现场注入」的时间块。
+				requestsDuringCompact.forEach((body, index) => {
+					expect(
+						timeBlocksIn(body),
+						`压缩期间第 ${index + 1} 个模型请求里多出了注入的时间块（压缩路径不该注入）`,
+					).toBeLessThanOrEqual(blocksInLastRun);
+				});
+				// ② 会话文件：压缩本身不追加任何快照条目（三条通道条数不变），且它写下的最后
+				//    一条就是那条 compaction —— 注入若挂在压缩路径上会落在它之后。
+				expect(
+					snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE).length,
+					"压缩本身追加了快照条目（runtime）",
+				).toBe(countsBeforeCompact[0]);
+				expect(
+					snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE).length,
+					"压缩本身追加了快照条目（hidden）",
+				).toBe(countsBeforeCompact[1]);
+				expect(
+					snapshotLines(file, RUN_TIME_CUSTOM_TYPE).length,
+					"压缩本身追加了 run-time 条目（该次压缩没有 run 期的注入读口）",
+				).toBe(countsBeforeCompact[2]);
+				expect(
+					lineKinds(file).at(-1),
+					"压缩后文件末行不是 compaction ⇒ 有东西在压缩路径上追加了条目",
+				).toBe("compaction");
 
 				/* ── 夹具前提守卫：压缩**真的**遮蔽了旧快照，且两条读法**真的**分叉 ──
 				 * 少了这两条，下面的「重新追加」要么恒绿（没遮蔽）要么与实现选择无关。 */
@@ -587,33 +735,263 @@ describe("上下文压缩的可见面：被遮蔽的快照会被重新追加（�
 
 				const afterRuntime = snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE);
 				const afterHidden = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				const afterRunTime = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
 				expect(
 					afterHidden,
 					"被压缩遮蔽的快照没有重新追加 ⇒ 模型这一轮丢了环境事实（基线取错成 getBranch/getEntries）",
 				).toHaveLength(2);
 				expect(afterRuntime, "被压缩遮蔽的 runtime 快照没有重新追加").toHaveLength(2);
+				expect(afterRunTime, "被压缩遮蔽的时间快照没有重新追加").toHaveLength(2);
 
 				// ① 追加的那条正文逐字节等于渲染结果。
 				expect(afterHidden[1]?.content).toBe(HIDDEN_A);
 				expect(afterRuntime[1]?.content).toBe(RUNTIME_BLOCK);
+				expect(afterRunTime[1]?.content).toBe(RUN_TIME_A);
 				expect(afterHidden[1]?.display).toBe(false);
 
 				// ② 被遮蔽的旧条目没有被改写（append-only）：原始 JSON 行与行号逐字节不变。
 				expect(afterHidden[0]).toEqual(oldHidden[0]);
 				expect(afterRuntime[0]).toEqual(oldRuntime[0]);
+				expect(afterRunTime[0]).toEqual(oldRunTime[0]);
 
 				// ③ 新条目落在**压缩之后的活分支**上：文件行序为
-				//    … compaction → message:user → custom_message:runtime → custom_message:hidden → message:assistant
+				//    … compaction → user → runtime → hidden → run-time → assistant
 				const kinds = lineKinds(file);
 				const compactionAt = kinds.lastIndexOf("compaction");
 				expect(compactionAt, `实际顺序：${kinds.join(" → ")}`).toBeGreaterThan(-1);
-				expect(kinds.slice(compactionAt, compactionAt + 5), `实际顺序：${kinds.join(" → ")}`).toEqual([
+				expect(kinds.slice(compactionAt, compactionAt + 6), `实际顺序：${kinds.join(" → ")}`).toEqual([
 					"compaction",
 					"message:user",
 					`custom_message:${RUNTIME_CONTEXT_CUSTOM_TYPE}`,
 					`custom_message:${HIDDEN_CONTEXT_CUSTOM_TYPE}`,
+					`custom_message:${RUN_TIME_CUSTOM_TYPE}`,
 					"message:assistant",
 				]);
+			} finally {
+				session.dispose();
+			}
+		},
+		60_000,
+	);
+});
+
+/* ── 时间通道拆分 + 取代声明（spec: add-supersede-note-and-time-split）──────
+ *
+ * 本组钉的四件事，全部落在**会话文件的原始行**或**模型端点收到的请求体**上：
+ *   7.1 环境块逐字节未变、仅 `current_time` 跨分钟 ⇒ 只追加一条 run-time；
+ *       环境块那一条的原始 JSON 行与行号必须逐字节不变（append-only）。
+ *   7.2 环境事实变了（工作目录）、时间未跨分钟 ⇒ 只追加一条环境块。
+ *   7.3 三条通道各按自己的 customType 读基线，互不触发。
+ *   7.4 每条快照正文都以取代声明开头（容器内第一行 / 正文第一行）。
+ *
+ * **输入由生产纯函数拼**（`productionInputs` → `composeHiddenBlock` /
+ * `formatRunTime` / `formatRuntimeContext`，与 SessionHost.composeRunHiddenContext
+ * 同一份 section 名单）：输入若是手写字符串，「时间被拼回环境块」这种形态回退就
+ * 只改生产代码、本文件照绿 —— 那正是 AGENTS.md §8「护栏先会红」要堵的洞。
+ */
+describe("时间通道拆分与取代声明（真实 pi 会话 + 真实 createPromptSwitch）", () => {
+	/** 一次 run 用的固定时刻（分钟粒度）：11:01 → 11:02 恰好跨一个分钟边界。 */
+	const AT_11_01 = new Date(2026, 8, 18, 11, 1);
+	const AT_11_02 = new Date(2026, 8, 18, 11, 2);
+
+	/** 断言某条快照正文以取代声明开头（容器块：声明在开标签之后的**第一行**）。 */
+	function expectNoteFirstLine(content: string, opener: string): void {
+		const head = `${opener}\n${SNAPSHOT_SUPERSEDE_NOTE}\n`;
+		expect(
+			content.startsWith(head),
+			`快照正文没有以取代声明开头（期望开头 ${JSON.stringify(head)}，实际 ${JSON.stringify(content.slice(0, 120))}）`,
+		).toBe(true);
+	}
+
+	it(
+		"7.1 仅 current_time 跨分钟：只追加一条 run-time；环境块不追加且旧行逐字节不变",
+		async () => {
+			endpoint.setReply(() => sseText("收到。"));
+			const inputs = productionInputs({
+				cwd: "C:\\proj",
+				at: AT_11_01,
+				memory: RUNTIME_BLOCK,
+			});
+			const manager = SessionManager.create(cwd, sessionsDir);
+			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
+			try {
+				await session.prompt("第一轮");
+				const file = sessionFileOf(manager);
+				const envAfter1 = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				const timeAfter1 = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
+				expect(envAfter1).toHaveLength(1);
+				expect(timeAfter1).toHaveLength(1);
+				expect(envAfter1[0]?.content).toContain("工作目录：C:\\proj");
+				expect(timeAfter1[0]?.content).toContain("<current_time>");
+				expect(timeAfter1[0]?.content).toContain(formatRunTime(AT_11_01));
+
+				// run 2：环境事实逐字节未变，只是墙钟跨了分钟。两份正文都按生产的方式
+				// **重新渲染一次**（session-host 每个 run 都从同一份 section 名单重算）——
+				// 若时间被拼回了环境块，这里渲染出的环境块就会跟着分钟一起变，
+				// 下面那条计数断言立刻红。
+				const next = productionInputs({
+					cwd: "C:\\proj",
+					at: AT_11_02,
+					memory: RUNTIME_BLOCK,
+				});
+				const nextRunTime = next.runTime;
+				expect(nextRunTime, "夹具坏了：时间块渲染不出").toBeDefined();
+				expect(nextRunTime).not.toBe(inputs.runTime);
+				inputs.runTime = nextRunTime;
+				inputs.hiddenContext = next.hiddenContext;
+				await session.prompt("第二轮");
+
+				const envAfter2 = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				expect(
+					envAfter2,
+					"环境块没变却追加了 ⇒ 时间被拼回了环境块（这正是本组要拦的回退）",
+				).toHaveLength(1);
+				// 既有那条的**原始 JSON 行与行号**逐字节不变（append-only）。
+				expect(envAfter2.map((line) => line.raw)).toEqual(envAfter1.map((line) => line.raw));
+				expect(envAfter2[0]).toEqual(envAfter1[0]);
+
+				const timeAfter2 = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
+				expect(timeAfter2, "时间跨分钟却没追加").toHaveLength(2);
+				expect(timeAfter2[0], "追加不许动既有那条（append-only）").toEqual(timeAfter1[0]);
+				expect(timeAfter2[1]?.content).toBe(nextRunTime);
+				expect(timeAfter2[1]?.content).toContain(formatRunTime(AT_11_02));
+				expect(timeAfter2[1]?.display).toBe(false);
+				// runtime 通道与本例无关，两次 run 都一样 ⇒ 始终 1 条。
+				expect(snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE)).toHaveLength(1);
+
+				// 夹具守卫（放在行为断言之后）：这一轮渲染出的环境块必须与上一轮逐字节相同
+				// ——「环境事实没变」是上面结论的前提。放最后，本组自证时先红的才是
+				// 「只追加时间那一条」。
+				expect(next.hiddenContext, "夹具坏了：环境块两次渲染不一致").toBe(envAfter1[0]?.content);
+				// 形状：时间只在时间块里 —— 环境块的正文里没有 `<current_time>`。
+				expect(envAfter2[0]?.content, "环境块里还带着时间").not.toContain("<current_time>");
+			} finally {
+				session.dispose();
+			}
+		},
+		60_000,
+	);
+
+	it(
+		"7.2 环境事实变了（工作目录）、时间未跨分钟：只追加一条环境块；时间块不追加",
+		async () => {
+			endpoint.setReply(() => sseText("收到。"));
+			const inputs = productionInputs({ cwd: "C:\\proj", at: AT_11_01, memory: RUNTIME_BLOCK });
+			const manager = SessionManager.create(cwd, sessionsDir);
+			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
+			try {
+				await session.prompt("第一轮");
+				const file = sessionFileOf(manager);
+				const envAfter1 = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				const timeAfter1 = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
+				expect(envAfter1).toHaveLength(1);
+				expect(timeAfter1).toHaveLength(1);
+
+				// run 2：工作目录变了（环境事实），同一分钟（时间块逐字节相同）。
+				const next = productionInputs({
+					cwd: "C:\\proj\\sub",
+					at: AT_11_01,
+					memory: RUNTIME_BLOCK,
+				});
+				expect(next.runTime, "夹具坏了：同一分钟的时间块应当逐字节相同").toBe(inputs.runTime);
+				const nextHidden = next.hiddenContext;
+				expect(nextHidden, "夹具坏了：环境块渲染不出").toBeDefined();
+				expect(nextHidden).not.toBe(inputs.hiddenContext);
+				inputs.hiddenContext = nextHidden;
+				await session.prompt("第二轮");
+
+				const envAfter2 = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				expect(envAfter2, "环境事实变了却没追加").toHaveLength(2);
+				expect(envAfter2[0], "追加不许动既有那条（append-only）").toEqual(envAfter1[0]);
+				expect(envAfter2[1]?.content).toBe(nextHidden);
+				expect(envAfter2[1]?.content).toContain("工作目录：C:\\proj\\sub");
+				// 时间块没变 ⇒ 不追加（旧那条的原始行不变）。
+				expect(snapshotLines(file, RUN_TIME_CUSTOM_TYPE).map((line) => line.raw)).toEqual(
+					timeAfter1.map((line) => line.raw),
+				);
+			} finally {
+				session.dispose();
+			}
+		},
+		60_000,
+	);
+
+	it(
+		"7.3 三条通道互不触发：三条 run 分别只让一条通道变化（各自按自己的 customType 读基线）",
+		async () => {
+			endpoint.setReply(() => sseText("收到。"));
+			const inputs = productionInputs({ cwd: "C:\\proj", at: AT_11_01, memory: RUNTIME_BLOCK });
+			const manager = SessionManager.create(cwd, sessionsDir);
+			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
+			try {
+				const counts = (file: string): readonly number[] => [
+					snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE).length,
+					snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE).length,
+					snapshotLines(file, RUN_TIME_CUSTOM_TYPE).length,
+				];
+
+				await session.prompt("第一轮");
+				const file = sessionFileOf(manager);
+				expect(counts(file), "三条通道首次 run 各落一条").toEqual([1, 1, 1]);
+
+				// run 2：只有画像变（记忆内容改了）。环境事实与时间逐字节相同。
+				const run2 = productionInputs({
+					cwd: "C:\\proj",
+					at: AT_11_01,
+					memory: `${RUNTIME_BLOCK}\n\n（本轮新增一条记忆）`,
+				});
+				expect(run2.hiddenContext, "夹具坏了：run 2 不该动环境块").toBe(inputs.hiddenContext);
+				expect(run2.runTime, "夹具坏了：run 2 不该动时间块").toBe(inputs.runTime);
+				expect(run2.runtimeContext).not.toBe(inputs.runtimeContext);
+				inputs.runtimeContext = run2.runtimeContext;
+				await session.prompt("第二轮");
+				expect(counts(file), "只有画像变 ⇒ 只追加 runtime 那一条").toEqual([2, 1, 1]);
+
+				// run 3：只有环境事实变（工作目录）。画像保持 run 2 那份，时间逐字节相同。
+				inputs.hiddenContext = composeHiddenBlock(
+					hiddenSections("C:\\proj\\sub", AT_11_01),
+					"user-context",
+				);
+				await session.prompt("第三轮");
+				expect(counts(file), "只有环境事实变 ⇒ 只追加 hidden 那一条").toEqual([2, 2, 1]);
+			} finally {
+				session.dispose();
+			}
+		},
+		60_000,
+	);
+
+	it(
+		"7.4 每一条快照正文都以取代声明开头（会话文件原始行 + 模型端点收到的请求体）",
+		async () => {
+			endpoint.setReply(() => sseText("收到。"));
+			const inputs = productionInputs({ cwd: "C:\\proj", at: AT_11_01, memory: RUNTIME_BLOCK });
+			const manager = SessionManager.create(cwd, sessionsDir);
+			const session = await openSession({ cwd, agentDir, catalog, sessionManager: manager, inputs });
+			try {
+				await session.prompt("第一轮");
+				const file = sessionFileOf(manager);
+
+				// ① 会话文件：三条通道的正文都以声明开头（容器块的声明在开标签之后第一行）。
+				const env = snapshotLines(file, HIDDEN_CONTEXT_CUSTOM_TYPE);
+				const time = snapshotLines(file, RUN_TIME_CUSTOM_TYPE);
+				const runtime = snapshotLines(file, RUNTIME_CONTEXT_CUSTOM_TYPE);
+				expect(env).toHaveLength(1);
+				expect(time).toHaveLength(1);
+				expect(runtime).toHaveLength(1);
+				expectNoteFirstLine(env[0]?.content ?? "", `${HIDDEN_CONTEXT_MARKER}user-context">`);
+				expectNoteFirstLine(time[0]?.content ?? "", `${HIDDEN_CONTEXT_MARKER}additional-data">`);
+				// 画像/个性化没有 XML 容器：声明就是正文第一行（不是「包含」，是开头）。
+				expect(runtime[0]?.content.startsWith(`${SNAPSHOT_SUPERSEDE_NOTE}\n\n`)).toBe(true);
+				expect(runtime[0]?.content).toContain(RUNTIME_BLOCK);
+
+				// ② 模型真收到了它（请求体里逐字可查）——「落进会话文件」不等于「模型看见了」。
+				const last = endpoint.requests.at(-1);
+				const visible = requestMessages(last)
+					.map((message) => messageText(message))
+					.join("\n");
+				expect(visible).toContain(SNAPSHOT_SUPERSEDE_NOTE);
+				expect(visible).toContain(env[0]?.content ?? "（夹具坏了：环境块是空的）");
 			} finally {
 				session.dispose();
 			}

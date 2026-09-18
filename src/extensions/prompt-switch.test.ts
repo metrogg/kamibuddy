@@ -2,10 +2,10 @@
  * 提示词切换扩展的胶水测试（仿 permission-gate.test 的假 ExtensionAPI）。
  *
  * 策略本体在 prompt-composer / resources 里测过了，这里钉三类东西：
- *   1. 接缝：before_agent_start 被注册三个 handler（systemPrompt + 两条快照
+ *   1. 接缝：before_agent_start 被注册四个 handler（systemPrompt + 三条快照
  *      通道）、每次触发都带「当时的两轴」去 compose、compose 的返回值原样成为
  *      systemPrompt；
- *   2. 快照通道：两条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
+ *   2. 快照通道：三条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
  *      独立追加（内容未变不返回 message ⇒ pi 不追加条目），空内容不注入；
  *   3. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
  *      相等 —— 组装**走生产入口**（core/system-prompt-composer.ts 的
@@ -29,6 +29,7 @@ import {
 } from "../core/system-prompt-composer.ts";
 import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
+	RUN_TIME_CUSTOM_TYPE,
 	RUNTIME_CONTEXT_CUSTOM_TYPE,
 } from "../shared/observability.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
@@ -62,17 +63,22 @@ interface Mounted {
 	readonly handler: Handler;
 	/** 第 2 个 handler：runtime-context 快照通道。 */
 	readonly runtime: Handler;
-	/** 第 3 个 handler：hidden-context 快照通道。 */
+	/** 第 3 个 handler：hidden-context（环境块）快照通道。 */
 	readonly hidden: Handler;
-	/** 传给两个快照 handler 的假 ctx（buildContextEntries 由用例给定）。 */
+	/** 第 4 个 handler：run-time（时间块）快照通道。 */
+	readonly runTime: Handler;
+	/** 传给三个快照 handler 的假 ctx（buildContextEntries 由用例给定）。 */
 	readonly ctx: FakeCtx;
 }
 
 const EMPTY_EVENT: HandlerEvent = { systemPromptOptions: {} };
-/** 注入块样例：runtime-context 通道只有记忆内容 / 个性化（时间走 hidden context）。 */
+/** 注入块样例：runtime-context 通道只有记忆内容 / 个性化（时间走 run-time 通道）。 */
 const RUNTIME_BLOCK = "## 长期记忆（用户级）\n\n报告一律用表格呈现数据。";
 const HIDDEN_BLOCK =
 	'<system-reminder data-role="user-context">\n<workspace_context>\n工作目录：D:\\proj\n</workspace_context>\n</system-reminder>';
+/** 时间块的正文形态与 `composeHiddenBlock(…, "additional-data")` 的产物一致。 */
+const RUN_TIME_BLOCK =
+	'<system-reminder data-role="additional-data">\n<current_time>\n2026-09-18 11:01（周五，GMT+8）\n</current_time>\n</system-reminder>';
 
 /**
  * 假 ctx 的默认基线：没有同类型快照（新会话）。
@@ -97,6 +103,7 @@ function mount(options: {
 	) => Promise<string>;
 	readonly runtimeContext?: () => string;
 	readonly hiddenContext?: () => string | undefined;
+	readonly runTime?: () => string | undefined;
 	readonly entries?: readonly unknown[];
 }): Mounted {
 	const handlers: Handler[] = [];
@@ -111,15 +118,22 @@ function mount(options: {
 		compose: options.compose,
 		composeRuntimeContext: options.runtimeContext ?? (() => ""),
 		composeHiddenContext: options.hiddenContext ?? (() => undefined),
+		composeRunTime: options.runTime ?? (() => undefined),
 	})(fakePi);
 
-	// 三个 handler 是编排契约的一部分（一个换提示词、两个各管一条快照通道）：
+	// 四个 handler 是编排契约的一部分（一个换提示词、三个各管一条快照通道）：
 	// 少了任何一个都说明「通道被并进别的 handler」或「通道被删」—— 直接炸。
-	const [handler, runtime, hidden] = handlers;
-	if (handlers.length !== 3 || handler === undefined || runtime === undefined || hidden === undefined) {
-		throw new Error(`before_agent_start 处理器注册数不对：${handlers.length}（应为 3）`);
+	const [handler, runtime, hidden, runTime] = handlers;
+	if (
+		handlers.length !== 4 ||
+		handler === undefined ||
+		runtime === undefined ||
+		hidden === undefined ||
+		runTime === undefined
+	) {
+		throw new Error(`before_agent_start 处理器注册数不对：${handlers.length}（应为 4）`);
 	}
-	return { handler, runtime, hidden, ctx: ctxWith(options.entries ?? []) };
+	return { handler, runtime, hidden, runTime, ctx: ctxWith(options.entries ?? []) };
 }
 
 describe("before_agent_start 接缝", () => {
@@ -210,25 +224,32 @@ describe("before_agent_start 接缝", () => {
 });
 
 /**
- * 两条快照通道（spec: persist-context-snapshots Task 2）。
+ * 三条快照通道（spec: persist-context-snapshots Task 2 + spec:
+ * add-supersede-note-and-time-split Task 2）。
  *
  * 形态级断言只有一条是关键的：**内容没变就不返回 message**。pi 的
  * emitBeforeAgentStart 只把返回了的 message 收进 messages 数组
  * （runner.js），所以「不返回」就等于「不追加条目」—— 这正是每 run 重付
  * 58,094 token 的止血点。去重基线取会话活分支（`buildContextEntries()`），
  * 不做进程内缓存，所以 resume / 新进程同样正确。
+ *
+ * 三条通道（runtime-context / hidden-context 环境块 / run-time 时间块）**各读
+ * 各的基线**：时间按分钟变、环境事实几乎不变、画像偶尔变 —— 共用一个基线会让
+ * 变化频率最低的那条被频率最高的那条拖着重发（本组最后两个用例钉这个）。
  */
-describe("快照通道：两条通道各自独立去重、各自追加", () => {
-	it("首次 run（活分支上没有同类型快照）→ 两条通道各返回一条 message，形态为持久 custom 消息", async () => {
-		const { runtime, hidden, ctx } = mount({
+describe("快照通道：三条通道各自独立去重、各自追加", () => {
+	it("首次 run（活分支上没有同类型快照）→ 三条通道各返回一条 message，形态为持久 custom 消息", async () => {
+		const { runtime, hidden, runTime, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
 			hiddenContext: () => HIDDEN_BLOCK,
+			runTime: () => RUN_TIME_BLOCK,
 		});
 
 		const runtimeResult = await runtime(EMPTY_EVENT, ctx);
 		const hiddenResult = await hidden(EMPTY_EVENT, ctx);
+		const runTimeResult = await runTime(EMPTY_EVENT, ctx);
 
 		expect(runtimeResult).toEqual({
 			message: {
@@ -237,7 +258,8 @@ describe("快照通道：两条通道各自独立去重、各自追加", () => {
 				display: false,
 			},
 		});
-		// 两块正文各自成一条（不拼成一条）：合并会让 73% 的稳定内容跟着每 run 重发。
+		// 三块正文各自成一条（不拼成一条）：合并会让逐字节没变的那部分跟着
+		// 时间每 run 重发。
 		expect(hiddenResult).toEqual({
 			message: {
 				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
@@ -245,36 +267,75 @@ describe("快照通道：两条通道各自独立去重、各自追加", () => {
 				display: false,
 			},
 		});
+		expect(runTimeResult).toEqual({
+			message: {
+				customType: RUN_TIME_CUSTOM_TYPE,
+				content: RUN_TIME_BLOCK,
+				display: false,
+			},
+		});
 	});
 
-	it("内容与活分支上最后一条同类型快照逐字节相同 → 不返回 message（run 2 不追加条目）", async () => {
-		// resume / 第二个 run 的形态：上一条快照已经在会话文件里（同内容）。
-		const { runtime, hidden, ctx } = mount({
+	it("三条通道各自读自己的基线：末条属于别的通道时不算基线（互不触发）", async () => {
+		/*
+		 * 三条通道的正文在活分支上**各有一条同内容的末条**，但它们彼此交错。
+		 * 正确实现下三条都「内容没变 ⇒ 不追加」；任何形式的「共用一个基线」
+		 * （读别的通道的 customType、或读末条 custom_message 不看类型）都会让
+		 * 前两条读到**别人的**内容 ⇒ 误判为变了 ⇒ 多追加一条（本用例红）。
+		 * 这正是 Task 3 第三组改坏要变红的断言。
+		 */
+		const { runtime, hidden, runTime, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
 			hiddenContext: () => HIDDEN_BLOCK,
+			runTime: () => RUN_TIME_BLOCK,
+			entries: [
+				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
+				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				snapshotEntry(RUN_TIME_CUSTOM_TYPE, RUN_TIME_BLOCK),
+			],
+		});
+
+		expect(await runtime(EMPTY_EVENT, ctx), "runtime 通道读到了别人的基线").toBeUndefined();
+		expect(await hidden(EMPTY_EVENT, ctx), "hidden 通道读到了别人的基线").toBeUndefined();
+		expect(await runTime(EMPTY_EVENT, ctx), "run-time 通道读到了别人的基线").toBeUndefined();
+	});
+
+	it("内容与活分支上最后一条同类型快照逐字节相同 → 不返回 message（run 2 不追加条目）", async () => {
+		// resume / 第二个 run 的形态：上一条快照已经在会话文件里（同内容）。
+		const { runtime, hidden, runTime, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			runtimeContext: () => RUNTIME_BLOCK,
+			hiddenContext: () => HIDDEN_BLOCK,
+			runTime: () => RUN_TIME_BLOCK,
 			entries: [
 				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
 				{ type: "message", message: { role: "user", content: "上一轮提问" } },
 				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				snapshotEntry(RUN_TIME_CUSTOM_TYPE, RUN_TIME_BLOCK),
 			],
 		});
 
 		expect(await runtime(EMPTY_EVENT, ctx)).toBeUndefined();
 		expect(await hidden(EMPTY_EVENT, ctx)).toBeUndefined();
+		expect(await runTime(EMPTY_EVENT, ctx)).toBeUndefined();
 	});
 
-	it("只变了一条时另一条照旧不追加（两条通道各自读自己的基线，互不串台）", async () => {
-		const changedHidden = `${HIDDEN_BLOCK}\n<current_time>\n2026-09-18 11:00（周五，GMT+8）\n</current_time>`;
-		const { runtime, hidden, ctx } = mount({
+	it("只变了一条时另两条照旧不追加（三条通道各自读自己的基线）", async () => {
+		// 环境事实变了（换工作目录）、画像与时间逐字节没变。
+		const changedHidden = HIDDEN_BLOCK.replace("D:\\proj", "D:\\proj\\sub");
+		const { runtime, hidden, runTime, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
 			hiddenContext: () => changedHidden,
+			runTime: () => RUN_TIME_BLOCK,
 			entries: [
 				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
 				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				snapshotEntry(RUN_TIME_CUSTOM_TYPE, RUN_TIME_BLOCK),
 			],
 		});
 
@@ -283,6 +344,37 @@ describe("快照通道：两条通道各自独立去重、各自追加", () => {
 			message: {
 				customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
 				content: changedHidden,
+				display: false,
+			},
+		});
+		expect(await runTime(EMPTY_EVENT, ctx)).toBeUndefined();
+	});
+
+	it("仅时间跨分钟：只追加 run-time 一条，环境块不追加（拆通道的收益就在这条）", async () => {
+		/*
+		 * 上一版把 current_time 拼在环境块里，于是「分钟一变」= 整条 1,066 字符
+		 * 重发（其中约 510 token 是逐字节没变的重复内容）。拆成两条通道后，
+		 * 环境块（逐字节没变）不追加，只有时间块追加一条（**实测 150 字符 / 61 estTokens**，
+		 * 其中真新信息只有时间戳 26 字符 ≈11 est）。
+		 */
+		const nextMinute =
+			'<system-reminder data-role="additional-data">\n<current_time>\n2026-09-18 11:02（周五，GMT+8）\n</current_time>\n</system-reminder>';
+		const { hidden, runTime, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			hiddenContext: () => HIDDEN_BLOCK,
+			runTime: () => nextMinute,
+			entries: [
+				snapshotEntry(HIDDEN_CONTEXT_CUSTOM_TYPE, HIDDEN_BLOCK),
+				snapshotEntry(RUN_TIME_CUSTOM_TYPE, RUN_TIME_BLOCK),
+			],
+		});
+
+		expect(await hidden(EMPTY_EVENT, ctx), "环境块没变却追加了（时间被拼回了环境块）").toBeUndefined();
+		expect(await runTime(EMPTY_EVENT, ctx)).toEqual({
+			message: {
+				customType: RUN_TIME_CUSTOM_TYPE,
+				content: nextMinute,
 				display: false,
 			},
 		});
@@ -323,24 +415,27 @@ describe("快照通道：两条通道各自独立去重、各自追加", () => {
 		expect(await hidden(EMPTY_EVENT, ctx)).not.toBeUndefined();
 	});
 
-	it("空内容不注入（runtime 空白串 / hidden undefined → 该通道不产生消息）", async () => {
-		const { runtime, hidden, ctx } = mount({
+	it("空内容不注入（runtime 空白串 / hidden 与 run-time undefined → 该通道不产生消息）", async () => {
+		const { runtime, hidden, runTime, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => "  \n ",
 			hiddenContext: () => undefined,
+			runTime: () => "   ",
 		});
 
 		expect(await runtime(EMPTY_EVENT, ctx)).toBeUndefined();
 		expect(await hidden(EMPTY_EVENT, ctx)).toBeUndefined();
+		expect(await runTime(EMPTY_EVENT, ctx)).toBeUndefined();
 	});
 
 	it("读会话失败 → 降级为「没有基线」⇒ 追加，且不抛错（pi 的 must-not-throw 契约）", async () => {
-		const { runtime, hidden } = mount({
+		const { runtime, hidden, runTime } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
 			runtimeContext: () => RUNTIME_BLOCK,
 			hiddenContext: () => HIDDEN_BLOCK,
+			runTime: () => RUN_TIME_BLOCK,
 		});
 		const broken: FakeCtx = {
 			sessionManager: {
@@ -352,6 +447,7 @@ describe("快照通道：两条通道各自独立去重、各自追加", () => {
 
 		expect(await runtime(EMPTY_EVENT, broken)).not.toBeUndefined();
 		expect(await hidden(EMPTY_EVENT, broken)).not.toBeUndefined();
+		expect(await runTime(EMPTY_EVENT, broken)).not.toBeUndefined();
 	});
 
 	it("只读活分支：被压缩遮蔽掉的快照不算基线（下一次 run 按需重新追加）", async () => {

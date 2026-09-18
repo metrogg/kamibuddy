@@ -25,8 +25,9 @@
  *     （工具定义不在 systemSegments 里）—— 分段逐段一致时只能如实说断点在提示词之前；
  *   - 上一轮台账没有分段指纹（旧台账）时，只有字符数可对照，判不出就说判不出。
  *
- * **上下文快照**（`kamibuddy-runtime-context` / `kamibuddy-hidden-context`）**是真历史、
- * 不得剔除** —— 其差异就是真实断点。快照由 extensions/prompt-switch.ts 的
+ * **上下文快照**（`kamibuddy-runtime-context` / `kamibuddy-hidden-context` /
+ * `kamibuddy-run-time` —— 第三条是时间块，spec: add-supersede-note-and-time-split）
+ * **是真历史、不得剔除** —— 其差异就是真实断点。快照由 extensions/prompt-switch.ts 的
  * `before_agent_start` handler 落成会话文件里的持久条目，落盘那一刻 id
  * （`custom:<timestamp>`）与位置就定下，此后逐条 diff 看到的是**真实**的断点。
  *

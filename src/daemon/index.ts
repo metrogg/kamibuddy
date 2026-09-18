@@ -2305,7 +2305,7 @@ async function createHost(
 				// 由本会话 SessionHost 的 hidden context `current_time` 送达。
 				composeRuntimeContext: () => buildRuntimeContext(cwd),
 				/*
-				 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文。
+				 * hidden context 快照通道：取本 run 在宿主里冻结的那份**环境块**全文。
 				 * 时序成立 —— before_agent_start 只在 pi 的 session.prompt() 里触发，
 				 * 而 host.prompt() 在调它之前已同步 freeze（见
 				 * session-host.peekHiddenContext 的注释）。这里用 `host` 是
@@ -2313,6 +2313,12 @@ async function createHost(
 				 * （subagent-runner / member-runner 同形），事件触发时 host 必已赋值。
 				 */
 				composeHiddenContext: () => host.peekHiddenContext(),
+				/*
+				 * 时间快照通道：同一次 freeze 的另一半（`kamibuddy-run-time`）。
+				 * 与环境块分开取：两条通道各自去重，时间跨分钟时只追加时间那一条
+				 * （spec: add-supersede-note-and-time-split）。
+				 */
+				composeRunTime: () => host.peekRunTime(),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -4052,10 +4058,18 @@ const handlers: Record<string, Handler> = {
 	// 最近一次注入的 hidden context 全文（任务诊断面板 ② 的「实际内容」块）。
 	// 宿主未建（还没发过消息）直接 undefined，不为此建宿主 —— 建宿主会产生
 	// 目录与模型校验副作用，展示口不该有这些代价。
+	//
+	// 两份快照各自是一条落盘消息（环境块 / 时间块，spec:
+	// add-supersede-note-and-time-split）；展示口按注入顺序拼成一屏（IPC 契约不变，
+	// 面板不需要为此分两块），取不到哪一份就少哪一份、都不取到才 undefined。
 	[INVOKE.hiddenContext]: async () => {
 		const hostPromise = currentBucket.hostPromise;
 		if (hostPromise === undefined) return undefined;
-		return (await hostPromise).peekHiddenContext();
+		const host = await hostPromise;
+		const blocks = [host.peekHiddenContext(), host.peekRunTime()].filter(
+			(block): block is string => block !== undefined && block !== "",
+		);
+		return blocks.length === 0 ? undefined : blocks.join("\n");
 	},
 
 	/**

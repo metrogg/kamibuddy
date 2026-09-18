@@ -25,6 +25,7 @@ import {
 	type SkillDescriptor,
 } from "./prompt-composer.ts";
 import type { ExpertDefinition } from "./experts.ts";
+import { SNAPSHOT_SUPERSEDE_NOTE } from "../shared/hidden-context.ts";
 
 const BASE = {
 	sceneBody: "你是 KamiBuddy。\n\n# 模式\n{{interaction}}\n{{skills}}",
@@ -151,6 +152,21 @@ describe("运行时上下文注入块（formatRuntimeContext）", () => {
 		expect(out).toContain(MEMORY);
 		expect(out).toContain("用户希望被称为「老王」。");
 		expect(out.indexOf("## 长期记忆")).toBeLessThan(out.indexOf("用户希望被称为"));
+	});
+
+	it("正文第一行是取代声明（单点常量，三条快照通道共用）", () => {
+		/*
+		 * 画像/个性化是 append-only 的：内容一变就追加一条新的、旧的原样留档，
+		 * 而旧那条里写着「最后更新：…」这类会过期的事实 —— 模型必须知道冲突时
+		 * 以最新那条为准（spec: add-supersede-note-and-time-split 的 A）。
+		 * 声明是常量 ⇒ 同内容两次渲染逐字节相等，去重（shouldAppendSnapshot）
+		 * 不被它破坏。
+		 */
+		const out = formatRuntimeContext({ memoryContent: MEMORY });
+		expect(out.startsWith(`${SNAPSHOT_SUPERSEDE_NOTE}\n\n`)).toBe(true);
+		expect(formatRuntimeContext({ memoryContent: MEMORY })).toBe(out);
+		// 无内容时零 token：不白发一句声明出去。
+		expect(formatRuntimeContext({})).toBe("");
 	});
 
 	it("记忆为空 / 全空白不注入（零 token 口径不变）；个性化四项全空同理", () => {
