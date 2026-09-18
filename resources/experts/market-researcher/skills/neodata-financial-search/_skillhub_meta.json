@@ -1,0 +1,9 @@
+{
+  "name": "NeoData金融搜索服务",
+  "slug": "neodata-financial-search",
+  "version": "1.0.1",
+  "installedAt": 1779411700742,
+  "source": "marketplace",
+  "iconSource": "neodata-financial-search",
+  "preinstalledTemplate": true
+}

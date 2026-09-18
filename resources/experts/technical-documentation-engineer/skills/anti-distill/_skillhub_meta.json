@@ -1,0 +1,9 @@
+{
+  "name": "反蒸馏",
+  "slug": "anti-distill",
+  "version": "1.0.0",
+  "installedAt": 1779411701035,
+  "source": "marketplace",
+  "iconSource": "anti-distill",
+  "preinstalledTemplate": true
+}

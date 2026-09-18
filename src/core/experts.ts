@@ -43,7 +43,8 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { optionalStringArray, parseFrontmatter, requireString, requireStringArray } from "./frontmatter.ts";
 
 /** 专家人设文件名（目录布局：<name>/expert.md）。 */
@@ -114,17 +115,22 @@ function strayMarkdown(dir: string, allowed: readonly string[]): readonly string
 		.sort();
 }
 
-/** 读一个技能目录（<skills>/<name>/SKILL.md）的技能名。 */
-function loadSkillRef(skillDir: string): SkillRef {
-	const file = join(skillDir, SKILL_FILE);
-	if (!existsSync(file)) {
-		throw new Error(`${skillDir}: 技能目录缺少 ${SKILL_FILE}`);
-	}
-	const doc = parseFrontmatter(readFileSync(file, "utf8"), file);
-	return { name: requireString(doc, "name", file), file };
-}
-
-/** 收集专家私有技能（<expertDir>/skills/ 下的子目录）；没有 skills/ 目录 → 空。 */
+/**
+ * 收集专家私有技能（<expertDir>/skills/ 下的子目录）；没有 skills/ 目录 → 空。
+ *
+ * 技能 frontmatter **交给 pi 的 `loadSkills` 解析**，不用我们自己的 parseFrontmatter：
+ * 照搬来的上游技能会用嵌套映射（如 `metadata:`）这类真 YAML 构造，我们那个极简
+ * 解析器刻意不支持；而运行时真正把技能喂给模型的就是 pi（真 yaml 包）。
+ * 两边同源才不会出现「我们说这个技能没问题、pi 说不认」的错配。
+ *
+ * pi 的处置口径（`core/skills.ts` 的 loadSkillFromFile，已核对源码）：
+ *   - `name` 缺省 → 取技能目录名兜底，技能照常加载；
+ *   - name/description 不合规范（超长、非法字符）→ 只算 warning，**仍然加载**；
+ *   - description 缺失/为空、或 frontmatter 解析失败 → 该技能不加载。
+ * 所以「技能丢没丢」只认一件事：它有没有出现在 pi 返回的 skills 里 —— 这也是
+ * 本函数唯一会抛错的判断（目录形状另算）。warning 不抛：那是内容侧的规范问题，
+ * 改的是照搬资产，不该在加载器里拦停会话。
+ */
 function loadExpertSkills(expertDir: string): readonly SkillRef[] {
 	const skillsDir = join(expertDir, SKILLS_DIR);
 	if (!existsSync(skillsDir)) return [];
@@ -137,7 +143,29 @@ function loadExpertSkills(expertDir: string): readonly SkillRef[] {
 			`${skillsDir}: 专家的 skills/ 目录为空。技能必须放在 <技能名>/SKILL.md 下；没有私有技能就删掉该目录`,
 		);
 	}
-	return skillDirs.map((name) => loadSkillRef(join(skillsDir, name)));
+	for (const dirName of skillDirs) {
+		if (!existsSync(join(skillsDir, dirName, SKILL_FILE))) {
+			throw new Error(`${join(skillsDir, dirName)}: 技能目录缺少 ${SKILL_FILE}`);
+		}
+	}
+
+	const { skills } = loadSkills({
+		cwd: skillsDir,
+		agentDir: skillsDir,
+		skillPaths: [skillsDir],
+		includeDefaults: false,
+	});
+
+	const byDir = new Map(skills.map((skill) => [basename(dirname(skill.filePath)), skill]));
+	return skillDirs.map((dirName) => {
+		const skill = byDir.get(dirName);
+		if (skill === undefined) {
+			throw new Error(
+				`${join(skillsDir, dirName, SKILL_FILE)}: pi 没有加载这个技能（frontmatter 不合法，或缺 description）—— 这样模型看不到它`,
+			);
+		}
+		return { name: skill.name, file: skill.filePath };
+	});
 }
 
 /** 加载一个专家目录（<dir>/expert.md + 可选 skills/）。 */
@@ -252,17 +280,23 @@ export function loadExperts(
 	for (const loaded of builtin) byName.set(loaded.def.name, loaded);
 	for (const loaded of user) byName.set(loaded.def.name, loaded);
 
-	// 重名校验：先占位全局技能，再逐个专家登记私有技能；命中即报错并带两边路径。
-	// 在合并后的最终集合上校验：被用户级覆盖掉的内置专家不参与（它的技能也不生效）。
+	// 重名校验的边界（2026-09 修订，起因：照搬专家的技能池）：
+	//   - 全局技能 vs 专家私有技能 → **必须唯一**。两者会同时进同一个会话的技能池
+	//     （全局恒在，绑定专家时追加私有目录），重名会让 pi 静默取先者。
+	//   - 专家之间 → **允许同名**。一个会话只可能绑定一个专家，两者的私有技能
+	//     永不同时在场；而且上游专家包本身就共享技能池（equity-research 与
+	//     market-researcher 都带 sector-overview / idea-generation），要求全局唯一
+	//     就等于要求把技能从某个专家里删掉 —— 专家不再自包含。
+	// 否决方案：把重名技能只留一份、另一处不复制。否掉的理由就是自包含 ——
+	// 绑定 market-researcher 时它的 sector-overview 会凭空消失。
 	const claimed = new Map<string, string>();
 	for (const ref of loadGlobalSkills(globalSkillsDir)) claimed.set(ref.name, ref.file);
 	for (const loaded of byName.values()) {
 		for (const ref of loaded.skills) {
 			const other = claimed.get(ref.name);
 			if (other !== undefined) {
-				throw new Error(`技能名「${ref.name}」重复：${ref.file} 与 ${other}`);
+				throw new Error(`技能名「${ref.name}」与全局技能重名：${ref.file} 与 ${other}`);
 			}
-			claimed.set(ref.name, ref.file);
 		}
 	}
 

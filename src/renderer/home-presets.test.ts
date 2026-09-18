@@ -16,9 +16,9 @@ const CHIPS: readonly WelcomeChip[] = [
 ];
 
 const CASES: readonly WelcomeCase[] = [
-	{ id: "c1", chipId: "doc", title: "订单接口文档", subtitle: "s", prompt: "写接口文档", cover: "https://x/1.png" },
-	{ id: "c2", chipId: "doc", title: "读书笔记卡", subtitle: "s", prompt: "做读书笔记", cover: "https://x/2.png" },
-	{ id: "c3", chipId: "slides", title: "品牌介绍 PPT", subtitle: "s", prompt: "做 PPT", cover: "https://x/3.png" },
+	{ id: "c1", chipId: "doc", title: "订单接口文档", subtitle: "s", prompt: "写接口文档", expert: "technical-documentation-engineer", cover: "https://x/1.png" },
+	{ id: "c2", chipId: "doc", title: "读书笔记卡", subtitle: "s", prompt: "做读书笔记", expert: "technical-documentation-engineer", cover: "https://x/2.png" },
+	{ id: "c3", chipId: "slides", title: "品牌介绍 PPT", subtitle: "s", prompt: "做 PPT", expert: "ppt-creation-expert", cover: "https://x/3.png" },
 ];
 
 describe("chipsForScene", () => {
