@@ -1438,6 +1438,7 @@ textarea:focus-visible {
 	padding: var(--space-2);
 	border-radius: var(--radius-sm);
 	color: var(--text-secondary);
+	/* transition 见文件末尾「走 scale 的那批」共享块（本条会被它顶掉，故不在此声明）。 */
 }
 
 /* :not(:disabled) —— .bar-btn 带 disabled 的调用点不少（pdf 翻页/缩放、产物「外部打开」、
@@ -1537,6 +1538,9 @@ textarea:focus-visible {
 	border-radius: var(--radius-full);
 	background: var(--primary);
 	color: var(--primary-text);
+	/* transition 不写在这里：本类是文件末尾「走 scale 的那批」共享块的成员，
+	   那里统一声明 transform / background-color / color / opacity 四个属性
+	   （该块排在本条之后，写在这里会被整条顶掉 —— 见那处的注释）。 */
 }
 
 /* 注：输入框旁的「立即插入」按钮（.insert-btn）2026-09-17 移除 —— 空输入框时
@@ -1839,10 +1843,18 @@ textarea:focus-visible {
 	color: var(--text);
 }
 
-/* 首页那颗仍是基类的三级灰 —— 显式写出来，避免后人以为漏了规则又去「补」一条。 */
-.context-row .permission-menu-zone .context-chip {
-	color: var(--text-secondary);
-}
+/*
+ * 首页**不写覆盖**：基类的三级灰就是它要的颜色，hover 加深由 `.context-chip:hover`
+ * 天然生效。
+ *
+ * 【2026-09-18 自查订正】这里一度显式写了
+ * `.context-row .permission-menu-zone .context-chip { color: var(--text-secondary) }`
+ * —— 画蛇添足且有害：它是 (0,3,0)，盖过了 `.context-chip:hover` 的 (0,2,0)，
+ * 首页那颗 chip 从此 hover 不再变黑（而 WB 的挂件 hover 是会加深的，用户实测
+ * 正是以「默认权限：灰 → hover 变黑」举例说明这种小交互不能再丢）。
+ * 教训：为「显式表达意图」而复制一条与基类同值的规则，会顺带吃掉基类上的状态规则
+ *（:hover / :focus-visible）。意图写在注释里，别写成规则。
+ */
 
 /*
  * 「允许完全访问」档的整颗红字（WB 的 buttonDanger → `--cr-permission-danger`）。
@@ -5534,6 +5546,7 @@ textarea:focus-visible {
 	font-size: var(--text-meta);
 	color: var(--text);
 	flex: 0 0 auto;
+	/* transition 见文件末尾「走 scale 的那批」共享块（本条会被它顶掉，故不在此声明）。 */
 }
 
 .mini-btn:hover:not(:disabled) {
@@ -5568,6 +5581,7 @@ textarea:focus-visible {
 	background: var(--primary);
 	color: var(--primary-text);
 	font-size: var(--text-list);
+	/* transition 见文件末尾「走 scale 的那批」共享块（本条会被它顶掉，故不在此声明）。 */
 }
 
 .primary-btn:hover:not(:disabled) {
@@ -6184,7 +6198,11 @@ textarea:focus-visible {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	background: var(--bg);
-	color: var(--text-muted);
+	/* 【2026-09-18 修】原写 `var(--text-muted)` —— 本 token **不存在**（tokens.css 只有
+	   --text-secondary(.5) / --text-faint(.3)），`var()` 解析失败会静默回退到**继承色**，
+	   于是这颗 chip 显示的是父级正文色而不是想要的浅灰。按相邻语义（同组 chip 走
+	   --text-secondary，这颗更轻）取 --text-faint。 */
+	color: var(--text-faint);
 	font: inherit;
 	font-size: var(--text-meta);
 	cursor: pointer;
@@ -7949,7 +7967,10 @@ textarea:focus-visible {
 
 .auto-tpl-schedule {
 	font-size: var(--text-meta);
-	color: var(--text-tertiary);
+	/* 【2026-09-18 修】同 .num-chip：原写 `var(--text-tertiary)`，本 token 不存在，
+	   解析失败静默回退继承色。它紧跟 .auto-tpl-desc（--text-secondary）之后，语义是
+	   再轻一档 → --text-faint。 */
+	color: var(--text-faint);
 }
 
 .auto-run-time {
@@ -9062,7 +9083,18 @@ textarea:focus-visible {
    走底色加深的那批（列表行 / 菜单项）**不加**过渡：它们的 hover 底本来就是瞬时的，
    按下再叠 150ms 渐显只会让「按下去」显得迟钝。
    .ex-card 不在这里——它本来就有 transition，已在定义处把 transform 加进那行
-   （不能在这覆盖，否则会把它原有的 border-color / background 过渡顶掉）。 */
+   （不能在这覆盖，否则会把它原有的 border-color / background 过渡顶掉）。
+
+   【2026-09-18 扩属性】原来这里只声明 `transform`，于是这一族的 **hover 变色/填底
+   全是硬切**：.bar-btn（`+`、图标按钮）hover 同时改 background+color、.mini-btn 改
+   background、.primary-btn 与 .send-btn 改 opacity —— 用户实测反馈「交互动画都没了，
+   很生硬」指的正是这些。现在把这一族真正会变的四个属性一次声明齐。
+   为什么加在**这里**而不是各自的定义处（我第一版就是那么写的，是错的）：
+   本条与各定义处同为 (0,1,0) 且排在其后，**会把定义处的 transition 整条顶掉** ——
+   写在定义处的 opacity/background 声明不会生效，只会让后人以为它管事。
+   改这一族的手感只改这一处；要单开例外就把该类从下面的名单里摘出去。
+   注意**不波及**列表行/菜单项（.ws-item / .model-menu-item / …）：它们不在名单里，
+   上面那条「不加过渡」的决策照旧。 */
 .bar-btn,
 .entry-icon-btn,
 .task-op-btn,
@@ -9075,7 +9107,9 @@ textarea:focus-visible {
 .skills-tab,
 .ex-cat,
 .model-card {
-	transition: transform var(--dur-fast) var(--ease-standard);
+	transition: transform var(--dur-fast) var(--ease-standard),
+		background-color var(--dur-fast) ease, color var(--dur-fast) ease,
+		border-color var(--dur-fast) ease, opacity var(--dur-fast) var(--ease-standard);
 }
 
 /* ── 禁用态视觉补齐 ────────────────────────────────────────────────────────

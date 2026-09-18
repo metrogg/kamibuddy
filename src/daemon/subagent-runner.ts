@@ -92,6 +92,13 @@ export interface SubagentRunnerDeps {
 	/** 当前生效模型：子代理缺省继承主会话模型（v1 不做子代理独立选模型）。 */
 	readonly getModelKey: () => string | undefined;
 	readonly resources: LoadedResources;
+	/**
+	 * 输出语言规则段（daemon 现读的 loadLanguagePrompt 结果，ARCHITECTURE §4.15）。
+	 * 子代理的中间报告与最终结论会回到主会话上下文里，用英文写就是往主会话灌
+	 * 英文材料 —— 那正是主会话飘成英文的诱因，所以子代理与主会话同一份规则。
+	 * undefined = 资源缺失（loadResources 启动时已拦，真实路径不可达）。
+	 */
+	readonly languageBody?: string;
 	readonly getPermissions: () => PermissionSettings;
 	/**
 	 * 全局默认推理强度（daemon 装配处注入，现读偏好）。子代理会话每次新建，
@@ -341,7 +348,14 @@ export function buildSubagentExtensions(
 		createPromptSwitch({
 			getCurrent: () => ({ sceneId: "work", interactionId: "craft" }),
 			compose: (_sceneId, _interactionId, _expertId, piContext) =>
-				Promise.resolve(composeSubagentPrompt({ agentBody: agent.body, cwd, piContext })),
+				Promise.resolve(
+					composeSubagentPrompt({
+						agentBody: agent.body,
+						cwd,
+						piContext,
+						...(deps.languageBody === undefined ? {} : { languageBody: deps.languageBody }),
+					}),
+				),
 			/*
 			 * hidden context 快照通道：取本 run 在宿主里冻结的那份全文（时序见
 			 * session-host.peekHiddenContext 的注释）。**子代理 / 成员会话与用户会话

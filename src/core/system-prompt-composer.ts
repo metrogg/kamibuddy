@@ -27,6 +27,8 @@
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
  * What the model sees: 产出的 `prompt` 字符串就是请求的 message 0（pi 的 forced 整串替换）；
  * `segments`（source + 字符数）与 `systemTokens` 只进台账与预览，不进请求。
+ * 段序以 `language` 段收尾（输出语言规则排在 `style:<id>` 风格段**之后**，
+ * 因为风格文件是搬用的英文材料、是「怎么说人话」的最后一条指令 —— 见 §4.15）。
  * Token effect: `systemTokens` 是字符估算（estimateTokens：CJK 约 1 token/字、其余约 4 字符/token，
  * **不是真 tokenizer**）；技能清单段另以 `skillsTokens` 单列供用量明细拆项。
  * KV Cache effect: 本模块是**前缀缓存的头部生产者** —— 同一会话两次组装必须逐字节相同；逐轮/逐 run
@@ -52,6 +54,7 @@ import {
 } from "./prompt-composer.ts";
 import {
 	DEFAULT_STYLE_ID,
+	loadLanguagePrompt,
 	loadResources,
 	resolveStyle,
 	type LoadedResources,
@@ -104,6 +107,8 @@ export interface AssembleSystemPromptInput {
 	readonly expert?: ExpertPersona;
 	/** 记忆**行为纪律**段（不是记忆内容 —— 内容走注入路径）。 */
 	readonly memorySystemBody?: string;
+	/** 输出语言规则段（`resources/prompts/language.md` 正文，见 ARCHITECTURE §4.15）。 */
+	readonly languageBody?: string;
 	readonly piContext?: PromptContextOptions;
 }
 
@@ -136,6 +141,7 @@ export async function assembleSystemPrompt(
 		resolveFragment: (name) => input.resources.fragments.get(name),
 		...(input.style === undefined ? {} : { style: input.style }),
 		...(input.memorySystemBody === undefined ? {} : { memorySystemBody: input.memorySystemBody }),
+		...(input.languageBody === undefined ? {} : { languageBody: input.languageBody }),
 		...(input.expert === undefined ? {} : { expert: input.expert }),
 		piContext: input.piContext,
 	});
@@ -172,6 +178,14 @@ export interface SystemPromptComposerDeps {
 	readonly readPreferences: () => Preferences;
 	/** 记忆行为纪律段现读（loadMemorySystemPrompt(resourcesDir) 的产物）。 */
 	readonly loadMemorySystemBody: () => string | undefined;
+	/**
+	 * 输出语言规则段现读（loadLanguagePrompt(resourcesDir) 的产物，§4.15）。
+	 *
+	 * 与 loadMemorySystemBody 一样是「现读」而不是启动快照：两者都由组装器
+	 * 直接注入，且 `loadResources` 已在启动时校验 language.md 存在且非空，
+	 * 所以返回 undefined 在真实路径上不可达（只为纯函数可测保留）。
+	 */
+	readonly loadLanguageBody: () => string | undefined;
 	/** 风格漂移的落点（daemon 写事件日志；探针打印）。 */
 	readonly onStyleDrift: (drift: StyleDrift) => void;
 	/** token 估算（core/observability.ts 的 estimateTokens）。 */
@@ -207,6 +221,9 @@ export function createSystemPromptComposer(deps: SystemPromptComposerDeps): Syst
 		// 记忆行为纪律段每轮现读（同技能清单口径）。读取失败单份降级为空、不抛错
 		// —— 记忆是增强不是门槛（core/memory.ts 文件头）。
 		const memorySystemBody = deps.loadMemorySystemBody();
+		// 输出语言段逐次现读（同记忆段口径）。它必须进 assembleSystemPrompt 的
+		// languageBody，由 composer 排到风格段之后 —— 位序理由见 §4.15。
+		const languageBody = deps.loadLanguageBody();
 		const assembled = await assembleSystemPrompt({
 			resources: deps.resources,
 			scene,
@@ -215,6 +232,7 @@ export function createSystemPromptComposer(deps: SystemPromptComposerDeps): Syst
 			...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 			...(expert === undefined ? {} : { expert: toExpertPersona(expert) }),
 			...(memorySystemBody === undefined ? {} : { memorySystemBody }),
+			...(languageBody === undefined ? {} : { languageBody }),
 			piContext: input.piContext,
 		});
 		return {
@@ -269,6 +287,7 @@ export function createSystemPromptComposerFromDefaults(
 		enabledSkills: options.enabledSkills,
 		onStyleDrift: options.onStyleDrift,
 		loadMemorySystemBody: () => loadMemorySystemPrompt(options.resourcesDir),
+		loadLanguageBody: () => loadLanguagePrompt(options.resourcesDir),
 		estimateTokens,
 		readPreferences: options.readPreferences ?? readPreferences,
 	});

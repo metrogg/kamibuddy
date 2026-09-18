@@ -148,6 +148,76 @@ describe("拒绝路径", () => {
 	});
 });
 
+/* ── 拒绝文案必须带「接下来怎么办」（2026-09-18，ARCHITECTURE §4.14 决策 D） ── */
+
+describe("拒绝文案带出出路", () => {
+	/*
+	 * 规则出处：permission-gate.ts 的 APPROVAL_REFUSAL 注释 ——「每档都要给一句
+	 * 『接下来怎么办』：只说『被拒了』会诱导模型原样重试」。
+	 *
+	 * 为什么值得一条机械守卫：这条规则**曾经不合规而无人发觉** —— `rejected`
+	 * 原文只有「用户拒绝了这次操作。」一句，`cancelled` 同理。文案是模型可见的
+	 * 输出，写坏了不会有编译错误、也不会有别的用例变红（全仓库没有一个用例钉过
+	 * 它）。这条守卫就是那个缺口的补丁。
+	 *
+	 * 判据取「有没有下一步」而不是钉死整句：措辞可以改，规则不能破。
+	 * 对应 docs/试用前自查报告.md 的验收项「拒绝后模型收到原因且不重试同一路径」。
+	 *
+	 * 覆盖不到的一档：`cancelled` **没有生产者**（shared/permissions.ts 的
+	 * ApprovalOutcome 注释自述「我们的审批请求没有中止通道」），所以它无法经真
+	 * 入口路径造出来；它的文案由穷尽 Record 强制存在，规则与其余档一致。
+	 */
+	const NEXT_STEP_MARKERS = ["改用", "请切换", "交给用户", "由用户"] as const;
+
+	/** 工作目录外写入 = 要询问（medium），三种档位把这一条变成三种不同的拒绝。 */
+	const OUTSIDE = join(HOME, "Desktop", "报告.txt");
+
+	function expectNextStep(reason: string | undefined): void {
+		expect(reason).toBeDefined();
+		const text = reason ?? "";
+		const hit = NEXT_STEP_MARKERS.filter((marker) => text.includes(marker));
+		// 失败时把整句打出来：光说「没有下一步」看不出该补什么。
+		expect(hit, `拒绝文案里找不到下一步指引：${text}`).not.toHaveLength(0);
+	}
+
+	it("用户拒绝（rejected）要把「别原样重试、换了也没用」说出来", async () => {
+		const { call } = mount({ approve: () => ({ id: "x", decision: "deny" }) });
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+		expectNextStep(result?.reason);
+	});
+
+	it("审批策略「不询问」（never）要说清重试必然失败并给两条出路", async () => {
+		const settings: PermissionSettings = {
+			sandbox: "workspace-write",
+			approval: "never",
+			presetId: "custom",
+		};
+		const { call } = mount({ settings, approve: () => ({ id: "x", decision: "allow" }) });
+		const result = await call({ toolName: "write", input: { path: OUTSIDE } });
+
+		expect(result?.block).toBe(true);
+		// 这一档的语义是「不问 = 不做」，批准也不该让它过去。
+		expect(result?.reason).toContain("不询问");
+		expectNextStep(result?.reason);
+	});
+
+	it("对照：只读预设的拒绝同样带出路（这条原本就合规，钉住不许回退）", async () => {
+		const settings: PermissionSettings = {
+			sandbox: "read-only",
+			approval: "ask",
+			presetId: "readonly",
+		};
+		const { call } = mount({ settings });
+		const result = await call({ toolName: "write", input: { path: join(WORKSPACE, "周报.html") } });
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("只读");
+		expectNextStep(result?.reason);
+	});
+});
+
 describe("询问路径", () => {
 	it("用户允许后不拦", async () => {
 		const { call, asked } = mount({ approve: () => ({ id: "x", decision: "allow" }) });

@@ -412,6 +412,86 @@ describe("回复风格注入（F8）", () => {
 	});
 });
 
+/* ── 输出语言段（ARCHITECTURE §4.15）：位序就是本段存在的全部理由 ────────── */
+
+describe("输出语言段", () => {
+	const LANGUAGE = "## 输出语言\n\n一律用简体中文输出。";
+	// 与 F8 那份同值（它定义在「回复风格注入（F8）」describe 内，此处取不到）。
+	const STYLE = { id: "socratic", body: "\n苏格拉底式提问，逐步引导。\n" };
+	const EXPERT = { displayName: "工作周报", profession: "职场汇报写作专家", body: "人格正文" };
+
+	it("**必须排在风格段之后** —— 风格文件是英文材料，语言规则要靠位序压过它", () => {
+		/*
+		 * 本节唯一要害：风格段是搬用 WorkBuddy 的英文材料（7 份全英文、正文带
+		 * 英文范例句），是「怎么说人话」的最后一条指令。语言规则排在它前面就要
+		 * 靠位置去赢一个 2,182 字符的英文段 —— 实测后果是过程叙述飘成英文。
+		 * 断言取**关系**（在 style 之后、且是核心段最后一段）而不是钉死整个数组：
+		 * 上方骨架/槽位怎么变不该让这条规则的红绿跟着动。
+		 */
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			modeId: "craft",
+			skillsSection: "技能清单X",
+			style: STYLE,
+			languageBody: LANGUAGE,
+		});
+		const sources = segments.map((s) => s.source);
+		expect(sources, `段序：${sources.join(" → ")}`).toContain("style:socratic");
+		expect(sources, `段序：${sources.join(" → ")}`).toContain("language");
+		expect(
+			sources.indexOf("language"),
+			`语言段跑到了风格段前面：${sources.join(" → ")}`,
+		).toBeGreaterThan(sources.indexOf("style:socratic"));
+		expect(sources[sources.length - 1], `语言段不在核心段末尾：${sources.join(" → ")}`).toBe(
+			"language",
+		);
+		// 字节等价（finalizeCore 的按段压平对它同样成立），正文里的先后也一致。
+		expect(segments.map((s) => s.text).join("")).toBe(text);
+		expect(text.indexOf("苏格拉底式提问")).toBeLessThan(text.indexOf("一律用简体中文输出"));
+	});
+
+	it("风格关闭（不传 style）时仍在核心段末尾 —— 不依赖风格是否开启", () => {
+		// BASE 骨架带 {{interaction}}，所以 mode 段恒存在（未给 modeId 时为 mode:unknown）。
+		const { segments } = composePromptWithMeta({ ...BASE, languageBody: LANGUAGE });
+		expect(segments.map((s) => s.source)).toEqual([
+			"skeleton",
+			"mode:unknown",
+			"skeleton",
+			"language",
+		]);
+	});
+
+	it("骨架没有 {{interaction}} 槽位时同样落在核心段末尾", () => {
+		const { segments } = composePromptWithMeta({
+			...BASE,
+			sceneBody: "只有骨架",
+			style: STYLE,
+			languageBody: LANGUAGE,
+		});
+		expect(segments.map((s) => s.source)).toEqual(["skeleton", "style:socratic", "language"]);
+	});
+
+	it("绑定专家时**不**让位：风格段缺席，语言段仍在（人格同样要用中文说话）", () => {
+		const { text, segments } = composePromptWithMeta({
+			...BASE,
+			expert: EXPERT,
+			style: STYLE,
+			languageBody: LANGUAGE,
+		});
+		// 前提确认：这条路径上风格段确实被抑制（否则本用例测不到让位语义）。
+		expect(text).not.toContain("## 回复风格");
+		expect(segments.map((s) => s.source)).toContain("language");
+	});
+
+	it("空白正文不注入（零 token 口径，同 skillsSection）", () => {
+		expect(composePrompt({ ...BASE, languageBody: "   \n" })).not.toContain("输出语言");
+	});
+
+	it("语言正文里的残留槽位（{{乱写}}）也被拦下", () => {
+		expect(() => composePrompt({ ...BASE, languageBody: "含 {{乱写}}" })).toThrow(/残留槽位/);
+	});
+});
+
 describe("记忆段注入（spec: add-memory-system）", () => {
 	const MEMORY_SYSTEM = "\n三层记忆的结构与写入纪律。\n";
 
@@ -472,6 +552,31 @@ describe("子代理提示词不注入风格与时间块", () => {
 		expect(out).not.toMatch(/Current time:/);
 		// 工作目录仍在（子代理不接 pi 内置 section，它是自包含身份）。
 		expect(out).toContain("当前工作目录：C:\\ws");
+	});
+
+	it("输出语言段照常注入，且排在 pi 上下文（可能是英文的 AGENTS.md）之前", () => {
+		/*
+		 * 子代理用英文写报告 = 往主会话上下文灌英文材料 —— 正是主会话飘成英文的
+		 * 诱因（§4.15）。所以它与主会话同一份规则；位序同理排在「怎么说人话」的
+		 * 指令之后、项目内容（pi 上下文）之前。
+		 */
+		const LANGUAGE = "## 输出语言\n\n一律用简体中文输出。";
+		const out = composeSubagentPrompt({
+			agentBody: "你是侦察员。",
+			cwd: "C:\\ws",
+			languageBody: LANGUAGE,
+			piContext: { contextFiles: [{ path: "C:\\ws\\AGENTS.md", content: "Use English please." }] },
+		});
+		expect(out).toContain("一律用简体中文输出");
+		// 相对位序：agent 正文 → 工作目录 → 输出语言 → pi 上下文。
+		expect(out.indexOf("当前工作目录")).toBeLessThan(out.indexOf("一律用简体中文输出"));
+		expect(out.indexOf("一律用简体中文输出")).toBeLessThan(out.indexOf("Use English please."));
+	});
+
+	it("缺省 languageBody → 不注入该段（既有调用点零改动，不凭空多一个空段）", () => {
+		expect(composeSubagentPrompt({ agentBody: "你是侦察员。", cwd: "C:\\ws" })).not.toContain(
+			"输出语言",
+		);
 	});
 });
 

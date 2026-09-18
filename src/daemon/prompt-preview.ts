@@ -52,6 +52,13 @@ export interface PromptPreviewEnvironment {
 	 * 发消息看到的提示词」静默漂移。undefined = 读取降级，对应段不出现。
 	 */
 	readonly memorySystemBody?: string;
+	/**
+	 * 输出语言规则段（daemon 现读的 loadLanguagePrompt 结果，ARCHITECTURE §4.15）。
+	 * 同 memorySystemBody：它是系统提示词的一个段，预览少了它就会与「此刻发消息
+	 * 看到的提示词」静默漂移 —— 而这段恰恰是用户最需要能在预览里核对的一段
+	 * （它要排到 `## 回复风格` 之后，位序错了正是本次要修的 bug）。
+	 */
+	readonly languageBody?: string;
 }
 
 /**
@@ -94,6 +101,7 @@ export async function buildPromptPreview(
 		...(style === undefined ? {} : { style: { id: style.id, body: style.body } }),
 		...(expert === undefined ? {} : { expert }),
 		...(env.memorySystemBody === undefined ? {} : { memorySystemBody: env.memorySystemBody }),
+		...(env.languageBody === undefined ? {} : { languageBody: env.languageBody }),
 		// piContext 的差异点见文件头注释（差异 1）。
 	});
 

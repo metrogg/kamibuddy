@@ -97,7 +97,7 @@ import {
 	type PersonalizationSection,
 	type SkillDescriptor,
 } from "../core/prompt-composer.ts";
-import { DEFAULT_STYLE_ID, loadResources, toDescriptors } from "../core/resources.ts";
+import { DEFAULT_STYLE_ID, loadLanguagePrompt, loadResources, toDescriptors } from "../core/resources.ts";
 import { createSystemPromptComposerFromDefaults } from "../core/system-prompt-composer.ts";
 import { importSkill, readInstalledMeta, removeAgentSkill, userSkillsDir } from "../core/skill-install.ts";
 import { packSkillDir } from "../core/skill-pack.ts";
@@ -1713,6 +1713,11 @@ function liveMcpHandles(): McpClientHandle[] {
 const subagentRunner = createSubagentRunner({
 	getCatalog,
 	getModelKey: () => activeModelKey,	resources: RESOURCES,
+	/*
+	 * 输出语言规则（ARCHITECTURE §4.15）：与 composeSystemPrompt 同一来源现读。
+	 * 子代理必须与主会话同一份 —— 它的报告会回到主会话上下文里。
+	 */
+	languageBody: loadLanguagePrompt(getResourcesDir()),
 	getPermissions: () => activePermissions,
 	// 全局默认推理强度（现读偏好，理由同 automation 装配处）：子代理会话
 	// 每次新建、逐会话还原不适用，全局默认即口径。
@@ -4678,6 +4683,8 @@ const handlers: Record<string, Handler> = {
 			preferredStyleId: readPreferences().styleId,
 			// 与 composeSystemPrompt 同一来源现读（含降级口径），预览不静默漂移。
 			memorySystemBody: loadMemorySystemPrompt(getResourcesDir()),
+			// 同上：预览里少了输出语言段，用户就看不到它排没排到「回复风格」之后。
+			languageBody: loadLanguagePrompt(getResourcesDir()),
 		});
 	},
 

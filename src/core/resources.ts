@@ -183,6 +183,18 @@ export function loadResources(resourcesDir: string): LoadedResources {
 		});
 	if (styles.length === 0) throw new Error(`styles/ 下没有任何回复风格（${stylesDir}）`);
 
+	/*
+	 * 输出语言规则必须存在且非空。这里**不**沿用 fragments 的「目录缺失即空库」宽容，
+	 * 而是照默认回复风格那条口径响亮抛错（见 resolveStyle 的「professional 没了就是
+	 * 安装损坏或被手删」）：没有语言规则时产品会静默地改用英文说话 —— 那正是
+	 * ARCHITECTURE §4.15 要修的那个 bug，不能让它以「资源缺失」的形式静默复发。
+	 */
+	if (loadLanguagePrompt(resourcesDir) === undefined) {
+		throw new Error(
+			`prompts/language.md 缺失或为空（${join(resourcesDir, "prompts", "language.md")}）—— 输出语言规则不能没有`,
+		);
+	}
+
 	return { scenes, modes, styles, fragments: loadFragments(resourcesDir), welcome: loadWelcome(resourcesDir, scenes) };
 }
 
@@ -221,6 +233,30 @@ function loadFragments(resourcesDir: string): ReadonlyMap<string, string> {
 		fragments.set(id, body);
 	}
 	return fragments;
+}
+
+/**
+ * 输出语言规则（`resources/prompts/language.md`）的正文。
+ *
+ * 为什么是**顶层 prompts/ 文件**而不是 fragment：它必须出现在**每一个**会话里，
+ * 与被哪个场景/模式/风格组合无关 —— fragment 要靠骨架写 `{{> }}` 才生效，
+ * 漏写一个场景就漏一个场景；而这条规则缺席的后果是产品改用英文说话（§4.15）。
+ * 同款先例是 `prompts/memory-system.md`（也是顶层文件、由组装器单独成段）。
+ *
+ * 为什么由**组装器**注入成独立段、而不是留在场景正文里：它必须排在
+ * 「回复风格」段**之后**。风格文件是搬用 WorkBuddy 的**英文**材料（7 份全英文，
+ * 正文含英文范例句），是对「怎么说人话」的最后一条指令；语言规则若排在它前面，
+ * 就要在一个 2,182 字符的英文风格段面前靠位置取胜 —— 赢不了。WorkBuddy 自己的
+ * 做法同向：`<response_language>` 块放在模板**最末**（workbuddy-prompt.tpl:363）。
+ *
+ * 缺省（文件不存在）返回 undefined；调用方 `loadResources` 在启动时即抛错拦住，
+ * 所以这个 undefined 分支在真实运行路径上不可达，只为纯函数可测而保留。
+ */
+export function loadLanguagePrompt(resourcesDir: string): string | undefined {
+	const file = join(resourcesDir, "prompts", "language.md");
+	if (!existsSync(file)) return undefined;
+	const body = readFileSync(file, "utf8").trim();
+	return body === "" ? undefined : body;
 }
 
 /**
