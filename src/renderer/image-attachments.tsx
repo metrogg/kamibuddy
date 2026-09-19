@@ -23,7 +23,7 @@ import { useCallback, useState } from "react";
 import { docBadgeOf, docKindOf } from "@shared/doc-formats.ts";
 import { MAX_IMAGE_BYTES, type ImagePart } from "@shared/image.ts";
 import type { DocumentReference } from "@shared/ipc.ts";
-import { IconDoc, IconDocFile } from "./icons.tsx";
+import { IconClose, IconDoc, IconDocFile } from "./icons.tsx";
 
 /** 接受的图片格式。svg 故意不收：以图片身份进入会话的 SVG 可携带脚本。 */
 const ACCEPTED_MIME_TYPES: ReadonlySet<string> = new Set([
@@ -320,7 +320,7 @@ export function AttachmentStrip({
 						title="移除图片"
 						onClick={() => onRemove(index)}
 					>
-						×
+						<IconClose size={12} />
 					</button>
 				</div>
 			))}
@@ -360,7 +360,7 @@ export function DocumentRefStrip({
 							title="移除文档"
 							onClick={() => onRemove(index)}
 						>
-							×
+							<IconClose size={12} />
 						</button>
 					</div>
 				);

@@ -37,6 +37,7 @@ import {
 } from "./run-timeline.ts";
 import { SnapshotBreakdown } from "./snapshot-breakdown.tsx";
 import { EmptyState, ErrorState, LoadingState } from "./state-views.tsx";
+import { SelectField } from "./settings/select-field.tsx";
 
 /* ── 格式化小工具 ────────────────────────────────────────────────── */
 
@@ -102,13 +103,13 @@ function CompositionBar({
 }): React.JSX.Element {
 	const composition = snapshot.composition;
 	if (composition === undefined)
-		return <EmptyState title="还没有会话内容。" />;
+		return <EmptyState title="还没有会话内容" />;
 
 	const total = COMPOSITION_PARTS.reduce(
 		(sum, p) => sum + composition[p.key],
 		0,
 	);
-	if (total === 0) return <EmptyState title="还没有会话内容。" />;
+	if (total === 0) return <EmptyState title="还没有会话内容" />;
 
 	return (
 		<>
@@ -143,7 +144,7 @@ function CompositionBar({
 
 function RunTimeline({ run }: { run: RunRecord }): React.JSX.Element {
 	if (run.toolSpans.length === 0) {
-		return <EmptyState title="这个任务没有调用工具。" />;
+		return <EmptyState title="这个任务没有调用工具" />;
 	}
 	// 时间轴范围：run 开始到结束（进行中的 run 用最后一个 span 的终点兜底）。
 	const start = run.startedAt;
@@ -387,14 +388,27 @@ function LedgerRunView({
 						const d = item.data;
 						const selected =
 							selectedLlm?.runId === run.runId && selectedLlm.turnIndex === d.turnIndex;
+						/*
+						 * 三件套而非 <button>：这行是 flex 容器，靠父级块宽撑满；按钮的
+						 * width:auto 不会撑满（同文件的 .provider-select-trigger 都要显式
+						 * width:100% 才撑满），换成 button 会把轨道挤塌。
+						 */
 						return (
 							<div
 								key={`llm-${d.turnIndex}-${i}`}
 								className={`timeline-row clickable${selected ? " selected" : ""}`}
+								role="button"
+								tabIndex={0}
 								title={`${llmTitle(d, cacheReported)}（点击查看上下文拆分）`}
 								onClick={() =>
 									onSelectLlm({ runId: run.runId, turnIndex: d.turnIndex })
 								}
+								onKeyDown={(event) => {
+									// Enter/Space 是按钮的键盘等价入口；Space 要挡住默认滚动。
+									if (event.key !== "Enter" && event.key !== " ") return;
+									event.preventDefault();
+									onSelectLlm({ runId: run.runId, turnIndex: d.turnIndex });
+								}}
 							>
 								<span className="timeline-label">模型 #{d.turnIndex + 1}</span>
 								<div className="timeline-track">
@@ -892,7 +906,7 @@ export function DiagnosticsView({
 								<span className="stat-hint">点击行查看工具时间线</span>
 							</header>
 							{snapshot.runs.length === 0 ? (
-								<EmptyState title="还没有跑过任务。" />
+								<EmptyState title="还没有跑过任务" />
 							) : (
 								<>
 									<table className="stat-table stat-table-clickable">
@@ -917,7 +931,14 @@ export function DiagnosticsView({
 													}
 													onClick={() => setSelectedRunId(r.runId)}
 												>
-													<td>{formatClock(r.startedAt)}</td>
+													<td>
+														{/* 行选择此前只能鼠标点：给「开始」单元格一个真按钮，
+														    键盘用户 Tab 到它回车即可选；tr 的 onClick 保留，
+														    鼠标仍可点整行（顶部提示文案即如此承诺）。 */}
+														<button type="button" onClick={() => setSelectedRunId(r.runId)}>
+															{formatClock(r.startedAt)}
+														</button>
+													</td>
 													<td>{r.modelId ?? "—"}</td>
 													<td>
 														{r.endedAt === undefined
@@ -963,34 +984,27 @@ export function DiagnosticsView({
 						<header className="settings-section-head">
 							<h2>会话时间线</h2>
 							{ledger !== undefined && ledger.sessions.length > 0 && (
-								<select
-									className="ledger-select"
-									aria-label="选择会话"
+								/*
+								 * 原生 select 是 DESIGN.md §6 禁止项，换 SelectField。
+								 * 选中项可能不在列表里（请求的会话还没记台账、或 daemon 回退目标
+								 * 不在 mtime 列表内）——补一个选项，别让它回落成占位文案。
+								 */
+								<SelectField
+									ariaLabel="选择会话"
 									value={ledger.sessionId ?? ""}
-									onChange={(e) => {
-										const id = e.target.value;
+									options={[
+										...(ledger.sessionId !== undefined &&
+										!ledger.sessions.includes(ledger.sessionId)
+											? [{ value: ledger.sessionId, label: ledger.sessionId }]
+											: []),
+										...ledger.sessions.map((id) => ({ value: id, label: id })),
+									]}
+									onChange={(id) => {
 										setSelectedSessionId(id);
 										setSelectedLlm(undefined);
 										refreshLedger(id);
 									}}
-								>
-									{/*
-									 * 选中项可能不在列表里（请求的会话还没记台账、
-									 * 或 daemon 回退目标不在 mtime 列表内）——补一个选项
-									 * 让 select 恒受控，不悄悄跳回第一项。
-									 */}
-									{ledger.sessionId !== undefined &&
-										!ledger.sessions.includes(ledger.sessionId) && (
-											<option value={ledger.sessionId}>
-												{ledger.sessionId}
-											</option>
-										)}
-									{ledger.sessions.map((id) => (
-										<option key={id} value={id}>
-											{id}
-										</option>
-									))}
-								</select>
+								/>
 							)}
 							<span className="stat-hint">点击模型调用行看上下文拆分</span>
 						</header>

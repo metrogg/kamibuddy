@@ -18,7 +18,7 @@ import { useState } from "react";
 import type { SubagentStatus } from "@shared/session-events.ts";
 import { AgentRow } from "./agent-row.tsx";
 import { ExpertAvatar } from "./expert-avatar.tsx";
-import { IconChevronDown } from "./icons.tsx";
+import { IconChevronDown, IconClose } from "./icons.tsx";
 import { teamBarRows, teamBarStats } from "./team-status-bar-model.ts";
 
 export interface TeamStatusBarProps {
@@ -88,7 +88,7 @@ export function TeamStatusBar({ members, currentName, onFocus, onClose }: TeamSt
 					aria-label="隐藏团队成员状态"
 					onClick={onClose}
 				>
-					×
+					<IconClose size={12} />
 				</button>
 			</div>
 			{expanded && (

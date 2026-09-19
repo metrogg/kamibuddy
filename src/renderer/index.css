@@ -154,7 +154,7 @@ textarea:focus-visible {
 	position: relative;
 	display: flex;
 	height: 100vh;
-	/* 窗口最小宽（main/index.ts 的 minWidth: 900）下，侧栏 216 + 面板宽
+	/* 窗口最小宽（main/index.ts 的 minWidth: 900）下，侧栏 264 + 面板宽
 	   仍可能超过视口：`.chat` 的 min-width: 0 只是被压成 0，多出来的部分
 	   会撑出横向滚动条、整页错位。面板宽的上限已随窗口可用宽动态计算
 	   （artifact-panel.tsx 的 maxPanelWidth，含缩窗时回落），这里再兜一道，
@@ -164,8 +164,14 @@ textarea:focus-visible {
 
 /* ── 侧栏 ─────────────────────────────────────────────────────── */
 
+/* 侧栏展开宽 = 264px（2026-09-19 由 216 改，依据 WorkBuddy 的
+   `SIDEBAR_SIZE.EXPANDED_WIDTH = 264`，见 ui-docs-viewer-C2jT2eXi.js:187382；
+   同值另见 .claw-sidebar-drawer 的 flex-basis/width: 264（ui-docs-viewer-D8SBBSEE.css:16955）。
+   旧值 216 是我们早期自定、无 WB 出处，代价是侧栏行被挤到「标题只剩几个字」——
+   本文件与 sidebar.tsx 里多处「216px 窄栏」的取舍注释都是那时候写的，
+   数值一并改为 264，结论不变（那些取舍在更宽栏下只会更宽松，不会失效）。 */
 .sidebar {
-	flex: 0 0 216px;
+	flex: 0 0 264px;
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
@@ -276,9 +282,12 @@ textarea:focus-visible {
 	scrollbar-color: var(--border) transparent;
 }
 
-/* WebKit（Electron 走这个）同款透明/hover 显色。 */
+/* WebKit（Electron 走这个）同款透明/hover 显色。
+   宽 6px 与 WB 侧栏/详情栏一致（conversation-list-content::-webkit-scrollbar 与
+   detail-sidebar__body::-webkit-scrollbar 都是 6，ui-docs-viewer-D8SBBSEE.css:31297/47210）；
+   原写 4px 是全站基线的无理由收窄（*::-webkit-scrollbar 就是 6）。 */
 .sidebar-scroll::-webkit-scrollbar {
-	width: 4px;
+	width: 6px;
 }
 
 .sidebar-scroll::-webkit-scrollbar-track {
@@ -437,7 +446,7 @@ textarea:focus-visible {
 }
 
 /* WorkBuddy 同款紧凑行：标题+时间同排（标题左对齐省略，时间右对齐常驻），
-   行高压进 ~24px，侧栏在 216px 下塞更多条目。 */
+   行高压进 ~24px，侧栏在 264px 下塞更多条目。 */
 .task-item-body {
 	display: flex;
 	align-items: center;
@@ -448,7 +457,7 @@ textarea:focus-visible {
 	   于是标题可用宽在两种态下逐像素相同（不跳字，「hover 不得改变布局」仍满足），
 	   而右侧不留任何空白。
 	   为什么**不**预留 padding-right（本行曾写 72px，已删）：那是把**两种态都缩窄**——
-	   216px 侧栏里 72(让位) + 时间戳常驻 ~60–90 全被吃掉，标题只剩 ~20px，
+	   窄栏（当年 216px）里 72(让位) + 时间戳常驻 ~60–90 全被吃掉，标题只剩 ~20px，
 	   任何标题都被压成一个字加省略号（"你…"/"用"）。
 	   为什么**不**改回"hover 才让位"（更早的写法，同样不许回去）：hover 瞬间标题可用宽少
 	   72px，省略号位置跳变、整列在抖 —— 那正是当初改成常驻的原因。
@@ -664,7 +673,7 @@ textarea:focus-visible {
 	/* **不预留让位宽度**（理由同 .task-item-body）：组头的「+」「⋯」两个操作钮是普通
 	   flex 子项（.space-group-actions，只切 opacity/visibility，**不脱离排版**），
 	   宽度本来就常驻，hover 不会改变主按钮的可用宽 —— 这里再写 48px padding-right 是
-	   **第二重让位**：组名可用宽被扣两次（216px 侧栏算下来只剩 ~50px，约 3~4 字，
+	   **第二重让位**：组名可用宽被扣两次（当年 216px 侧栏算下来只剩 ~50px，约 3~4 字，
 	   所以被截成 ".kami…"/"给肉…"）。右侧没有常驻元信息要保护（组计数早已不渲染），删掉即可。 */
 	text-align: left;
 }
@@ -743,7 +752,7 @@ textarea:focus-visible {
 	color: var(--danger);
 }
 
-/* 移除确认文案较长（13 字 + 两钮），216px 侧栏一行放不下，允许换行。 */
+/* 移除确认文案较长（13 字 + 两钮），窄栏一行放不下，允许换行。 */
 .space-group-confirm {
 	flex-wrap: wrap;
 }
@@ -931,7 +940,12 @@ textarea:focus-visible {
 	   文字二级色、白底细边、胶囊圆角 + 一层几乎不可见的投影（原值照抄）。 */
 	gap: var(--space-1);
 	height: 32px;
-	padding: 0 var(--space-4);
+	/* 水平内边距 8（--space-3）而不是 12（--space-4）：2026-09-19 改。
+	   原注释引用的是 WB `.quick-actions__item`（0 12），但该选择器在本地解包参考物里
+	   查不到；而参考物里**所有 32px 高的 chip** 都是 `padding: 0 8px`
+	   （`.cr-input-footer-item`，lib-chat-ui-Co_VI_pZ.css:19066-19079；
+	   `._chip_`，home-KqE7jadI.css:120-137）。故按可证实的那一族取值。 */
+	padding: 0 var(--space-3);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-full);
 	font-size: var(--text-body);
@@ -1040,9 +1054,17 @@ textarea:focus-visible {
 /* WorkBuddy 首页输入框的外层渐变槽（.wb-home-composer__input-slot 原值）：
    灰白渐变底 + 24px 圆角 + 上/左右 2px、下 4px 内边距 —— 白卡与下方的
    工作空间/权限 chips 都坐在这一层浅灰渐变上（WB 注释：灰色由外层渐变透出）。
-   对话页没有这个槽，是首页专属。 */
+   对话页没有这个槽，是首页专属。
+
+   【2026-09-19 订正】渐变起点色原写 #ebebeb，**取错了 token**：WB 的
+   `--wb-home-input-slot-bg` 是 `linear-gradient(180deg, #f0f0f0 0%, #f5f5f5 100%)`
+   （ui-docs-viewer-C2jT2eXi.js:93905-93911），而 #ebebeb 是另一个 token
+   `--wb-quick-action-sub-item-bg`（同文件:93913-93921）。后果是输入卡周围那圈灰带
+   比 WB 深一档 —— 输入卡是首页视觉焦点，这层灰直接影响整页的"轻重"。
+   现按 WB token 原值改回 #f0f0f0；仍不入 token 档（它是 WB 的场景原值，
+   DESIGN.md §2.7 已登记同类例外）。 */
 .composer-slot {
-	background: linear-gradient(180deg, #ebebeb 0%, #f5f5f5 100%);
+	background: linear-gradient(180deg, #f0f0f0 0%, #f5f5f5 100%);
 	border-radius: 24px;
 	padding: 2px 2px var(--space-1);
 }
@@ -1054,7 +1076,11 @@ textarea:focus-visible {
 
 .composer-card {
 	background: var(--bg);
-	border: 1px solid var(--border);
+	/* 描边 0.5px（2026-09-19 由 1px 改）：WB `.cr-input-container` 就是
+	   `border: 0.5px solid var(--cr-border-default, #ebebeb)`（lib-chat-ui-Co_VI_pZ.css:18403-18414）。
+	   输入卡是首页视觉焦点，1px 的 #e6e6e6 在浅灰槽上读成"一个框"；
+	   0.5px 是我们已有的手法（.case-cover 同款），色仍取全站唯一 --border。 */
+	border: 0.5px solid var(--border);
 	/* WB 输入容器圆角 24（cr-input-container，对话页同值）；首页被槽覆写为 22。 */
 	border-radius: 24px;
 	box-shadow: var(--shadow-input);
@@ -1431,6 +1457,27 @@ textarea:focus-visible {
 	gap: var(--space-2);
 }
 
+/*
+ * 输入卡底行的控件统一 32px 高（2026-09-19 新增）。
+ *
+ * 起因（本文件旧注释自认的遗留）：右组本来就是 32（发送键 32×32、模型 chip 因
+ * 13px 文字 + 上下 padding 天然到 32~33），左组的「+」是 .bar-btn 的 28
+ * （padding 6 + 图标 16）——同一行左矮右高，是一眼能看出的"没对齐"。
+ * WB 的输入卡工具栏是一片 32 高：`.cr-input-toolbar { min-height: 32px }`
+ * （lib-chat-ui-Co_VI_pZ.css:12942-12952）、`.cr-input-footer-item { height: 32px }`
+ * （同文件:19066-19079），故取 32 为这一行的统一高度。
+ *
+ * 为什么**只改 .composer-bar 内的控件**而不是 .bar-btn 全局：.bar-btn 还被
+ * 产物面板/PDF 翻页/面板开关组等用着，其中 .panel-toggle-btn 的 top 与
+ * chat-header 的按钮中线是对齐算出来的（见下方注释），全局改高会连带挪动那些行；
+ * 本条要解决的只是输入卡这一行。
+ */
+.composer-bar .bar-btn,
+.composer-bar .bar-btn-text {
+	height: 32px;
+	padding-block: 0;
+}
+
 .bar-btn {
 	display: flex;
 	align-items: center;
@@ -1464,9 +1511,9 @@ textarea:focus-visible {
  * 我们此前只有基类的「hover 变黑」，于是常态是灰的 —— 用户实测指出
  * 「右边的模型字体应该是黑的」「对话界面模型也是黑色」。
  *
- * **只改颜色，不动尺寸**（有意）：WB 那一行的挂件统一 32 高，而我们的 `+` 是
- * .bar-btn 的 28（padding 6 + 16 图标）。单把模型 chip 抬到 32 会让同一行左矮右高；
- * 要对齐 32 就得连 `+` 与左组 chip 一起改，那是另一处改动，不在本次范围内。
+ * 尺寸对齐已于 2026-09-19 落地：本条原先只改颜色、并留了一句「要对齐 32 得连 `+`
+ * 与左组 chip 一起改，是另一处改动」——那次改动就是上面 `.composer-bar .bar-btn`
+ * 那条统一 32 的规则，现在这一行的挂件高度一致（模型 chip 也由它吃到 32）。
  */
 .bar-btn-text.model-chip {
 	color: var(--text);
@@ -3035,6 +3082,16 @@ textarea:focus-visible {
 	overflow-wrap: anywhere;
 }
 
+/* 模型输出里的图片（markdown.tsx 的 img 覆盖只在对话页挂，见那里的注释）。
+   没有 `max-width` 时一张大图会把消息列撑破、整列横向滚动（此前只有
+   `.preview-markdown img` 有这条，对话页的正文没有）—— 这条是内容兜底不是装饰：
+   尺寸未知故 width/height 给不了，CLS 只能靠 `height: auto` + 元素上的
+   `loading="lazy"` 收敛。 */
+.markdown img {
+	max-width: 100%;
+	height: auto;
+}
+
 /* 模型常以 # 或 ## 开标题，在对话里降级为分段小标题，别整得像文档 H1。 */
 .markdown h1,
 .markdown h2,
@@ -3702,7 +3759,11 @@ textarea:focus-visible {
 	width: 100%;
 	border: none;
 	background: transparent;
-	/* 高度由 TSX 内联 style 驱动（RO 上报 + clamp + 防抖），过渡让微增长平滑。 */
+	/* 高度由 TSX 内联 style 驱动（RO 上报 + clamp + 防抖），过渡让微增长平滑。
+	   `height` 是 DESIGN.md §5.1 明文禁止过渡的布局属性，本条为**受控例外 ⑤**
+	   （2026-09-19 登记，理由见该处）：跨文档的 iframe 只能由宿主改盒子高度，
+	   transform: scale 会缩放内容并错位 iframe 内的点击/滚动坐标；
+	   而 RO 上报是离散值（防抖后），无过渡即逐跳变。 */
 	transition: height var(--dur-fast) ease;
 }
 
@@ -6541,18 +6602,9 @@ textarea:focus-visible {
  * 条目色值全部复用全局分类板（--cat-*）与语义色，不新增颜色。
  */
 
-/* 会话选择器：与 .preview-field select 同一套控件外观，不另立风格。 */
-.ledger-select {
-	padding: var(--space-1) var(--space-3);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	background: var(--bg);
-	color: inherit;
-	font: inherit;
-	font-size: var(--text-meta);
-	cursor: pointer;
-	max-width: 240px;
-}
+/* 会话选择器改走共享 SelectField（2026-09-19）：原 `.ledger-select` 是原生 <select>
+   的自定义外观，DESIGN.md §6 禁止清单要求一律用 settings/select-field.tsx 的
+   SelectField —— 换掉后本规则无引用，删除（不做「留着以后可能用」的保留）。 */
 
 .timeline-run {
 	margin-top: var(--space-4);
@@ -7551,6 +7603,18 @@ textarea:focus-visible {
 	font-size: var(--text-meta);
 	opacity: 0;
 	transition: opacity var(--dur-fast) ease;
+}
+
+/* hover/active 补齐（2026-09-19）：本条此前只有「淡入」没有自身四态 ——
+   它是主色按钮（§3.1 主按钮级别），按下去毫无反馈。hover/active 取主按钮同款
+   两档（--primary-hover / --primary-active），按下走 §3.1 的 scale(.98)
+   （按下态在文件末尾「走 scale 的那批」里登记，过渡由那里的共享 transition 提供）。 */
+.ex-card-use:hover:not(:disabled) {
+	background: var(--primary-hover);
+}
+
+.ex-card-use:active:not(:disabled) {
+	background: var(--primary-active);
 }
 
 .ex-card:hover .ex-card-use,
@@ -8970,6 +9034,7 @@ textarea:focus-visible {
 /* 常规按钮与 chip / tab 胶囊（DESIGN.md §3.1：active 叠 scale(.98)）。 */
 .mini-btn:active:not(:disabled),
 .primary-btn:active:not(:disabled),
+.ex-card-use:active:not(:disabled),
 .cases-action:active,
 .capability-chip:active,
 .quick-prompt-chip:active,
@@ -9035,6 +9100,7 @@ textarea:focus-visible {
 .quick-prompt-chip,
 .skills-tab,
 .ex-cat,
+.ex-card-use,
 .model-card {
 	transition: transform var(--dur-fast) var(--ease-standard),
 		background-color var(--dur-fast) ease, color var(--dur-fast) ease,
@@ -9281,6 +9347,18 @@ textarea:focus-visible {
 
 .team-bar-close:hover {
 	color: var(--text);
+}
+
+/* 三处「关闭」按钮原先是纯文本 `×`（靠行盒承载），2026-09-19 换成 icons.tsx 的
+   IconClose 后必须补成 flex 居中：SVG 是 inline 元素，落在非 flex 容器里会按**基线**
+   对齐 —— 盒子比原来的字符高 2~4px、图标也偏上。同族的 .attachment-remove /
+   .mode-chip-clear / .expert-chip-close 本来就是 inline-flex，这里补齐口径。 */
+.cu-close,
+.pending-tip-close,
+.team-bar-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 }
 
 /* ── 成员行（子代理卡与团队状态栏共用，组件见 agent-row.tsx）────────────

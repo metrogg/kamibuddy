@@ -193,7 +193,7 @@ export function SkillsView({ onClose, onTodo, onToast, experts, expertsError, on
 						<LoadingState />
 					) : snapshot.skills.length === 0 ? (
 						<EmptyState
-							title="还没有安装任何技能。"
+							title="还没有安装任何技能"
 							description="点右上角「导入技能」选择一个包含 SKILL.md 的文件夹；或把技能文件夹直接放进技能目录。"
 						/>
 					) : (

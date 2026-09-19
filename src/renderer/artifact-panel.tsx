@@ -815,7 +815,7 @@ const PANEL_MIN_WIDTH = 340;
 /** 面板宽度软上限（WorkBuddy 默认口径）；实际还要被窗口可用宽压住，见 maxPanelWidth。 */
 const PANEL_MAX_WIDTH = 800;
 /*
- * 主区（对话列）最小可用宽。取 320 的算式：窗口最小宽 900 - 侧栏 216 - 320 = 364，
+ * 主区（对话列）最小可用宽。取 320 的算式：窗口最小宽 900 - 侧栏 264 - 320 = 316，
  * 面板压到下限 340 后三者恰好铺满视口；取更大（如 360）则面板已在下限、主区仍在视口外
  * 溢出 16px（spec 场景「拉到最小仍可用」）。是布局约束不是视觉档位，故不登记 token。
  */
@@ -824,13 +824,13 @@ const MAIN_MIN_WIDTH = 320;
 /**
  * 面板宽度上限：随窗口可用宽动态计算（spec: harden-desktop-interactions）。
  *
- * 窗口最小宽 900 < 侧栏 216 + 面板上限 800 = 1016，固定 800 会把主区挤出屏幕；
+ * 窗口最小宽 900 < 侧栏 264 + 面板上限 800 = 1064，固定 800 会把主区挤出屏幕；
  * 上限必须由「窗口可用宽 - 侧栏 - 主区最小宽」决定。
  *
- * 侧栏宽从 DOM 量（index.css `.sidebar { flex: 0 0 216px }`）而不是在 TS 里再抄一份 216：
+ * 侧栏宽从 DOM 量（index.css `.sidebar { flex: 0 0 264px }`）而不是在 TS 里再抄一份 264：
  * 侧栏收起时 `.sidebar` 虽常驻 DOM，但 flex-basis / padding-inline / border 都归零
  * （见 index.css 的 `[data-sidebar="collapsed"] .sidebar`），量到 0 恰好是对的
- * —— 抄常量会白占 216px，且与 CSS 双写必然漂移。
+ * —— 抄常量会白占 264px，且与 CSS 双写必然漂移。
  * 结果兜底到 PANEL_MIN_WIDTH：窗口极窄时上限不能低于下限，否则 clamp 上下限自相矛盾。
  */
 export function maxPanelWidth(): number {

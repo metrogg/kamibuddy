@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import type { TeamTaskView } from "@shared/ipc.ts";
+import { IconClose } from "./icons.tsx";
 
 /** 面板分组顺序（与 daemon 的任务清单渲染同序：能开工的排最前）。 */
 const GROUP_ORDER: readonly { readonly status: string; readonly label: string }[] = [
@@ -83,7 +84,7 @@ export function TeamTaskPanel({ onClose }: TeamTaskPanelProps): React.JSX.Elemen
 				<span className="team-tasks-title">任务板</span>
 				<span className="team-tasks-hint">只读 · 让主理人改（Ctrl+T 关闭）</span>
 				<button type="button" className="team-bar-close" onClick={onClose} aria-label="关闭任务板" title="关闭">
-					×
+					<IconClose size={12} />
 				</button>
 			</div>
 			{error !== undefined ? (

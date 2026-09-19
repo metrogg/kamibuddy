@@ -140,6 +140,7 @@ function ProviderRow({
 				<div className="key-input">
 					<input
 						type="password"
+						aria-label="服务商 API Key"
 						value={draft}
 						autoComplete="off"
 						placeholder="粘贴 API Key，回车保存"
@@ -382,12 +383,14 @@ function CustomForm({ initial, busy, onCancel, onSave }: CustomFormProps): React
 						<div className="model-row">
 							<input
 								className="model-id"
+								aria-label="模型 ID"
 								value={model.id}
 								placeholder="模型 ID，如 glm-4.7"
 								onChange={(e) => patchModel(index, { id: e.target.value })}
 							/>
 							<input
 								className="model-name"
+								aria-label="模型显示名"
 								value={model.name}
 								placeholder="显示名（可留空）"
 								onChange={(e) => patchModel(index, { name: e.target.value })}
@@ -739,6 +742,7 @@ function ProviderSelect({ providers, target, onPick }: ProviderSelectProps): Rea
 						<input
 							// 面板展开的唯一目的就是先过滤，焦点直接进搜索框（项目无 eslint，无需 a11y 豁免注释）。
 							autoFocus
+							aria-label="搜索供应商"
 							value={filter}
 							placeholder="搜索供应商"
 							onChange={(e) => setFilter(e.target.value)}
@@ -950,12 +954,14 @@ function AddModelDialog({ providers, onClose, onSaved }: AddModelDialogProps): R
 							<div className="model-row">
 								<input
 									className="model-id"
+									aria-label="模型 ID"
 									value={model.id}
 									placeholder="模型 ID，如 glm-4.7"
 									onChange={(e) => setModel((m) => ({ ...m, id: e.target.value }))}
 								/>
 								<input
 									className="model-name"
+									aria-label="模型显示名"
 									value={model.name}
 									placeholder="显示名（可留空）"
 									onChange={(e) => setModel((m) => ({ ...m, name: e.target.value }))}

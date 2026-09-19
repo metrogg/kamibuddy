@@ -149,7 +149,7 @@ const TREND_VIEW_HEIGHT = 30;
 
 function TokenTrend({ stats }: { readonly stats: UsageStats }): React.JSX.Element {
 	const points = stats.dailyTokens;
-	if (points.length === 0) return <EmptyState title="还没有 token 记录。" />;
+	if (points.length === 0) return <EmptyState title="还没有 token 记录" />;
 
 	const max = Math.max(...points.map((p) => p.tokens));
 	const step = points.length === 1 ? 0 : TREND_VIEW_WIDTH / (points.length - 1);

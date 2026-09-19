@@ -30,6 +30,7 @@ import {
 	IconCheck,
 	IconChevronDown,
 	IconClipboard,
+	IconClose,
 	IconCode,
 	IconCopy,
 	IconDoc,
@@ -293,8 +294,8 @@ function UserBubble({
 	onBranch,
 }: {
 	/** 数据条目 id：落在根 div 上（data-entry-id），供发送吸顶时按 entry 定位
-	    （decideScrollAction 的 align-top）。刻度轨改标轮后走轮容器自己的
-	    data-turn-key，不再消费它。 */
+		（decideScrollAction 的 align-top）。刻度轨改标轮后走轮容器自己的
+		data-turn-key，不再消费它。 */
 	readonly entryId: string;
 	readonly text: string;
 	readonly at: number;
@@ -1224,7 +1225,7 @@ function WaitingPendingLine({
 						onBlur={() => setPaused(false)}
 						onClick={onDismiss}
 					>
-						×
+						<IconClose size={12} />
 					</button>
 				</span>
 			)}
@@ -2441,11 +2442,11 @@ export function ChatView({
 						const userEntry = view.userEntry;
 						return (
 							<div
-							key={view.key}
-							className={anchored ? "turn-group anchor-space" : "turn-group"}
-							// 刻度轨的测量锚点（TurnNav 按它取每轮顶端的滚动坐标）。
-							data-turn-key={view.key}
-						>
+								key={view.key}
+								className={anchored ? "turn-group anchor-space" : "turn-group"}
+								// 刻度轨的测量锚点（TurnNav 按它取每轮顶端的滚动坐标）。
+								data-turn-key={view.key}
+							>
 								{userEntry !== undefined && (
 									<UserBubble
 										entryId={userEntry.id}

@@ -1467,7 +1467,7 @@ export function App(): React.JSX.Element {
 		    条件挂载的元素**挂载即终态**，CSS transition 没有「起始态→终态」可跑，折叠只会瞬跳
 		    （第 2 期弹层踩过同一个坑，那边只能退回 animation —— 但那只解决展开方向，
 		    收起方向会随卸载消失，见 DESIGN.md §5 规则 7）。这里要的是两侧都平滑动，
-		    所以选择常驻：折叠 = `.sidebar` 的 flex-basis 216px → 0（index.css 的
+		    所以选择常驻：折叠 = `.sidebar` 的 flex-basis 264px → 0（index.css 的
 		    `[data-sidebar="collapsed"] .sidebar`，登记为 §5.1 第二条 width 受控例外）。
 		    首屏不播动画：初始态就是终态（展开），transition 只在属性变化时触发。
 		    visibility 随折叠过渡一起走（index.css），收起后侧栏出 Tab 序与 a11y 树。

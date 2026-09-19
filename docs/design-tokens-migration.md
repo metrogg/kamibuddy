@@ -921,6 +921,101 @@ npm run build        → 成功（53.52s）；产物含 MiSans-Regular-EjI9NiHY.
 
 ---
 
+## 12. 界面比例与质感收口（2026-09-19，用户直接提出，无 spec）
+
+> 触发：用户拿 WorkBuddy 截图对照我们的首页，指出「界面比例差一点」，并要求一并审查
+> 审美质感与顺滑度。与第 11 期的分工：**第 11 期管「动起来顺不顺」，本期管「静态比例
+> 对不对、像不像 WB」**。证据一律取自本地解包参考物
+> `docs/WorkBuddy-reference/extracted/`（逐值带 `file:line`）。
+
+### 12.1 本期做了什么
+
+| # | 改动 | 依据（本地参考物可核） |
+|---|---|---|
+| 1 | 侧栏展开宽 216 → **264px**（同步改了散落在 `index.css`/`sidebar.tsx`/`App.tsx`/`artifact-panel.tsx` 的「216px 窄栏」注释与算式） | WB `SIDEBAR_SIZE.EXPANDED_WIDTH = 264`（`ui-docs-viewer-C2jT2eXi.js:187382-187385`）；同值另见 `.claw-sidebar-drawer { flex: 0 0 264px }`（`ui-docs-viewer-D8SBBSEE.css:16955`）。旧值 216 无 WB 出处 |
+| 2 | 首页输入槽渐变起点 `#ebebeb` → **`#f0f0f0`** | WB token `--wb-home-input-slot-bg`（`ui-docs-viewer-C2jT2eXi.js:93905-93911`）；`#ebebeb` 实为另一个 token `--wb-quick-action-sub-item-bg`（同文件:93913-93921）——**取错 token** |
+| 3 | 输入卡描边 1px → **0.5px**（色仍取全站唯一 `--border`） | WB `.cr-input-container { border: 0.5px solid var(--cr-border-default,#ebebeb) }`（`lib-chat-ui-Co_VI_pZ.css:18403-18414`） |
+| 4 | 输入卡底行控件统一 **32px**（只作用于 `.composer-bar` 内的 `.bar-btn` / `.bar-btn-text`） | WB `.cr-input-toolbar { min-height: 32px }`（`lib-chat-ui-Co_VI_pZ.css:12942-12952`）、`.cr-input-footer-item { height: 32px }`（同文件:19066-19079）。此前左组 `+` 是 28、右组 32 —— 正是本文件旧注释自认的遗留 |
+| 5 | 能力胶囊水平内边距 12 → **8** | 参考物里所有 32px 高的 chip 都是 `padding: 0 8px`（`:19071`、`home-KqE7jadI.css:125`）；原注释引用的 `.quick-actions__item` 在参考物中**查无此选择器** |
+| 6 | 侧栏滚动条 4 → **6px** | WB 侧栏/详情栏滚动条 6（`ui-docs-viewer-D8SBBSEE.css:31297`、`:47210`）；全站基线 `*::-webkit-scrollbar` 本就是 6 |
+| 7 | 规范修复包 | 见 12.3 |
+
+### 12.2 否决方案
+
+- **侧栏保持 216px**：否决。216 是我们早期自定、**没有任何 WB 出处**；代价在本文件与
+  `sidebar.tsx` 里被反复记录（「标题只剩几个字」「挤成一团」）。264 有两处独立出处且同值。
+  **但保留一条未消解的不确定**（见 12.4 第 1 条）：若实机对照发现更窄，回退只改一个值。
+- **折中 240px**：否决。两个 WB 版本都没有这个值，等于凭空造第三档；`DEFAULT_SIDEBAR_WIDTH = 240`
+  是 **docs-viewer 的右侧详情面板**（另一个组件）的默认宽，不能拿来当左侧栏宽。
+- **`.bar-btn` 全局改 32px**：否决。它还被产物面板 / PDF 翻页 / 窗口右上角面板开关组用着，
+  其中 `.panel-toggle-btn` 的 `top` 是与 `chat-header` 的按钮中线对齐算出来的；全局改高会连带
+  挪动那些行。本期只解决输入卡这一行（作用域收在 `.composer-bar`）。
+- **删掉 `.widget-frame` 的 `height` 过渡**（审计把它记为未登记的布局属性过渡）：否决删除，
+  改为**登记为 §5 受控例外 ⑤**。理由：挂件是跨文档 iframe，高度只能由宿主改盒子高；
+  `transform: scale` 会缩放内容并让 iframe 内的点击/滚动坐标错位，而 RO 上报是防抖后的离散值，
+  删了就是逐次跳变。**行为未变，只是把账记清楚**。
+- **输入卡描边色也改成 WB 的 `#ebebeb`**：否决。会破「全站唯一 `--border`」这条收敛，
+  只改描边**粗细**（0.5px）已能拿到 WB 的观感。
+- **首页内容列 848 上探 1008**：否决。该「WB 原值」在本地参考物里**查不到出处**（见 12.4 第 2 条），
+  凭一句旧注释改首页骨架风险大于收益。
+- **顺手把 `.bar-btn` 与 `.mini-btn` 的字号/内边距一并按参考物重排**：否决。超出「比例与质感」范围，
+  且参考物里的对应值取自比截图更新的版本，混用会引入无法验证的漂移。
+
+### 12.3 规范修复包（用户点名的「我没说到的」部分）
+
+| 类别 | 处置 | 处数 |
+|---|---|---|
+| 表单可访问名 | 只有 placeholder、无程序化标签的输入框补 `aria-label` | 11（设置各分区 + 侧栏两处行内重命名） |
+| 键盘可达 | 诊断页「模型调用行」补 `role="button"` + `tabIndex` + Enter/Space；「最近任务」表在「开始」单元格放真 `<button>`（保留整行鼠标点击） | 2 |
+| 禁止清单 | 诊断页原生 `<select className="ledger-select">` 换共享 `SelectField`；随之删除死 CSS `.ledger-select` | 1 |
+| 字符当图标 | 文本 `×` 换 `icons.tsx` 的 `IconClose` | 8（清单内 6 + 审计范围外同规则 2） |
+| 标点 | 空态短句末尾多余的 `。` 删除（相邻完整说明句保留句号） | 8 |
+| 内容兜底 | markdown 渲染的 `<img>` 补 `loading="lazy"` / `decoding="async"`，并补 `.markdown img { max-width: 100%; height: auto }`（此前只有 `.preview-markdown img` 有这条，对话正文没有——大图会撑破消息列） | 2 |
+| 四态缺口 | `.ex-card-use` 补 hover/active（并纳入共享 transition 名单） | 1 |
+| 模态口径 | `context-usage` 的浮层声明了 `role="dialog"` 却无焦点管理 → 按 §7.3 反推为**非模态**，降级 `role="group"`（它本就外点即关、不阻断页面） | 1 |
+| SVG 基线 | 3 处关闭按钮（`.cu-close` / `.pending-tip-close` / `.team-bar-close`）补 `inline-flex` 居中 —— 字符换 SVG 后不属于 flex 容器会按基线对齐、盒子高 2~4px | 3 |
+
+### 12.4 诚实标注
+
+1. **参考物版本比用户截图新**：参考物是带 `sidebar-next` / `claw` 新壳层的版本，用户截图那版
+   （WorkBuddy 5.5.6）的侧栏按截图量算约 216px —— 与 264 冲突，**未消解**。本期取「有出处的值」，
+   并在 DESIGN.md §3.7 留了回退点（改一个数即可）。
+2. **首页几何的一批「WB 原值」在本地参考物中查不到**：`.wb-home-page` 的 max-width（848/1008/1681）、
+   `.wb-home-header__title` 的 30/42、`.wb-scene-tabs` 的 36/2、`.quick-actions__item`、
+   `.wb-related-playbooks__*`、案例槽 `bottom: 56px` —— grep 全部无命中（`not found in reference`）。
+   能坐实的只有 `min-height: max(calc(432px + 220px), 100%)`（`home-KqE7jadI.css:41-43`，与我们等价）
+   与 `--wb-font-body-size/-line-height = 14/22`。**没有出处的值一律不动**。
+3. **沙箱无 GUI，所有视觉改动未经人眼验收**：证据只有「参考物逐值对照 + 静态检查 + 构建通过」，
+   观感结论需人工按 12.5 的清单确认。
+4. **仓库无 DOM 测试基建**（`vitest.config.ts` 是 node 环境）：本期 a11y 改动靠 `tsc` + 人工走查，
+   没有自动回归；`tsc` 只能保证类型，**证明不了焦点环与读屏体验**。
+5. **两处未纳入本期的同规则违例**：`chat-view.tsx` 的空会话消息流仍无空态引导（DESIGN.md §4 已登记为缺口）。
+6. **一处已知范围外改名**：`.ledger-select` 删除后 `diagnostics-view` 的会话选择器视觉由
+   `SelectField`（`provider-select-trigger` 一族）决定，与设置页下拉**同源**，与它原来的原生
+   select 外观不同 —— 这是 DESIGN.md §6 要求的方向，但确实是一处用户可见的观感变化。
+
+### 12.5 人工验收清单（建议按此顺序看）
+
+1. 首页：侧栏变宽后，任务行标题是否更少被截断；输入卡那圈灰带是否更浅、描边是否更细。
+2. 输入卡底行：`+`、模式/专家 chip、模型 chip、发送键是否**同高（32px）**、中线齐平（首页与对话页各看一次）。
+3. 首页能力胶囊：内边距变窄后 4 个胶囊是否更紧凑、与输入卡左缘对齐。
+4. 对话页：Tab 到输入框 → 焦点环可见；发一条含图片链接的回复看图片是否被限制在列宽内。
+5. 诊断页：Tab 到「模型调用行」能否用 Enter 选中；「最近任务」的「开始」单元格能否 Tab + 回车选中；
+   会话选择器换成了自绘下拉。
+6. 键盘走查设置页各分区：Tab 进 API Key / 模型 ID / 画像 / 记忆 / 自定义指令，读屏应能读出名称。
+
+### 12.6 本期校验结论
+
+```
+npm run typecheck    → 通过（tsc --noEmit 无输出）
+npm run check:deps   → 通过（依赖方向校验通过）
+npm run check:tokens → 通过（真违例 0；渐变那条白名单条目的 snippet 由 #ebebeb 改为 #f0f0f0，条数未增）
+npm test             → 161 文件 / 2976 通过 + 1 skipped（基线用例全绿）
+npm run build        → 成功（36.48s）
+```
+
+---
+
 ## 附：维护约定
 
 - 新增「确实不归档」的值 -> 加白名单条目，**必须**写 `reason`；优先给 `snippet`（行文本片段），

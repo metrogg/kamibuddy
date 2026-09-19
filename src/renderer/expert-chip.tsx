@@ -11,6 +11,7 @@
 
 import type { ExpertListItem } from "@shared/ipc.ts";
 import { ExpertAvatar } from "./expert-avatar.tsx";
+import { IconClose } from "./icons.tsx";
 
 export function ExpertChip({
 	expert,
@@ -29,7 +30,7 @@ export function ExpertChip({
 				title="取消选中"
 				onClick={onClear}
 			>
-				×
+				<IconClose size={12} />
 			</button>
 			<span className="expert-chip-name">{expert.displayName}</span>
 		</span>

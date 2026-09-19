@@ -248,6 +248,9 @@ export function Sidebar({
 						<input
 							className="task-rename-input"
 							defaultValue={task.name ?? task.title}
+							/* 行内编辑框没有可见标签（标题位置被它顶替），补一个不可见的可访问名：
+							   否则屏幕阅读器只读出「编辑框」，不知道在改什么。 */
+							aria-label="重命名会话"
 							// 弹出的唯一输入框，自动聚焦即预期（同 workspace-picker）。
 							autoFocus
 							onKeyDown={(e) => {
@@ -315,7 +318,7 @@ export function Sidebar({
 				{/*
 					行内操作 = **一个「⋯」入口 + 菜单**，不是一排图标按钮。
 					此前这里并排四个 20px 图标（打开文件夹 / 导出 / 重命名 / 删除，gap 2px）：
-					216px 窄栏里挤成一团、glyph 之间只隔 2px 看着像叠在一起，而且整簇
+					窄栏里挤成一团、glyph 之间只隔 2px 看着像叠在一起，而且整簇
 					压在右侧时间戳那一格上。WorkBuddy 的做法是行尾只留一个「⋯」，动作全收进菜单
 					（其菜单：打开文件夹 / 重命名 / 分享任务 / 删除任务）。
 					「保存到工作空间」对我们不适用（2026-09-17 起该功能已删）。
@@ -477,6 +480,8 @@ export function Sidebar({
 						<input
 							className="task-rename-input"
 							defaultValue={group.name}
+							/* 同任务重命名：行内编辑取代了组名，补可访问名。 */
+							aria-label="重命名空间"
 							autoFocus
 							onKeyDown={(e) => {
 								if (e.key === "Enter") {
@@ -619,7 +624,7 @@ export function Sidebar({
 	 *     同类的误导）。
 	 *
 	 * 两者都在任务区就地呈现一次（断开态与失败态同一个重试入口）；空间区是同一份
-	 * groups 的派生，不重复第二张错误卡 —— 216px 窄栏里叠两个重试按钮只是噪音。
+	 * groups 的派生，不重复第二张错误卡 —— 窄栏里叠两个重试按钮只是噪音。
 	 */
 	const groupsUnavailable = tasksError !== undefined || link.kind === "down";
 	const visibleTasks = tasksExpanded

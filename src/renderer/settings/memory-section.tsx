@@ -236,6 +236,7 @@ function MemorySection({ busy }: { readonly busy: boolean }): React.JSX.Element 
 						</div>
 						<textarea
 							className="profile-textarea"
+							aria-label="画像"
 							value={profile}
 							disabled={busy}
 							placeholder="还没有画像。开启「生成对话记忆」后会自动整理，也可以直接在这里填写。"
@@ -356,6 +357,7 @@ function LongTermMemorySection({ busy }: { readonly busy: boolean }): React.JSX.
 						{editing ? (
 							<textarea
 								className="profile-textarea"
+								aria-label="长期记忆"
 								value={content}
 								disabled={busy}
 								placeholder="一行一条，写下希望 AI 长期记住的偏好与决定。"

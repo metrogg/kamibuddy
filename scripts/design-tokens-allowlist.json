@@ -120,9 +120,9 @@
     },
     {
       "file": "src/renderer/index.css",
-      "snippet": "linear-gradient(180deg, #ebebeb",
+      "snippet": "linear-gradient(180deg, #f0f0f0",
       "rule": "color",
-      "reason": "WB 首页输入槽渐变原值（.composer-slot，linear-gradient(180deg,#ebebeb,#f5f5f5)）：WB 原值照抄，灰由外层渐变透出、白卡与 chips 坐其上；非 token 等值项，保留原值（DESIGN.md §2.7 WB 原值例外同口径）。"
+      "reason": "WB 首页输入槽渐变原值（.composer-slot）：逐字对齐 WB token --wb-home-input-slot-bg = linear-gradient(180deg,#f0f0f0 0%,#f5f5f5 100%)（ui-docs-viewer-C2jT2eXi.js:93905-93911）。非 token 等值项，保留原值（DESIGN.md §2.7 WB 原值例外同口径）。2026-09-19 由 #ebebeb 订正为此值——#ebebeb 是另一个 token --wb-quick-action-sub-item-bg，属取错 token。"
     },
     {
       "file": "src/renderer/index.css",

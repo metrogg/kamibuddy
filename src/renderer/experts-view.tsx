@@ -180,6 +180,7 @@ export function ExpertsView({ experts, error, onRetry, onUseExpert, onCreateExpe
 					<input
 						type="text"
 						className="ex-search-input"
+						aria-label="搜索专家"
 						placeholder="搜索专家职称或描述"
 						value={searchInput}
 						onChange={(e) => {

@@ -249,6 +249,7 @@ function WebSearchSection({ busy }: WebSearchSectionProps): React.JSX.Element {
 							/>
 								<input
 									type="password"
+									aria-label="联网搜索 API Key"
 									value={apiKey}
 									autoComplete="off"
 									placeholder="粘贴 API Key，回车保存"

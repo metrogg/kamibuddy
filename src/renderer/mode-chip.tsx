@@ -22,6 +22,7 @@
  */
 
 import type { ModeDescriptor } from "@shared/session-events.ts";
+import { IconClose } from "./icons.tsx";
 
 /**
  * 默认交互模式 id。与 shared/conversation.ts 的
@@ -55,7 +56,7 @@ export function ModeChip({
 				title="退出该模式"
 				onClick={() => onChange(DEFAULT_INTERACTION_ID)}
 			>
-				×
+				<IconClose size={12} />
 			</button>
 		</span>
 	);

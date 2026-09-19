@@ -214,7 +214,15 @@ export const Markdown = React.memo(function Markdown({
 						? {}
 						: {
 							img: ({ src, alt }) => (
-								<img src={typeof src === "string" ? resolveImageSrc(src) : src} alt={alt ?? ""} />
+								<img
+									src={typeof src === "string" ? resolveImageSrc(src) : src}
+									alt={alt ?? ""}
+									/* 尺寸未知（内容来自模型，不是我们生成的），给不了 width/height；
+									   下界靠 CSS 的 max-width + height:auto，加载时机靠 lazy + async 解码，
+									   避免长回复里的图在同一帧里全量解码、把滚动卡住。 */
+									loading="lazy"
+									decoding="async"
+								/>
 							),
 						}),
 				}}

@@ -332,7 +332,7 @@ export function AutomationsView({
 					<LoadingState />
 				) : tasks.length === 0 ? (
 					<EmptyState
-						title="还没有定时任务。"
+						title="还没有定时任务"
 						description="新建一个任务，让它按调度在对应工作空间里自动运行。"
 						action={
 							<button type="button" className="primary-btn" onClick={openCreate}>
@@ -544,7 +544,7 @@ function AutomationRow({
 			{expanded && (
 				<div className="auto-runs">
 					{runs.length === 0 ? (
-						<EmptyState title="还没有运行记录。" />
+						<EmptyState title="还没有运行记录" />
 					) : (
 						runs.map((run) =>
 							run.sessionId === "" ? (

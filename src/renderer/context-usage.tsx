@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { formatTokenCount, type ContextUsageDetail } from "@shared/context-usage.ts";
+import { IconClose } from "./icons.tsx";
 
 /** 圆环几何：18px 视窗、半径 7、线宽 2。周长 = 2πr。 */
 const R = 7;
@@ -154,11 +155,15 @@ export function ContextUsageRing({
 				</svg>
 			</button>
 			{open && (
-				<div className="cu-popover" role="dialog" aria-label="上下文用量">
+				/*
+				 * 外点即关、不阻断页面 → 非模态浮层：不声明 dialog（声明了按 DESIGN.md §7.3
+				 * 就得配焦点陷阱 + 焦点归还），用 group 只承载「这是一组带名字的内容」。
+				 */
+				<div className="cu-popover" role="group" aria-label="上下文用量">
 					<header className="cu-header">
 						<span className="cu-title">上下文用量</span>
 						<button type="button" className="cu-close" aria-label="关闭" onClick={() => setOpen(false)}>
-							×
+							<IconClose size={14} />
 						</button>
 					</header>
 					<ContextUsageBreakdown detail={detail} />

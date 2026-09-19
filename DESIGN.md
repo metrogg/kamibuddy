@@ -148,7 +148,8 @@
 ### 3.2 输入框 / 输入卡
 
 - 行内小输入框（重命名、表单）：高 28px 左右，1px `--border`，圆角 sm，padding `--space-2`×`--space-3`；focus 边框改 `--accent` 或依赖全局焦点环，二者取一不叠加。
-- 输入卡（`.composer-card`）：圆角 24px（WB 例外值）、padding 12/16px、���影走输入卡例外（见 2.7）；focus-within 时**阴影加深一档**（`--shadow-input-focus`，WB `cr-input-container--focused` 口径），**边框不动** —— 曾经写成边框加深，点进输入框是一圈黑线（2026-09-17 反馈后改）。
+- 输入卡（`.composer-card`）：圆角 24px（WB 例外值）、描边 **0.5px** `--border`（WB `.cr-input-container` 原值）、padding 12/16px、阴影走输入卡例外（见 2.7）；focus-within 时**阴影加深一档**（`--shadow-input-focus`，WB `cr-input-container--focused` 口径），**边框不动** —— 曾经写成边框加深，点进输入框是一圈黑线（2026-09-17 反馈后改）。
+- 输入卡**底行（`.composer-bar`）内的控件一律 32px 高**（WB `.cr-input-toolbar { min-height: 32px }` / `.cr-input-footer-item { height: 32px }`）：`+`、模式/专家 chip、模型 chip、发送键同高。统一作用域收在 `.composer-bar` 内，**不**改 `.bar-btn` 全局（产物面板/PDF 翻页/面板开关组另有对齐算法，见 §3.1 图标按钮档）。
 - 文本域：不可横向拉伸（`resize: none` 或 vertical）；占位文字 `--text-faint`；禁用态底 `--bg-raised` 字 `--text-faint`。
 
 ### 3.3 卡片
@@ -191,6 +192,17 @@
 | 位置 | 气泡里**内联在正文流**（WB 同款 `[图标] 技能名  正文`），靠 `.user-bubble .skill-chip` 的 margin-right 与正文隔开；输入卡里排在 chip 条内 |
 
 高度 23px / padding 1px 是 WB 原值、不入 §2.5 的间距档（§10.3 登记）；换高档位会顶出正文行高。
+
+### 3.7 应用外壳几何（侧栏 / 内容列）
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| 侧栏展开宽 | **264px**（`--space-*` 之外的外壳常量，不入档） | WB `SIDEBAR_SIZE.EXPANDED_WIDTH = 264`；`.claw-sidebar-drawer { flex: 0 0 264px }` |
+| 侧栏折叠宽 | 0（整栏让位，`visibility: hidden` 移出 Tab 序） | 我们自己的折叠语义，见 §5 受控例外 ④ |
+| 首页内容列 | `max-width: 848px` + 左右 `--space-6`（24）；底部案例槽预留 220px、案例槽 `bottom: 56px` | WB `.wb-home-page` 的 `min-height: max(432px + var(--wb-home-slot-reserve,220px), 100%)` 可证；848 与 56 是旧注释引用值，**本地参考物中查不到出处**（见迁移文档 §12.4） |
+| 内容列最小可用宽 | 320（`artifact-panel.tsx` 的 `MAIN_MIN_WIDTH`） | 900（窗口最小宽）− 264（侧栏）− 320 = 316，面板下限 340 后恰好铺满 |
+
+改动史与证据见 [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §12（含否决方案）。
 
 ## 4. 状态矩阵（组件 × 7 状态）
 
@@ -258,7 +270,7 @@
 1. **只动 `transform` / `opacity` / `visibility`**。禁止过渡/动画这些属性：
    `width`、`height`、`max-height`、`min-height`、`padding`、`margin`、`border-width`、
    `font-weight`、`background-position`、`top`/`left`（非 transform 写法）、`grid-template-rows`。
-   （四条**受控例外**见本节末，明确不属于违规。）
+   （五条**受控例外**见本节末，明确不属于违规。）
 2. **折叠展开的合法写法**：「从 0 到内容高度」只有两条可靠路径 —— `grid-template-rows: 0fr ↔ 1fr`
    （配内层 `min-height: 0; overflow: hidden`，参考 `.metafold-body` 手法）或
    `interpolate-size: allow-keywords` + `height: 0 ↔ auto`（参考 `.tool-detail-box` 手法，
@@ -303,6 +315,11 @@
    ≈ `--space-4`×2 + 1px 边框，而不是 0），而
    `artifact-panel` 的 `maxPanelWidth()` 正是量这个盒子，归零才保住「收起时量到 0」的契约；
    `visibility` 参与过渡以承担收起后的 Tab 序/a11y 移出（见规则 7 的条件挂载口径）。
+⑤ **`.widget-frame` 的 `height` 过渡**（2026-09-19 登记）：可视化挂件是**跨文档 iframe**，
+   高度只能由宿主改盒子高来表达 —— `transform: scale` 会同时缩放 iframe 内的内容并让
+   点击/滚动坐标错位（iframe 内命中测试用的是未缩放的坐标系）。而 iframe 内 `ResizeObserver`
+   的上报是离散值（已防抖），去掉过渡就是逐次跳变。时长 `--dur-fast`，只服务「微增长平滑」；
+   挂件高度本身另有 `[60, 2000]` 的钳制（`widget-view.tsx`）。
 
 ## 6. 禁止清单
 

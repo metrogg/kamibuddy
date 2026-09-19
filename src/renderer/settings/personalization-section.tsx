@@ -166,6 +166,7 @@ function CustomInstructionsSection({
 			</header>
 			<textarea
 				className="profile-textarea"
+				aria-label="自定义指令"
 				value={draft}
 				disabled={busy}
 				maxLength={CUSTOM_INSTRUCTIONS_MAX}
