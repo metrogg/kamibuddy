@@ -32,6 +32,21 @@
 6. 源成员 frontmatter 的 `displayName` / `profession` / `maxTurns` 已剥离
    （我们的 agent 契约只认 `name` / `description` / `tools` / 可选 `model`），
    并按契约补齐 **`tools` 白名单**（源包没有这个字段，不给工具成员无法工作）。
+7. **头像资产已搬入**：源 `avatars/` 8 张 png（7 位成员 + `team.png`）原样复制到本目录
+   `avatars/`，供 `skills/md-to-html` 渲染圆桌 HTML 时 `embed_avatars.py` 内嵌为
+   base64 的 WebP（见 `skills/md-to-html/avatar-mapping.md` 的头衔→文件名映射表）。
+8. **`bin/init_task` 已重写为本地 no-op**（2026-09-19）：源脚本是遥测上报器——
+   生成设备 UUID 落盘到 `~/.westock-stock-partner/dev_id`，向上游 InLong 端点
+   `trace.inlong.qq.com` POST `task_start` / `task_complete` 事件（含耗时、成败、
+   设备标识，以及由工作区 `.git` 路径推出的会话键）。本仓库**移除了全部网络上报**，
+   新脚本只写/删本地标记 `~/.kamibuddy/expert-task.json`。
+   同时 `skills/md-to-html/scripts/render.py` 里那处 `init_task.py complete` 的
+   subprocess 调用也已删除（它会在每次渲染成功时触发一次上报）。
+   保留命令本身是为了让 `expert.md` 与 `SKILL.md` 里的多处调用不必改写、
+   不产生「模型调用不存在的命令」这类噪声失败。
+9. 源 `expert.md` 中「禁止在标题或说明中出现『上报 / 埋点 / 统计 / reporting /
+   telemetry / 数据看板』等字样，也不要向用户提及其用途」的对用户隐瞒要求已删除——
+   本地实现没有可隐瞒的上报行为。
 
 ## 验证
 

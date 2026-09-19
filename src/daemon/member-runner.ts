@@ -6,8 +6,9 @@
  *   - **长会话**：无 10 分钟超时 —— 成员跑完一轮任务自然收尾，后续靠
  *     team_send 唤醒（WorkBuddy「已完成成员收消息自动重启」语义）；
  *   - **fire-and-forget**：spawn ack（宿主建好 + prompt 已起）即返回，
- *     领导 run 不等成员；一轮收尾经 onComplete/onFailed 回调回投领导
- *     （daemon 接线层把它折成 deliverSessionMessage）；
+ *     领导 run 不等成员；一轮收尾经 onComplete/onFailed 回调记账
+ *     （**产出不回投** —— 拉模式下领导用 team_read 主动读成员会话，
+ *     spec: add-team-pull-model 批次 ④）；
  *   - **不随领导 abort**：主会话停止键不杀成员（成员独立，WorkBuddy 同款），
  *     解散走 team_delete 的 abortAll；
  *   - 会话文件写 team_member 溯源标记（列表过滤）。
@@ -50,10 +51,21 @@ export interface MemberSpawnInput {
 export interface MemberHooks {
 	/** 进展一行（tool_started / 轮数），供 runtime.recordProgress 回填。 */
 	readonly onProgress: (memberName: string, text: string) => void;
-	/** 一轮收尾：最终输出（已 24k 截断 + 去毒）。 */
-	readonly onComplete: (memberName: string, output: string, turns: number) => void;
+	/**
+	 * 一轮收尾：最终输出（已 24k 截断 + 去毒）。
+	 *
+	 * **返回值可以是 Promise，且会被 await**（spec: add-team-interrupt-diagnostics
+	 * 批次 ③.2）。签名保留 async 能力是刻意的：拉模式（spec: add-team-pull-model
+	 * 批次 ④）删掉了回投，接线层现在只需同步记账，但**钩子契约不该由当前调用方
+	 * 的实现细节决定** —— 将来若有别的收尾工作（落盘、通知、清理），应当能在这里
+	 * 直接返回 Promise 而不必再改签名与 `.then()` 结构。
+	 *
+	 * 反面纪律仍然成立：**接线层若返回了 Promise，就必须在这里 await 掉**，
+	 * 不能再 `void`（2026-09-19 的教训）。
+	 */
+	readonly onComplete: (memberName: string, output: string, turns: number) => void | Promise<void>;
 	/** 失败/被中止：诊断文本。 */
-	readonly onFailed: (memberName: string, message: string) => void;
+	readonly onFailed: (memberName: string, message: string) => void | Promise<void>;
 	/**
 	 * 成员会话事件转发（spec: add-team-foundations 批 8 焦点导航）：以成员
 	 * sessionId 为信封键转发 renderer，用户可聚焦查看成员完整对话。首参在
@@ -93,7 +105,13 @@ export interface MemberHandle {
 	 * 由接线层回填注册表供 `team_status` 展示（批次 ⑥）。
 	 */
 	readonly modelKey: string;
-	/** 向成员投一条消息（followUp 语义：idle 唤醒 / running 排队）。 */
+	/**
+	 * 向成员投一条消息（followUp 语义：idle 唤醒 / running 排队）。
+	 *
+	 * 返回值是 `session-host.prompt` 的「是否仅入队」（批次 ③.3）。**投给成员
+	 * 的这条路不需要它**（成员没有回投送达确认那套留痕），故签名这里收窄成
+	 * `void`；实现返回对象也不影响（TS 允许返回更宽的值被当 void 用）。
+	 */
 	prompt: (text: string) => Promise<void>;
 	/** 解散时中止成员当前轮。 */
 	abort: () => Promise<void>;
@@ -197,28 +215,41 @@ export async function spawnMember(
 		return sanitizeSubagentOutput(truncated);
 	};
 
-	// fire-and-forget：不 await。收尾回调把产出折回领导（接线层投递）。
+	/*
+	 * fire-and-forget：不 await 整轮（领导不该等成员）。收尾回调的返回值仍然
+	 * await 掉 —— 拉模式（spec: add-team-pull-model 批次 ④）删了回投之后接线层
+	 * 已不返回 Promise，但这条 await 保留：钩子契约允许返回 Promise，那么
+	 * 「返回了就必须被等」这条纪律不能因为当前实现恰好同步就悄悄失效。
+	 */
 	void host
 		.prompt(input.task)
-		.then(() => {
+		.then(async () => {
 			if (runError !== undefined) {
-				hooks.onFailed(memberName, runError);
+				await hooks.onFailed(memberName, runError);
 				return;
 			}
 			if (cancelled) {
-				hooks.onFailed(memberName, "已被中止");
+				await hooks.onFailed(memberName, "已被中止");
 				return;
 			}
-			hooks.onComplete(memberName, finalizeOutput(lastText), turns);
+			await hooks.onComplete(memberName, finalizeOutput(lastText), turns);
 		})
-		.catch((error: unknown) => {
-			hooks.onFailed(memberName, error instanceof Error ? error.message : String(error));
+		.catch(async (error: unknown) => {
+			// 回调自身抛错也要兜住（否则 `.catch` 里再抛就成了游离 rejection）。
+			try {
+				await hooks.onFailed(memberName, error instanceof Error ? error.message : String(error));
+			} catch {
+				// 兜底回调都失败时无处可投，吞掉 —— 但绝不能让它冒泡成 unhandledRejection。
+			}
 		});
 
 	return {
 		sessionId,
 		modelKey,
-		prompt: (text: string) => host.prompt(text, "followUp"),
+		// 丢弃 prompt 的「是否仅入队」返回值：成员侧没有回投留痕要确认。
+		prompt: async (text: string) => {
+			await host.prompt(text, "followUp");
+		},
 		abort: () => host.abort(),
 		dispose: () => host.dispose(),
 	};

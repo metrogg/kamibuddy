@@ -1,7 +1,8 @@
 /**
- * 团队工具七件套（spec: add-team-foundations 批 5；team_shutdown / team_delegate_mode /
- * team_plan_review 见 spec: add-team-collaboration-parity 批次 ②③④）：
- * team_create / team_send / team_status / team_shutdown / team_plan_review /
+ * 团队工具八件套（spec: add-team-foundations 批 5；team_shutdown / team_delegate_mode /
+ * team_plan_review 见 spec: add-team-collaboration-parity 批次 ②③④；
+ * team_read 见 spec: add-team-pull-model 批次③）：
+ * team_create / team_send / team_status / team_read / team_shutdown / team_plan_review /
  * team_delegate_mode / team_delete。
  *
  * 与 task-tool 同取向：编排与回传格式在本文件，执行本体（成员 spawn、路由、
@@ -10,9 +11,12 @@
  * 语义要点（对齐 WorkBuddy Agent Teams，裁剪见 spec）：
  *   - **单会话单团队**：已有团队时 team_create 响亮报错（注册表层校验，
  *     工具层转述）；
- *   - **fire-and-forget**：team_create 返回时成员已 spawn ack（会话 id 已定、
- *     初始任务已开跑），不等成员完成；成员产出经完成回投（deliverSessionMessage）
- *     自动回到领导会话；
+ *   - **fire-and-forget + 拉模式取产出**（spec: add-team-pull-model）：team_create
+ *     返回时成员已 spawn ack（会话 id 已定、初始任务已开跑），不等成员完成；
+ *     成员产出写在**成员自己的会话记录**里，领导用 **team_read 主动取回** ——
+ *     不自动回投。这是对齐 WorkBuddy 的核心手法的落点（它的领导靠
+ *     `readTranscript` 读子会话，`derivePersistedTranscriptStatus` 从文件派生状态）；
+ *     拉模式同时消灭了「投递可能失败」这个历史事故源（2026-09-19 三次复现）；
  *   - **单成员可优雅关闭**：team_shutdown 只针对一个成员（发收尾请求 → 它交回
  *     报告后关闭；force 走 abort）。整队中止仍然只有 team_delete；
  *   - **@寻址**：team_send 的 to 是成员名或 "@all"（大小写不敏感，WorkBuddy
@@ -26,12 +30,14 @@
  * kind 盖 "team" —— 主会话活动卡按团队成员分组呈现，渲染层零改动。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 六个工具（team_create / team_send / team_status / team_shutdown /
- * team_delegate_mode / team_delete）的名称、description 与参数 schema；返回的成员 spawn 计划、
- * 成员名单与状态摘要、以及错误文案（未知成员名 / 已有团队 / 成员不许再委派 /
- * 已关闭成员不再收消息）。成员产出经完成回投作为新消息回到领导会话。
- * Token effect: 定义常驻（**七条**定义）；返回是团队规模与状态的摘要文本。
- * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时七个工具**根本不注册** ——
+ * What the model sees: 七个工具（team_create / team_send / team_status / team_read /
+ * team_shutdown / team_delegate_mode / team_delete）的名称、description 与参数 schema；
+ * 返回的成员 spawn 计划、成员名单与状态摘要、以及错误文案（未知成员名 / 已有团队 /
+ * 成员不许再委派 / 已关闭成员不再收消息）。**成员产出不自动送达** —— 领导用
+ * team_read 主动取回（team_status 会标注「有产出可读」）。
+ * Token effect: 定义常驻（**八条**定义）；返回是团队规模与状态的摘要文本，
+ * team_read 返回产出正文（可能很长，这是它的用途）。
+ * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时八个工具**根本不注册** ——
  * 工具集本身就是前缀的一部分，开关在会话间翻转会让改动点之后的整段前缀（含历史）失配
  * （判据同 mcp-client）。结果追加在历史之后，不动既有前缀。
  */
@@ -73,6 +79,26 @@ export interface TeamMemberState {
 	readonly planStatus?: string;
 	/** 该成员实际使用的模型（`providerId/modelId`）；未记录时缺省。 */
 	readonly model?: string;
+	/**
+	 * 领导已经等了多久（分钟；spec: add-team-interrupt-diagnostics 批次 ②）。
+	 * **0 / 缺省 = 不在等待中**（成员已交回产出、失败了、或从未起跑）。
+	 *
+	 * 把它写进 team_status 是给**模型**看的：领导自己不知道时间流逝，
+	 * 没有这个数字它就不会想到「等太久了，该 team_send 问一句或者收尾了」——
+	 * 2026-09-19 实测里领导就是在一次进度通报之后永久静默了。
+	 */
+	readonly waitedMinutes?: number;
+	/**
+	 * 该成员的会话记录里**有没有可读的产出**（spec: add-team-pull-model 批次③）。
+	 *
+	 * 与 `status` 正交，且**从文件派生**（不是注册表标记）：只要成员会话里有一条
+	 * 带正文的 assistant 消息就是 true。领导据此决定要不要 `team_read` 取回。
+	 *
+	 * 为什么不做成「注册表里记一个布尔」：那又是一份可能与文件不一致的副本 ——
+	 * 拉模式的全部意义就是**文件是唯一真源**（对齐 WorkBuddy 的
+	 * `derivePersistedTranscriptStatus`：状态从文件算，不从上一次的结论继承）。
+	 */
+	readonly outputAvailable?: boolean;
 }
 
 export interface MemberSpawnHooks {
@@ -104,6 +130,20 @@ export interface TeamToolDeps {
 	readonly sendToMembers: (to: string, text: string) => Promise<readonly string[]>;
 	/** 当前团队状态；无团队 → undefined。 */
 	readonly getTeamState: () => { name: string; members: readonly TeamMemberState[] } | undefined;
+	/**
+	 * 读取成员的产出正文（spec: add-team-pull-model 批次③）—— **拉模式的核心落点**。
+	 *
+	 * 对齐 WorkBuddy 的做法：领导拿产出不靠「成员把产出推给我」，而是**自己去读**
+	 * 成员的会话记录（它的 `readTranscript` 读 `<taskId>.jsonl`）。产出写进成员
+	 * 会话的那一刻就算交付 —— 没有「投递」这个可能失败的环节，也就没有丢的可能。
+	 *
+	 * 实现层（daemon）读 `~/.kamibuddy/sessions/<memberSessionId>.jsonl`，取最近
+	 * 一条有正文的 assistant 消息。成员被解散/会话文件不存在 → 返回 undefined
+	 * （工具据此报「读不到」，而不是抛错 —— 读不到是常态，不是异常）。
+	 *
+	 * @param to 成员名（@寻址键）。未知成员 → throw（那是调用方错误）。
+	 */
+	readonly readMemberOutput: (to: string) => Promise<{ member: string; output: string | undefined; status: string | undefined } | undefined>;
 	/**
 	 * 单成员优雅关闭（spec: add-team-collaboration-parity 批次 ②）：
 	 * force=false → 投收尾请求（成员交回报告后关闭）；force=true → 直接中止。
@@ -156,7 +196,7 @@ const emptyDetails: TeamToolDetails = { teamName: "", [CHILD_AGENTS_DETAILS_KEY]
 export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 	// 权限档自声明（permission-policy 批注：编排类、无本地路径、无副作用）——
 	// 声明在注册处，写工具的人顺手登记，不再有中心清单要记得更新。
-	declareReadOnlyTools(["team_create", "team_send", "team_status", "team_delete"]);
+	declareReadOnlyTools(["team_create", "team_send", "team_status", "team_read", "team_delete"]);
 	return (pi: ExtensionAPI): void => {
 		// 开关关闭时不注册：craft 白名单里的名字对 pi 静默忽略（docx_convert 先例），
 		// 模型看不到团队能力，成本为零。
@@ -167,14 +207,15 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			label: "建团队",
 			description:
 				"创建团队并启动成员：每个成员是一个独立长会话，带各自人格（agents 库定义）与初始任务。" +
-				"成员在后台独立执行（本工具不等它们完成），完成或失败时结果会自动回投到本会话。" +
-				"每个会话同时只能有一个团队。成员 1-8 名，成员名是 @寻址的唯一键。" +
-				"需要追加指示用 team_send，查进度用 team_status，解散用 team_delete。",
+				"成员在后台独立执行（本工具不等它们完成），它们的产出**存在各自的会话记录里**。" +
+				"取产出用 team_read（不会自动送到你这里）；查进度用 team_status，追加指示用 team_send，解散用 team_delete。" +
+				"每个会话同时只能有一个团队。成员 1-8 名，成员名是 @寻址的唯一键。",
 			promptSnippet:
-				"team_create: 建团队并行攻坚——成员独立长会话后台跑，产出自动回投；适合可分片的并行任务",
+				"team_create: 建团队并行攻坚——成员独立长会话后台跑，产出用 team_read 取回；适合可分片的并行任务",
 			promptGuidelines: [
 				"任务拆分要自包含：成员看不到本会话历史，初始任务里写全背景与验收要求。",
 				"先想清楚分工再建团：成员数就是并行度，1-8 人；琐碎任务直接自己做。",
+				"成员跑完后用 team_read 取回产出再汇总 —— 产出不会自动出现。",
 			],
 			parameters: Type.Object({
 				name: Type.String({ minLength: 1, description: "团队名（展示用）。" }),
@@ -273,8 +314,10 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 		pi.registerTool({
 			name: "team_status",
 			label: "团队状态",
-			description: "查看团队成员的当前状态（工作/空闲/失败）、已完成轮数与最近动作。",
-			promptSnippet: "team_status: 查团队成员状态，决定等待、追加指示还是汇总",
+			description:
+				"查看团队成员的当前状态（工作/空闲/失败/已中断）、已完成轮数、最近动作，以及你等它多久了。" +
+				"某成员标注「有产出可读」时，用 team_read 取回它的产出正文（产出存在它的会话记录里，不会自动送到你这里）。",
+			promptSnippet: "team_status: 查团队成员状态，决定等待、追加指示还是 team_read 取产出",
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params): Promise<ToolResult> {
 				const state = deps.getTeamState();
@@ -288,10 +331,76 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 					const plan = m.planStatus === undefined || m.planStatus === "none" ? "" : `，计划：${m.planStatus}`;
 					const model = m.model === undefined || m.model === "" ? "" : `，模型：${m.model}`;
 					const recent = m.lastActivity === "" ? "" : `，最近：${m.lastActivity}`;
-					return `- ${m.name}（${m.agentName}）：${m.status}，已完成 ${m.turns} 轮${plan}${model}${recent}`;
+					// 产出可读（批次③，拉模式）：这是领导该去 team_read 的信号。
+					const readable =
+						m.outputAvailable === true ? "，**有产出可读（team_read 可取回）**" : "";
+					// 等待时长（批次 ②）：只在真的在等时附加。超过 5 分钟显式提示
+					// 「可能已中断」，让领导有机会主动处置而不是无限期静默。
+					const waited =
+						m.waitedMinutes === undefined || m.waitedMinutes <= 0
+							? ""
+							: m.waitedMinutes < 5
+								? `，你已等 ${m.waitedMinutes} 分钟`
+								: `，你已等 ${m.waitedMinutes} 分钟（**偏久，考虑 team_send 问一句或 team_shutdown 收尾**）`;
+					return `- ${m.name}（${m.agentName}）：${m.status}，已完成 ${m.turns} 轮${plan}${model}${recent}${readable}${waited}`;
 				});
 				return {
 					content: [{ type: "text" as const, text: `团队「${state.name}」：\n${lines.join("\n")}` }],
+					details: emptyDetails,
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "team_read",
+			label: "读成员产出",
+			description:
+				"读取某个成员的产出正文（它最近一轮交出的完整内容）。" +
+				"成员的产出**存在它自己的会话记录里**，完成时不会自动推到你这里 —— 你要用本工具主动取回。" +
+				"典型用法：team_status 看到某成员「有产出可读」或「已完成 N 轮」后调 team_read 取回内容，再决定下一步。" +
+				"同一份产出可以反复读，内容不变（不会重复、不会丢失）。",
+			promptSnippet: "team_read: 取回某个成员的产出正文（产出在它的会话记录里，要用这个读）",
+			promptGuidelines: [
+				"成员跑完一轮后主动 team_read 取它的产出，不要干等它「自动送过来」—— 产出不会自动送达。",
+				"汇总多名成员的产出时逐个 team_read，再自己整合；不要假定内容已在你的上下文里。",
+			],
+			parameters: Type.Object({
+				to: Type.String({ minLength: 1, description: "成员名（@寻址键）。" }),
+			}),
+			async execute(_toolCallId, params): Promise<ToolResult> {
+				const result = await deps.readMemberOutput(params.to);
+				if (result === undefined) {
+					return {
+						content: [{ type: "text" as const, text: "当前会话没有团队。" }],
+						details: emptyDetails,
+					};
+				}
+				if (result.output === undefined) {
+					const why =
+						result.status === "running"
+							? "它还在跑，产出还没落盘"
+							: result.status === "interrupted"
+								? "它上次运行被中断，没有完整产出"
+								: result.status === "failed"
+									? "它上次运行失败了，没有产出"
+									: "它的会话记录里还没有产出";
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `成员「${result.member}」暂无产出可读（${why}）。可以 team_status 看它的状态，或用 team_send 问一句。`,
+							},
+						],
+						details: emptyDetails,
+					};
+				}
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `成员「${result.member}」的产出：\n\n${result.output}`,
+						},
+					],
 					details: emptyDetails,
 				};
 			},

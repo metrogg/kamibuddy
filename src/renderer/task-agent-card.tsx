@@ -59,6 +59,30 @@ export function deriveAgentRow(agent: SubagentStatus): AgentRowView {
 		case "failed":
 			// output 是失败诊断（契约）；类型上可选，缺席时交代一句不空行。
 			return { status: "failed", action: agent.output ?? "执行失败", live: false };
+	case "interrupted":
+		// 中断（spec: add-team-interrupt-diagnostics 批次 ①）：动作行要说清
+		// 三件事 —— 上次跑到哪、产出还在不在、下一步该做什么。只写「已中断」
+		// 用户不知道要不要去捞产出，那就是把诊断信号浪费掉了。
+		//
+		// 拉模式（spec: add-team-pull-model 批次 ④）：判据从注册表的
+		// `pendingDelivery` 标记换成**从会话文件派生的 `outputAvailable`** ——
+		// 文件在就说明产出在，这比「上次登记过一个标记」可靠得多（标记会随
+		// 进程一起没，文件不会）。
+		if (agent.outputAvailable === true) {
+			return {
+				status: "interrupted",
+				action: "上次那一轮已跑完、产出还在（在它的会话记录里）；可去取回，不必重跑",
+				live: false,
+			};
+		}
+		return {
+			status: "interrupted",
+			action:
+				agent.turns > 0
+					? `上次运行中随进程中断（已跑 ${agent.turns} 轮）`
+					: "上次运行中随进程中断",
+			live: false,
+		};
 	}
 }
 
@@ -86,6 +110,15 @@ function AgentGlyph({ status }: { readonly status: SubagentStatus["status"] }): 
 		return (
 			<span className="todo-glyph">
 				<IconClose size={14} className="task-agent-cross" />
+			</span>
+		);
+	}
+	// 中断沿用叉的容器，但走独立色档（spec: add-team-interrupt-diagnostics 批次 ①）：
+	// 视觉上与失败同族（都不是成功），色上区分（琥珀 vs 红，成员自己没出错）。
+	if (status === "interrupted") {
+		return (
+			<span className="todo-glyph">
+				<IconClose size={14} className="task-agent-interrupted" />
 			</span>
 		);
 	}

@@ -40,7 +40,7 @@ python3 skills/md-to-html/scripts/render.py \
 init_task complete
 ```
 
-详见主理人 prompt「会话初始化与收尾」节；步骤标题保持中性、静默执行，不向用户解释。本步与渲染解耦，渲染失败不影响已产出的 HTML。
+详见主理人 prompt「会话标记」节；步骤标题保持中性、静默执行。本命令在本产品中是纯本地 no-op（不联网、不上报），与渲染解耦，渲染失败不影响已产出的 HTML。
 
 ---
 

@@ -27,6 +27,9 @@
    我们的成员是长会话（跑完一轮自然收尾，可用 `team_send` 唤醒）。
 5. 源成员 frontmatter 的 `displayName` / `profession` / `maxTurns` 已剥离，
    并按我们的 agent 契约补齐 **`tools` 白名单**（源包没有这个字段）。
+6. **头像与许可已搬入**（2026-09-19）：源 `avatars/` 9 张 png（8 位成员 + `team.png`）
+   与源 `LICENSE`（MIT，Copyright (c) 2026 weiyou）原样复制到本目录。
+   本包不使用 `md-to-html` 渲染链路，头像目前仅供展示层取用（见 spec 批次⑨）。
 
 ## 工具面分配（按角色，本地补齐）
 

@@ -823,11 +823,25 @@ export class SessionHost {
 		return this.session.getActiveToolNames();
 	}
 
+	/**
+	 * 投一条消息。返回**是否仅入了 followUp 队列**。
+	 *
+	 * 返回值说明 pi 的 `followUp()` 是**入队即 resolve**：await 完它**无法判断
+	 * 消息是否已进入上下文**，本返回值只能告诉调用方这一发有没有真的起一轮。
+	 *
+	 * ⚠️ **不要拿它当送达回执**。团队产出曾经就是栽在这里 —— 三次复现
+	 * 「成员跑完但领导收不到产出」，最后一版的根因正是把 `queued: false`
+	 * 当成「已送达」去清留痕。拉模式（spec: add-team-pull-model 批次 ④）之后
+	 * 产出不再走这条路，`getFollowUpQueue` 与那套销账协议一并删除。
+	 *
+	 * 现在没有调用方需要这个区分（普通用户输入、成员 followUp 都忽略返回值），
+	 * 保留返回值是为了让「入队 ≠ 送达」这件事在签名层可见，别让后来者再猜一次。
+	 */
 	async prompt(
 		text: string,
 		whileStreaming?: "steer" | "followUp",
 		images?: readonly ImagePart[],
-	): Promise<void> {
+	): Promise<{ queued: boolean }> {
 		// pi 的两个入口形态不同（agent-session.d.ts）：prompt 走 PromptOptions.images，
 		// steer/followUp 的第二参直接是图片数组。这里统一先归一。
 		const piImages = toPiImages(images);
@@ -838,22 +852,27 @@ export class SessionHost {
 			// 想立刻插进当前这轮必须显式带 "steer"（队列条 ↑ 的重排路径走这条）。
 			if (whileStreaming === "steer") await this.session.steer(text, piImages);
 			else await this.session.followUp(text, piImages);
-			return;
+			return { queued: true };
 		}
 		if (whileStreaming !== undefined) {
 			// daemon 旁路进来的排队意图撞上「run 恰好收尾」的竞态：消息不能丢，
 			// 也不能裸调 prompt（pi 对流式会话无 streamingBehavior 会响亮拒绝）。
 			// AgentSession.prompt 自带 streamingBehavior 选项，把排队意图原样交给 pi
 			// —— run 真已结束就是普通发送，万一边缘并发也按同一语义排队。
+			//
+			// 这里**不返回 queued: true**：`streamingBehavior` 只是在「恰好还在
+			// 流式」时作为兜底排队条件交给 pi；run 已结束就是一次普通发送，
+			// 消息立刻进上下文。调用方（回投）据此不必等 queue_changed。
 			this.freezeHiddenContext();
 			await this.session.prompt(text, {
 				...(piImages === undefined ? {} : { images: piImages }),
 				streamingBehavior: whileStreaming,
 			});
-			return;
+			return { queued: false };
 		}
 		this.freezeHiddenContext();
 		await this.session.prompt(text, piImages === undefined ? undefined : { images: piImages });
+		return { queued: false };
 	}
 
 	/**

@@ -49,6 +49,7 @@ function mount(deps: Partial<TeamToolDeps> = {}): {
 			name: "攻坚队",
 			members: [{ name: "a", agentName: "scout", status: "running", turns: 2, lastActivity: "正在 read x" }],
 		}),
+		readMemberOutput: async (to) => ({ member: to, output: `${to} 的产出正文`, status: "idle" }),
 		shutdownMember: async (to) => `已向成员「${to}」发出收尾请求`,
 		setDelegateMode: async (enabled) => (enabled ? "已开启委派模式" : "已关闭委派模式"),
 		reviewPlan: async () => "已记录计划裁决",
@@ -65,13 +66,14 @@ describe("开关门（agentTeamsEnabled）", () => {
 		expect(tools.size).toBe(0);
 	});
 
-	it("isEnabled=true → 七件套齐", () => {
+	it("isEnabled=true → 八件套齐（含拉模式的 team_read）", () => {
 		const { tools } = mount();
 		expect([...tools.keys()].sort()).toEqual([
 			"team_create",
 			"team_delegate_mode",
 			"team_delete",
 			"team_plan_review",
+			"team_read",
 			"team_send",
 			"team_shutdown",
 			"team_status",
@@ -165,6 +167,96 @@ describe("team_shutdown（批次 ② 单成员优雅关闭）", () => {
 			},
 		});
 		await expect(tools.get("team_shutdown")!.execute("t1", { to: "@all" })).rejects.toThrow(/整队中止请用 team_delete/);
+	});
+});
+
+describe("team_read（spec: add-team-pull-model 批次 ③ 领导主动拉产出）", () => {
+	it("成员有产出 → 原样返回正文（产出不自动送达，这是唯一的取回路径）", async () => {
+		const asked: string[] = [];
+		const { tools } = mount({
+			readMemberOutput: async (to) => {
+				asked.push(to);
+				return { member: to, output: "## 调查报告\n\n三条来源……", status: "idle" };
+			},
+		});
+		const text = (await tools.get("team_read")!.execute("t1", { to: "a" })).content[0]?.text ?? "";
+		expect(asked).toEqual(["a"]);
+		expect(text).toContain("成员「a」的产出");
+		expect(text).toContain("## 调查报告");
+		expect(text).toContain("三条来源");
+	});
+
+	it("无团队 → 提示当前会话没有团队（不做成员名猜测）", async () => {
+		const { tools } = mount({ readMemberOutput: async () => undefined });
+		const text = (await tools.get("team_read")!.execute("t1", { to: "a" })).content[0]?.text ?? "";
+		expect(text).toContain("没有团队");
+	});
+
+	it("产出还没落盘 → 按状态分原因：running 说还在跑", async () => {
+		const { tools } = mount({
+			readMemberOutput: async (to) => ({ member: to, output: undefined, status: "running" }),
+		});
+		const text = (await tools.get("team_read")!.execute("t1", { to: "a" })).content[0]?.text ?? "";
+		expect(text).toContain("还在跑");
+	});
+
+	it("产出还没落盘 → interrupted 说那一轮没跑完、可稍后再取", async () => {
+		const { tools } = mount({
+			readMemberOutput: async (to) => ({ member: to, output: undefined, status: "interrupted" }),
+		});
+		const text = (await tools.get("team_read")!.execute("t1", { to: "a" })).content[0]?.text ?? "";
+		expect(text).toContain("中断");
+		expect(text).toContain("a");
+	});
+
+	it("产出还没落盘 → failed 说跑失败了、看它的会话记录找原因", async () => {
+		const { tools } = mount({
+			readMemberOutput: async (to) => ({ member: to, output: undefined, status: "failed" }),
+		});
+		const text = (await tools.get("team_read")!.execute("t1", { to: "a" })).content[0]?.text ?? "";
+		expect(text).toContain("失败");
+	});
+
+	it("未知成员名的报错原样透传（注册表层 requireMember 大声拒绝）", async () => {
+		const { tools } = mount({
+			readMemberOutput: async () => {
+				throw new Error("团队里没有成员「x」；现有成员：a、b");
+			},
+		});
+		await expect(tools.get("team_read")!.execute("t1", { to: "x" })).rejects.toThrow(/没有成员「x」/);
+	});
+
+	it("to 为空串被 schema 拦下（minLength 1）", async () => {
+		const { tools } = mount();
+		const def = tools.get("team_read") as unknown as { parameters?: unknown } | undefined;
+		expect(def?.parameters, "team_read 应带参数 schema").toBeDefined();
+	});
+});
+
+describe("team_status 的产出可读提示（spec: add-team-pull-model 批次 ③）", () => {
+	it("outputAvailable → 明说「有产出可读、用 team_read 取回」", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "攻坚队",
+				members: [
+					{ name: "a", agentName: "scout", status: "closed", turns: 2, lastActivity: "已完成 2 轮", outputAvailable: true },
+				],
+			}),
+		});
+		const text = (await tools.get("team_status")!.execute("t1", {})).content[0]?.text ?? "";
+		expect(text).toContain("有产出可读");
+		expect(text).toContain("team_read");
+	});
+
+	it("没有产出 → 不出现「有产出可读」（别让领导白跑一趟）", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "攻坚队",
+				members: [{ name: "a", agentName: "scout", status: "running", turns: 1, lastActivity: "正在 read x" }],
+			}),
+		});
+		const text = (await tools.get("team_status")!.execute("t1", {})).content[0]?.text ?? "";
+		expect(text).not.toContain("有产出可读");
 	});
 });
 
@@ -269,6 +361,43 @@ describe("team_send / team_status / team_delete", () => {
 		const result = await tools.get("team_delete")!.execute("t1", {});
 		expect(closed).toBe(true);
 		expect(result.content[0]?.text).toContain("已解散");
+	});
+});
+
+describe("team_status 的等待时长（spec: add-team-interrupt-diagnostics 批次 ②）", () => {
+	it("等待 < 5 分钟 → 只报时长，不催办", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "攻坚队",
+				members: [{ name: "a", agentName: "scout", status: "running", turns: 1, lastActivity: "正在 read x", waitedMinutes: 2 }],
+			}),
+		});
+		const text = (await tools.get("team_status")!.execute("t1", {})).content[0]?.text ?? "";
+		expect(text).toContain("你已等 2 分钟");
+		expect(text).not.toContain("偏久");
+	});
+
+	it("等待 ≥ 5 分钟 → 附催办提示（领导自己不知道时间流逝）", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "攻坚队",
+				members: [{ name: "a", agentName: "scout", status: "running", turns: 1, lastActivity: "正在 read x", waitedMinutes: 9 }],
+			}),
+		});
+		const text = (await tools.get("team_status")!.execute("t1", {})).content[0]?.text ?? "";
+		expect(text).toContain("你已等 9 分钟");
+		expect(text).toContain("偏久");
+	});
+
+	it("waitingSince 为 0 → 不显示等待（已交回产出/失败/没起跑都不算在等）", async () => {
+		const { tools } = mount({
+			getTeamState: () => ({
+				name: "攻坚队",
+				members: [{ name: "a", agentName: "scout", status: "idle", turns: 2, lastActivity: "已完成 2 轮" }],
+			}),
+		});
+		const text = (await tools.get("team_status")!.execute("t1", {})).content[0]?.text ?? "";
+		expect(text).not.toContain("你已等");
 	});
 });
 

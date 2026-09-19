@@ -115,6 +115,7 @@ import {
 import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from "../core/run-ledger.ts";
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
+import { readMemberTranscriptView } from "./member-transcript.ts";
 import { TeamRegistry } from "./team-runtime.ts";
 import { TeamTaskBoard } from "../core/team-tasks.ts";
 import { readTeams, removeTeam, TEAM_STORE_VERSION, writeTeam, type StoredTeam } from "../core/team-store.ts";
@@ -959,7 +960,9 @@ function setCurrentBucket(bucket: SessionBucket<SessionHost>): void {
 function evictIdleHosts(): void {
 	for (const bucket of pickEvictions(bucketsById.values(), currentBucket)) {
 		// 领导桶逐出即解散团队（spec: add-team-foundations 批 5 v1 决策）：
-		// 成员产出要回投领导，领导宿主没了就是断了回投线 —— 留着只会烧钱。
+		// 成员产出不再需要回投（拉模式，spec: add-team-pull-model 批次 ④ ——
+		// 产出一直在成员会话 JSONL 里），但成员的宿主必须收掉，否则就是
+		// 一支没人管的幽灵队伍在白烧钱。
 		void disbandTeamOf(bucket.sessionId);
 		bucketsById.delete(bucket.sessionId);
 		// pickEvictions 已排除 pristine（无 hostPromise）与 running / 审批待答 /
@@ -1215,6 +1218,29 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 		pushTaskListChanged();
 		if (event.type !== "run_started") evictIdleHosts();
 	}
+	/*
+	 * 领导会话这一轮跑糟了 → 把仍在跑且**永远收不到回音**的成员收敛掉
+	 * （spec: add-team-pull-model 批次 ②，对齐 WorkBuddy 的 `settleAllRunning`）。
+	 *
+	 * 判据只取 `run_error` 与「被取消的 run_finished」这两类**真的结束了**的边界：
+	 *   - 正常 `run_finished`（stop）**不触发** —— 领导跑完一轮就回到 idle 等用户，
+	 *     而成员是独立的 fire-and-forget 长会话，此刻很可能正跑得好好的。
+	 *     这正是 WorkBuddy 不变量 2 说的事（它原文：「运行时 idle 不触发 settle。
+	 *     主 agent end_turn 不代表 subagent 已经结束，硬 settle 会引入假态」）。
+	 *   - 用户按停止键（outcome=cancelled）：领导这一轮被掐断，此后不会有谁
+	 *     再去读成员产出，把它们一律留成 running 会让「没人接了」的观感永续
+	 *     —— 收敛成 interrupted，并告诉用户「产出仍在它的会话记录里」（拉模式
+	 *     下这句话恒真，与推模式那条会撒谎的「产出待捞」完全不同）。
+	 *
+	 * 为什么放在这里而不是 bundle 进 emitTeamProgress：收敛会改注册表，得刷投影
+	 * 才能到界面，所以顺序是「先收敛、再刷」。
+	 */
+	if (event.type === "run_error" || (event.type === "run_finished" && event.outcome === "cancelled")) {
+		const reason = event.type === "run_error" ? "error" : "terminated";
+		if (teamRegistry.settleRunningMembers(bucket.sessionId, reason).length > 0) {
+			emitTeamProgress(bucket.sessionId);
+		}
+	}
 	// prompt IPC 的「受理即回」：run_started 解闸对应桶上等待受理的提交方
 	//（见 INVOKE.prompt 的 accepted 注释）。
 	if (event.type === "run_started") {
@@ -1223,7 +1249,6 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 			for (const waiter of waiters) waiter();
 		}
 	}
-
 	// 带用量的 session_state 到达后补发明细：used/total 是 pi 的精确值（刚折叠进
 	// 桶的 conversation.state），分类所需的系统提示词/技能段 token 只有这里知道。
 	// context_usage 自身不会再触发本分支，无递归。
@@ -1806,6 +1831,9 @@ const teamMailbox = new SessionMailbox();
  *
  * @param fromLabel 来源显示名（成员名/会话标题，批 5 的路由层有这个知识）；
  *        缺省回落 fromSessionId。
+ * @returns **是否仅入了 followUp 队列**（批次 ③.3）。`queued: true` 表示消息
+ *        还躺在 pi 的队列里等消费 —— 调用方（回投）据此把留痕保留到
+ *        `queue_changed` 认领为止；`false` 表示这一发就已进上下文。
  * @throws 目标会话不在注册表、或从未建过宿主（pristine 桶没有可接收消息的
  *         对话）—— 响亮失败，不静默丢消息。
  */
@@ -1814,7 +1842,7 @@ function deliverSessionMessage(
 	toSessionId: string,
 	text: string,
 	fromLabel?: string,
-): Promise<void> {
+): Promise<{ queued: boolean }> {
 	const target = bucketsById.get(toSessionId);
 	if (target === undefined) {
 		throw new Error(`目标会话不存在：${toSessionId}`);
@@ -1834,18 +1862,18 @@ function deliverSessionMessage(
 	if (target.running) {
 		return (async () => {
 			const host = await target.hostPromise;
-			if (host === undefined) return; // 不可达（上方已判），窄化守卫
+			if (host === undefined) return { queued: false }; // 不可达（上方已判），窄化守卫
 			teamMailbox.drain(toSessionId);
 			const composed = `[来自会话「${fromLabel ?? fromSessionId}」的消息]\n${text}`;
-			await host.prompt(composed, "followUp");
+			return host.prompt(composed, "followUp");
 		})();
 	}
 	return enqueue(target, async () => {
 		const composed = await composeFromMailbox();
-		if (composed === "") return;
+		if (composed === "") return { queued: false };
 		const host = await target.hostPromise;
-		if (host === undefined) return; // 不可达（上方已判），窄化守卫
-		await host.prompt(composed, "followUp");
+		if (host === undefined) return { queued: false }; // 不可达（上方已判），窄化守卫
+		return host.prompt(composed, "followUp");
 	});
 }
 
@@ -1887,6 +1915,10 @@ function emitTeamProgress(leaderSessionId: string): void {
 		idle: "done",
 		failed: "failed",
 		closed: "done",
+		// 中断是**独立态**（spec: add-team-interrupt-diagnostics 批次 ①）：
+		// 折成 failed 会让用户以为成员自己出错，折成 done 会让他以为活干完了。
+		// 它要传达的是第三件事：宿主没了，那一轮很可能跑完但产出没回来。
+		interrupted: "interrupted",
 	};
 	const members = [...team.members.values()].map(
 		(member): SubagentStatus => ({
@@ -1900,6 +1932,18 @@ function emitTeamProgress(leaderSessionId: string): void {
 			...(member.toolCalls > 0 ? { toolCalls: member.toolCalls } : {}),
 			...(member.tokens > 0 ? { tokens: member.tokens } : {}),
 			...(member.cost > 0 ? { cost: member.cost } : {}),
+			// 等待起点（批次 ②）：只在真的在等（running）时下发，其余态缺席 ——
+			// 消费端按「缺席 = 不在等」解释，不需要自己判 status。
+			...(member.waitingSince > 0 ? { waitingSince: member.waitingSince } : {}),
+			/*
+			 * 产出可读（spec: add-team-pull-model 批次③）：**从成员会话文件派生**，
+			 * 不是注册表标记 —— 拉模式的全部意义是「文件是唯一真源」。
+			 * 与 getTeamState 同源同判据（都走 readMemberTranscriptView），
+			 * 两处不许各算一份。
+			 */
+			...(member.sessionId !== undefined && readMemberTranscriptView(member.sessionId).output !== undefined
+				? { outputAvailable: true }
+				: {}),
 		}),
 	);
 	const bucket = bucketsById.get(leaderSessionId);
@@ -1939,6 +1983,12 @@ function persistTeam(leaderSessionId: string): void {
 		cost: member.cost,
 		planStatus: member.planStatus,
 		planFeedback: member.planFeedback,
+		/*
+		 * 落盘不含任何「产出是否送达」字段（spec: add-team-pull-model 批次④ 已删掉
+		 * `pendingDelivery`）：拉模式下产出永远在成员会话 JSONL 里，重启后
+		 * `restoreTeam` 直接读文件派生出「有没有产出」，不需要落盘副本
+		 * （那反而是可能与文件不一致的第二真源）。
+		 */
 	}));
 	const tasks = teamTaskBoard.listTasks(leaderSessionId);
 	const fingerprint = `${team.name}\u0000${JSON.stringify(members)}\u0000${JSON.stringify(tasks)}`;
@@ -1964,9 +2014,26 @@ function persistTeam(leaderSessionId: string): void {
 }
 
 /**
- * 启动恢复（spec: add-team-collaboration-parity 批次 ⑤）：把落盘的团队与任务板
- * 灌回内存态。成员一律按 `closed` 恢复（宿主不可恢复，理由见 core/team-store.ts
- * 文件头），所以恢复后主理人看到的是「团队还在、任务板还在、成员需重建」。
+ * 启动恢复（spec: add-team-collaboration-parity 批次 ⑤；
+ * spec: add-team-pull-model 批次 ② 改为**派生优先**）：把落盘的团队与任务板
+ * 灌回内存态。
+ *
+ * 成员状态判定**先读会话文件派生**（对齐 WorkBuddy 的 `deriveChildState`），
+ * 派生不出才回落落盘的 `status` 字面量：
+ *   - 派生出 `completed` → `closed`（跑完了，产出在它的会话记录里，可 team_read 取）
+ *   - 派生出 `killed`    → `interrupted`
+ *   - 派生出 `failed`    → `failed`
+ *   - 派生不出 + 落盘 `spawning`/`running`/`closing` → `interrupted`
+ *   - 派生不出 + 其余终态 → `closed`
+ *
+ * 为什么派生优先：落盘 status 是**运行时状态**（「杀进程那刻它在干什么」），
+ * 不是「它最终跑成什么样」。成员若已跑完、产出完整写进 JSONL，只是没来得及
+ * 翻 idle 就死了，落盘会说 `running` → 被误判成「要重跑」。读文件才有确切答案。
+ * WorkBuddy 的原话：「终态事件走 ACP 实时通道、**进程重启就丢**」——
+ * 它同样不信任状态帧，靠回读文件重算。
+ *
+ * 宿主一律不可恢复（理由见 core/team-store.ts 文件头），恢复后主理人看到的是
+ * 「团队还在、任务板还在、成员需重建或去捞产出」。
  *
  * 解析失败**不致命**：记事件日志并继续启动（同 models.json 的容错口径 ——
  * 一份坏文件不该让界面永久卡在「正在启动」）。
@@ -1975,7 +2042,9 @@ function restoreTeamsFromDisk(): void {
 	let restored = 0;
 	try {
 		for (const stored of readTeams(getConfigDir())) {
-			teamRegistry.restoreTeam(stored.leaderSessionId, stored.name, stored.members);
+			teamRegistry.restoreTeam(stored.leaderSessionId, stored.name, stored.members, (sessionId) =>
+				readMemberTranscriptView(sessionId).status,
+			);
 			teamTaskBoard.restore(stored.leaderSessionId, stored.tasks);
 			restored += 1;
 		}
@@ -2720,57 +2789,58 @@ async function createHost(
 							memberRunnerDeps,
 							{ cwd, agent, memberName: member.name, task: member.task, ...(member.model === undefined ? {} : { modelKey: member.model }) },
 							{
-								onProgress: (name, text) => {
-									teamRegistry.recordProgress(leaderId, name, 0, text);
-									emitTeamProgress(leaderId);
-									hooks.onProgress(name, text);
-								},
-								onComplete: (name, output, turns) => {
-									// 收尾请求下的回投 = 成员的告别报告（批次 ②）：交完就关，
-									// 宿主 dispose 掉，别让它再占一个长会话。
-									const wasClosing = teamRegistry.getTeam(leaderId)?.members.get(name)?.status === "closing";
-									teamRegistry.markStatus(
-										leaderId,
-										name,
-										wasClosing ? "closed" : "idle",
-										wasClosing ? `已收尾（${turns} 轮）` : `已完成 ${turns} 轮`,
-									);
-									emitTeamProgress(leaderId);
-									if (wasClosing) {
-										const closingSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
-										if (closingSession !== undefined) {
-											memberHandlesBySession.get(closingSession)?.dispose();
-											memberHandlesBySession.delete(closingSession);
-										}
+							onProgress: (name, text) => {
+								// turnsDelta 传 0：轮数由 onComplete 权威回填（批次 ③.4）。
+								// 这里原先也传 0，但当时**没有**任何地方写 turns，
+								// 于是注册表的 turns 恒为 0（实测反例：activity 写着
+								// 「已完成 2 轮」而 turns=0）。现在 onComplete 会赋值。
+								teamRegistry.recordProgress(leaderId, name, 0, text);
+								emitTeamProgress(leaderId);
+								hooks.onProgress(name, text);
+							},
+							/*
+							 * 收尾（spec: add-team-pull-model 批次 ④，拉模式）。
+							 *
+							 * **这里不再回投产出**。推模式的那套（markPendingDelivery →
+							 * await 回投 → markDeliveryPending → queue_changed 销账）
+							 * 已整体删除，理由就是 2026-09-19 三次复现的共同结论：
+							 * 「把产出推给领导」这条路上，任何一个异步环节断了，
+							 * 产出就静默消失，而且我们无法用任何留痕机制可靠地发现
+							 * —— pi 的 `followUp()` 是入队即 resolve，`await` 它不承诺
+							 * 送达，于是「投递成功」这个事实在这条链上根本不存在。
+							 *
+							 * 拉模式（对齐 WorkBuddy）把这件事从根上绕开了：产出写进
+							 * 成员会话 JSONL 的那一刻**交付就已经完成**，没有「送达」
+							 * 这个环节，也就没有「送达失败」。领导用 `team_status`
+							 * 看 `outputAvailable`、用 `team_read` 取正文。
+							 *
+							 * 因此这里只剩下「如实记账 + 刷界面」：
+							 *   ① recordCompletion  —— 权威轮数回填
+							 *   ② markStatus        —— idle（或收尾时 closed）
+							 *   ③ emitTeamProgress  —— 界面立刻看到「跑完了」
+							 * 不再有 await，不再有失败分支 —— 这条路已经无异步可失败。
+							 */
+							onComplete: (name, _output, turns) => {
+								// 收尾请求下成员交的是告别报告（批次 ②）：交完就关，
+								// 宿主 dispose 掉，别让它再占一个长会话。
+								const wasClosing = teamRegistry.getTeam(leaderId)?.members.get(name)?.status === "closing";
+								// 轮数权威回填（批次 ③.4）：成员执行器自己数的真值，
+								// 覆盖掉 recordProgress 那个恒 0 的旧路径。
+								teamRegistry.recordCompletion(leaderId, name, turns, wasClosing ? `已收尾（${turns} 轮）` : `已完成 ${turns} 轮`);
+								teamRegistry.markStatus(leaderId, name, wasClosing ? "closed" : "idle");
+								emitTeamProgress(leaderId);
+								if (wasClosing) {
+									const closingSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
+									if (closingSession !== undefined) {
+										memberHandlesBySession.get(closingSession)?.dispose();
+										memberHandlesBySession.delete(closingSession);
 									}
-									void deliverSessionMessage(
-										teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId ?? "",
-										leaderId,
-										output,
-										name,
-									).catch((error: unknown) => {
-										eventLog.append({
-											kind: "team_member_delivery_failed",
-											sessionId: leaderId,
-											message: error instanceof Error ? error.message : String(error),
-										});
-									});
-								},
-								onFailed: (name, message) => {
-									teamRegistry.markStatus(leaderId, name, "failed", message);
-									emitTeamProgress(leaderId);
-									const memberSession = teamRegistry.getTeam(leaderId)?.members.get(name)?.sessionId;
-									if (memberSession === undefined) return;
-									void deliverSessionMessage(memberSession, leaderId, `成员任务失败：${message}`, name).catch(
-										(error: unknown) => {
-											eventLog.append({
-												kind: "team_member_delivery_failed",
-												sessionId: leaderId,
-												message: error instanceof Error ? error.message : String(error),
-											});
-										},
-									);
-								},
+								}
+							},
+							onFailed: (name, message) => {
+								teamRegistry.markStatus(leaderId, name, "failed", message);
+								emitTeamProgress(leaderId);
+							},
 								// 事件转发（焦点导航）+ 计数回填（批 8）：转发以成员 sessionId
 								// 为信封键，renderer 按后台会话折叠；计数增量回注册表后推投影。
 								onEvent: (memberSessionId, event) => {
@@ -2822,21 +2892,69 @@ async function createHost(
 				}
 				return names;
 			},
-			getTeamState: () => {
-				const team = teamRegistry.getTeam(adoptedSessionId(bucket));
+			getTeamState: () => {				const team = teamRegistry.getTeam(adoptedSessionId(bucket));
 				if (team === undefined) return undefined;
+				const now = Date.now();
 				return {
 					name: team.name,
-					members: [...team.members.values()].map((member) => ({
-						name: member.name,
-						agentName: member.agentName,
-						status: member.status,
-						turns: member.turns,
-						lastActivity: member.lastActivity,
-						planStatus: member.planStatus,
-						...(member.model === "" ? {} : { model: member.model }),
-					})),
+					members: [...team.members.values()].map((member) => {
+						/*
+						 * 产出可读性（spec: add-team-pull-model 批次③）：**从文件派生**，
+						 * 不是注册表标记 —— 拉模式的全部意义是「文件是唯一真源」。
+						 * 会话 id 已丢（重启后清空）时判 false：读不到就不该骗领导去读。
+						 */
+						const output =
+							member.sessionId === undefined
+								? undefined
+								: readMemberTranscriptView(member.sessionId).output;
+						return {
+							name: member.name,
+							agentName: member.agentName,
+							status: member.status,
+							turns: member.turns,
+							lastActivity: member.lastActivity,
+							planStatus: member.planStatus,
+							...(member.model === "" ? {} : { model: member.model }),
+							...(output === undefined ? {} : { outputAvailable: true }),
+							// 等待时长（批次 ②）：只给「真的在等」的成员附上（waitingSince
+							// 由注册表在 running 时起算、其余态清零，见 markStatus）。
+							...(member.waitingSince > 0
+								? { waitedMinutes: Math.floor((now - member.waitingSince) / 60_000) }
+								: {}),
+						};
+					}),
 				};
+			},
+			/*
+			 * 读成员产出（spec: add-team-pull-model 批次③）—— 拉模式的核心落点。
+			 *
+			 * 对齐 WorkBuddy：它的领导靠 `readTranscript(childFiles, taskId)` 读子会话
+			 * JSONL 拿产出，而不是等成员把产出推过来。本方法同样**只读文件**：
+			 * 产出写进成员会话的那一刻就算交付，没有「投递」这个可能失败的环节。
+			 */
+			readMemberOutput: async (to) => {
+				const leaderId = adoptedSessionId(bucket);
+				const team = teamRegistry.getTeam(leaderId);
+				if (team === undefined) return undefined;
+				const name = to.replace(/^@/, "");
+				// 未知成员**响亮抛错**（调用方错误）；已知但会话已丢 → 返回 output 为 undefined
+				// （读不到是常态：成员还在启动、或重启后 sessionId 已清空）。
+				const member = teamRegistry.requireMember(leaderId, name);
+				if (member.sessionId === undefined) {
+					return { member: member.name, output: undefined, status: member.status };
+				}
+				const view = readMemberTranscriptView(member.sessionId);
+				// 派生出的终态优先（文件事实）；文件读不到时回落注册表状态，
+				// 好让「暂无产出」的说明能说清原因（在跑 / 中断 / 失败）。
+				const status =
+					view.status === "completed"
+						? "idle"
+						: view.status === "killed"
+							? "interrupted"
+							: view.status === "failed"
+								? "failed"
+								: member.status;
+				return { member: member.name, output: view.output, status };
 			},
 			/*
 			 * 计划裁决（spec: add-team-collaboration-parity 批次 ④）。
@@ -2854,7 +2972,8 @@ async function createHost(
 				if (decision === "awaiting") {
 					return `已记录：成员「${member}」的计划待审（它当前 ${updated.status}）。决定后再用 approve / reject 调一次。`;
 				}
-				const memberSessionId = teamRegistry.resolveMemberSessions(leaderId, [member])[0];
+				const memberSessions = teamRegistry.resolveMemberSessions(leaderId, [member]);
+				const memberSessionId = memberSessions[0];
 				if (memberSessionId === undefined) throw new Error(`成员「${member}」还没有会话，无法通知`);
 				const text =
 					decision === "approve"

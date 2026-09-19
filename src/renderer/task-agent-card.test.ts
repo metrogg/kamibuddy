@@ -52,6 +52,28 @@ describe("deriveAgentRow：动作行文本", () => {
 		const row = deriveAgentRow(agent({ status: "failed", activity: "" }));
 		expect(row.action).toBe("执行失败");
 	});
+
+	it("interrupted 说清「中断事实 + 跑了几轮」，不扫光", () => {
+		const row = deriveAgentRow(agent({ status: "interrupted", activity: "", turns: 5 }));
+		expect(row.status).toBe("interrupted");
+		expect(row.live).toBe(false);
+		// 拉模式下不再说「产出未回投」（产出一直是可以取回的，见
+		// spec: add-team-pull-model 批次 ④）：有产出时由 outputAvailable 分支
+		// 单独说，没产出时这句话只是噪音。
+		expect(row.action).toContain("中断");
+		expect(row.action).toContain("5 轮");
+		expect(row.action).not.toContain("回投");
+	});
+
+	it("interrupted 但一轮都没跑完：不提轮数（别写「已跑 0 轮」）", () => {
+		const row = deriveAgentRow(agent({ status: "interrupted", activity: "", turns: 0 }));
+		expect(row.action).toContain("中断");
+		expect(row.action).not.toContain("0 轮");
+	});
+
+	it("interrupted 不携带 output（它没有可展开的终态产出）", () => {
+		expect(deriveAgentRow(agent({ status: "interrupted", output: "残留" })).output).toBeUndefined();
+	});
 });
 
 describe("deriveAgentRow：done 组的可展开输出", () => {
@@ -81,5 +103,29 @@ describe("defaultOpenOf：默认展开规则", () => {
 		expect(defaultOpenOf("error")).toBe(false);
 		expect(defaultOpenOf("blocked")).toBe(false);
 		expect(defaultOpenOf("aborted")).toBe(false);
+	});
+});
+
+describe("deriveAgentRow：产出还在（spec: add-team-pull-model 批次 ④，比 interrupted 更精确）", () => {
+	it("带 outputAvailable 时文案说「跑完了 + 产出还在 + 可去取回」", () => {
+		const row = deriveAgentRow(agent({ status: "interrupted", outputAvailable: true }));
+		expect(row.status).toBe("interrupted");
+		expect(row.action).toContain("跑完");
+		expect(row.action).toContain("产出还在");
+		expect(row.action).toContain("会话记录");
+		expect(row.action).toContain("不必重跑");
+	});
+
+	it("outputAvailable 优先于 interrupted 文案（两者同真时取更有信息量的）", () => {
+		const precise = deriveAgentRow(agent({ status: "interrupted", turns: 5, outputAvailable: true }));
+		// 若无此分支会输出「已跑 5 轮」；有它则说「产出还在…可去取回」——
+		// 前者只报「丢了什么」，后者告诉用户「东西还在、怎么做」。
+		expect(precise.action).not.toContain("已跑 5 轮");
+		expect(precise.action).toContain("可去取回");
+	});
+
+	it("outputAvailable 缺席时走原中断文案（不误报「产出还在」）", () => {
+		const row = deriveAgentRow(agent({ status: "interrupted", turns: 5 }));
+		expect(row.action).toBe("上次运行中随进程中断（已跑 5 轮）");
 	});
 });

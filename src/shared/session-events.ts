@@ -180,7 +180,16 @@ export interface SubagentStatus {
 	 * task 工具不写、旧格式会话没有这个键，读方不得要求它存在。
 	 */
 	readonly kind?: "subagent" | "team";
-	readonly status: "queued" | "running" | "done" | "failed";
+	/**
+	 * 四态是 task 工具的子代理投影（spec: add-team-foundations 批 4）；
+	 * `interrupted` 是团队成员投影独有的第五态（spec: add-team-interrupt-diagnostics
+	 * 批次 ①）—— 进程被杀时该成员正在跑一轮，重启后从落盘恢复成这一态。
+	 *
+	 * 与 `failed` 的责任方不同：failed 是成员这一轮自己出了问题，interrupted 是
+	 * 宿主消失、**它那一轮很可能已经跑完但产出没回投**（2026-09-19 实测）。
+	 * 消费端遇不认识的值应按 `running` 兜底（向后兼容：这是新增值）。
+	 */
+	readonly status: "queued" | "running" | "done" | "failed" | "interrupted";
 	/** 最新动作行，如「正在 web_search xxx」「已完成 N 轮」；无进展时为空串。 */
 	readonly activity: string;
 	/** 已完成的 agent 轮数。 */
@@ -212,6 +221,24 @@ export interface SubagentStatus {
 	readonly tokens?: number;
 	/** 累计费用（美元，各轮 cost 之和）。 */
 	readonly cost?: number;
+	/**
+	 * 「领导正在等它」的起点时戳（epoch ms；spec: add-team-interrupt-diagnostics
+	 * 批次 ②）。**缺席 = 不在等待中**（消费端不要自己按 status 反推）。
+	 *
+	 * 存在它是为了回答用户实测里那句「到中间这一步没有人接了」—— 领导派活后
+	 * 只能干等，没有这个字段界面就分不清「在等」和「断了」。
+	 */
+	readonly waitingSince?: number;
+	/**
+	 * 「它的会话记录里有产出可读」（spec: add-team-pull-model 批次 ③）。
+	 * **缺席 = 还没产出 / 读不到**（消费端不要自己按 status 反推）。
+	 *
+	 * 拉模式的信号灯：产出不再由成员推给领导，而是领导用 `team_read` 主动取。
+	 * 这个键就是从成员会话 JSONL **派生**出来的「读得到吗」——派生得出正文才置 true，
+	 * 与注册表状态无关（文件是唯一真源）。有了它，领导每轮 `team_status` 一眼能看出
+	 * 该去谁那儿取活，用户也能看出「活已经在了、只是还没被取走」。
+	 */
+	readonly outputAvailable?: boolean;
 }
 
 export interface ToolCard {

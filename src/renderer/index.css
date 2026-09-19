@@ -3655,6 +3655,12 @@ textarea:focus-visible {
 	color: var(--danger);
 }
 
+/* 中断（spec: add-team-interrupt-diagnostics 批次 ①）：与失败同族（都不是成功）
+   但走琥珀 —— 成员自己没出错，是宿主随进程消失且产出没回投。 */
+.task-agent-interrupted {
+	color: var(--warning);
+}
+
 /* done 组的可展开输出盒：等宽小字；缩进由外层 .task-agent-detail 统一负责。 */
 .task-agent-output {
 	padding: var(--space-3) var(--space-4);
@@ -9309,11 +9315,35 @@ textarea:focus-visible {
 .team-bar-mark.st-queued {
 	color: var(--text-faint);
 }
+/* 中断态（spec: add-team-interrupt-diagnostics 批次 ①）：用 --warning 而非
+   --danger —— 成员自己没出错（danger 会误导成「它挂了」），是宿主消失导致
+   产出没回投。同 8869 行「琥珀表出错但在自愈」的既有语义。 */
+.team-bar-mark.st-interrupted {
+	color: var(--warning);
+}
+.team-bar-chip.interrupted .team-bar-name {
+	color: var(--warning);
+}
 .team-bar-name {
 	color: var(--text);
 }
 .team-bar-count {
 	color: var(--text-faint);
+}
+/* 等待超阈值（批次 ②）：把「等了很久」从平淡灰字换成琥珀，
+   这是用户实测里最需要被看见的信号（「在等」vs「断了」）。 */
+.team-bar-count.warn {
+	color: var(--warning);
+}
+/* 产出待捞（spec: add-team-interrupt-diagnostics 批次 ③）：比 interrupted 更进一步
+   —— 它不只是「中断了」，而是「它跑完了、产出就在会话记录里」。这是四态里唯一
+   有救的一条，所以给整枚 chip 描一道琥珀边（不只是文字变色），让它在成员行里
+   一眼可辨。仍用 --warning：语义是「需要你处理，但没有东西坏掉」。 */
+.team-bar-chip.recoverable {
+	border-color: var(--warning);
+}
+.team-bar-chip.recoverable .team-bar-name {
+	color: var(--warning);
 }
 .team-bar-close {
 	border: none;

@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { SubagentStatus } from "@shared/session-events.ts";
-import { nextMemberTarget, teamBarRows } from "./team-status-bar.tsx";
+import { formatWaiting, nextMemberTarget, teamBarRows, WAITING_ALERT_MS } from "./team-status-bar.tsx";
 
 function member(overrides: Partial<SubagentStatus> & { agent: string }): SubagentStatus {
 	return {
@@ -33,8 +33,7 @@ describe("teamBarRows", () => {
 		expect(rows.map((row) => row.name)).toEqual(["谭溯源"]);
 	});
 
-	it("四态各有符号与色档（… 启动中 / ● 运行中 / ✓ 已完成 / ✗ 失败）", () => {
-		const rows = teamBarRows(
+	it("四态各有符号与色档（… 启动中 / ● 运行中 / ✓ 已完成 / ✗ 失败）", () => {		const rows = teamBarRows(
 			[
 				member({ agent: "a", status: "queued" }),
 				member({ agent: "b", status: "running" }),
@@ -45,6 +44,19 @@ describe("teamBarRows", () => {
 		);
 		expect(rows.map((row) => `${row.mark}${row.tone}`)).toEqual(["…queued", "●running", "✓done", "✗failed"]);
 		expect(rows.map((row) => row.live)).toEqual([false, true, false, false]);
+	});
+
+	it("中断态有自己的符号与标记（! / interrupted），不折成 done 或 failed", () => {
+		const rows = teamBarRows(
+			[member({ agent: "谭溯源", status: "interrupted" })],
+			undefined,
+		);
+		expect(rows[0]?.mark).toBe("!");
+		expect(rows[0]?.tone).toBe("interrupted");
+		expect(rows[0]?.interrupted).toBe(true);
+		expect(rows[0]?.statusText).toContain("中断");
+		// 中断不是活动态，也不该被当成「运行中」去强调。
+		expect(rows[0]?.live).toBe(false);
 	});
 
 	it("计数只显示有内容的项（0 轮 0 工具是噪音）", () => {
@@ -75,6 +87,100 @@ describe("teamBarRows", () => {
 	it("空团队 → 空行（调用方据此不渲染整条状态栏）", () => {
 		expect(teamBarRows([], undefined)).toEqual([]);
 		expect(teamBarRows([{ ...member({ agent: "scout" }), kind: "subagent" }], undefined)).toEqual([]);
+	});
+});
+
+describe("等待可见性（spec: add-team-interrupt-diagnostics 批次 ②）", () => {
+	const T0 = 1_700_000_000_000;
+
+	it("waitingSince 缺席 = 不在等，不显示等待文案", () => {
+		const rows = teamBarRows([member({ agent: "a", turns: 2 })], undefined, T0);
+		expect(rows[0]?.waiting).toBe("");
+		expect(rows[0]?.waitingAlert).toBe(false);
+		expect(rows[0]?.count).toBe("2 轮");
+	});
+
+	it("不足 1 分钟不显示（「等了 0 分钟」是噪音）", () => {
+		const rows = teamBarRows([member({ agent: "a", waitingSince: T0 - 30_000 })], undefined, T0);
+		expect(rows[0]?.waiting).toBe("");
+		expect(rows[0]?.waitingAlert).toBe(false);
+	});
+
+	it("分钟级显示「已等 N 分钟」，并追加进 count 摘要", () => {
+		const rows = teamBarRows(
+			[member({ agent: "a", turns: 1, waitingSince: T0 - 3 * 60_000 })],
+			undefined,
+			T0,
+		);
+		expect(rows[0]?.waiting).toBe("3 分钟");
+		expect(rows[0]?.count).toBe("1 轮 · 已等 3 分钟");
+	});
+
+	it("恰好 5 分钟触发告警色（阈值含等号）", () => {
+		const at = teamBarRows([member({ agent: "a", waitingSince: T0 - WAITING_ALERT_MS })], undefined, T0);
+		expect(at[0]?.waitingAlert).toBe(true);
+		const justUnder = teamBarRows(
+			[member({ agent: "b", waitingSince: T0 - WAITING_ALERT_MS + 1 })],
+			undefined,
+			T0,
+		);
+		expect(justUnder[0]?.waitingAlert).toBe(false);
+	});
+
+	it("超 1 小时进位到小时", () => {
+		const rows = teamBarRows(
+			[member({ agent: "a", waitingSince: T0 - 2 * 60 * 60_000 - 30 * 60_000 })],
+			undefined,
+			T0,
+		);
+		expect(rows[0]?.waiting).toBe("2 小时");
+		expect(rows[0]?.waitingAlert).toBe(true);
+	});
+
+	it("formatWaiting 的边界：59 分钟仍按分钟", () => {
+		expect(formatWaiting(0)).toBe("");
+		expect(formatWaiting(59_999)).toBe("");
+		expect(formatWaiting(60_000)).toBe("1 分钟");
+		expect(formatWaiting(59 * 60_000)).toBe("59 分钟");
+		expect(formatWaiting(60 * 60_000)).toBe("1 小时");
+	});
+});
+
+describe("产出可读（spec: add-team-pull-model 批次 ④：文件是唯一真源）", () => {
+	const T0 = 1_700_000_000_000;
+
+	it("outputAvailable 透传到行上", () => {
+		const rows = teamBarRows([member({ agent: "谭溯源", outputAvailable: true })], undefined, T0);
+		expect(rows[0]?.outputAvailable).toBe(true);
+	});
+
+	it("缺席 outputAvailable 时按 false（常态，不是「不知道」）", () => {
+		const rows = teamBarRows([member({ agent: "a" })], undefined, T0);
+		expect(rows[0]?.outputAvailable).toBe(false);
+	});
+
+	it("文案说清「产出还在 + 可去取回」而不是笼统的「已中断」", () => {
+		const rows = teamBarRows(
+			[member({ agent: "谭溯源", status: "interrupted", outputAvailable: true })],
+			undefined,
+			T0,
+		);
+		const text = rows[0]?.statusText ?? "";
+		expect(text).toContain("已中断");
+		expect(text).toContain("产出还在");
+		expect(text).toContain("会话记录");
+		expect(text).toContain("可去取回");
+	});
+
+	it("与 status 正交：运行中也可以带着已落盘的产出（前一轮的）", () => {
+		const rows = teamBarRows([member({ agent: "a", status: "running", outputAvailable: true })], undefined, T0);
+		expect(rows[0]?.statusText).toContain("运行中");
+		expect(rows[0]?.statusText).toContain("产出还在");
+	});
+
+	it("没有产出可读时仍走原 STATUS_TEXT（不误报）", () => {
+		const rows = teamBarRows([member({ agent: "a", status: "interrupted" })], undefined, T0);
+		expect(rows[0]?.statusText).toBe("已中断（那一轮没有回音）");
 	});
 });
 

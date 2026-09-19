@@ -104,6 +104,84 @@
   左侧也抬到 84，行首控件凭空右移（2026-09-16 在 `.chat-header` 上踩过一次）。
   算让位时顺手 grep 同类名，把「跟着控件宽度走的算式」一起改。
 
+## 专家团（agent-team）：产出走「拉」，不走「推」（2026-09-19 架构调整，§4.19）
+
+**现状（不要再按推模式理解团队产出）**：成员产出**永远只存在**于
+`~/.kamibuddy/sessions/<memberSessionId>.jsonl`，领导用 **`team_read`** 主动取回。
+**没有任何回投/推送机制** —— 整套推模式协议（2026-09-19 批次 ④）已删除：
+`pendingDelivery` / `markPendingDelivery` / `markDeliveryPending` / `confirmDelivery` /
+`clearPendingDelivery` / `deliveryAwaiting` / `queue_changed` 销账钩子。
+
+- 「有没有产出」= **从文件派生**的 `outputAvailable`（`readMemberTranscriptView`），
+  **不是**注册表标记。派生函数单源，`getTeamState` 与 `emitTeamProgress` 都调它，不许各算一份。
+- 成员状态**派生优先**（`restoreTeam` 注入 `deriveStatus`）：completed → closed /
+  killed → interrupted / failed → failed；派生不出才回落到落盘 status 字面量。
+- `settleRunningMembers` 三条不变量（抄自 WorkBuddy `settleAllRunning`）：
+  只动 running；**运行时 idle 不触发**（领导跑完一轮 ≠ 成员停了）；
+  父 `{terminated,error,failed}` 才强制收敛。接线在 `run_error` 与
+  「被取消的 `run_finished`」上。
+- 权威来源：`.trae/specs/add-team-pull-model/spec.md` + `docs/ARCHITECTURE.md` §4.19。
+  旧 spec `add-team-interrupt-diagnostics` 的**批次 ③ 已被取代**（其余仍有效）。
+
+**为什么改（别走回头路）**：三次复现「团队没人接了」三个根因，逐个修都没修住 ⇒
+根因在问题形状 —— 推模式要求「送进领导上下文」成功，而 pi 的 `followUp()` 是
+**入队即 resolve**，链上**不存在「投递成功」这个事实**。给不可观测的事件设计记账
+协议怎么设计都是猜。WorkBuddy 实测 `followUp`/`deliverSessionMessage` 命中数 **0**，
+它压根没有回投。
+
+## 专家团（agent-team）生命周期纪律（2026-09-19，两次现网复现后定）
+
+症状一句话：**团队成员跑完了、状态也更新了，但领导收不到产出，整个团从此「所有人都没动静」。**
+
+- **根因是「同步的先落盘、异步的最后丢」。**
+  `hooks.onComplete` 里的顺序是 ①`markStatus` ②`emitTeamProgress` ③`deliverSessionMessage`。
+  ①② 同步 → 已落盘（所以重启后能看到 `已完成 N 轮`）；③ 是**异步**且历史上被 `void` 掉
+  （`enqueue` → `host.prompt` → 写会话文件，不参与生命周期）→ 进程一死就**静默丢失**。
+  两次复现的事件日志都停在 ② 与 ③ 之间。
+- **铁律：生命周期敏感路径上的异步操作不许 `void`。** 团队回投（`deliverSessionMessage`）
+  必须是被 `await` 的、且在 `hooks.onComplete`/`onFailed` 的签名里被允许返回 Promise
+  （`=> void | Promise<void>`，`member-runner.ts` 的 `.then()` 相应改 `async` 回调）。
+  同理 `onComplete` 自身也是 `async`。
+- **先留痕，再投递。** `markPendingDelivery()` 必须在 `deliverSessionMessage()` **之前**调用，
+  `finally` 里 `clearPendingDelivery()`。这样「产出还没送达」这个事实先于投递落盘：
+  进程死在投递中就留下痕迹（可去会话 JSONL 捞回），投递成功才抹掉。
+- **`pendingDelivery` ≠ `interrupted`，别混**：`interrupted` 说「它当时在跑」（要重跑）；
+  `pendingDelivery` 说「它跑完了、产出在会话 JSONL 里、只是没送达」（可去捞）。
+  状态仍是 `closed`/`interrupted`，但 UI 文案与摘要行优先级要**产出待捞 > 中断 > 工作中 > 平静**。
+- **只存标记不存正文**（遵守不双写纪律）：`pendingDelivery: boolean` + `pendingDeliveryTurns`，
+  **不要**把产出正文塞进注册表/落盘文件。
+- ⚠️ **`TeamMember.turns` 字段长期恒为 0，是假信号。** 接线层 `recordProgress(leaderId, name, 0, text)`
+  第三参写死 0，而注册表是 `+=` → 永远 0。判断成员真跑了几轮，**看 `activity`（`已完成 N 轮`）**。
+  轮数的权威来源已改为 `onComplete` 里的 `recordCompletion()`（**赋值**，绝对值，不是累加）。
+  → 教训：**别用「字段为 0/为空」反推「某回调没跑」**，先去读那个字段是谁写的。
+- 落盘/投影新增字段时，成员序列化（`persistTeam`）与投影（`emitTeamProgress`）**都要加**，
+  且用条件展开（`...(x ? {x} : {})`），否则会搅动 `persistedFingerprint` 让「没变就不写」失效。
+
+## 回投送达确认：`followUp()` 入队 ≠ 送达（2026-09-19 第三次复现后定）
+
+**三次复现三个根因，别用一个解释套三次**（① `void` 掉回投 → ② 进程死在 ②/③ 之间 →
+③ `await` 了入队即返回的 `followUp()`）。
+
+- **pi 的 `followUp()` 是「入队即 resolve」**：`agent-session.js` 的 `_queueFollowUp`
+  全程同步（`push` + `_emitQueueUpdate` + `agent.followUp`），不 await 任何东西。
+  d.ts 注释：`Delivered only when agent has no more tool calls or steering messages.`
+  → **`await host.prompt(·, "followUp")` 的 resolve 只代表入队成功，不是送达回执。**
+- **`session-host.prompt` 返回 `{ queued: boolean }`**：`isStreaming` → `true`（只入队）；
+  另两分支 → `false`（真起一轮、进上下文 = 已送达）。新增 `getFollowUpQueue()`
+  透传 pi 的 `_followUpMessages`（补「入队早于登记」的竞态）。
+- **消费时机 = `queue_changed`**：pi 在 `_handleAgentEvent` 里遇到
+  `message_start` + `role === "user"` 时从 `_followUpMessages` `splice` 掉并 emit
+  `queue_update`（`session-host.ts` 折成 `queue_changed`）。**「不在队列里了」与消费同刻。**
+- **两拍判据（必须）**：`team-runtime` 的 `deliveryAwaiting` + `markDeliveryPending` /
+  `confirmDelivery` —— **① 见过它在队列里（`seen`）② 然后它消失** 才销账。
+  「不在队列里」≠「已送达」：也可能是从没进过队列 / 被 `clearQueue()` 丢掉 /
+  队列里是别的消息（`clearQueue()` 是另一条丢失路径）。
+- **教训：失败路径上不要急着擦痕迹。** `finally { clearPendingDelivery() }` 在
+  「操作本身不承诺结果」时是有害的 —— 它把「可能没送达」粉饰成「已送达」。
+  痕迹该由**确凿的成功信号**擦，不由**流程走完**擦。
+
 ## 完成后必跑
 
 `npm run typecheck && npm run check:deps && npm test`；改 `documents/` 必须跑 `npm test`。
+另有门禁：`check:tokens`（设计令牌）、`check:model-experience`、`check:invariants`（模块不变量）、
+`check:expert-assets`。全量 vitest 偶发 `src/core/doc-extract.test.ts` 超时抖动，与本类改动无关。

@@ -1217,6 +1217,92 @@ AGENTS.md §六。
 | 原生模块                  | 三个 `.node`，clipboard 在 import 期即加载（原"全懒加载"假设已证伪）；但全部基于 Node-API，ABI 稳定。基线 3/3 通过，待 Electron 内复核（§4.1）       |
 | SDK 导出面               | 实测确认 `createAgentSession` / `SessionManager` / `ModelRuntime` / `AgentSession` 均从包根导出                       |
 
+### 4.19 成员产出走「拉」，不走「推」：文件是唯一真源（2026-09-19，spec add-team-pull-model）
+
+**背景是三次复现的同一个症状**：团队成员跑完了、状态也更新了，但领导的上下文里
+永远没有那份产出，整支队伍从此「所有人都没动静」。三次复现三个根因，逐个修都没修住：
+
+| 复现 | 修的东西 | 为什么没修住 |
+| --- | --- | --- |
+| ① | 回投从 `void` 改成 `await` | 下一个异步环节照样丢 |
+| ② | 「先留痕再投递」（`markPendingDelivery` 在投递前同步落盘） | 留痕对，但**投递失败时**没有可靠信号去擦它 |
+| ③ | 两拍销账（`{queued}` + `queue_changed` 认领） | 判据细节对了，但**整个问题的形状是错的** |
+
+**根因在问题形状，不在某个环节。** 推模式要求「把产出送进领导上下文」这一步**成功**，
+而 pi 的 `followUp()` 是**入队即 resolve**（`_queueFollowUp` 全程同步、不 await 任何东西，
+d.ts 原话：`Delivered only when agent has no more tool calls or steering messages.`）。
+于是链上**根本不存在「投递成功」这个事实** —— `await` 拿不到它，也就没有任何可靠信号
+能用来销账。三次修复都是在给一个**不可观测的事件**设计记账协议，方向错了。
+
+**决策：改成拉模式，对齐 WorkBuddy。** 逆向实证（逆向产物
+`docs/WorkBuddy-reference/extracted/main/server.js`，保留源码注释与路径标注）：
+
+- `followUp` / `steering` / `deliverSessionMessage` / `team_send` 在 WorkBuddy 全部
+  216 个 js 文件里**命中数为 0**。它的会话协议是 ACP 方法表
+  （`session/prompt` / `session/steer` / `session/cancel` …），**没有「回投」这个概念**。
+- 状态是**派生**的不是**上报**的：`derivePersistedTranscriptStatus(items)` 读子会话
+  JSONL —— 见 `cancelled`/`killed` → killed，见 `failed`/`error` → failed，
+  见**中间态**（工具调用 / reasoning）→ **清掉**，见有正文的 assistant 消息 → completed。
+- **明确接受「状态帧会丢」**：注释原话「终态事件走 ACP 实时通道、**进程重启就丢**」，
+  解法是冷启动 hydrate 后**回读文件重算**，不是去加固那条会丢的通道。
+- 幂等靠**内容比对**（`hasEquivalentAssistant` + `normalizeAgentOutput`），
+  不需要任何送达状态机。
+
+落到我们这边（`src/daemon/member-transcript.ts` + `team_read` 工具）：
+
+| 环节 | 推模式（已删） | 拉模式（现行） |
+| --- | --- | --- |
+| 产出在哪 | 靠投递进领导上下文 | 一直在 `~/.kamibuddy/sessions/<memberId>.jsonl` |
+| 「有没有产出」 | 注册表布尔 `pendingDelivery`（第二真源） | **从文件派生** `outputAvailable`（真源） |
+| 送达证据 | `queue_changed` 两拍销账 | **不需要** —— 写入即交付 |
+| 失败面 | 投递 / 入队 / 消费，任一环断了都静默 | 无（读文件失败就报「读不到」） |
+| 领导怎么拿 | 等着被推 | `team_status` 看信号 → `team_read` 取 |
+
+**连带删掉的东西**（推模式遗物，不要复活）：`pendingDelivery` /
+`pendingDeliveryTurns` 字段、`markPendingDelivery`、`markDeliveryPending`、
+`confirmDelivery`、`clearPendingDelivery`、`deliveryAwaiting` 待确认清单、
+`queue_changed` 销账钩子、成员 `onComplete` 里的回投与 `onFailed` 里的失败通知。
+
+**三条不变量**（从 WorkBuddy 的 `settleAllRunning` 抄来，改 `settleRunningMembers` 前先读）：
+
+1. **只动 `status === "running"`** —— 已终态的成员有自己的证据链，不能被父状态覆盖。
+2. **父 idle 只在冷启动 hydrate 时才 settle，运行时 idle 不触发** —— 领导跑完一轮
+   回到 idle **不代表**成员停了（成员是独立长会话）。硬 settle 会造出
+   「子在跑却说 completed」的假态。
+3. **父进入 `{terminated, error, failed}` → 强制收敛** —— 这类是真结束了，
+   子不可能再有回音。接线点在 `run_error` 与「被取消的 `run_finished`」两条边界上。
+
+**纪律沉淀（通用，不限于团队）**：
+
+- **修了三次没修住，先怀疑问题形状，别再修下一个环节。** 三次复现三个根因是
+  「根因不在某处」的强信号 —— 那说明链上有个环节**不可观测**（此处：入队即 resolve
+  ⇒ 没有「送达」事实），给不可观测的事件设计记账协议，怎么设计都是猜。
+- **不可观测 ⇒ 换掉那个环节，而不是给它加监控。** 拉模式把「送达」这个环节整个删了，
+  于是没有失败面需要留痕。这是比「加两拍销账」更省的解。
+- **别把「文件里的事实」抄成内存标记。** `outputAvailable` 每次从会话 JSONL 派生，
+  不落盘、不缓存；派生函数单源（`readMemberTranscriptView`），
+  `getTeamState` 与 `emitTeamProgress` 两处都调它，不许各算一份。
+- **失败路径上不要急着擦痕迹**（复现 ③ 的直接教训）：痕迹该由**确凿的成功信号**擦，
+  不由**流程走完**擦。拉模式之后这条不再需要 —— 因为没有需要擦的痕迹。
+
+#### 否决方案
+
+1. **否决：保留极简回投通知（「X 已完成，用 team_read 取回」）。**
+   理由：通知本身仍是**推**，仍走同一条入队即 resolve 的路，于是「通知有没有到」
+   又变成一个需要留痕的问题 —— 等于把刚删掉的失败面原样请回来，只是内容变短了。
+   领导每轮 `team_status` 都会看到 `outputAvailable`，不需要额外通知。
+2. **否决：保留 `pendingDelivery` 字段读旧落盘文件（升级兼容）。**
+   理由：它唯一能说的是「有一份产出在成员会话里」，而这句话**派生已经说得更好**
+   （派生还知道它有没有真的完成）。留着等于维护两个口径不同的「有没有产出」，
+   必然打架。旧文件多出来的键在 `restoreTeam` 里被忽略（不读、不报错）——
+   实测已钉：旧文件带着该键时恢复不抛错。
+3. **否决：领导空闲（idle）时也 settle 成员。**
+   理由：WorkBuddy 不变量 2。领导 idle = 它在等用户说话，成员此刻很可能**正跑得好好的**，
+   settle 会造出「子在跑却说 interrupted」的假态 —— 这正是本次要消灭的那类假信号。
+4. **否决：引入 ACP 方法表照搬 WorkBuddy 的协议层。**
+   理由：要的是「**产出从文件拉**」这个语义，不是它的传输协议。我们的宿主是 pi 不是
+   ACP，换协议是**重写会话层**，收益为零。抄机制不抄协议（§4.11 同口径）。
+
 ##
 
 ##

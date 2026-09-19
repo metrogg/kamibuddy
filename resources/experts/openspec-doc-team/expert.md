@@ -1,9 +1,9 @@
 ---
 name: openspec-doc-team
-description: 企业级长文档生成，4角色协作完成深度调研、大纲规划、内容撰写与合规审核全流程
+description: 企业级长文档生成，主理人 + 3 位成员协作完成深度调研、大纲规划、内容撰写与合规审核全流程
 displayName: 专业文档生成团队
 profession: 专业文档生成团队
-displayDescription: 企业级长文档生成，4角色协作完成深度调研、大纲规划、内容撰写与合规审核全流程
+displayDescription: 企业级长文档生成，主理人 + 3 位成员协作完成深度调研、大纲规划、内容撰写与合规审核全流程
 quickPrompts: [帮我生成一份建筑施工图设计说明, 将需求转化为完整的规格说明文档, 搭建文档团队协作和质量审核流程]
 tags: [文档团队, 规格文档, 文档审计]
 expertType: team

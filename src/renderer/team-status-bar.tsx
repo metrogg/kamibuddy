@@ -34,18 +34,36 @@ export interface TeamBarRow {
 	readonly live: boolean;
 	/** 是否是当前正在查看的成员。 */
 	readonly current: boolean;
+	/** 是否已中断（样式用；tone 之外的独立开关注解，便于 chip 加特殊视觉）。 */
+	readonly interrupted: boolean;
+	/**
+	 * 「它的会话记录里有产出可读」（spec: add-team-pull-model 批次③）。
+	 * 直接取投影字段，不做加工 —— 它本来就是布尔语义。
+	 * 与 `tone`/`interrupted` 正交：中断态也可能带着产出。
+	 */
+	readonly outputAvailable: boolean;
+	/**
+	 * 「已等待 X」文案（spec: add-team-interrupt-diagnostics 批次 ②）；
+	 * 不在等待中 / 不足 1 分钟时为空串。
+	 */
+	readonly waiting: string;
+	/** 等待时长是否已超阈值（样式换告警色用）。 */
+	readonly waitingAlert: boolean;
 	readonly sessionId?: string;
 }
 
 /**
- * 注意：投影只有 queued/running/done/failed 四态 —— WorkBuddy 状态栏的
- * 「— 已取消」我们没有对应态（团队投影把 closed 折成 done），故不造第五个符号。
+ * 注意：投影有 queued/running/done/failed/**interrupted** 五态。
+ * interrupted 是团队投影独有的（spec: add-team-interrupt-diagnostics 批次 ①）——
+ * 进程被杀时该成员正在跑一轮，重启后从落盘恢复成这一态。它既不是 done（活没交
+ * 回来）也不是 failed（成员自己没出错），用 `!` 与「已中断」把区别写在脸上。
  */
 const MARKS: Record<SubagentStatus["status"], string> = {
 	queued: "…",
 	running: "●",
 	done: "✓",
 	failed: "✗",
+	interrupted: "!",
 };
 
 const STATUS_TEXT: Record<SubagentStatus["status"], string> = {
@@ -53,33 +71,81 @@ const STATUS_TEXT: Record<SubagentStatus["status"], string> = {
 	running: "运行中",
 	done: "已完成",
 	failed: "失败",
+	interrupted: "已中断（那一轮没有回音）",
 };
+
+/**
+ * 等待告警阈值（spec: add-team-interrupt-diagnostics 批次 ②）。
+ *
+ * 选 5 分钟的理由：实测里成员的深挖轮跑了约 1.5 分钟（`16:54:39` 派活 →
+ * `16:56:03` 交付），单轮搜索型任务极少超过 5 分钟。超过就该提示「可能断了」
+ * 而不是无限期显示「运行中」—— 那正是用户实测时被误导的地方。
+ */
+export const WAITING_ALERT_MS = 5 * 60 * 1000;
+
+/**
+ * 把等待时长折成人读的短文案（纯函数，可单测）。
+ *
+ * 粒度刻意粗：<1 分钟不显示（「等了 0 分钟」是噪音），分钟级只到 59，
+ * 之后进位到小时。用户要的是「大概等了多久」这个量级判断。
+ */
+export function formatWaiting(elapsedMs: number): string {
+	if (elapsedMs < 60_000) return "";
+	const minutes = Math.floor(elapsedMs / 60_000);
+	if (minutes < 60) return `${minutes} 分钟`;
+	const hours = Math.floor(minutes / 60);
+	return `${hours} 小时`;
+}
 
 /**
  * 派生状态栏行（纯函数，可单测）。
  *
  * 计数只在有内容时出现：`0 轮 · 0 工具` 对刚起步的成员是噪音，
  * 而「3 轮」本身就是「它真的在干活」的信号。
+ *
+ * `now` 是注入的「现在」（epoch ms），缺省 `Date.now()` —— 等待时长要可测，
+ * 就不能在函数体里直接读时钟。生产调用不传。
  */
 export function teamBarRows(
 	members: readonly SubagentStatus[],
 	currentName: string | undefined,
+	now?: number,
 ): readonly TeamBarRow[] {
+	const at = now ?? Date.now();
 	return members
 		.filter((member) => (member.kind ?? "subagent") === "team")
 		.map((member) => {
 			const parts: string[] = [];
 			if (member.turns > 0) parts.push(`${member.turns} 轮`);
 			if (member.toolCalls !== undefined && member.toolCalls > 0) parts.push(`${member.toolCalls} 工具`);
+			// 等待文案（批次 ②）：缺席 waitingSince = 不在等，不显示。
+			const elapsed = member.waitingSince === undefined ? -1 : at - member.waitingSince;
+			const waiting = elapsed < 0 ? "" : formatWaiting(elapsed);
+			if (waiting !== "") parts.push(`已等 ${waiting}`);
+			/*
+			 * 产出可读（spec: add-team-pull-model 批次③）：**从文件派生**的信号，
+			 * 与状态正交 —— 中断态也可能有产出（上次那一轮跑完了、只是进程没了）。
+			 * 有它就说明「去取回」比「重跑」更划算，所以 statusText 优先说它。
+			 */
+			const outputAvailable = member.outputAvailable === true;
+			// 状态词（批次 ③）：有产出可读时把「产出在、可去取」说进 statusText ——
+			// title 与无障碍文本读到的就是这句，用户不必猜。
+			const statusText = outputAvailable
+				? `${STATUS_TEXT[member.status]}；产出还在它的会话记录里，可去取回（不必重跑）`
+				: STATUS_TEXT[member.status];
 			return {
 				name: member.agent,
 				mark: MARKS[member.status],
-				statusText: STATUS_TEXT[member.status],
+				statusText,
 				count: parts.join(" · "),
 				clickable: member.sessionId !== undefined,
 				tone: member.status,
 				live: member.status === "running",
 				current: currentName === member.agent,
+				interrupted: member.status === "interrupted",
+				outputAvailable,
+				waiting,
+				waitingAlert: elapsed >= WAITING_ALERT_MS,
 				...(member.sessionId === undefined ? {} : { sessionId: member.sessionId }),
 			};
 		});
@@ -128,17 +194,35 @@ export function TeamStatusBar({ members, currentName, onFocus, onClose }: TeamSt
 	const rows = teamBarRows(members, currentName);
 	if (rows.length === 0) return null;
 	const liveCount = rows.filter((row) => row.live).length;
+	const interruptedCount = rows.filter((row) => row.interrupted).length;
+	const recoverableCount = rows.filter((row) => row.outputAvailable).length;
+	/*
+	 * 摘要行按「最需要用户注意」的事优先：
+	 *   有产出可读 > 中断 > 工作中 > 平静。
+	 *
+	 * 「有产出可读」排最前（拉模式，spec: add-team-pull-model 批次 ④）是因为它是
+	 * 四者里唯一**有救**的一条 —— 用户在它面前能立刻做对的事（把产出取回来），
+	 * 而「中断/工作中」只能让他继续等或重跑。把它埋在后面等于浪费掉最有价值的信号。
+	 */
+	const summary =
+		recoverableCount > 0
+			? `${rows.length} 名成员 · ${recoverableCount} 人有产出可读（在各自会话记录里）`
+			: interruptedCount > 0
+				? `${rows.length} 名成员 · ${interruptedCount} 人中中断`
+				: liveCount > 0
+					? `${rows.length} 名成员 · ${liveCount} 人工作中`
+					: `${rows.length} 名成员`;
 	return (
 		<div className="team-bar" role="status" aria-label="团队成员状态">
-			<span className="team-bar-lead">
-				{liveCount > 0 ? `${rows.length} 名成员 · ${liveCount} 人工作中` : `${rows.length} 名成员`}
-			</span>
+			<span className="team-bar-lead">{summary}</span>
 			<div className="team-bar-members">
 				{rows.map((row) => (
 					<button
 						key={row.name}
 						type="button"
-						className={`team-bar-chip${row.live ? " live" : ""}${row.current ? " active" : ""}`}
+						className={`team-bar-chip${row.live ? " live" : ""}${row.current ? " active" : ""}${
+							row.interrupted ? " interrupted" : ""
+						}${row.outputAvailable ? " recoverable" : ""}${row.waitingAlert ? " waiting-alert" : ""}`}
 						title={`${row.name}｜${row.statusText}${row.count === "" ? "" : `｜${row.count}`}`}
 						disabled={!row.clickable}
 						onClick={() => {
@@ -149,7 +233,9 @@ export function TeamStatusBar({ members, currentName, onFocus, onClose }: TeamSt
 							{row.mark}
 						</span>
 						<span className="team-bar-name">{row.name}</span>
-						{row.count !== "" && <span className="team-bar-count">{row.count}</span>}
+						{row.count !== "" && (
+							<span className={`team-bar-count${row.waitingAlert ? " warn" : ""}`}>{row.count}</span>
+						)}
 					</button>
 				))}
 			</div>
