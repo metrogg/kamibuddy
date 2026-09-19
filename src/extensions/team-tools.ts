@@ -34,24 +34,22 @@
  * team_shutdown / team_plan_review / team_delegate_mode / team_delete）的名称、
  * description 与参数 schema；
  * 返回的成员 spawn 计划、成员名单与状态摘要、以及错误文案（未知成员名 / 已有团队 /
- * 成员不许再委派 / 已关闭成员不再收消息）。**成员产出不自动送达** —— 领导用
- * team_read 主动取回（team_status 会标注「有产出可读」）。**任一 team 工具的结果末尾
- * 都可能附带一段「待送达的成员产出」块**（状态行 + 尚未送达的产出正文；超长则截断并
- * 标注「全文用 team_read」）—— 领导不必记得去读，产出搭它本就要调的 team 工具顺路送到。
+ * 成员不许再委派 / 已关闭成员不再收消息）。成员产出仍由 team_read 取回（team_status 会
+ * 标注「有产出可读」）；**本文件不再往工具结果里附加「待送达的成员产出」块** —— 那层
+ * 包装已被本 change 删除，「待送达」块统一由 `extensions/team-output-hook.ts` 挂在
+ * **任意**工具结果上（含 team_*，见该文件的契约段）。
  * **凡回执都不许出现「完成时会收到回投/产出会送过来」这类推模式措辞**：2026-09-19
  * 真机现场里，team_create 的旧回执正是这么写的，领导据此干等而从不调 team_read。
  * Token effect: 定义常驻（**八条**定义）；返回是团队规模与状态的摘要文本，
- * team_read 返回产出正文（可能很长，这是它的用途）。「待送达的成员产出」块**全局每份
- * 产出只付一次** —— 判据是它的指纹（`[fp …]`）是否已出现在领导会话正文里；
- * 无待送达则工具结果一字不加（零成本路径）。
+ * team_read 返回产出正文（可能很长，这是它的用途）；「待送达的成员产出」块的开销记在
+ * team-output-hook 的契约里（全局每份产出只付一次）。
  * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时八个工具**根本不注册** ——
  * 工具集本身就是前缀的一部分，开关在会话间翻转会让改动点之后的整段前缀（含历史）失配
- * （判据同 mcp-client）。结果追加在历史之后，不动既有前缀。工具结果是 append-only 的
- * 持久记录 ⇒ 「待送达」块付一次即进缓存，不随后续请求重付。
+ * （判据同 mcp-client）。结果追加在历史之后，不动既有前缀。
  */
 
-import type { ExtensionAPI, ExtensionFactory, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { AgentDefinition } from "../core/agents.ts";
 import { ChildAgentsProjection, CHILD_AGENTS_DETAILS_KEY } from "../shared/child-agents.ts";
 import { declareReadOnlyTools } from "./permission-policy.ts";
@@ -153,12 +151,6 @@ export interface TeamToolDeps {
 	 */
 	readonly readMemberOutput: (to: string) => Promise<{ member: string; output: string | undefined; status: string | undefined } | undefined>;
 	/**
-	 * 「待送达的成员产出」块（可能返回 undefined = 没有新东西）。
-	 * 由 daemon 现算：扫领导会话正文里已有的 [fp …] 判"送达过没有"。
-	 * 见 index.ts 的 pendingTeamOutput（与 run 起点的快照通道共用同一条判据）。
-	 */
-	readonly readPendingOutputs: () => string | undefined;
-	/**
 	 * 单成员优雅关闭（spec: add-team-collaboration-parity 批次 ②）：
 	 * force=false → 投收尾请求（成员交回报告后关闭）；force=true → 直接中止。
 	 * 未知成员名 / 未启动 / 已关闭 → throw；返回给模型看的回执文案。
@@ -216,40 +208,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 		// 模型看不到团队能力，成本为零。
 		if (!deps.isEnabled()) return;
 
-		/*
-		 * 单点包装：**每个 team 工具都附**「待送达的成员产出」块（不是只挂 team_status）。
-		 *
-		 * 为什么不是只挂一个工具：领导每次调任一 team 工具都说明「此刻在管团队」，而它调
-		 * 哪个工具不可预判（2026-09-19 真机里它偏偏不调 team_status）。把块挂在**所有**
-		 * 结果上，产出就搭它本来就会做的动作顺路送到；去重由指纹判据保证（全局每份产出
-		 * 只送一次），多挂几个工具不增加 token。
-		 *
-		 * 为什么落点在工具结果而不是 run 起点另挂一条隐藏快照：工具结果是 append-only 的
-		 * 持久记录 —— 付一次即进缓存；旧快照方案一个 run 只在开头求值一次，42 次模型调用
-		 * 的长 run 里等于不存在（见 daemon/index.ts 的 pendingTeamOutput）。
-		 *
-		 * 只动 `content`：`details` **原样保留** —— team_create 的成员投影走 details，
-		 * 渲染层靠它（`{...result}` 同时保住 usage / terminate 等其余字段）。
-		 */
-		const register = <TParams extends TSchema, TDetails, TState>(
-			def: ToolDefinition<TParams, TDetails, TState>,
-		): void => {
-			const wrapped: ToolDefinition<TParams, TDetails, TState> = {
-				...def,
-				async execute(toolCallId, params, signal, onUpdate, ctx) {
-					const result = await def.execute(toolCallId, params, signal, onUpdate, ctx);
-					const pending = deps.readPendingOutputs();
-					if (pending === undefined) return result;
-					return {
-						...result,
-						content: [...result.content, { type: "text" as const, text: pending }],
-					};
-				},
-			};
-			pi.registerTool(wrapped);
-		};
-
-		register({
+		pi.registerTool({
 			name: "team_create",
 			label: "建团队",
 			description:
@@ -334,7 +293,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_send",
 			label: "发成员消息",
 			description:
@@ -359,7 +318,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_status",
 			label: "团队状态",
 			description:
@@ -399,7 +358,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_read",
 			label: "读成员产出",
 			description:
@@ -454,7 +413,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_plan_review",
 			label: "审计划",
 			description:
@@ -478,7 +437,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_delegate_mode",
 			label: "委派模式",
 			description:
@@ -496,7 +455,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_shutdown",
 			label: "收尾成员",
 			description:
@@ -518,7 +477,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			},
 		});
 
-		register({
+		pi.registerTool({
 			name: "team_delete",
 			label: "解散团队",
 			description: "解散当前团队：中止全部成员并清理。成员未完成的任务会丢失；解散前先用 team_read 取回还需要保留的产出。",

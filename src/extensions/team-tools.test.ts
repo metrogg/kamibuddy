@@ -53,8 +53,6 @@ function mount(deps: Partial<TeamToolDeps> = {}): {
 			members: [{ name: "a", agentName: "scout", status: "running", turns: 2, lastActivity: "正在 read x" }],
 		}),
 		readMemberOutput: async (to) => ({ member: to, output: `${to} 的产出正文`, status: "idle" }),
-		// 缺省零成本路径：没有待送达产出（既有用例的期望值因此逐字节不变）。
-		readPendingOutputs: () => undefined,
 		shutdownMember: async (to) => `已向成员「${to}」发出收尾请求`,
 		setDelegateMode: async (enabled) => (enabled ? "已开启委派模式" : "已关闭委派模式"),
 		reviewPlan: async () => "已记录计划裁决",
@@ -448,43 +446,6 @@ describe("成员级模型（spec: add-team-collaboration-parity 批次 ⑥）", 
 		const out = await tools.get("team_status")!.execute("t1", {});
 		expect(out.content[0]?.text).toContain("模型：deepseek/deepseek-chat");
 		expect(out.content[0]?.text).not.toContain("模型：，");
-	});
-});
-
-describe("待送达的成员产出块（单点包装，spec: deliver-team-output-via-tools）", () => {
-	/** 一段只在「待送达」时才会出现的文本（含指纹，形状同 team-output-snapshot 的块）。 */
-	const PENDING =
-		'<team_output team="攻坚队">\n- a（scout）：idle，已完成 2 轮 [fp a1b2c3d4]\n\n<member_output member="a">\n产出正文\n</member_output>\n</team_output>';
-
-	it("team_create：块只加在 content 末尾，details 与不接该 dep 时逐字节一致", async () => {
-		const params = { name: "攻坚队", members: [{ name: "scout-a", agent: "scout", task: "调研" }] };
-		const withPending = await mount({ readPendingOutputs: () => PENDING })
-			.tools.get("team_create")!
-			.execute("t1", params);
-		const baseline = await mount().tools.get("team_create")!.execute("t2", params);
-		// content 结尾恰好多出读取器给的那一段，前缀与基线逐字节相同。
-		expect(withPending.content).toEqual([...baseline.content, { type: "text", text: PENDING }]);
-		// details 原样保留（team_create 的成员投影走 details，渲染层靠它）。
-		expect(withPending.details).toEqual(baseline.details);
-	});
-
-	it("team_status 与 team_delete 都附同一段块（单点包装，不是只挂一个工具）", async () => {
-		for (const name of ["team_status", "team_delete"]) {
-			const mounted = mount({ readPendingOutputs: () => PENDING });
-			const result = await mounted.tools.get(name)!.execute("t1", {});
-			const baseline = await mount().tools.get(name)!.execute("t1", {});
-			expect(result.content.at(-1)?.text, `${name} 的结果末尾应附待送达块`).toBe(PENDING);
-			expect(result.details, `${name} 的 details 不该被包装动过`).toEqual(baseline.details);
-		}
-	});
-
-	it("读取器返回 undefined → content 与不接该 dep 时完全一致（零成本路径）", async () => {
-		const explicitNone = await mount({ readPendingOutputs: () => undefined })
-			.tools.get("team_status")!
-			.execute("t1", {});
-		const baseline = await mount().tools.get("team_status")!.execute("t1", {});
-		expect(explicitNone.content).toEqual(baseline.content);
-		expect(explicitNone.details).toEqual(baseline.details);
 	});
 });
 

@@ -116,7 +116,7 @@ import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from ".
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
 import { readMemberTranscript, readMemberTranscriptView } from "./member-transcript.ts";
-import { collectFingerprintsIn, collectTeamOutputMembers, composePendingTeamOutput } from "./team-output-snapshot.ts";
+import { collectFingerprintsFromSession, collectTeamOutputMembers, composePendingTeamOutput } from "./team-output-snapshot.ts";
 import { TeamRegistry } from "./team-runtime.ts";
 import { TeamTaskBoard } from "../core/team-tasks.ts";
 import { readTeams, removeTeam, TEAM_STORE_VERSION, writeTeam, type StoredTeam } from "../core/team-store.ts";
@@ -175,6 +175,7 @@ import { createMcpClient, type McpClientHandle } from "../extensions/mcp-client.
 import { createPresentFiles } from "../extensions/present-files.ts";
 import { createPromptSwitch } from "../extensions/prompt-switch.ts";
 import { spillExtensionFactory } from "../extensions/spill-hook.ts";
+import { createTeamOutputHook } from "../extensions/team-output-hook.ts";
 import { createWebTools } from "../extensions/web-tools.ts";
 import type { WebSearchConfig } from "../core/web-search.ts";
 import { parseBuiltinCommand } from "../shared/builtin-commands.ts";
@@ -1935,6 +1936,96 @@ const memberHandlesBySession = new Map<string, MemberHandle>();
 const teamTaskBoard = new TeamTaskBoard();
 
 /**
+ * 「已送达」账本（spec: unify-team-output-delivery 的 MODIFIED Requirement）：
+ * leaderSessionId → 已经送进领导上下文的产出指纹集合。
+ *
+ * 为什么要有它：挂载点从「~6 次/run 的 `team_*` 工具结果」扩到「~40 次/run 的**任意**
+ * 工具结果」之后，旧口径（每次注入前读 + 拼 + 扫一遍领导会话正文，≤512KB）的成本不再
+ * 可接受 —— 一趟 run 白付几十次整档扫描。账本把那次扫描收敛成**每个领导会话一次**
+ * （首次需要时种子化，见 `deliveredLedgerOf`），此后只做 O(成员数) 的 Set 命中判断。
+ *
+ * 它**不是第二份真源**：成员产出的**内容**始终来自成员会话文件
+ * （`member-transcript.ts`），账本只记「哪些指纹已送达」。进程内只增不改。
+ */
+const deliveredTeamFingerprints = new Map<string, Set<string>>();
+
+/**
+ * 取领导会话的「已送达」账本，首次需要时从领导会话文件**种子化**。
+ *
+ * 种子里只有**工具结果**里的 `[fp …]`（`type:"message"`）；只经 run 起点快照通道
+ * （`custom_message`）送达的指纹不在种子里，重启后会被再送一次（**多送、不会漏送**）——
+ * 那条通道的送达另有保护（同一通道的快照逐字节相同即不追加）。取舍理由见
+ * `takePendingTeamOutput` 的「已知边界」。
+ *
+ * 种子化只做一次：`readMemberTranscript` 走 `TRANSCRIPT_TAIL_BYTES`（512KB）尾部窗口
+ * —— 正是旧口径每次注入都要付的那趟 IO，现在每个领导会话只付一次。
+ */
+function deliveredLedgerOf(leaderSessionId: string): Set<string> {
+	let ledger = deliveredTeamFingerprints.get(leaderSessionId);
+	if (ledger === undefined) {
+		ledger = collectFingerprintsFromSession(
+			readMemberTranscript(leaderSessionId)
+				.map((message) => message.text)
+				.join("\n"),
+		);
+		deliveredTeamFingerprints.set(leaderSessionId, ledger);
+	}
+	return ledger;
+}
+
+/**
+ * 取「待送达的成员产出」块 —— **唯一判据**（一条判据，两个触发点）：
+ *   ① 领导会话 run 起点的隐藏快照通道（`createPromptSwitch` 的 `composeTeamOutput`）；
+ *   ② 领导会话**任意**工具结果末尾（`extensions/team-output-hook.ts` 的 `composePending`）。
+ *
+ * 为什么两个触发点共用它：两条通路回答的是同一个问题 ——「有哪些成员产出领导还没见过」。
+ * 各写一份判据必然漂移（一块去重准、另一块重复送），所以这里既是取块点，也是**唯一**的
+ * 登记点。
+ *
+ * 为什么**可以在这里登记**（「取块即登记」）：两个消费路径在「文本里有新指纹」时必然会把
+ * 这段文本写进会话 ——
+ *   - run 起点那条：`composePendingTeamOutput` 只在**有产出块**时才返回文本，而带上新块
+ *     的候选必然与上一条同通道快照不同 ⇒ `snapshotMessage` 的 `shouldAppendSnapshot`
+ *     判「追加」，pi 因此追加一条 custom 消息；
+ *   - 工具结果那条：`createTeamOutputHook` 的非 `undefined` 返回值一定被 pi 当作该
+ *     tool_result 的最终 `content` 写进会话条目（agent-session 的 afterToolCall）。
+ * 所以正常路径下登记不会出现「账本说送过、会话里其实没有」。唯一的窗口是**登记之后、
+ * 落盘之前**进程被杀 / run 被中止：此时账本说送过、会话里没有 ⇒ 本进程内不再重送，
+ * 但重启后种子化读不到它 ⇒ 会补送（自愈）。因此**不存在持续性的漏送** —— 与 spec 的
+ * 「进程内只增不改」一致，是刻意的方向选择。
+ *
+ * 门控顺序刻意先判 id 与开关、再查注册表，最后才读成员会话文件（零成本优先）：两条通路
+ * 都会频繁触发，先读盘就白付 IO；开关关 / 本桶无团队时**一个文件都不读**。
+ *
+ * 为什么不用 `adoptedSessionId`：它是为「问卷/审批必须在宿主 adopt 之后发起」设计的
+ * **响亮断言**。本函数是**读侧**降级口径 —— 桶尚未 adopt（sessionId 为空）时名下定然
+ * 没有团队，静默跳过才是对的，不该因此把一个 run 打炸。
+ *
+ * 不写 try/catch：`readMemberTranscript` / `readMemberTranscriptView` 内部已 catch
+ * （读不到当没读到），`teamRegistry.getTeam` 也不抛（AGENTS.md §7：不写防御性兜底
+ * 掩盖上游问题）。
+ *
+ * **已知边界（刻意不修）**：种子化只读会话文件的**尾部窗口**（≤512KB）。领导会话长过窗口
+ * 后，早期工具结果里的 `[fp …]` 会滚出窗口；若此时进程重启，那些产出会被**再送达一次**
+ * （多付一次块，语义无害，之后又回到稳定）。这是刻意的：为它维护一份跨进程账本会引入
+ * 第二真源，代价大于多送一块。
+ */
+function takePendingTeamOutput(leaderSessionId: string): string | undefined {
+	if (leaderSessionId === "") return undefined;
+	if (!isAgentTeamsEnabled()) return undefined;
+	const team = teamRegistry.getTeam(leaderSessionId);
+	if (team === undefined) return undefined;
+	const members =
+		collectTeamOutputMembers(team, (sid) => readMemberTranscriptView(sid).output) ?? [];
+	const delivered = deliveredLedgerOf(leaderSessionId);
+	const composed = composePendingTeamOutput({ teamName: team.name, members, delivered });
+	if (composed === undefined) return undefined;
+	// 取块即登记（理由见上）：登记本次**真正写进块**的那批指纹，不重发。
+	for (const fingerprint of composed.fingerprints) delivered.add(fingerprint);
+	return composed.text;
+}
+
+/**
  * 把当前团队成员状态折成投影并推给领导会话（spec: add-team-foundations 批 7）。
  *
  * 归位协议见 session-events.ts 的 team_member_progress 注释：不带 toolCallId、
@@ -2360,49 +2451,6 @@ async function createHost(
 			? (bucket.conversation.state.thinkingLevel ?? readPreferences().thinkingLevel)
 			: undefined;
 
-	/*
-	 * 「待送达的成员产出」块的**唯一判据**（一条判据，两个触发点）：
-	 *   ① run 起点的隐藏快照通道（createPromptSwitch 的 composeTeamOutput，旧落点）；
-	 *   ② 每个 team 工具结果末尾（teamExtensionFactory 的 readPendingOutputs）。
-	 *
-	 * 为什么两个触发点共用它：两条通路要回答的是同一个问题 ——「有哪些成员产出领导还
-	 * 没见过」。各写一份判据就会各自漂移（一块去重准、另一块重复送）。交付事实的载体
-	 * 是**领导会话正文里已有的 `[fp …]`**（`collectFingerprintsIn` 扫出来的），不引入
-	 * 任何进程内账本 —— resume / 新进程之后仍与文件一致。
-	 *
-	 * 门控顺序刻意先判开关与桶，再查注册表，最后才读成员会话文件（零成本优先）：两条
-	 * 通路都会频繁触发，先读盘就白付 IO；开关关 / 本桶无团队时**一个文件都不读**。
-	 *
-	 * 为什么不用 `adoptedSessionId`：它是为「问卷/审批必须在宿主 adopt 之后发起」设计的
-	 * **响亮断言**（空 id 说明 adopt 顺序坏了）。本函数是**读侧**降级口径 —— 桶尚未 adopt
-	 * 时名下定然没有团队，静默跳过才是对的，不该因此把一个 run 打炸。
-	 *
-	 * 不写 try/catch：`readMemberTranscript` / `readMemberTranscriptView` 内部已 catch
-	 * （读不到当没读到），`teamRegistry.getTeam` 也不抛（AGENTS.md §7：不写防御性兜底
-	 * 掩盖上游问题）。
-	 *
-	 * **已知边界（刻意不修）**：`readMemberTranscript` 只读会话文件的**尾部窗口
-	 * （≤512KB）**。领导会话长过窗口后，早期工具结果里的 `[fp …]` 会滚出窗口 ⇒ 那些
-	 * 产出会被**再送达一次**（多付一次块，语义无害，之后又回到稳定）。这是刻意的：
-	 * 为它维护一份跨进程账本会引入第二真源，代价大于多送一块。
-	 */
-	const pendingTeamOutput = (): string | undefined => {
-		if (!isAgentTeamsEnabled()) return undefined;
-		if (bucket.sessionId === "") return undefined;
-		const team = teamRegistry.getTeam(bucket.sessionId);
-		if (team === undefined) return undefined;
-		const members =
-			collectTeamOutputMembers(team, (sid) => readMemberTranscriptView(sid).output) ?? [];
-		// 已经出现在**领导会话正文**里的指纹 = 已交付过（工具结果是 append-only 的持久
-		// 记录，交付事实已经在会话里了，不需要第二份账本）。
-		const delivered = collectFingerprintsIn(
-			readMemberTranscript(bucket.sessionId)
-				.map((message) => message.text)
-				.join("\n"),
-		);
-		return composePendingTeamOutput({ teamName: team.name, members, delivered });
-	};
-
 	const host = await SessionHost.create({
 		catalog,
 		modelKey: activeModelKey,
@@ -2547,6 +2595,25 @@ async function createHost(
 				report: (message) => eventLog.append({ kind: "tool_result_spill_error", message }),
 			}),
 			/*
+			 * 团队产出送达（spec: unify-team-output-delivery）：把「待送达的成员产出」块
+			 * 挂到**任意**工具结果末尾（原来是 team_* 工具内的包装层，本 change 收敛到这一处）。
+			 * **只挂用户 / 领导会话**：成员、子代理、定时任务会话名下定然没有团队注册表，
+			 * 它们各自的装配数组里也没有本项（该 option 不是必填，这里不注册即可）。
+			 *
+			 * **注册顺序必须排在 spill-hook 之后**（硬约束，别调）：pi 的 tool_result
+			 * handler 是**逐扩展链式**的（runner.ts emitToolResult 把每个 handler 的返回值
+			 * 写回同一个 currentEvent 再交给下一个），而 spill 用 `singleTextBlock` 判
+			 * 「唯一的文本块」。我们的块若先追加，结果就成了两块 ⇒ spill 直接跳过 ⇒
+			 * **带产出块的长输出不再落盘截断、绕过 spill 上界**（输出长度无上限）。
+			 * 顺序由 src/extensions/team-output-hook.test.ts 的断言钉住。
+			 *
+			 * composePending 走 `takePendingTeamOutput`（与 run 起点快照通道共用同一条
+			 * 判据，见模块作用域的那个函数）。
+			 */
+			createTeamOutputHook({
+				composePending: () => takePendingTeamOutput(bucket.sessionId),
+			}),
+			/*
 			 * 项目信任：**所有会话都装**（与权限门同理）。
 			 *
 			 * 理由：项目级资源的加载发生在工具层之前 —— `.pi/extensions` 是
@@ -2626,14 +2693,14 @@ async function createHost(
 				 * **只挂用户会话（领导）** —— 只有领导名下有团队注册表，子代理 / 定时任务
 				 * 没有团队，装配处显式传 no-op（该 option 必填就是为让漏接编译报错）。
 				 *
-				 * 判据与门控全在 `pendingTeamOutput`（见本装配上方的定义）：本通道与 team
-				 * 工具结果末尾的 `readPendingOutputs` **共用同一条判据** —— 「哪些产出领导
-				 * 还没见过」只该有一个答案，各写一份必然漂移。
+				 * 判据与门控全在模块作用域的 `takePendingTeamOutput`（与工具结果挂载点
+				 * `createTeamOutputHook` 的 composePending **共用同一条判据**）——「哪些产出
+				 * 领导还没见过」只该有一个答案，各写一份必然漂移。
 				 *
-				 * 零参箭头对旧签名 `(previous) => …` 同样合法：调用方不再需要传入上一条快照，
-				 * 判据已改成扫领导会话正文里的 `[fp …]`（不依赖 previous）。
-				 */
-				composeTeamOutput: () => pendingTeamOutput(),
+				 * 判据读的是**只增账本**（首次由领导会话文件种子化）而非每次扫会话正文；
+				 * 本通道与工具结果挂载点是同一本账本的**唯一**登记点。
+			 */
+			composeTeamOutput: () => takePendingTeamOutput(bucket.sessionId),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -3058,12 +3125,6 @@ async function createHost(
 								: member.status;
 				return { member: member.name, output: view.output, status };
 			},
-			/*
-			 * 「待送达的成员产出」块（spec: deliver-team-output-via-tools）：与 run 起点的
-			 * 快照通道**共用同一条判据**（见装配处上方的 `pendingTeamOutput`）—— 工具层只
-			 * 负责把它附到结果末尾（单点包装，见 extensions/team-tools.ts）。
-			 */
-			readPendingOutputs: pendingTeamOutput,
 			/*
 			 * 计划裁决（spec: add-team-collaboration-parity 批次 ④）。
 			 *

@@ -5,14 +5,17 @@
  * **豁免也必须写理由**，缺席不能与遗忘混淆），落点换成我们的**文件头注释块**
  * （我们模块没有 README）。
  *
- * 扫描范围 = 「注册工具」的模块 + 三个具名模块：
+ * 扫描范围 = 「注册工具」的模块 + 五个具名模块：
  *   - `src/extensions/` 下调用了 `registerTool(` 的非测试模块（注册工具即改变
  *     模型所见：工具定义与返回都进请求）；
  *   - 具名模块：`src/core/system-prompt-composer.ts`、`src/shared/hidden-context.ts`、
- *     `src/extensions/prompt-switch.ts`、`src/extensions/spill-hook.ts`（它们不注册
- *     工具，但一个改提示词、一个改每轮注入、一个改工具面装配、一个用 `tool_result`
- *     改写**每一个**工具结果 —— 最后这个不 registerTool 却比任何工具都更直接地
- *     改变模型所见，漏掉它就是给「改写全部工具结果」留一条门禁外的路）。
+ *     `src/extensions/prompt-switch.ts`、`src/extensions/spill-hook.ts`、
+ *     `src/extensions/team-output-hook.ts`（它们不注册工具，但一个改提示词、一个改
+ *     每轮注入、一个改工具面装配，**两个**用 `tool_result` 改写工具结果 —— 后两个不
+ *     registerTool 却比任何工具都更直接地改变模型所见，漏掉任何一个就是给「改写工具
+ *     结果」留一条门禁外的路）。**改写工具结果的扩展现在不止一个**：`spill-hook`
+ *     先做超长落盘截断，`team-output-hook` 再在末尾追加团队成员产出块；两者都以契约段
+ *     声明各自给模型带来的增量。
  * 不扫 `src/extensions/` 下其余不注册工具的模块（command-guard / permission-* 等）：
  * 它们对模型所见的影响经对应工具的结果文本生效，由那个工具的契约覆盖。
  *
@@ -41,12 +44,13 @@ const EXEMPT_RE = /^\s*\*?\s*模型体验豁免\s*[：:]\s*(.*)$/;
 /** 文件头注释块。`^` 锚定：契约落在文件第一个注释块里，不放扫描器去猜「哪块算头」。 */
 const HEADER_RE = /^\s*\/\*([\s\S]*?)\*\//;
 
-/** 具名模块：不注册工具、但改变模型所见（spec 点名 + spill-hook，见文件头）。 */
+/** 具名模块：不注册工具、但改变模型所见（spec 点名 + 两个改写工具结果的钩子，见文件头）。 */
 const NAMED_MODULES = [
 	"src/core/system-prompt-composer.ts",
 	"src/shared/hidden-context.ts",
 	"src/extensions/prompt-switch.ts",
 	"src/extensions/spill-hook.ts",
+	"src/extensions/team-output-hook.ts",
 ] as const;
 
 interface Failure {

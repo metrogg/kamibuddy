@@ -483,8 +483,8 @@ describe("快照通道：三条通道各自独立去重、各自追加", () => {
  * 与三条既有通道的差别在这里钉住：
  *   1. 正文由 composer 决定 —— 该通道语义是**增量**（旧产出不被新快照取代），
  *      故 prompt-switch 侧不许替它加取代声明；
- *   2. 「哪些产出还没送达」的判据**在调用方**（扫领导会话正文的 `[fp …]`，见
- *      daemon/team-output-snapshot.ts 的 collectFingerprintsIn），composer 被
+ *   2. 「哪些产出还没送达」的判据**在调用方**（只增账本，首次由领导会话文件种子化；
+ *      见 daemon/index.ts 的 takePendingTeamOutput），composer 被
  *      **无参**调用；本文件只管「内容没变不追加」这条既有纪律。
  * 其余（逐字节相同不追加、空内容不注入、按 customType 各读各的基线）沿用同一机制。
  */

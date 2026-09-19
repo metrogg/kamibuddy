@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
-	collectFingerprintsIn,
+	collectFingerprintsFromSession,
 	collectTeamOutputMembers,
 	composePendingTeamOutput,
 	composeTeamOutputSnapshot,
@@ -346,31 +346,44 @@ describe("collectTeamOutputMembers · 取数接缝", () => {
 	});
 });
 
-describe("collectFingerprintsIn · 从正文扫指纹", () => {
+describe("collectFingerprintsFromSession · 从文本抽指纹", () => {
 	it("扫得到被拼在长文本中间的 [fp …]（不依赖行首/行尾）", () => {
 		const text = `${"前".repeat(200)}[fp a1b2c3d4]${"后".repeat(200)}`;
-		expect(collectFingerprintsIn(text)).toEqual(new Set(["a1b2c3d4"]));
+		expect(collectFingerprintsFromSession(text)).toEqual(new Set(["a1b2c3d4"]));
+	});
+
+	it("多行文本里逐行抽全（跨行都要，不只看第一行）", () => {
+		const text = [
+			'<team_output team="研究队">',
+			"以下是你还没见过的成员产出增量；状态行末尾的 [fp xxxxxxxx] 只用于跨轮去重，你可以忽略它。",
+			"",
+			"- 谭溯源（topic-researcher）：idle，已完成 53 轮 [fp a1b2c3d4]",
+			"- 程文成（report-writer）：running，已完成 2 轮 [fp 00ff00ff]",
+			"</team_output>",
+		].join("\n");
+		expect(collectFingerprintsFromSession(text)).toEqual(new Set(["a1b2c3d4", "00ff00ff"]));
 	});
 
 	it("多份去重：同一指纹出现两次只算一个", () => {
 		const text = "见 [fp 11111111] …… 又说了一次 [fp 11111111] …… 还有另一份 [fp 22222222]。";
-		expect(collectFingerprintsIn(text)).toEqual(new Set(["11111111", "22222222"]));
+		expect(collectFingerprintsFromSession(text)).toEqual(new Set(["11111111", "22222222"]));
 	});
 
 	it("非 hex（大小写）/ 长度不对不命中，命中项仍被扫到", () => {
 		const text =
 			"[fp xxxxxxxx] [fp 1234] [fp 123456789] [fp ABCDEF12] [fp 1234567g] [fp deadbeef]";
-		expect(collectFingerprintsIn(text)).toEqual(new Set(["deadbeef"]));
+		expect(collectFingerprintsFromSession(text)).toEqual(new Set(["deadbeef"]));
 	});
 
 	it("说明句里的常量示例 [fp xxxxxxxx] 不命中（x 不是 hex）", () => {
 		const text =
 			"以下是你还没见过的成员产出增量；状态行末尾的 [fp xxxxxxxx] 只用于跨轮去重，你可以忽略它。";
-		expect(collectFingerprintsIn(text).size).toBe(0);
+		expect(collectFingerprintsFromSession(text).size).toBe(0);
 	});
 
-	it("空串 → 空集合", () => {
-		expect(collectFingerprintsIn("").size).toBe(0);
+	it("无指纹 / 空串 → 空集合", () => {
+		expect(collectFingerprintsFromSession("").size).toBe(0);
+		expect(collectFingerprintsFromSession("一段没有任何标记的普通正文").size).toBe(0);
 	});
 });
 
@@ -378,7 +391,7 @@ describe("composePendingTeamOutput · 待送达判定", () => {
 	it("待送达的产出出现在块里；已送达的不出现（两者状态行都保留）", () => {
 		const deliveredOutput = "已经给过领导的产出";
 		const pendingOutput = "还没给过领导的产出";
-		const text = composePendingTeamOutput({
+		const result = composePendingTeamOutput({
 			teamName: "研究队",
 			members: [
 				member({ name: "谭溯源", agentName: "topic-researcher", output: deliveredOutput }),
@@ -387,11 +400,14 @@ describe("composePendingTeamOutput · 待送达判定", () => {
 			delivered: new Set([outputFingerprint(deliveredOutput)]),
 		});
 
-		expect(text).toBeDefined();
+		expect(result).toBeDefined();
+		const text = result?.text ?? "";
 		expect(text).toContain('<member_output member="程文成">');
 		expect(text).toContain(pendingOutput);
 		expect(text).not.toContain(deliveredOutput);
 		expect(text).not.toContain('<member_output member="谭溯源">');
+		// 回传的只有**本次真正写进块**的指纹：谭溯源已在账本里，不该被登记第二次。
+		expect(result?.fingerprints).toEqual([outputFingerprint(pendingOutput)]);
 		// 状态行照旧两条都在 —— 它是「已送达」标记的载体，也是领导判断谁在跑的依据。
 		expect(text).toContain(
 			`- 谭溯源（topic-researcher）：idle，已完成 1 轮 [fp ${outputFingerprint(deliveredOutput)}]`,
@@ -399,6 +415,56 @@ describe("composePendingTeamOutput · 待送达判定", () => {
 		expect(text).toContain(
 			`- 程文成（report-writer）：idle，已完成 1 轮 [fp ${outputFingerprint(pendingOutput)}]`,
 		);
+	});
+
+	it("成员的已送达判定相互独立：甲的指纹在账本里不影响产出不同的乙", () => {
+		const jiaOutput = "甲的产出";
+		const yiOutput = "乙的产出";
+		const members = [
+			member({ name: "甲", agentName: "researcher", output: jiaOutput }),
+			member({ name: "乙", agentName: "writer", output: yiOutput }),
+		];
+
+		// 首次（账本为空）：两人的块都要发，回传两个指纹。
+		const first = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
+		expect(first?.fingerprints).toHaveLength(2);
+
+		// 只登记甲的指纹：乙仍在待送达集合里（甲不误杀乙）。
+		const second = composePendingTeamOutput({
+			teamName: "研究队",
+			members,
+			delivered: new Set([outputFingerprint(jiaOutput)]),
+		});
+		expect(second?.text).not.toContain(jiaOutput);
+		expect(second?.text).toContain(yiOutput);
+		expect(second?.fingerprints).toEqual([outputFingerprint(yiOutput)]);
+	});
+
+	it("两名成员产出逐字节相同：指纹是内容寻址的 ⇒ 登记一次即对两人都判已送达", () => {
+		// 指纹只取自产出正文（见 outputFingerprint），所以逐字节相同的两份产出指纹相同。
+		// 这是有意设计：内容相同说明领导已看过该内容，再送一份没有信息增益；状态行仍逐成员
+		// 渲染，两人的轮次/状态照旧看得见。
+		const output = "收到。";
+		const members = [
+			member({ name: "甲", agentName: "researcher", output }),
+			member({ name: "乙", agentName: "writer", output }),
+		];
+
+		const first = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
+		// 账本为空 ⇒ 两块都写（内容重复，但这是首次送达）。
+		expect(first?.text).toContain('<member_output member="甲">');
+		expect(first?.text).toContain('<member_output member="乙">');
+		// 同一指纹只登记一次（账本是 Set 语义）。
+		expect(first?.fingerprints).toEqual([outputFingerprint(output)]);
+
+		// 登记后：两人内容相同 ⇒ 都视为已送达 ⇒ undefined（不是把乙「误杀」成没产出）。
+		expect(
+			composePendingTeamOutput({
+				teamName: "研究队",
+				members,
+				delivered: new Set(first?.fingerprints ?? []),
+			}),
+		).toBeUndefined();
 	});
 
 	it("全部已送达 → undefined（零成本，调用方直接用工具原文）", () => {
@@ -412,24 +478,52 @@ describe("composePendingTeamOutput · 待送达判定", () => {
 		).toBeUndefined();
 	});
 
-	it("闭环：第一次返回的文本喂回 collectFingerprintsIn ⇒ 第二次返回 undefined", () => {
+	it("三连跑收敛：登记指纹后无待送达 ⇒ undefined，且不再来回交替", () => {
+		const output = "调研结论：共 3 条。";
+		const fingerprint = outputFingerprint(output);
+		const members = [
+			member({ name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53, output }),
+		];
+
+		// run1：账本为空 ⇒ 写产出块，并回传本次写入的指纹。
+		const first = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
+		expect(first).toBeDefined();
+		expect(first?.text).toContain("<member_output");
+		expect(first?.text).toContain(output);
+		expect(first?.fingerprints).toEqual([fingerprint]);
+
+		// 调用方把回传指纹登记进账本 —— 这就是「已送达」的唯一登记动作。
+		const ledger = new Set(first?.fingerprints ?? []);
+
+		// run2：指纹已在账本 ⇒ 无待送达产出 ⇒ undefined（连纯状态行都不发）。
+		expect(
+			composePendingTeamOutput({ teamName: "研究队", members, delivered: ledger }),
+		).toBeUndefined();
+
+		// run3：账本只增不改 ⇒ 仍 undefined（不会像扫会话正文那份判据那样 A/B 交替）。
+		expect(
+			composePendingTeamOutput({ teamName: "研究队", members, delivered: ledger }),
+		).toBeUndefined();
+	});
+
+	it("闭环：回传的 fingerprints 与从返回文本种子化的集合一致 ⇒ 第二次 undefined", () => {
 		const output = "调研结论：共 3 条。";
 		const members = [
 			member({ name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53, output }),
 		];
 
-		// 第一次：还没交付过任何东西 ⇒ 带产出块（状态行里已埋下指纹）。
 		const first = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
-		expect(first).toBeDefined();
-		expect(first).toContain("<member_output");
+		expect(first?.text).toContain("<member_output");
 
-		// 交付事实藏在正文里：从第一次的返回文本扫出「已送达」集合（模拟领导正文里出现过的指纹）。
-		const delivered = collectFingerprintsIn(first ?? "");
-		expect(delivered.has(outputFingerprint(output))).toBe(true);
+		const ledger = new Set(first?.fingerprints ?? []);
+		expect(ledger.has(outputFingerprint(output))).toBe(true);
+		// 种子化等价：从返回文本反扫出的指纹 == 回传的「本次写入」指纹（单人、首轮时相等）。
+		// 一般情形 @>=：状态行对已送达成员也带 fp，反扫只会更多，不会漏。
+		expect(collectFingerprintsFromSession(first?.text ?? "")).toEqual(ledger);
 
-		// 第二次：指纹已出现 ⇒ 无待送达产出 ⇒ undefined，判据自洽。
-		const second = composePendingTeamOutput({ teamName: "研究队", members, delivered });
-		expect(second).toBeUndefined();
+		expect(
+			composePendingTeamOutput({ teamName: "研究队", members, delivered: ledger }),
+		).toBeUndefined();
 	});
 
 	it("成员产出更新（指纹变了）⇒ 新指纹未送达 ⇒ 再发一次", () => {
@@ -439,16 +533,17 @@ describe("composePendingTeamOutput · 待送达判定", () => {
 			members: [member({ ...base, output: "第一版产出" })],
 			delivered: new Set(),
 		});
-		const delivered = collectFingerprintsIn(first ?? "");
+		const ledger = new Set(first?.fingerprints ?? []);
 
 		const second = composePendingTeamOutput({
 			teamName: "研究队",
 			members: [member({ ...base, output: "第二版产出" })],
-			delivered,
+			delivered: ledger,
 		});
 		expect(second).toBeDefined();
-		expect(second).toContain("第二版产出");
-		expect(second).not.toContain("第一版产出");
+		expect(second?.text).toContain("第二版产出");
+		expect(second?.text).not.toContain("第一版产出");
+		expect(second?.fingerprints).toEqual([outputFingerprint("第二版产出")]);
 	});
 });
 
@@ -459,7 +554,7 @@ describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
 		];
 		const legacy = composeTeamOutputSnapshot({ teamName: "研究队", members, previous: undefined });
 		const pending = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
-		expect(pending).toBe(legacy);
+		expect(pending?.text).toBe(legacy);
 	});
 
 	it("超长正文被截到 maxChars 且带「全文用 team_read 取回」标注", () => {
@@ -467,7 +562,7 @@ describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
 			teamName: "研究队",
 			members: [member({ name: "谭溯源", output: "甲".repeat(TEAM_OUTPUT_MAX_CHARS + 500) })],
 			delivered: new Set(),
-		});
+		})?.text;
 		expect(text).toBeDefined();
 		expect(text).toContain("甲".repeat(TEAM_OUTPUT_MAX_CHARS));
 		expect(text).not.toContain("甲".repeat(TEAM_OUTPUT_MAX_CHARS + 1));
@@ -480,7 +575,7 @@ describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
 			members: [member({ name: "谭溯源", output: "一二三四五" })],
 			delivered: new Set(),
 			maxChars: 3,
-		});
+		})?.text;
 		expect(text).toContain("一二三");
 		expect(text).not.toContain("一二三四");
 		expect(text).toContain("（已截断，全文用 team_read 取回）");
@@ -494,7 +589,7 @@ describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
 				member({ name: "程文成", agentName: "report-writer", status: "running", turns: 2 }),
 			],
 			delivered: new Set(),
-		});
+		})?.text;
 		expect(text).toContain(
 			`- 谭溯源（topic-researcher）：idle，已完成 53 轮 [fp ${outputFingerprint("产出正文")}]`,
 		);
@@ -507,7 +602,7 @@ describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
 			teamName: "研究队",
 			members: [member({ name: "谭溯源", output: "产出正文" })],
 			delivered: new Set(),
-		});
+		})?.text;
 		expect(text).not.toContain("本条快照取代此前所有同类快照");
 	});
 });

@@ -1396,6 +1396,11 @@ run 起点那条快照通道保留（覆盖"领导下一次 run 开始时尚有�
 
 #### 否决方案（触发点）
 
+【**状态：本段的挂载点结论已被 §4.23 取代（2026-09-19 同日）** —— 挂载点从「`team_*` 工具
+结果」扩到「任意工具结果」，第 9 条（否决进程内清单）随之反过来：判据改用「内存账本 +
+首次从会话文件种子化」。第 7、8 条（否决「只靠 run 开始」与「per-request 注入」）结论不变。
+原文保留不改，供后人看清当时的推理。】
+
 7. **否决：只靠"run 开始"注入（即本 change 的第一版形态）。** 真机数据见上：领导一个 run 42 次调用，
    而 run 起点只触发一次、且可能发生在团队建立之前 —— 通路等于不存在。**这是被真机否掉的，不是推测。**
 8. **否决：改成 per-request 注入（pi 的 `transformContext` / `context` 钩子）。**
@@ -1428,6 +1433,66 @@ run 起点那条快照通道保留（覆盖"领导下一次 run 开始时尚有�
    先删就没有对照组，且会立刻丢能力面。
 6. **否决：为它新增一个偏好开关。** 验证性改动，加开关要动偏好模型与设置页 UI，成本高于收益；
    门控复用既有的 `agentTeamsEnabled`。
+
+### 4.23 团队产出送达的挂载点：从 `team_*` 扩到任意工具结果，判据改账本（2026-09-19，spec unify-team-output-delivery）
+
+**症状（用户实测）**：成员交回产出后，**主理人要等自己的 `Start-Sleep` 跑完才拿到产出**。
+§4.22 把主要挂载点定在「任一 `team_*` 工具的结果」，但真机里领导的循环是
+`team_status → powershell(Start-Sleep) → team_status → team_read → team_send …` ——
+它必须**再调一次 team 工具**才拿到，sleep 期间拿不到；若它 sleep 完去调 `read` / `write`，则继续等。
+
+**改判（挂载点）**：从「`team_*` 工具结果」扩到「**任意工具结果**」—— 领导会话注册一个
+`tool_result` handler（**与 `spill-hook` 同事件**，见 `src/extensions/spill-hook.ts` 的
+`pi.on("tool_result", …)`），在**任意**工具结果末尾追加「待送达成员产出」块。工具结果是
+append-only 的会话条目、位置固定 ⇒ 缓存不受影响；领导的 `Start-Sleep` 一结束，它的下一个
+工具结果（哪怕是 `read`）就会带上产出。`team_*` 本身就是工具，所以新挂载点是它的**超集**
+（§4.22 那层「包住八个 `team_*` 注册点」的包装随之删掉）。
+
+**改判（「已送达」判据）**：从「每次注入前扫领导会话正文的 `[fp …]`」
+（`src/daemon/team-output-snapshot.ts` 的 `collectFingerprintsIn`；领导会话正文经
+`readMemberTranscript` 读入，尾部窗口 `TRANSCRIPT_TAIL_BYTES = 512 * 1024`，见
+`src/daemon/member-transcript.ts`）改为「**内存账本 + 首次从会话文件种子化**」。
+理由是成本随挂载点线性增长：挂载点从 `~6 次/run` 扩到 `~40 次/run`（spec
+unify-team-output-delivery 的 What Changes），每次注入前再扫一遍 ≤512 KB 的领导会话正文
+不可接受。账本首次需要时从领导会话文件种子化（读尾部窗口即可），重启后因此**基本**正确：种子只认
+`type:"message"` 条目（工具结果通道），只经 run 起点快照通道（`custom_message`）送达的指纹
+不在种子里、重启后会被**再送一次**—— 方向只会「多送」不会「漏送」，取舍理由见
+`src/daemon/index.ts` 的 `takePendingTeamOutput`「已知边界」；
+进程内只增不改，注入点把本次写入的指纹登记进去。**账本不是第二真源**：成员产出的**内容**
+始终来自成员会话文件（`src/daemon/member-transcript.ts`），账本只记「哪些指纹已送达」。
+
+**run 起点通道保留**：§4.22 建的 `kamibuddy-team-output` 通道保留为窄场景兜底（领导长时间
+不调任何工具时，下一轮 run 仍能看到产出），且与工具结果挂载点**共用同一个注入函数** ——
+两个触发点必须给出**一致**的「待送达」集合。
+
+**字面不变（这次只换「何时/在哪挂载」）**：状态行（`- 名字（角色）：状态，已完成 N 轮
+[fp a1b2c3d4]`）与产出块（每成员截断 4,000 字符并标注「（已截断，全文用 `team_read`）」）的
+正文**逐字节不变**；`tool_result` handler 只追加 `content`，`details` / `isError` 原样不动，
+没有待送达产出时返回 `undefined`、工具结果逐字节不变。
+
+#### 否决方案
+
+1. **否决：改用 pi 的 `context` 事件做每请求尾部拼接（= WorkBuddy 的 `sliceInvocationWindow` 形态）。**
+   钩子确实存在（`on("context")` 可返回 `{ messages }` 整体替换；见 pi
+   `packages/coding-agent/src/core/extensions/types.ts:670`（`ContextEvent`）/
+   `:1065`（`ContextEventResult`）/ `:1220`（`on("context", …)`）；WorkBuddy 侧见
+   `docs/WorkBuddy-reference/extracted/main/server.js:52180-52222` 的
+   `historyRef: { storeId, afterId, lastId }` + `sliceInvocationWindow`）。
+   但这条路本项目 **2026-09-18 已实测失败**：台账 `01a0b2b3-…`（24 次模型调用）里，两块注入
+   在每个 run 内**逐字节完全相同**却被注入 24 次，`cacheRead_N = prompt_{N−1} − 2,423…2,615`，
+   23 轮白付 **58,094 token**，占全会话未命中（201,908）的 **28.8%**（数字与根因见
+   `src/shared/hidden-context.ts` 文件头与 `src/extensions/prompt-switch.ts` 头注释 (b) 段）。
+   根因：`context` 的返回值**不落会话文件**，于是它每轮都是一条新的尾部消息、位置每轮后移
+   —— 前缀缓存里它每轮都失配、每轮重付。WorkBuddy 能这么做，是因为它的子窗口插在**调用发生
+   的历史位置**（不是每轮重算的新尾巴），那份位置在父会话里是固定的；而 pi 的 `context`
+   返回值**没有这个位置**。
+2. **否决：保留 `team_*` 包装 + 新增 `tool_result` 两处并存。**
+   `team_*` 本身就是工具，新挂载点已覆盖它；两处并存 = 同一份产出被两条路各判一次
+   （各自扫正文 / 各自记账），多一份维护，也是两处口径漂移的来源。
+3. **否决：不引入账本、继续每次扫会话正文。**
+   挂载点从 `~6 次/run` 扩到 `~40 次/run`，而每次注入前都要再扫一遍 ≤512 KB 的领导会话正文
+   ⇒ 成本随挂载点**线性增长**。账本与「扫正文」判的是同一件事（账本首次用会话文件种子化后
+   等价、失败口径相同），没有理由在触发点数倍增长的挂载点上再付这份重复代价。
 
 ##
 

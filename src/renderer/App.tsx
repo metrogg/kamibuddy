@@ -343,7 +343,7 @@ export function App(): React.JSX.Element {
 			// present_files 交付：首个本地文件自动在预览面板打开，且面板自动展开
 			//（WorkBuddy：第一个自动打开 + 交付时面板若收起则展开）。
 			if (event.type === "artifacts_presented") {
-				setPanelOpen(true);
+				revealPanel("artifact");
 				if (event.focusFile !== undefined) openPreview({ kind: "file", path: event.focusFile });
 				// 预览服务按 cwd 懒建（Task 2.7），交付时刻它必然已起 ——
 				// baseUrl 此刻重取最准（cwd 未变，effect 不会自动再跑）。
@@ -759,6 +759,20 @@ export function App(): React.JSX.Element {
 		setPanelFullscreen(false);
 		// 来源面板同属「随会话走的面板态」：切会话关闭，回到 ArtifactPanel 位。
 		setSourcesOpen(false);
+	}, []);
+
+	/**
+	 * 把右侧面板位翻到「产物预览」或「引用来源」。
+	 *
+	 * 面板位同一时刻只渲染一个，优先级写死在渲染处：**任务诊断 > 引用来源 > 产物预览**。
+	 * 所以只写 panelOpen / sourcesOpen 是不够的 —— 诊断开着时面板位仍渲染诊断，
+	 * 表现为「点了产物卡没反应」，用户得先把诊断关掉才看得见。
+	 * 三个 setter 收在这一处，新增入口就不必各自记得「让出另外两个占用者」。
+	 */
+	const revealPanel = useCallback((target: "artifact" | "sources"): void => {
+		setTaskDiagOpen(false);
+		setPanelOpen(true);
+		setSourcesOpen(target === "sources");
 	}, []);
 
 	/** 切换交互模式（对标 WorkBuddy 的 interactionmode 轴）。权威状态同样在 daemon 侧。 */
@@ -1440,10 +1454,9 @@ export function App(): React.JSX.Element {
 			openArtifact(path);
 			return;
 		}
-		setPanelOpen(true);
-		setSourcesOpen(false);
+		revealPanel("artifact");
 		openPreview({ kind: "file", path });
-	}, [conversation.state.cwd, openArtifact, openPreview]);
+	}, [conversation.state.cwd, openArtifact, openPreview, revealPanel]);
 
 	return (
 		<div className="app" data-sidebar={sidebarOpen ? "open" : "collapsed"} data-resizing={windowResizing}>
@@ -1550,9 +1563,9 @@ export function App(): React.JSX.Element {
 						else {
 							// panelOpen 是渲染门的唯一开关：面板被用户收起后再点产物卡，
 							// 只写 previewTabs/previewActive 会静默无反应（点了没动静）。
-							setPanelOpen(true);
-							// 来源面板开着时先翻回产物面板（同位互斥），否则预览不可见。
-							setSourcesOpen(false);
+							// revealPanel 顺带让出诊断与来源 —— 面板位优先级是
+							// 诊断 > 来源 > 产物，不让位则预览根本不会露面。
+							revealPanel("artifact");
 							openPreview({ kind: "file", path });
 						}
 					}}
@@ -1561,16 +1574,13 @@ export function App(): React.JSX.Element {
 						// 聚合入口：打开面板（无激活项时用第一个产物）。产物分组在
 						// 面板概览视图里常驻展示，无需额外展开动作。
 						// 与 onPreviewArtifact 同理，漏了 setPanelOpen 面板就不会露面。
-						setPanelOpen(true);
-						// 来源面板开着时先翻回产物面板（同位互斥）。
-						setSourcesOpen(false);
+						revealPanel("artifact");
 						const first = conversation.artifacts[0];
 						if (first !== undefined) openPreview({ kind: "file", path: first.path });
 					}}
 					onOpenSources={() => {
-						// 与产物面板同位互斥：面板未展开时先展开，再翻到来源面板。
-						setPanelOpen(true);
-						setSourcesOpen(true);
+						// 与产物/诊断面板同位互斥：面板未展开时先展开，再翻到来源面板。
+						revealPanel("sources");
 					}}
 					onOpenSettings={openSettings}
 					onError={showToast}

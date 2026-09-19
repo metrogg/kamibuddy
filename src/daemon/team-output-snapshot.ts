@@ -24,9 +24,14 @@
  * 脱离会话单独喂数组测试 —— 这条链最容易错的就是「同一份产出被反复注入」，
  * 而它出错的代价正是每个 run 白付一段输入 token。
  *
- * 幂等判据刻意**不引入第二真源**（否决「在 daemon 里维护已注入清单」）：进程重启
- * / resume / 上下文被压缩遮蔽之后，进程内 Map 都会与文件不一致。这里比的是文本 ——
- * 判据完全取自会话内容，可从文件重放。
+ * 判据的**真源仍是会话内容**：`[fp …]` 会被写进状态行、随工具结果落进会话文件，
+ * 于是重启 / resume 后可以从文件把「已送达」集合重建（`collectFingerprintsFromSession`，
+ * 只从**文本**抽、不做 IO）。但重建只在**账本首次启用**时做一次 —— 挂载点从
+ * ~6 次/run 扩到 ~40 次/run 之后，「每次注入前读 + 拼 + 扫一遍会话正文（≤512KB）」
+ * 的旧口径成本不再可接受，所以运行期内改用调用方持有的**只增账本**
+ * （`ReadonlySet<string>`，见 `composePendingTeamOutput` 的账本入参），本模块只做纯
+ * 查询。账本不是第二份真源：产出**内容**始终来自成员会话文件，账本只记「哪些指纹
+ * 已送达」。
  */
 
 import { createHash } from "node:crypto";
@@ -68,10 +73,12 @@ export function outputFingerprint(output: string): string {
 }
 
 /**
- * 领导会话正文里出现过的产出指纹（`[fp xxxxxxxx]`）。
+ * 从一段会话文本里抽出所有产出指纹（`[fp xxxxxxxx]`）。
  *
- * 为什么要从正文扫而不是另记账：工具结果本身就是持久记录，交付事实已经在会话里了；
- * 另起一份清单就是第二真源（resume / 新进程后与文件不一致）。
+ * 语义刻意是「从**文本**抽」，不是「从**文件**读」：本模块不许碰 IO（读哪个文件、
+ * 读多长的窗口，都由调用方决定），这个函数只回答「这段文本里出现过哪些指纹」。
+ * 调用方（daemon）在账本首次启用时用它把领导会话文件的尾部窗口**种子化**，于是
+ * 重启 / resume 后「哪些产出已送达」依旧正确；运行期内改由账本增量登记。
  *
  * 为什么**不能**只认行首/行尾：这些块会随工具结果被拼进一段很长的正文（前后还有
  * 别的消息内容），状态行不一定独立成行、指纹也可能不在行尾，所以整串扫描。
@@ -79,10 +86,10 @@ export function outputFingerprint(output: string): string {
  * 说明句里的常量示例 `[fp xxxxxxxx]` 不会被误收 —— `x` 不是十六进制字符，正则只认
  * 8 位 `[0-9a-f]`；这正是那句示例能安全写进正文的前提。
  */
-export function collectFingerprintsIn(historyText: string): ReadonlySet<string> {
+export function collectFingerprintsFromSession(text: string): Set<string> {
 	const found = new Set<string>();
 	// 全局扫描（`matchAll` 需 `g`）：一处命中不够，同一段正文里可能有多份产出。
-	for (const match of historyText.matchAll(/\[fp ([0-9a-f]{8})\]/g)) {
+	for (const match of text.matchAll(/\[fp ([0-9a-f]{8})\]/g)) {
 		const fingerprint = match[1];
 		if (fingerprint !== undefined) found.add(fingerprint);
 	}
@@ -247,42 +254,74 @@ export function composeTeamOutputSnapshot(input: {
  * 里领导一个 run 有 42 次模型调用 —— 快照只在 run 开头求值那一次，而那次求值时团队
  * 可能还没建起来，于是整条通路在长 run 里等于不存在。
  *
- * 新落点：把「尚未送达给领导的成员产出」附在 `team_*` 工具的**结果**里。工具结果是
- * append-only 的持久记录，付一次即进缓存；而领导本来就会调 `team_status` /
- * `team_send` / `team_read`。交付事实仍然藏在会话内容本身里（指纹 `[fp xxxxxxxx]`
- * 写进块正文），**不引入任何进程内账本**。
+ * 新落点：把「尚未送达给领导的成员产出」附在工具**结果**里（本 change 起从 `team_*`
+ * 扩到**任意**工具结果）。工具结果是 append-only 的持久记录，付一次即进缓存。交付
+ * 事实仍然藏在会话内容本身里（指纹 `[fp xxxxxxxx]` 写进状态行），调用方另持一本
+ * **只增账本**记「哪些指纹已送达」（见下）。
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  与 composeTeamOutputSnapshot 的差别只有判据
  * ═══════════════════════════════════════════════════════════════════════════
  *
  *   旧：这份产出的指纹是否出现在**上一条同通道快照**里（`previous` 状态行）；
- *   新：这份产出的指纹是否已出现在**领导会话正文**里（`delivered`，
- *       由 `collectFingerprintsIn` 从正文扫出）。
+ *   新：这份产出的指纹是否已登记进**调用方传入的已送达账本**（`delivered`）。
  *
  * 渲染形状、状态行口径、截断口径、不写取代声明 —— **全部与旧函数一致**，且直接复用
  * 同一批渲染/截断/指纹工具函数。为什么必须逐字节同形：两块共享 `[fp …]` 的解析口径
- * （`collectFingerprintsIn` 与 `parseRecordedFingerprints` 都在读它），复制第二份渲染
- * 逻辑等于让两个解析口径各自漂移。
+ * （`collectFingerprintsFromSession` 与 `parseRecordedFingerprints` 都在读它），复制
+ * 第二份渲染逻辑等于让两个解析口径各自漂移。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  为什么判据换成「账本入参」，而不是每次扫会话正文
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * 早先的判据是调用方先把**领导会话正文**拼起来、再整体扫出其中的 `[fp …]` 当「已送达」
+ * 集合。挂载点从「~6 次/run 的 `team_*` 工具结果」扩到「~40 次/run 的任意工具结果」
+ * 之后，这条路每次注入前都要读 / 拼 / 扫一份 ≤512KB 的会话文件 —— 一趟 run 白付几十
+ * 次整档扫描，不可接受。改为调用方持一本**只增账本**（`ReadonlySet<string>`），本函数
+ * 只做纯查询：O(成员数) 的 Set 命中判断，零 IO、零文本扫描。
+ *
+ * 账本不是第二份真源：成员产出的**内容**始终来自成员会话文件，账本只记「哪些指纹已
+ * 送达」；且账本首次启用时由调用方用 `collectFingerprintsFromSession` 从会话文件
+ * 种子化（重启 / resume 后依旧正确）。本模块因此保持无 IO。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  为什么要把本次写入的指纹回传给调用方
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * 状态行里的 `[fp …]` 对**所有**有产出的成员都会渲染（已送达的也保留），所以从返回
+ * 文本反扫指纹分不清「这轮究竟写了哪几块」。`fingerprints` 精准给出**本次真正写进块
+ * 里的那批指纹**，就是调用方要登记进账本的最小集合 —— 回传它，调用方不必（也不该）
+ * 再从文本里猜。
  *
  * ═══════════════════════════════════════════════════════════════════════════
  *  已知边界（刻意不修）
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * 同一批里并行调用两个 `team_*` 工具时，两次调用看到的是同一份「未送达」集合，于是
- * 可能各带一份相同增量。代价有界（多付一次块）、语义无害（领导看到重复信息）；而为此
- * 引入进程内账本会破坏「单一真源」，得不偿失 —— 所以接受它。
+ * 账本**首用时从领导会话文件种子化**，而种子只认 `type:"message"` 条目
+ * （`readMemberTranscript` 的读法）—— 只经 run 起点快照通道（落到 `custom_message`）
+ * 送达、从未随工具结果送达的指纹，在进程重启后不在账本里，于是会被**再送一次**。
+ * 代价有界（多付一块）、语义无害（重复信息），方向只会「多送」不会「漏送」
+ * （账本偏小 ⇒ 宁可重算）；为它维护一份跨进程账本会引入第二真源，代价更大。
+ *
+ * 早先这里写的是「并行调用两个工具可能各带一份相同增量」—— **那条边界是虚设的**：
+ * 读账本与登记是同一段同步代码（无 await），JS 单线程下不存在两次调用都读到旧集合的窗口
+ * （2026-09-19 复核时改掉，免得它掩盖上面那条真边界）。
+ *
+ * 指纹是**内容寻址**的：两名成员产出逐字节相同时指纹相同，账本登记一次即对两人都判
+ * 「已送达」。这是有意的 —— 内容相同说明领导已经看过这份内容，再送一份没有信息增益；
+ * 状态行照旧逐成员渲染，领导仍看得见两人各自的轮次与状态。
  *
  * 没有任何待送达产出 ⇒ 返回 `undefined`（调用方零成本直接用工具原文）。这条与旧函数的
  * 「候选 == previous 才 undefined」不同：这里没有 previous 可比，判据就是「有没有块要发」；
- * 只剩状态行、没有产出块时不发，免得每调一次 `team_*` 都白付一段纯状态行。
+ * 只剩状态行、没有产出块时不发，免得每调一次工具都白付一段纯状态行。
  */
 export function composePendingTeamOutput(input: {
 	readonly teamName: string;
 	readonly members: readonly TeamOutputMemberInput[];
 	readonly delivered: ReadonlySet<string>;
 	readonly maxChars?: number;
-}): string | undefined {
+}): { readonly text: string; readonly fingerprints: readonly string[] } | undefined {
 	const { teamName, members, delivered } = input;
 	const maxChars = input.maxChars ?? TEAM_OUTPUT_MAX_CHARS;
 
@@ -290,6 +329,9 @@ export function composePendingTeamOutput(input: {
 
 	const statusLines: string[] = [];
 	const blocks: string[] = [];
+	// 本次**真正写进块**的指纹（已送达的成员不进这里）；去重是因为两名内容相同的成员
+	// 会产出同一个指纹，而账本是 Set 语义、重复项没有意义。
+	const written = new Set<string>();
 	for (const member of members) {
 		const body = normalizeMemberOutput(member.output ?? "");
 		// 空白正文视同没有产出（与旧函数同口径）：进块只会制造「有块但没内容」的噪声。
@@ -299,19 +341,20 @@ export function composePendingTeamOutput(input: {
 		}
 
 		const fingerprint = outputFingerprint(body);
-		// 状态行照旧始终带当前产出的指纹：它既是「已送达」标记的载体，也是领导判断谁在跑
-		// 的依据；下一轮从正文扫指纹时，靠的就是这里留下的那一份。
+		// 状态行照旧始终带当前产出的指纹：它既是「已送达」标记的载体，也是账本种子化的
+		// 来源（`collectFingerprintsFromSession` 从这段文本里把它扫回去）。
 		statusLines.push(renderStatusLine(member, fingerprint));
 
-		// 指纹已在领导正文里出现过 ⇒ 交付过 ⇒ 跳过产出块（状态行照旧保留）。
+		// 指纹已在账本里 ⇒ 领导已见过这份产出 ⇒ 跳过块（状态行照旧保留）。
 		if (delivered.has(fingerprint)) continue;
 		blocks.push(renderMemberBlock(member.name, body, maxChars));
+		written.add(fingerprint);
 	}
 
 	// 没有任何待送达产出 ⇒ undefined（零成本）。这是本函数与旧函数唯一的语义差异点。
 	if (blocks.length === 0) return undefined;
 
-	return assembleSnapshot(teamName, statusLines, blocks);
+	return { text: assembleSnapshot(teamName, statusLines, blocks), fingerprints: [...written] };
 }
 
 /**
