@@ -41,6 +41,7 @@ import type {
 	ToolOutcome,
 	UserMessage,
 } from "../shared/session-events.ts";
+import { toolOutcomeFrom } from "../shared/session-events.ts";
 import type { PresentedFile } from "../shared/artifacts.ts";
 import type { TokenUsage } from "../shared/observability.ts";
 import type { ImagePart } from "../shared/image.ts";
@@ -276,9 +277,10 @@ export function buildConversationEntries(
 				if (block.type !== "toolCall") continue;
 				const result = results.get(block.id);
 				// 孤儿 toolCall：模型吐了调用但结果没落盘（会话中断），不是 error ——
-				// 执行从未发生，语义是 aborted。
+				// 执行从未发生，语义是 aborted。被检查器/沙箱拦下的走 blocked
+				// （与 live 路径同一个判定函数，两端口径不许漂移）。
 				const outcome: ToolOutcome =
-					result === undefined ? "aborted" : result.isError ? "error" : "ok";
+					result === undefined ? "aborted" : toolOutcomeFrom(result.isError, result.details);
 				// todo_write：清单从落盘 args 重建（与 live 路径同一个解析函数，
 				// core/todo-parse.ts），恢复出的清单卡与实时产出同形态；
 				// 脏 args → 键缺席，卡片照常落成。

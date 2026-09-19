@@ -235,11 +235,24 @@ const matchRecursiveForceDelete: CategoryMatcher = (command, tokens) => {
 	};
 };
 
-/** 系统破坏类：每条子规则带一个点名标签，原因里要告诉模型撞的是哪条。 */
+/**
+ * 系统破坏类：每条子规则带一个点名标签，原因里要告诉模型撞的是哪条。
+ *
+ * **匹配位置的判据：核心词是常见英文单词时，必须排除参数位**（`(?<![\w-])`）。
+ * 教训来自一次真实会话：技能 `ppt-master` 用 `--shutdown` 关掉它自己起的确认页
+ * 服务（`scripts/confirm_ui/server.py --shutdown`），被 `\bshutdown\b` 当成系统关机
+ * 拦掉 —— `\b` 在 `-` 与 `s` 之间**也成立**，而单/双横线前缀正是参数名的标志。
+ * 生造词与复合名（`diskpart`、`bcdedit`、`Format-Volume`、`Restart-Computer`）不在此列：
+ * 它们被别家工具当参数名的概率极低，不加无谓的否定（§4.29）。
+ *
+ * 已知边界：这只排除了**参数位**，没排除**路径位** ——
+ * `Get-Content .\diskpart-notes.txt` 仍会命中。要根治得判定「命令位」，
+ * 那是另一层时序/语法解析；本文件头已声明这是 best-effort 文本分析。
+ */
 const SYSTEM_DAMAGE_RULES: ReadonlyArray<{ readonly label: string; readonly pattern: RegExp }> = [
-	{ label: "shutdown", pattern: /\bshutdown(\.exe)?\b/i },
+	{ label: "shutdown", pattern: /(?<![\w-])shutdown(\.exe)?\b/i },
 	{ label: "Restart-Computer/Stop-Computer", pattern: /\b(Restart|Stop)-Computer\b/i },
-	{ label: "format 盘符", pattern: /\bformat(\.exe)?\s+[A-Za-z]:/i },
+	{ label: "format 盘符", pattern: /(?<![\w-])format(\.exe)?\s+[A-Za-z]:/i },
 	{ label: "Format-Volume", pattern: /\bFormat-Volume\b/i },
 	{ label: "diskpart", pattern: /\bdiskpart(\.exe)?\b/i },
 	{ label: "reg delete", pattern: /\breg(\.exe)?\s+delete\b/i },

@@ -1077,6 +1077,20 @@ describe("show_widget 流式通道", () => {
 	});
 });
 
+describe("restoredToolLabel 的 blocked 词汇", () => {
+	/*
+	 * 拦下**不是失败**：命令压根没执行，改法是「交给用户自己跑」（§4.30）。
+	 * 说成「失败」会让用户以为它跑砸了，从而去查一个不存在的执行错误。
+	 * 词汇与审计面板里同一个概念同源（shared/audit.ts 的 AUDIT_OUTCOME_LABELS）。
+	 */
+	it("shell 工具被拦 → 已拦截（不是「失败」，也不是完成态词汇）", () => {
+		expect(restoredToolLabel("powershell", "blocked")).toBe("已拦截");
+		expect(restoredToolLabel("bash", "blocked")).toBe("已拦截");
+		// 对照：真抛错仍是「失败」。
+		expect(restoredToolLabel("powershell", "error")).toBe("失败");
+	});
+});
+
 describe("restoredToolLabel 的 show_widget 词汇", () => {
 	it("ok → 已生成；孤儿调用（aborted）→ 生成（未完成），与 write 同口径", () => {
 		expect(restoredToolLabel("show_widget", "ok")).toBe("已生成");

@@ -41,6 +41,29 @@ export type ToolCallId = string;
 export type ToolOutcome = "ok" | "error" | "blocked" | "aborted";
 
 /**
+ * 一次工具调用的终态判定 —— **live 与历史重建共用这一处**，不各自推一遍。
+ *
+ * `blocked` 的来源是工具结果 details 里的 `blocked: true`：危险命令检查器与沙箱
+ * 拒绝都是这个形状（`extensions/powershell-tool.ts`、`daemon/sandbox-runner.ts`）。
+ *
+ * 为什么必须单判：这些结果**刻意不是 isError**（原因要回给模型让它改写命令，
+ * 标成 isError 会诱导它原样重试，见 powershell-tool 文件头）。于是只看 isError
+ * 时，一条被检查器拦下的命令会被显示成「已执行成功」—— 卡片头写着「运行 关闭确认
+ * 页面服务」，用户完全看不出它根本没跑。2026-09-19 那条 `--shutdown` 被拦、
+ * 用户事后才发现，根因就在这里（§4.30）。
+ */
+export function toolOutcomeFrom(
+	isError: boolean,
+	details: unknown,
+): Exclude<ToolOutcome, "aborted"> {
+	if (isError) return "error";
+	if (typeof details === "object" && details !== null && (details as { blocked?: unknown }).blocked === true) {
+		return "blocked";
+	}
+	return "ok";
+}
+
+/**
  * 推理强度七档。与 pi 的 ThinkingLevel **平行定义**，不 import pi 类型 ——
  * 依赖方向规则（AGENTS.md §1.2）：pi 类型只允许出现在 core/ 与 extensions/，
  * 而本文件是 renderer 也 import 的契约层。档位集合与 pi 0.85.1 的

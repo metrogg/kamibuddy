@@ -16,6 +16,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ConversationSearchHit } from "../shared/session-events.ts";
+import { splitSkillBlocks } from "../shared/skill-block.ts";
 
 /** 扫描上限：只查最近这么多个会话文件（按 mtime 倒序截断），防止大会话库卡检索。 */
 const SCAN_LIMIT = 200;
@@ -31,10 +32,24 @@ const SNIPPET_RADIUS = 200;
  */
 const SESSION_TITLE_MAX = 40;
 
-/** 会话标题：命名优先，否则首条消息压单行截断。空会话给占位，不留空白行。 */
+/**
+ * 会话标题：命名优先，否则首条消息压单行截断。空会话给占位，不留空白行。
+ *
+ * 首条消息必须先过 `splitSkillBlocks`：`/skill:<name>` 被 pi 展开成
+ * 「`<skill name location>` + 整篇 SKILL.md 正文」当作用户消息落盘
+ * （形状见 shared/skill-block.ts），用户自己打的字在块**后面**。
+ * 不剥出去，标题就是 40 字的 XML 头 + SKILL.md 开头（用户实测侧栏出现
+ * `<skill name="ppt-master …`）；而且气泡里显示的是技能胶囊版，
+ * 两处展示同一份内容，口径必须与 session-host / session-rebuild 同源。
+ *
+ * 只选了技能、自己一个字没打时用技能名兜底：这条任务做的就是那件技能的事，
+ * 比「（空会话）」有信息量。
+ */
 export function deriveSessionTitle(name: string | undefined, firstMessage: string): string {
 	if (name !== undefined && name !== "") return name;
-	const oneLine = firstMessage.replace(/\s+/g, " ").trim();
+	const { skillNames, text } = splitSkillBlocks(firstMessage);
+	const source = text !== "" ? text : skillNames[0] ?? "";
+	const oneLine = source.replace(/\s+/g, " ").trim();
 	if (oneLine === "") return "（空会话）";
 	return oneLine.length > SESSION_TITLE_MAX
 		? `${oneLine.slice(0, SESSION_TITLE_MAX)}…`

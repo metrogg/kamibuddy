@@ -1437,9 +1437,19 @@ export function App(): React.JSX.Element {
 		[taskList, resumeTask],
 	);
 
-	const firstUserText = conversation.entries.find(
-		(e) => e.role === "user",
-	)?.text;
+	/*
+	 * 对话页标题取首条用户消息。技能消息在条目里只剩技能名 + 用户补的正文
+	 * （SKILL.md 正文已由 session-host / session-rebuild 剥掉），一个字没打时
+	 * text 是空串 —— 退回技能名，与侧栏任务列表（daemon 的 deriveSessionTitle）
+	 * 同一个口径；不退回就会得到一个空标题。
+	 */
+	const firstUser = conversation.entries.find((e) => e.role === "user");
+	const firstUserText =
+		firstUser === undefined
+			? undefined
+			: firstUser.text !== ""
+				? firstUser.text
+				: firstUser.skillNames?.[0];
 	const title =
 		firstUserText === undefined ? undefined : taskTitle(firstUserText);
 

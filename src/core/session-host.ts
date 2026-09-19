@@ -53,7 +53,8 @@ import type {
 	ToolCard,
 	ToolOutcome,
 } from "../shared/session-events.ts";
-import { generatingLabel } from "../shared/session-events.ts";
+import { generatingLabel, toolOutcomeFrom } from "../shared/session-events.ts";
+import { AUDIT_OUTCOME_LABELS } from "../shared/audit.ts";
 import { childAgentsOf } from "../shared/child-agents.ts";
 import type { ImagePart } from "../shared/image.ts";
 import {
@@ -252,8 +253,15 @@ function writeDoneLabel(changeType: "created" | "modified", outcome: ToolOutcome
 	return changeType === "created" ? "生成失败" : "修改失败";
 }
 
-/** 其余工具完成标签。 */
+/**
+ * 其余工具完成标签。
+ *
+ * `blocked` 单独一条：拦下**不是失败** —— 命令压根没执行，改法是「交给用户自己跑」，
+ * 说成「失败」会让用户以为它跑砸了。词汇复用审计面板里同一个概念的字（shared/audit.ts
+ * 的 AUDIT_OUTCOME_LABELS.blocked），不另造一个词。
+ */
 function doneLabel(toolName: string, outcome: ToolOutcome): string {
+	if (outcome === "blocked") return AUDIT_OUTCOME_LABELS.blocked;
 	if (outcome !== "ok") return "失败";
 	return TOOL_DONE_LABELS[toolName] ?? toolName;
 }
@@ -1850,7 +1858,7 @@ export class SessionHost {
 				this.toolCards.delete(event.toolCallId);
 				const stash = this.pendingChanges.get(event.toolCallId);
 				this.pendingChanges.delete(event.toolCallId);
-				const outcome: ToolOutcome = event.isError ? "error" : "ok";
+				const outcome: ToolOutcome = toolOutcomeFrom(event.isError, toolResultDetails(event.result));
 				const detail = toolResultText(event.result);
 
 				// 台账 tool_call 结算。漏 start（pi 时序异常，理论不该发生）不编造

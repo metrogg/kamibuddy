@@ -695,6 +695,10 @@ describe("formatSkillsSection", () => {
 		expect(section).toContain("${CLAUDE_SKILL_DIR}");
 		expect(section).toContain("<location> 所在的目录");
 		expect(section).toContain("不要当成环境变量去查");
+		// 技能目录不可写（§4.31 的现场是技能脚本往自己目录里落产物/缓存被沙箱拒）：
+		// 约定里必须给出「用脚本自己的输出参数指到会话工作目录」这条出路。
+		expect(section).toContain("不可写");
+		expect(section).toContain("--dir");
 		// 约定句在 pi 的清单之后（追加，不是重写）。
 		expect(section.indexOf("</available_skills>")).toBeLessThan(section.indexOf("优先调用 use_skill"));
 	});

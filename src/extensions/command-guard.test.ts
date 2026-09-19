@@ -156,6 +156,32 @@ describe("系统破坏（system-damage）", () => {
 		expectBlocked(command, "system-damage");
 	});
 
+	it("参数位不算命令位（`--shutdown` / `-shutdown` / `--format C:`）", () => {
+		/*
+		 * 实证误报（见 §4.29）：技能 `ppt-master` 用 `--shutdown` 关掉它自己起的
+		 * 确认页服务，命令里含 shutdown 一词就被当成系统关机拦掉。`\b` 在 `-` 与 `s`
+		 * 之间同样成立，而单/双横线前缀正是参数名的标志 —— 规则必须排除这个位置。
+		 */
+		expectAllowed(
+			'python "C:\\Users\\foo\\.kamibuddy\\skills\\ppt-master\\scripts\\confirm_ui\\server.py" "C:\\proj" --shutdown',
+		);
+		expectAllowed("my-tool -shutdown");
+		expectAllowed("my-tool --format C:");
+	});
+
+	it("命令位的 shutdown / format 照旧拦（只排除参数位，不放松判定）", () => {
+		for (const command of [
+			"shutdown /s /t 0",
+			"shutdown.exe /r",
+			".\\shutdown.exe /s",
+			"C:\\Windows\\System32\\shutdown.exe /s",
+			"format C: /q",
+			".\\format.exe D:",
+		]) {
+			expectBlocked(command, "system-damage");
+		}
+	});
+
 	it("takeown + icacls 夺权组合", () => {
 		expectBlocked(
 			'takeown /f C:\\Data && icacls C:\\Data /grant Everyone:F',

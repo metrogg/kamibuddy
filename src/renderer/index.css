@@ -3450,6 +3450,16 @@ textarea:focus-visible {
 	opacity: 1;
 }
 
+/* 被拦命令的接手入口行（§4.30）：卡片头说「已拦截」，展开区这里给一键复制
+   （检查器拒的是「代你执行」，不给一个可点的接手入口，模型就会被逼去绕路）。
+   靠右、与详情盒的右内边距对齐；只用既有间距档，不新造档位。 */
+.tool-blocked-row {
+	display: flex;
+	justify-content: flex-end;
+	margin: var(--space-1) 0;
+	padding: 0 var(--space-5);
+}
+
 /* 展开详情从通栏 pre 改为独立小圆角盒：详情是附属内容，圆角盒把它
    和消息正文在视觉上归为一档（对标 WorkBuddy）。
    基类即收起态、.open 是展开态 —— 元素常驻 DOM 由类切换，过渡才有起跳点

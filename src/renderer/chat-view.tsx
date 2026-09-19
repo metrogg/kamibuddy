@@ -748,6 +748,48 @@ function outcomeClass(outcome: ToolCard["outcome"]): string {
 }
 
 /**
+ * 「复制命令」——被拦下的命令的**接手入口**（§4.30）。
+ *
+ * 检查器拒的是「**代你**执行」，不是「你不能执行」：它的 reason 里本来就写着
+ * 「把命令交给用户在管理员终端自己执行」。这里把那句话变成一键动作，免得用户
+ * 只能看着一条被拦的卡片、而模型转头去绕路（那次它改去 `Stop-Process` 了）。
+ *
+ * 复制的是**命令原文**：模型给了 description 时卡头显示的是描述、命令本体在
+ * summaryTitle 里，所以要优先取它。
+ *
+ * 必须是独立组件：useCopyWithTick 是 hook，写进箭头函数会违反 hooks 规则
+ * （对齐 settings/runtimes-section.tsx 的 ReportCopyButton）。
+ */
+function CopyCommandButton({ command }: { readonly command: string }): React.JSX.Element {
+	const { copied, copy } = useCopyWithTick();
+	return (
+		<button
+			type="button"
+			className="mini-btn"
+			aria-label={copied ? "已复制命令" : "复制命令"}
+			title="复制这条命令，在管理员终端自行运行"
+			onClick={() => void copy(command)}
+		>
+			{copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+			{copied ? "已复制" : "复制命令"}
+		</button>
+	);
+}
+
+/**
+ * 被拦命令的原文（没有则 undefined）。
+ *
+ * 只认 shell 类工具 —— 拦下只发生在命令通道（检查器与沙箱），别的工具卡不该
+ * 长出这个按钮。摘要为空（args 解析不出）时也不给：复制一个空串比没有按钮更糟。
+ */
+function blockedCommandOf(card: ToolCard): string | undefined {
+	if (card.outcome !== "blocked") return undefined;
+	if (card.toolName !== "powershell" && card.toolName !== "bash") return undefined;
+	const command = card.summaryTitle ?? card.summary;
+	return command === "" ? undefined : command;
+}
+
+/**
  * 单张工具卡片，折叠态只显示一行摘要。
  *
  * 默认折叠：一次任务可能调十几次工具，全展开会把助手的结论冲掉，
@@ -777,6 +819,7 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 	// 换成失败状态图标，不再显示工具类型图标（状态图标与类型图标分属两套，WorkBuddy 同构）。
 	const failed = card.outcome !== undefined && card.outcome !== "ok";
 	const ToolIcon = failed ? FAILED_ICON : toolIconOf(card.toolName);
+	const blockedCommand = blockedCommandOf(card);
 
 	return (
 		<div className="entry tool">
@@ -847,6 +890,13 @@ function ToolEntry({ card, showChangeDetails }: { readonly card: ToolCard; reado
 							</button>
 						);
 					})}
+				</div>
+			)}
+			{/* 被拦下的命令：接手入口放在详情之上，紧跟卡头那句「已拦截」。
+			    只在展开态出现 —— 折叠态仍然只有一行摘要（本组件的既有纪律）。 */}
+			{open && blockedCommand !== undefined && (
+				<div className="tool-blocked-row">
+					<CopyCommandButton command={blockedCommand} />
 				</div>
 			)}
 			{(hasDetail || hasCommandLine) && (
@@ -1244,6 +1294,14 @@ function formatDuration(ms: number): string {
 }
 
 /**
+ * 回合头里助手名的缺省值：用户没在「设置 → 个性化 → 称呼与身份」里设
+ * 「AI 的名字」时退回产品名（与 WorkBuddy 的 assistantDisplay.name 缺省取
+ * 品牌名同口径）。设了名字就显示那个名字 —— 界面上的助手标签与系统提示词里
+ * 「你的名字是 X」（core/prompt-composer.ts）说的是同一个身份，别各说各的。
+ */
+const DEFAULT_ASSISTANT_NAME = "嘉立创Work";
+
+/**
  * 回合头部：agent 名 + 计时（WorkBuddy 同位置：名字下挂「已处理 41s」/「已完成 41s」）。
  *
  * 进行中每 500ms 走表（与 WorkBuddy 的刷新精度一致）；计时起点是用户消息
@@ -1265,12 +1323,15 @@ function formatDuration(ms: number): string {
 function TurnHeader({
 	active,
 	turn,
+	assistantName,
 	collapsible,
 	expanded,
 	onToggle,
 }: {
 	readonly active: boolean;
 	readonly turn: TurnTiming | undefined;
+	/** 已解析的助手名（AI 的名字，未设置时是产品名）。 */
+	readonly assistantName: string;
 	/** 本轮是否存在「已完成 Xs」轮折叠区（fold plan 的 hasTurnFold）。 */
 	readonly collapsible: boolean;
 	readonly expanded: boolean;
@@ -1303,7 +1364,7 @@ function TurnHeader({
 				<img className="turn-avatar-img" src={BUDDY_LOGO} alt="" />
 			</span>
 			<span className="turn-meta">
-				<span className="turn-agent">嘉立创Work</span>
+				<span className="turn-agent">{assistantName}</span>
 				<span className="turn-duration">
 					{duration}
 					{collapsible && (
@@ -1497,14 +1558,24 @@ export function ChatView({
 		onPrefillConsumed();
 	}, [prefill, onPrefillConsumed]);
 	/*
-	 * 个性化两个 UI 开关（加载欢迎语 / 展示变更过程详情）：组件内 effect 直读
-	 * 一次（与 vision-hint / model-menu 同路径 —— 这两个键不在 settingsSnapshot、
+	 * 个性化开关（加载欢迎语 / 展示变更过程详情）与 AI 的名字：组件内 effect 直读
+	 * 一次（与 vision-hint / model-menu 同路径 —— 这几个键不在 settingsSnapshot、
 	 * App 层无下发）。读取失败静默按契约缺省 true：问候与详情都是增强，读不到
 	 * 偏好不该把等待行/工具卡搞坏。disposed 守卫防 StrictMode 双跑回写。
+	 *
+	 * AI 的名字（设置 → 个性化 → 称呼与身份）也走这一次读取：回合头的助手名
+	 * 跟着用户设的名字走（空 = 未设置 → 退回产品名，与 WorkBuddy 的
+	 * assistantDisplay.name 缺省 getBrandName() 同口径）。设置页是独立视图，
+	 * 回来时本组件重新挂载、这次读取重跑，所以改完名字不必重启。
 	 */
-	const [personalization, setPersonalization] = useState<{ welcomeGreeting: boolean; showChangeDetails: boolean }>({
+	const [personalization, setPersonalization] = useState<{
+		welcomeGreeting: boolean;
+		showChangeDetails: boolean;
+		assistantName: string;
+	}>({
 		welcomeGreeting: true,
 		showChangeDetails: true,
+		assistantName: "",
 	});
 	useEffect(() => {
 		let disposed = false;
@@ -1515,6 +1586,8 @@ export function ChatView({
 					setPersonalization({
 						welcomeGreeting: info.welcomeGreeting,
 						showChangeDetails: info.showChangeDetails,
+						// 存的时候只校验 trim 后非空、存的是原值，展示前统一 trim 一次。
+						assistantName: info.assistantName.trim(),
 					});
 				}
 			})
@@ -1525,6 +1598,9 @@ export function ChatView({
 			disposed = true;
 		};
 	}, []);
+	/** 回合头显示的助手名：AI 的名字未设置（空串）时退回产品名。 */
+	const agentName =
+		personalization.assistantName === "" ? DEFAULT_ASSISTANT_NAME : personalization.assistantName;
 	/*
 	 * 内容列宽随容器动态计算（WorkBuddy use-dynamic-chat-content-width 同款）：
 	 * 固定 832 在宽屏两侧留白过多。ResizeObserver 挂一次（空依赖），
@@ -2469,6 +2545,7 @@ export function ChatView({
 								{turnId !== undefined && (
 									<TurnHeader
 										active={streaming && turnId === lastUserId}
+										assistantName={agentName}
 										// 活动轮用实时计时（走表）；历史/已结束轮从回合计时映射
 										// 按 turnId 取真实计时（Task 4.3，查不到即回落「已完成」）。
 										turn={

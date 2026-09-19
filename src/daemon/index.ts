@@ -3374,10 +3374,18 @@ async function listSessions(): Promise<SessionSummary[]> {
 		if (file === undefined || onDiskPaths.has(resolve(file))) continue;
 		if (isInternalSessionFile(file, builtinTaskIds)) continue;
 		const firstUser = bucket.conversation.entries.find((entry) => entry.role === "user");
+		/*
+		 * 桶里的 user 条目 text 已剥过技能块（session-host 的 message_start），
+		 * 技能消息只剩下用户自己补的正文；一个字没打时用技能名兜底 ——
+		 * 与磁盘那条（deriveSessionTitle 里剥原始首条消息）同一口径，
+		 * 免得标题在落盘那一刻从技能名跳成「（空会话）」。
+		 */
+		const firstText = firstUser?.text ?? "";
+		const titleText = firstText !== "" ? firstText : firstUser?.skillNames?.[0] ?? "";
 		pending.push({
 			id: bucket.sessionId,
 			path: file,
-			title: deriveSessionTitle(undefined, firstUser?.text ?? ""),
+			title: deriveSessionTitle(undefined, titleText),
 			cwd: bucket.cwd,
 			isTempTask: isTempCwd(bucket.cwd),
 			// 没落盘就没有文件时间戳；用桶的最近使用时刻，排序上落在最新（它就是最新的）。

@@ -1045,6 +1045,20 @@ describe("拒写识别", () => {
 		expect(outcome.note).toContain("沙箱写约束");
 	});
 
+	it("拒写说明必须点出「区内、但目录权限不含沙箱授权」这种成因（§4.31）", async () => {
+		/*
+		 * 现场：ppt-master 的 finalize_svg.py 用 tempfile.mkdtemp() 在**项目内**建目录
+		 * （mode 派生、不继承父目录的 DACL），沙箱的 ACE 不在里面 → Errno 13。
+		 * 旧文案只认「目标在工作目录之外」，结尾还写着「若目标本应在工作目录内，
+		 * 请检查路径」—— 模型据此怀疑自己路径写错，绕了半圈才推断出真相。
+		 * 这条钉住文案不再漏掉这种成因，且提权的适用条件覆盖它。
+		 */
+		const r = runnerWith(ENGLISH);
+		const note = ran(await r.run("python finalize_svg.py", 120)).note;
+		expect(note).toContain("mkdtemp");
+		expect(note).toContain("区内目录不归沙箱授权");
+	});
+
 	it("能提权时附上出路，不能提权时**不提**（不指向走不通的路）", async () => {
 		const withChannel = runnerWith(ENGLISH);
 		expect(ran(await withChannel.run("x", 120)).note).toContain("sandbox_permissions");

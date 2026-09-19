@@ -134,6 +134,17 @@ describe("标题口径", () => {
 		expect(deriveSessionTitle(undefined, "  ")).toBe("（空会话）");
 		expect(deriveSessionTitle("命名", "随便")).toBe("命名");
 	});
+
+	it("deriveSessionTitle：技能消息剥掉技能块，只选技能没打字时用技能名兜底", () => {
+		// 形状照 pi 的 _expandSkillCommand（shared/skill-block.ts 头注）：正文是整篇 SKILL.md。
+		const block =
+			'<skill name="ppt-master" location="C:\\skills\\ppt-master\\SKILL.md">\n' +
+			"References are relative to C:\\skills\\ppt-master.\n\n# PPT Master Skill\n\n很长的技能正文\n</skill>";
+		expect(deriveSessionTitle(undefined, `${block}\n\n做一个介绍守望先锋的ppt要有配图`)).toBe(
+			"做一个介绍守望先锋的ppt要有配图",
+		);
+		expect(deriveSessionTitle(undefined, block)).toBe("ppt-master");
+	});
 });
 
 describe("扫描顺序与上限", () => {
