@@ -40,11 +40,11 @@ import {
 	IconRefresh,
 	IconResearch,
 	IconSkill,
-	IconAssistant,
 	IconWeb,
 	IconSend,
 	IconTrash,
 } from "./icons.tsx";
+import { BUDDY_LOGO } from "./buddy-logo.ts";
 import { branchTargetsOf, type BranchTarget } from "./branch-target.ts";
 import { collectSources, sourceUrlMeta } from "./collect-sources.ts";
 import { Composer } from "./composer.tsx";
@@ -1297,8 +1297,10 @@ function TurnHeader({
 	// button 只允许 phrasing content（display 已由 CSS 接管，语义不变）。
 	const body = (
 		<>
+			{/* agent 头像：应用 logo（与侧栏底部徽标同一张图，见 buddy-logo.ts）。
+			    原先是内置的 IconAssistant 线框图标，2026-09-19 换图。 */}
 			<span className="turn-avatar" aria-hidden="true">
-				<IconAssistant size={16} />
+				<img className="turn-avatar-img" src={BUDDY_LOGO} alt="" />
 			</span>
 			<span className="turn-meta">
 				<span className="turn-agent">嘉立创Work</span>

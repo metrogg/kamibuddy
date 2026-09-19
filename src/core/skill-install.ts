@@ -17,7 +17,7 @@
  * 用户原来的技能没了」。
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { SkillInfo } from "../shared/settings.ts";
 import { getConfigDir } from "./config-paths.ts";
@@ -189,6 +189,32 @@ function stagingRoot(): string {
 }
 
 /**
+ * 递归复制目录树 —— **刻意不用 `fs.cpSync`**。
+ *
+ * 原因是实测到的 Node/Windows 崩溃：`cpSync` 只要**源路径含非 ASCII 字符**就把进程
+ * 原生带走（Windows 退出码 0xC0000409，没有 JS 异常，try/catch 也拦不住）：
+ *   cpSync("<tmp>\\中文目录\\src", asciiDest, { recursive: true }) → 崩（目录里只有 2 个文件也崩）
+ *   cpSync(asciiSrc, "<tmp>\\中文目录\\dst", { recursive: true }) → 正常（写入侧无关）
+ *   copyFileSync / readdirSync / statSync 读写中文路径 → 全部正常
+ * 而技能目录的路径来自用户（「桌面\速通ing\…」这类中文文件夹极常见），这条路上绝不能
+ * 出现「点一下导入、进程没了」——那比报个错还难排查。手写版只用上面已验证正常的那几个 API。
+ *
+ * 与 `cpSync` 的行为差异只有一处：**符号链接按目标内容复制**（cpSync 默认连链接一起复制）。
+ * 技能包里的链接极罕见，这里选更宽容的一侧；指向目录的链接会抛错，而不是静默少东西。
+ *
+ * 决策记录与被否掉的三条替代路线见 docs/ARCHITECTURE.md §4.27。
+ */
+function copyTree(sourceDir: string, destDir: string): void {
+	mkdirSync(destDir, { recursive: true });
+	for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+		const source = join(sourceDir, entry.name);
+		const dest = join(destDir, entry.name);
+		if (entry.isDirectory()) copyTree(source, dest);
+		else copyFileSync(source, dest);
+	}
+}
+
+/**
  * 导入技能，返回安装后的信息。
  *
  * 目标目录名 = frontmatter 的 name（pi 按它注册命令，目录名只是容器）。
@@ -217,12 +243,12 @@ export function importSkill(sourcePath: string, options: ImportSkillOptions = {}
 		// 少了这一句 ENOENT 会在最后一步换名时才炸出来。
 		mkdirSync(userSkillsDir(), { recursive: true });
 		mkdirSync(stagingDir, { recursive: true });
-		if (parsed.sourceDir !== null) cpSync(parsed.sourceDir, stagingDir, { recursive: true });
-		else cpSync(parsed.skillMdPath, join(stagingDir, "SKILL.md"));
+		if (parsed.sourceDir !== null) copyTree(parsed.sourceDir, stagingDir);
+		else copyFileSync(parsed.skillMdPath, join(stagingDir, "SKILL.md"));
 
 		/*
 		 * 写 sidecar 是**无条件覆盖**：来源里若本来就带 `_installed.json`（例如从一个已装技能目录
-		 * 再导入一次），cpSync 会把它一起复制过来，而那份记录的是**上一处**的安装信息 ——
+		 * 再导入一次），copyTree 会把它一起复制过来，而那份记录的是**上一处**的安装信息 ——
 		 * 本目录的安装时间必须以本次为准。
 		 */
 		const metaFile: InstalledMetaFile = {

@@ -11,14 +11,26 @@ appId: com.jlc.kamibuddy
 productName: 嘉立创Work
 directories:
   output: release           # .gitignore 已含 release/
-  buildResources: build     # 目录暂不存在：无 build/icon.ico 时用默认图标并告警（已定：图标后补）
+  buildResources: build     # 存放 build/icon.png（源图 1024×1024，electron-builder 自行转 .ico）
 files:
   # 白名单语义：只收构建产物与清单。生产依赖 node_modules 由 builder 自动收包
   #（externalizeDepsPlugin 全量 external，pi/koffi 等必须原样走 node_modules）；
   # 仓库根的 开源项目/ docs/ .trae/ scripts/ 等一律不进 asar。
   - out/**
   - package.json
+  # 体积裁剪 ①（2026-09-19 实测）：pi SDK 在自己的嵌套 node_modules 里内嵌了
+  # @esbuild 的**全平台**二进制（win32 / darwin / linux 各 arch / android /
+  # freebsd / netbsd / openbsd / sunos / aix / openharmony，外加 3 个 13MB 的
+  # .wasm），实测约 370MB，几乎构成 app.asar 的全部体积。
+  # 我们只出 win32-x64（见下面的 win.target.arch），esbuild 在 Windows x64 上
+  # 只解析 @esbuild/win32-x64，其余平台是纯冗余；win32-ia32 / win32-arm64 同理。
+  - "!**/@esbuild/{aix-*,android-*,darwin-*,freebsd-*,linux-*,netbsd-*,openbsd-*,openharmony-*,sunos-*,win32-ia32,win32-arm64}/**"
 asar: true
+# 体积裁剪 ②（2026-09-19 实测）：Electron 自带约 50 个语言包，占 48MB；
+# 部门内部使用只需中英双语。Electron 找不到对应 .pak 时回退 en-US。
+electronLanguages:
+  - zh-CN
+  - en-US
 # .node 原生模块（koffi / clipboard / console-mode / canvas）靠 smartUnpack 自动解包；
 # 若打包后 koffi 动态 import 报「不是有效的 Win32 应用」即解包没生效，显式加：
 # asarUnpack:
@@ -42,14 +54,17 @@ extraResources:
       - "!runtimes/payload/**"
       - "!runtimes/.cache/**"
 win:
-  # exe 文件名必须 ASCII：rcedit（写版本/图标资源的原生工具）对中文路径不兼容
-  # （实测 UNKNOWN open 错误）；安装目录与快捷方式仍按 productName 显示中文。
+  # exe 文件名必须 ASCII：安装目录与快捷方式仍按 productName 显示中文，
+  # 但 exe 本身与 `artifactName` 保持 ASCII（下载/网盘/杀软兼容）。
   executableName: JLCWork
-  # 本机（企业 AV 实时扫描）拦「新建 exe 的资源改写」：rcedit 对刚落盘的
-  # JLCWork.exe 写资源必报 UNKNOWN，重试无效（2026-09-17 实测）。关掉后 exe
-  # 保留 Electron 默认版本信息与图标——试用阶段本就用默认图标，无损失；
-  # 换正式图标/签名时在无 AV 干扰的打包机上再打开此项。
-  signAndEditExecutable: false
+  # icon 用 PNG 源图（1024×1024）：electron-builder 的 app-builder 会自行转成多尺寸 .ico。
+  # 不直接放 .ico 是为了让图标只有一个真源（改图标只改这一张图）。
+  icon: build/icon.png
+  # 2026-09-19 重开：electron-builder 26 的 exe 资源改写已换掉 rcedit 这个原生工具
+  # （app-builder-lib@26.15.3 的依赖里是纯 JS 的 resedit，app-builder-bin 已不在依赖表里），
+  # 所以 2026-09-17 那条「本机企业 AV 拦 rcedit 写资源、必报 UNKNOWN、重试无效」的
+  # 结论前提已消失。本次实测结论见 docs/试用前自查报告.md §三。
+  signAndEditExecutable: true
   target:
     - target: nsis
       arch:

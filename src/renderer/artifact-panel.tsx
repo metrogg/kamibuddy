@@ -848,6 +848,16 @@ export function clampPanelWidth(px: number): number {
 }
 
 /**
+ * 退出全屏时「视觉相位」多留的时长（ms）。
+ *
+ * 与 CSS 的 `--dur-base`(200) **必须一致**：`.preview-panel` 的 width 过渡时长就是它。
+ * 相位短于它会在过渡途中摘掉全屏类（面板提前变回在流的 440px 盒子 → 瞬跳），
+ * 长于它则面板空等一截。（TSX 读不到 CSS 变量，故手抄一份 —— 与 App.tsx 的
+ * PANEL_EXIT_MS 同性质：TS 侧的计时窗口必须跟 CSS 的过渡时长对齐。）
+ */
+const PANEL_FULLSCREEN_MS = 200;
+
+/**
  * 条目按钮的键盘等效入口：双击「转正为固定 tab」原本只有鼠标可达（DESIGN.md §7.7
  * 要求「双击动作的键盘等价入口」）。Shift+Enter 做同一件事。
  *
@@ -1011,14 +1021,44 @@ export function ArtifactPanel({
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [fullscreen, onToggleFullscreen]);
 
+	/**
+	 * 全屏的**视觉相位**：`visual` 管盒模型（abspos 覆盖 ↔ 在流停靠），与语义态 `fullscreen`
+	 * 只在**退出**方向错开一档（PANEL_FULLSCREEN_MS），让「收回停靠位」的 width 过渡播完
+	 * （2026-09-19：此前两个方向都直接瞬切）。
+	 *
+	 * 两个方向的要求是不对称的，这是本机制最容易写反的地方：
+	 *   - **入场**：盒模型与宽度的值必须落在**同一次提交**里 —— 只有这样宽度的两端才是
+	 *     「panelWidth → 100%」，过渡才有起点。所以这里用渲染期对齐（React 官方的
+	 *     「props 变化时调整 state」写法），**不能放 effect**：effect 晚一帧，那一帧宽度
+	 *     已是 100%（但在流里、包含块是 440px 的容器，算出来还是 440）→ 计算值没变 →
+	 *     过渡根本不触发，看着仍是瞬切。
+	 *   - **退出**：宽度的值立刻变回 panelWidth（此时面板还是 abspos，过渡照跑），盒模型
+	 *     再压一档摘 —— 摘早了面板已回到在流的 440px 盒子，那一帧即终态，同样没有起点。
+	 */
+	const [visual, setVisual] = useState(fullscreen);
+	if (fullscreen && !visual) setVisual(true);
+	useEffect(() => {
+		if (fullscreen || !visual) return;
+		const timer = window.setTimeout(() => setVisual(false), PANEL_FULLSCREEN_MS);
+		return () => window.clearTimeout(timer);
+	}, [fullscreen, visual]);
+
 	return (
+		/*
+		 * 全屏的几何与过渡都在 CSS（.preview-panel.fullscreen）：右缘锚定 right: 0，
+		 * 宽走「panelWidth px ↔ 100%」这条可插值的对，左缘因此从停靠位扫到窗口左缘。
+		 *
+		 * **类与内联宽取自两个不同的源**（上面的相位注释说了为什么）：
+		 * 类跟 `visual`（盒模型），宽度的值跟 `fullscreen`（语义态）。
+		 */
 		<aside
 			ref={panelRef}
-			className={`preview-panel${fullscreen ? " fullscreen" : ""}`}
-			style={fullscreen ? undefined : { width: `${width}px` }}
+			className={`preview-panel${visual ? " fullscreen" : ""}`}
+			style={{ width: fullscreen ? "100%" : `${width}px` }}
 		>
-			{/* 拖拽手柄：仅非全屏时可用（全屏宽由容器撑满，拖拽无意义）。 */}
-			{!fullscreen && (
+			{/* 拖拽手柄：仅停靠态渲染（全屏宽由窗口撑满，拖拽无意义）。跟随视觉相位 ——
+			   退出全屏的那一档里面板仍是全屏盒子，sash 会挂在扫动的左缘上跟着跑。 */}
+			{!visual && (
 				<div
 					className="preview-sash"
 					role="separator"

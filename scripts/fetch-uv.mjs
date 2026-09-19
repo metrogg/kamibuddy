@@ -119,8 +119,17 @@ if (exeEntry === null) {
 mkdirSync(binDir, { recursive: true });
 await writeFile(target, await exeEntry.async("nodebuffer"));
 await rm(join(binDir, "uvx.exe"), { force: true }); // 上一版脚本若解过 uvx，清掉（不需要）
+/*
+ * 落盘文件名刻意**不是** README.md（2026-09-19 踩坑）。
+ *
+ * resources/bin/README.md 是**受版本控制**的手写文件，记录 fd.exe / rg.exe 的
+ * 来源、版本、sha256 与许可 —— 那是 AGENTS.md §6「已搬用资产在目录 README 注明
+ * 来源」的载体，也是许可义务的凭据。本脚本原先无条件覆写它，于是每次
+ * `npm run dist`（第一段就是 fetch:uv）都会把那 58 行记录冲成一张 uv 便条；
+ * 实测撞到后才改。uv 自己的来源说明放独立文件，与手写 README 互不干扰。
+ */
 writeFileSync(
-	join(binDir, "README.md"),
+	join(binDir, "UV-NOTICE.md"),
 	`uv.exe ${UV_VERSION}（${ASSET}）\n来源：${usedUrl}\n由 scripts/fetch-uv.mjs 拉取${shaChecked ? "，sha256 已校验" : "，sha256 未校验（来源未提供）"}。\n随安装包分发；重拉：npm run fetch:uv -- --force。\n`,
 );
 log(`完成：${target}（uv ${UV_VERSION}${shaChecked ? "，sha256 已校验" : ""}）`);

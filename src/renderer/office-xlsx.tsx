@@ -7,15 +7,26 @@
  *
  * 独立成文件是 React.lazy 拆 chunk 的需要（见 office-preview.tsx 头注释）；
  * SheetJS 与 fortune-excel 在 effect 里二次动态 import，csv/xls 才会拉 SheetJS。
+ *
+ * ── 不把 Workbook 的 ref 交给 transformExcelToFortune（2026-09-19 修，踩坑记录）──
+ * 该库的第 4 个参数会挂一个 `setTimeout(1)`，在里面按 `{ id: sheet.id }` 调
+ * setColumnWidth / setRowHeight；而 fortune-sheet 的 Workbook 是**先以空 ctx 挂载、
+ * `data` 由它自己的 effect 才灌进 ctx** 的（react dist 的 useState(defaultContext) +
+ * 那个以 originalData 为依赖的 effect）。1ms 定时器与这两次 commit 赛跑，枪响在中间时
+ * `getSheet` 找不到 sheet id，抛 core 的 `sheet not found`（SHEET_NOT_FOUND），
+ * 且它抛在 React 的 state updater 里 ⇒ 被 ErrorBoundary 接住，整页变成「界面渲染出错」。
+ * 那一步在本链路里还是**空转**：它写回的正是 `sheet.config.columnlen / rowlen` 里已有的
+ * 数值（fortune-excel 产物实测就带这两项），而列宽行高本来就是 fortune-sheet 在 init 时
+ * 从 `ctx.config.columnlen / rowlen` 算出来的（core 的 calcRowColSize 与列布局循环）。
+ * 所以不传 ref：竞态这条路整条消失，列宽行高照旧。
  */
 
-import { useEffect, useRef, useState, type ComponentProps, type ComponentRef } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { Workbook } from "@fortune-sheet/react";
 import "@fortune-sheet/react/dist/index.css";
 import { ErrorState, Skeleton } from "./state-views.tsx";
 
 type SheetData = ComponentProps<typeof Workbook>["data"];
-type WorkbookHandle = ComponentRef<typeof Workbook>;
 
 /** fortune-excel 产物的最小形状（库的签名全是 any，这里只窄化我们要碰的字段）。 */
 interface RawSheet {
@@ -116,7 +127,6 @@ const SHEET_HEADER_STYLE: React.CSSProperties = {
 
 export default function XlsxPreview({ url }: { readonly url: string }): React.JSX.Element {
 	const hostRef = useRef<HTMLDivElement>(null);
-	const workbookRef = useRef<WorkbookHandle>(null);
 	const [sheets, setSheets] = useState<SheetData | undefined>(undefined);
 	const [renderKey, setRenderKey] = useState(0);
 	const [error, setError] = useState<string | undefined>(undefined);
@@ -145,7 +155,11 @@ export default function XlsxPreview({ url }: { readonly url: string }): React.JS
 			}
 			if (disposed) return;
 			const { transformExcelToFortune } = await import("@corbe30/fortune-excel");
-			// 库的 setKey 回调用于触发 Workbook 重挂载（列宽/行高在挂载后经 ref 应用）。
+			// setKey 回调用于触发 Workbook 重挂载（列宽/行高随数据里的 config 生效）。
+			// **第 4 个参数（sheetRef）显式传 undefined** —— 理由见文件头：传了它就会挂一个
+			// setTimeout(1)，与 Workbook 的数据灌入赛跑，枪响在中间就抛 `sheet not found`
+			// 打挂整个面板；而它写回的数值数据里本来就有（空转）。库的签名是 `sheetRef: any`，
+			// 传 undefined 就是它内部 `sheetRef?.current?…` 的不执行分支。
 			await transformExcelToFortune(
 				new File([bytes], name),
 				(raw: unknown) => {
@@ -154,7 +168,7 @@ export default function XlsxPreview({ url }: { readonly url: string }): React.JS
 				(updater: (k: number) => number) => {
 					if (!disposed) setRenderKey(updater);
 				},
-				workbookRef,
+				undefined,
 			);
 		})().catch((cause: unknown) => {
 			if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
@@ -207,7 +221,6 @@ export default function XlsxPreview({ url }: { readonly url: string }): React.JS
 			{sheets !== undefined && (
 				<Workbook
 					key={renderKey}
-					ref={workbookRef}
 					data={sheets}
 					lang="zh"
 					allowEdit={false}

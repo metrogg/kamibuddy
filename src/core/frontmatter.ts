@@ -1,32 +1,47 @@
 /**
- * 极简 YAML frontmatter 解析。
+ * frontmatter 解析：**委托给 pi 的解析器**（其内部是 `yaml@2.9.0`）。
  *
- * 为什么不引 js-yaml：我们只消费**自己写的**资源文件，格式完全可控 ——
- * 常态需要的仍是 `key: value`、`key: [a, b]`（元素可加引号以容纳值里的半角逗号）、
- * 布尔与数字四种。
- * 为此引一个通用 YAML 解析器（及其全部语法面）不划算（AGENTS.md §9 YAGNI）。
+ * 2026-09-19 第三次修订，起因是同一类 bug 被撞了三次 —— 真正加载资源与技能的是 pi，
+ * 我们自己另写一个「够用的子集解析器」，等于让**校验器比被校验的加载器更弱**：
+ *   1. 2026-09 搬入 WorkBuddy `equity-research` 技能：`description: |` 块标量读不了
+ *      → 补了 `|` / `|-` / `>` / `>-`（当时的判断原文：是我们比所依赖的加载器弱）；
+ *   2. 2026-09-19 导入官方 `easyeda-api` 技能：`metadata:` 是嵌套 map
+ *      （`metadata.openclaw.requires.bins`）→ 报「值为空；本解析器不支持多行值」；
+ *   3. 同日导入用户的 `ppt-master`：`metadata:` 下既有嵌套 map 又有嵌套数组
+ *      （`sponsors: [SPONSORS.md, …]`）→ 同一条报错。
+ * 三次症状一样：**技能页导入被拒**，而 pi 那条自动加载路径反而是正常降级的。
+ * 不再补第四个特例 —— 直接复用 pi 导出的 `parseFrontmatter`，
+ * 「我们的解析器」与「加载器的解析器」从此是**同一份实现**，这类偏差结构性消失。
  *
- * 这是 WorkBuddy「双面文件」机制的地基：一份 .md 的 frontmatter 给加载器读
- * 工具白名单，正文给模板引擎读提示片段 —— 一份文件同时定义策略与内容，
- * 两者不会漂移。
+ * 保留的两处自有行为（有意与 pi 的取舍不同）：
+ *   - **缺结束分隔线要报错**。pi 那边静默当「没有 frontmatter」，还把开头的 `---` 留在正文里；
+ *     对 modes / scenes 这类策略文件，症状会退化成「缺少字段 name」，定位信息全丢。
+ *   - **frontmatter 必须是映射、且键名非空**。真 YAML 下 `: 值` 会解析出空串键、
+ *     裸标量文档会解析成一个字符串 —— 两者都是写坏了的策略文件，响亮报错（AGENTS.md §7）。
  *
- * 2026-09 立场修订：新增块标量（`|` / `|-` / `>` / `>-`）支持。
- * 起因是从 WorkBuddy `equity-research` 专家包原样搬入的技能，其 `description`
- * 用 literal 块标量写了多行（AGENTS.md §6 要求逐字节保留、后续还要继续搬，
- * 改资源文件会破坏可追溯性；且多行是有语义的，折成单行就是改了值本身）。
- * 而真正加载技能的是 pi 的 `loadSkills`，它用真 yaml 包解析 frontmatter
- * （开源项目/pi/packages/coding-agent/src/utils/frontmatter.ts）——
- * 是我们的解析器比所依赖的加载器弱，这里补上差距而不是回去迁就解析器。
+ * 由此带来的**行为变化**（SKILL.md 与资源文件都要遵守）：
+ *   - 值里出现未加引号的 `: ` → 报错；要写冒号就加引号（原来按第一个冒号宽容切分）；
+ *   - 数组元素保真：`[1, 2]` 得到数字，不再一律转字符串。白名单类数组因此会被
+ *     `requireStringArray` 响亮拒绝，而不是悄悄变成 `["1","2"]`；
+ *   - `|+` / `>+`（keep）与缩进列表现在都能读（原来报错）；
+ *   - 块内各行的缩进必须对齐（原来宽容地取最小缩进为基准）。
+ * 变化清单、实测记录与被否掉的两条路线见 docs/ARCHITECTURE.md §4.26。
  *
- * 仍然刻意不支持的构造，遇到**报错**而非静默降级（AGENTS.md §7）：
- *   - 缩进列表 / 嵌套对象（即 `key:` 值为空、后跟缩进内容却无块标量指示符）；
- *   - 块标量的 keep 修饰符 `|+` / `>+`（会保留全部结尾空行，未实现，静默当 clip
- *     会悄悄改变值）；
- *   - 任何不是 `key: value` 形状的行。
- * 这些构造一旦真需要，就该换成真 YAML，而不是在这里长出半成品解析器。
+ * 「双面文件」机制照旧：一份 .md 的 frontmatter 给加载器读工具白名单，
+ * 正文给模板引擎读提示片段 —— 一份文件同时定义策略与内容，两者不会漂移。
  */
 
-export type FrontmatterValue = string | boolean | number | string[];
+import { parseFrontmatter as piParseFrontmatter } from "@earendil-works/pi-coding-agent";
+
+/**
+ * frontmatter 的值类型：**不设窄类型**。
+ *
+ * 原先是 `string | boolean | number | string[]` —— 那是自研解析器所能产出的全部形态。
+ * 换成真 YAML 之后，值可以是任意嵌套结构（`metadata` 就是典型），硬塞进旧联合类型
+ * 只会让类型说谎。形状判定的职责下移到取值辅助（requireString / requireStringArray / …）：
+ * 它们本来就在做 `typeof` 判断并按 AGENTS.md §7 响亮报错，那里才是唯一该判定形状的地方。
+ */
+export type FrontmatterValue = unknown;
 
 export interface ParsedDocument {
 	readonly frontmatter: Readonly<Record<string, FrontmatterValue>>;
@@ -36,145 +51,32 @@ export interface ParsedDocument {
 
 const FENCE = "---";
 
-/** 解析标量：布尔、数字，其余按字符串（去掉可选的引号）。 */
-function parseScalar(raw: string): FrontmatterValue {
-	const text = raw.trim();
-	if (text === "true") return true;
-	if (text === "false") return false;
-
-	// 只把「纯数字」当数字。像 "1.2.3"（版本号）这类必须留作字符串。
-	if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
-
-	// 去引号：写 `label: "含: 冒号的值"` 时需要。
-	if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-		return text.slice(1, -1);
-	}
-	return text;
+/** 错误信息用；非 Error 的值退化为 String()，不编造。 */
+function reasonOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * 解析行内数组 `[a, b, c]`。空数组写 `[]`。
- *
- * 元素可用单/双引号包裹，以容纳**值里本来就有的半角逗号** —— 搬 WorkBuddy
- * 资产时需要：上游 quickPrompts 是「先,后」这种混用半角的写法，而我们不改上游
- * 文字（AGENTS.md §6 逐字节保留），所以由解析器让步而不是回改数据。
+ * 把 YAML 错误里的**块内行号**换算成**文件内行号**，返回 `:N` 或空串。
+ * yaml 的 `linePos[0].line` 相对 frontmatter 块（块内第 1 行即文件第 2 行），故 +1。
+ * 实测：`---\nid: craft\n坏行\n---` 报 line 2，对应文件第 3 行。
+ * 形状不认识时返回空串 —— 宁可少一个行号，也不编一个假的定位让人白跳。
  */
-function parseInlineArray(raw: string): string[] {
-	const inner = raw.trim().slice(1, -1).trim();
-	if (inner === "") return [];
-	const parts: string[] = [];
-	let current = "";
-	let quote: "" | '"' | "'" = "";
-	for (const char of inner) {
-		if (quote === "") {
-			if (char === '"' || char === "'") {
-				quote = char;
-				current += char;
-				continue;
-			}
-			if (char === ",") {
-				parts.push(current);
-				current = "";
-				continue;
-			}
-			current += char;
-			continue;
-		}
-		if (char === quote) quote = "";
-		current += char;
-	}
-	parts.push(current);
-	return parts
-		.map((part) => {
-			const value = parseScalar(part);
-			// 数组元素一律当字符串：工具名、id 这类不该被误转成数字。
-			return typeof value === "string" ? value : String(value);
-		})
-		.filter((part) => part !== "");
+function fileLineSuffix(error: unknown): string {
+	if (typeof error !== "object" || error === null || !("linePos" in error)) return "";
+	const linePos = (error as { linePos?: unknown }).linePos;
+	if (!Array.isArray(linePos)) return "";
+	const first = linePos[0];
+	if (typeof first !== "object" || first === null) return "";
+	const line = (first as { line?: unknown }).line;
+	return typeof line === "number" && Number.isInteger(line) && line >= 1 ? `:${line + 1}` : "";
 }
 
-/** 行首缩进宽度（空格与制表符都算），用于判断块标量的范围与去缩进基准。 */
-function countIndent(line: string): number {
-	return line.length - line.trimStart().length;
-}
-
-/** 块标量指示符全集：`|`/`>` 加 strip（`-`）与 keep（`+`）修饰符。 */
-function isBlockScalarToken(rawValue: string): boolean {
-	return /^[|>][+-]?$/.test(rawValue);
-}
-
-/**
- * 折叠块（`>`）的行变换：相邻非空行的换行折成空格，空行各折成一个换行。
- * 结尾空行不在此处理（由 chomping 统一管），故只累积不输出。
- */
-function foldLines(content: readonly string[]): string {
-	let out = "";
-	let pendingBlanks = 0;
-	let started = false;
-	for (const line of content) {
-		if (line === "") {
-			pendingBlanks += 1;
-			continue;
-		}
-		if (started) out += pendingBlanks === 0 ? " " : "\n".repeat(pendingBlanks);
-		out += line;
-		pendingBlanks = 0;
-		started = true;
-	}
-	return out;
-}
-
-/**
- * 结尾换行处理（chomping）：
- * clip（无修饰符）保留一个换行；strip（`-`）全部去掉；纯空白内容归为空串。
- */
-function chomp(text: string, strip: boolean): string {
-	const trimmed = text.replace(/\n+$/, "");
-	if (trimmed === "") return "";
-	return strip ? trimmed : `${trimmed}\n`;
-}
-
-/**
- * 解析块标量。返回其值与块结束后应继续解析的行下标。
- *
- * 块内容 = 紧随其后、缩进深于 key 的行（空行也属于块）；遇到缩进回到
- * <= key 缩进的非空行即结束。去缩进基准取块内非空行的最小缩进。
- */
-function parseBlockScalar(
-	lines: readonly string[],
-	keyIndex: number,
-	keyIndent: number,
-	indicator: string,
-	key: string,
-	label: string,
-	keyLineNo: number,
-): { value: string; nextIndex: number } {
-	// keep 修饰符会保留全部结尾空行，我们没实现；静默当 clip 会改变值，故响亮报错。
-	if (indicator.endsWith("+")) {
-		throw new Error(
-			`${label}:${keyLineNo}: 「${key}」的块标量用了 keep 修饰符「${indicator}」；本解析器只支持 |、|-、>、>-`,
-		);
-	}
-
-	let end = keyIndex + 1;
-	while (end < lines.length) {
-		const candidate = lines[end] ?? "";
-		if (candidate.trim() !== "" && countIndent(candidate) <= keyIndent) break;
-		end += 1;
-	}
-
-	const blockLines = lines.slice(keyIndex + 1, end);
-	const baseIndent = blockLines.reduce(
-		(min, blockLine) => (blockLine.trim() === "" ? min : Math.min(min, countIndent(blockLine))),
-		Number.POSITIVE_INFINITY,
-	);
-	const content = blockLines.map((blockLine) =>
-		blockLine.trim() === "" ? "" : blockLine.slice(Number.isFinite(baseIndent) ? baseIndent : 0),
-	);
-
-	// 块内容天然以换行结尾（最后一行之后必有一个换行）。
-	const raw = content.length === 0 ? "" : `${indicator.startsWith("|") ? content.join("\n") : foldLines(content)}\n`;
-	return { value: chomp(raw, indicator.endsWith("-")), nextIndex: end };
+/** 形状的名字（给报错用）：区分 null / 数组 / 原始类型，别把 null 说成 object。 */
+function shapeName(value: unknown): string {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "数组";
+	return typeof value;
 }
 
 /**
@@ -186,62 +88,52 @@ function parseBlockScalar(
  * @param label 出错信息里用于定位的文件标识
  */
 export function parseFrontmatter(source: string, label: string): ParsedDocument {
-	// 统一换行，Windows 上编辑过的文件会带 \r。
-	const text = source.replace(/\r\n/g, "\n").replace(/^﻿/, "");
+	// 统一换行（Windows 上编辑过的文件带 \r）；BOM 写成转义而非字面量，避免文件里藏不可见字符。
+	const text = source.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
 
 	if (!text.startsWith(`${FENCE}\n`)) {
 		return { frontmatter: {}, body: text.trim() };
 	}
-
-	const end = text.indexOf(`\n${FENCE}`, FENCE.length);
-	if (end === -1) {
+	if (text.indexOf(`\n${FENCE}`, FENCE.length) === -1) {
 		throw new Error(`${label}: frontmatter 缺少结束的 --- 分隔线`);
 	}
 
-	const block = text.slice(FENCE.length + 1, end);
-	const body = text.slice(end + FENCE.length + 1).trim();
+	let frontmatter: Record<string, unknown>;
+	let body: string;
+	try {
+		const parsed = piParseFrontmatter(text);
+		frontmatter = parsed.frontmatter;
+		body = parsed.body;
+	} catch (error) {
+		// 保留 label 定位（pi 的错误里只有块内坐标，且是人读的英文散文）。
+		throw new Error(`${label}${fileLineSuffix(error)}: frontmatter 不是合法 YAML：${reasonOf(error)}`);
+	}
 
-	const frontmatter: Record<string, FrontmatterValue> = {};
-	const lines = block.split("\n");
-
-	for (let i = 0; i < lines.length; i += 1) {
-		const rawLine = lines[i] ?? "";
-		// 第 1 行是开头的 ---，故块内首行的行号是 2。
-		const lineNo = i + 2;
-		const line = rawLine.trim();
-		// 允许空行与注释，便于在资源文件里写说明。
-		if (line === "" || line.startsWith("#")) continue;
-
-		const colon = line.indexOf(":");
-		if (colon <= 0) {
-			throw new Error(`${label}:${lineNo}: 无法解析的 frontmatter 行「${line}」，应为 key: value`);
-		}
-
-		const key = line.slice(0, colon).trim();
-		const rawValue = line.slice(colon + 1).trim();
-
-		if (rawValue === "") {
-			// 多行值（YAML 的块标量或缩进列表）不支持。明确报错而不是当空串，
-			// 否则工具白名单写成缩进列表会静默变成「没有工具」。
-			throw new Error(`${label}:${lineNo}: 「${key}」的值为空；本解析器不支持多行值，请写成 key: [a, b] 形式`);
-		}
-
-		if (isBlockScalarToken(rawValue)) {
-			const { value, nextIndex } = parseBlockScalar(lines, i, countIndent(rawLine), rawValue, key, label, lineNo);
-			frontmatter[key] = value;
-			i = nextIndex - 1; // 交给 for 的 i += 1 落到块结束后的第一行。
-			continue;
-		}
-
-		frontmatter[key] = rawValue.startsWith("[") && rawValue.endsWith("]")
-			? parseInlineArray(rawValue)
-			: parseScalar(rawValue);
+	/*
+	 * 形状守卫按**运行时真值**判，不看类型标注：pi 把 `parse()` 的返回值断言成了
+	 * `Record<string, unknown>`，而裸标量文档（如整块只有一行「这行没有冒号」）
+	 * 在那里实际是个字符串 —— 那份标注在运行时是假话。
+	 */
+	const runtimeValue: unknown = frontmatter;
+	if (typeof runtimeValue !== "object" || runtimeValue === null || Array.isArray(runtimeValue)) {
+		throw new Error(
+			`${label}: frontmatter 必须是 key: value 形式，实际解析出 ${shapeName(runtimeValue)}`,
+		);
+	}
+	for (const key of Object.keys(runtimeValue)) {
+		// `: 值` 这种空键会被 YAML 解析成空串键；它是写坏了的策略文件，不能当合法字段放过。
+		if (key === "") throw new Error(`${label}: frontmatter 有空的键名，应为 key: value 形式`);
 	}
 
 	return { frontmatter, body };
 }
 
 /* ── 取值辅助：缺失或类型不符时报错，不静默用默认值 ─────────────── */
+
+/** 数组元素是否**全是**字符串（含空数组）。真 YAML 会让 `[1, 2]` 保持数字，这里据此响亮拒绝。 */
+function isStringArray(value: readonly unknown[]): value is readonly string[] {
+	return value.every((item) => typeof item === "string");
+}
 
 export function requireString(doc: ParsedDocument, key: string, label: string): string {
 	const value = doc.frontmatter[key];
@@ -268,10 +160,12 @@ export function optionalBoolean(doc: ParsedDocument, key: string, fallback: bool
 
 export function requireStringArray(doc: ParsedDocument, key: string, label: string): string[] {
 	const value = doc.frontmatter[key];
-	if (!Array.isArray(value)) {
-		throw new Error(`${label}: frontmatter 缺少数组字段「${key}」，应为 ${key}: [a, b]`);
+	if (!Array.isArray(value) || !isStringArray(value)) {
+		throw new Error(
+			`${label}: frontmatter 缺少数组字段「${key}」，应为 ${key}: [a, b]（元素必须都是字符串）`,
+		);
 	}
-	return value;
+	return [...value];
 }
 
 /**
@@ -285,8 +179,10 @@ export function optionalStringArray(
 ): readonly string[] | undefined {
 	const value = doc.frontmatter[key];
 	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-		throw new Error(`${label}: frontmatter 字段「${key}」应为字符串数组，写法 ${key}: [a, b]`);
+	if (!Array.isArray(value) || !isStringArray(value)) {
+		throw new Error(
+			`${label}: frontmatter 字段「${key}」应为字符串数组，写法 ${key}: [a, b]（元素必须都是字符串）`,
+		);
 	}
 	return value.length === 0 ? undefined : value;
 }

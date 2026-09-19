@@ -1710,6 +1710,23 @@ export class SessionHost {
 				// 详见 settleLlmCall：这一步之后才会跑本轮的工具。
 				this.settleLlmCall(message);
 
+				/*
+				 * 上下文用量按**步**刷新（2026-09-19 用户反馈「每一轮才更新一次上下文」）。
+				 *
+				 * 圆环的唯一数据源是 state.contextUsage → session_state →
+				 * daemon 派生 context_usage（daemon/index.ts:1257）。而 emitState 此前
+				 * 只挂在 run 边界与各 setter 上：事件日志实证 01a0b87c 会话 40 步只发了
+				 * 4 条 context_usage —— 一次几十步的 run 里，圆环从 agent_start 的读数
+				 * 一路冻到 agent_end，而它自称展示的是「现在」（context-usage.tsx:56）。
+				 *
+				 * 此刻就是最新的可用读数：pi 的 getContextUsage() 读 agent state 里
+				 * 最近一条 assistant 的 usage（agent-session.ts:955/3210），而 agent-core
+				 * 在 emit message_end 之前已把终态消息放进 state（同文件 :711 注释）。
+				 * 再晚也没有更新的值 —— 下一次测量要等下一步响应，所以工具执行期间
+				 * 这里读到的仍是「刚发出那次请求」的口径，这是测量事实，不是滞后。
+				 */
+				this.emitState();
+
 				const id = this.currentAssistantId;
 				this.currentAssistantId = undefined;
 				if (id === undefined) return;

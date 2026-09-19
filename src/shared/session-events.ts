@@ -492,7 +492,13 @@ export type SessionEvent =
 	 * 诊断信息走 daemon 侧日志，不经 UI。
 	 */
 	| { readonly type: "run_error"; readonly runId: RunId; readonly message: string }
-	/** 会话元信息变化（模型切换、模式切换、token 用量）。 */
+	/**
+	 * 会话元信息变化（模型切换、模式切换、token 用量）。整份 state 是**替换**语义。
+	 *
+	 * 「token 用量」这半个来源是**每步**的：助手 message_end 后 session-host 重推
+	 * 一次（2026-09-19 起），上下文圆环靠它从「每 run 一次」变成「每步一次」——
+	 * 改这里的发射时机前先读 session-host.ts 的 message_end 分支注释。
+	 */
 	| { readonly type: "session_state"; readonly state: SessionState }
 	/**
 	 * 会话历史已被 daemon 清空（新建任务 / 切换工作空间）。
@@ -508,6 +514,9 @@ export type SessionEvent =
 	/**
 	 * 上下文用量明细（used/total 精确 + 分类估算）。在带用量的 session_state 之后
 	 * 由 daemon 组装发出 —— 分类所需的系统提示词/技能段 token 只有 daemon 知道。
+	 *
+	 * 刷新粒度跟随 session_state：每步（助手 message_end）一次，所以圆环在一次
+	 * 几十步的 run 里是走的，不是跑完才跳（见 session_state 的注释）。
 	 */
 	| { readonly type: "context_usage"; readonly usage: ContextUsageDetail }
 	/**

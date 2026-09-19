@@ -5,6 +5,10 @@
  * （比如把 `tools: [read, write]` 读成空数组 → 模型一个工具都没有，
  * 表现为「它说自己做不到」，极难联想到是解析问题）。
  * 所以每条报错路径都要有测试压着。
+ *
+ * 2026-09-19：解析器换成 pi 那份（真 YAML）。**期望一律以加载器的行为为准** ——
+ * 原先钉着自研解析器「宽容行为」的 6 处期望按实测结果翻转，每处都在用例名或注释里
+ * 标了旧解析器的原行为，便于回溯为什么会变（详见 docs/ARCHITECTURE.md §4.26）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -81,12 +85,21 @@ x`);
 		expect(doc.frontmatter["label"]).toBe("写入：覆盖已有文件");
 	});
 
-	it("值里含冒号且未加引号时，只在第一个冒号处切分", () => {
-		const doc = parse(`---
+	it("值里含冒号必须加引号 —— 不加就是 YAML 错误，不再宽容切分", () => {
+		// 旧的自研解析器按第一个冒号切分，那是它独有的宽松；真 YAML 里 `: ` 属于映射语法，
+		// 不加引号会报 BLOCK_AS_IMPLICIT_KEY。这条变化记在 docs/ARCHITECTURE.md §4.26。
+		expect(() =>
+			parse(`---
 note: 参见 docs/ARCHITECTURE.md §4.6: 能力即数据
 ---
+x`),
+		).toThrow(/不是合法 YAML/);
+
+		const quoted = parse(`---
+note: "参见 docs/ARCHITECTURE.md §4.6: 能力即数据"
+---
 x`);
-		expect(doc.frontmatter["note"]).toBe("参见 docs/ARCHITECTURE.md §4.6: 能力即数据");
+		expect(quoted.frontmatter["note"]).toBe("参见 docs/ARCHITECTURE.md §4.6: 能力即数据");
 	});
 });
 
@@ -116,12 +129,14 @@ x`);
 		expect(doc.frontmatter["tools"]).toEqual(["read", "write"]);
 	});
 
-	it("数组元素一律是字符串，数字样式的 id 不被转换", () => {
+	it("数组元素保真：数字还是数字（旧解析器会一律转成字符串）", () => {
+		// 与 pi 的加载器同一语义，不再自作主张 stringify；白名单类字段因此会被
+		// requireStringArray 响亮拒绝，而不是悄悄变成 ["1","2"] 再被当成工具名用。
 		const doc = parse(`---
 codes: [1, 2]
 ---
 x`);
-		expect(doc.frontmatter["codes"]).toEqual(["1", "2"]);
+		expect(doc.frontmatter["codes"]).toEqual([1, 2]);
 	});
 });
 
@@ -156,25 +171,25 @@ describe("报错路径", () => {
 		expect(() => parse("---\nid: craft\n正文没有结束线")).toThrow(/缺少结束的 ---/);
 	});
 
-	it("值为空 → 报错，而不是当空串", () => {
-		// 关键用例：把工具白名单写成 YAML 缩进列表时会命中这里。
-		// 若静默当空串，白名单会变成「没有工具」，症状是模型说自己做不到。
-		expect(() =>
-			parse(`---
+	it("键后跟缩进列表 → 按数组读，不再是「不支持多行值」", () => {
+		// 本次换解析器最直接的收益：白名单写成 YAML 缩进列表是常见写法。
+		const doc = parse(`---
 tools:
   - read
   - write
 ---
-x`),
-		).toThrow(/不支持多行值/);
+x`);
+		expect(doc.frontmatter["tools"]).toEqual(["read", "write"]);
 	});
 
-	it("没有冒号的行 → 报错", () => {
-		expect(() => parse("---\n这行没有冒号\n---\nx")).toThrow(/无法解析的 frontmatter 行/);
+	it("整块不是映射（裸标量）→ 报错，不放行", () => {
+		// 真 YAML 会把「整块只有一行文本」解析成一个字符串文档；frontmatter 必须是映射。
+		expect(() => parse("---\n这行没有冒号\n---\nx")).toThrow(/必须是 key: value 形式/);
 	});
 
 	it("键为空 → 报错", () => {
-		expect(() => parse("---\n: 只有值\n---\nx")).toThrow(/无法解析/);
+		// YAML 接受 `: 值` 并把它解析成空串键；那是写坏了的策略文件，不能当合法字段放过。
+		expect(() => parse("---\n: 只有值\n---\nx")).toThrow(/空的键名/);
 	});
 
 	it("报错信息带文件标识与行号，便于定位", () => {
@@ -209,16 +224,24 @@ description: |-
 		expect(doc.frontmatter["description"]).toBe("第一行\n第二行");
 	});
 
-	it("去缩进以块内非空行的最小缩进为基准", () => {
-		// 首行缩进 4、次行缩进 2：基准取 2，首行保留多出的 2 个空格。
-		const doc = parse(`---
+	it("块内各行缩进必须对齐 —— 不齐是 YAML 错误（旧解析器宽容取最小缩进）", () => {
+		// 旧实现取「块内非空行的最小缩进」当基准，缩进不齐的文件也能读；真 YAML 要求同列。
+		expect(() =>
+			parse(`---
 note: |
     缩进四
   缩进二
 ---
-x`);
+x`),
+		).toThrow(/不是合法 YAML/);
 
-		expect(doc.frontmatter["note"]).toBe("  缩进四\n缩进二\n");
+		const aligned = parse(`---
+note: |
+  缩进二
+  还是缩进二
+---
+x`);
+		expect(aligned.frontmatter["note"]).toBe("缩进二\n还是缩进二\n");
 	});
 
 	it("> folded：同一段落的换行折成空格（clip 保留结尾换行）", () => {
@@ -298,35 +321,92 @@ x`);
 		expect(typeof doc.frontmatter["note"]).toBe("string");
 	});
 
-	it("key: 后跟缩进列表（无指示符）→ 仍报错，不放行", () => {
-		expect(() =>
-			parse(`---
-tools:
-  - read
-  - write
----
-x`),
-		).toThrow(/不支持多行值/);
-	});
-
-	it("keep 修饰符 |+ → 报错，不静默当 clip", () => {
-		expect(() =>
-			parse(`---
+	it("keep 修饰符 |+ → 能读，保留结尾换行（旧解析器报错）", () => {
+		const doc = parse(`---
 description: |+
   内容
 ---
-x`),
-		).toThrow(/keep 修饰符/);
+x`);
+		expect(doc.frontmatter["description"]).toBe("内容\n");
 	});
 
-	it("keep 修饰符 >+ → 报错，不静默当 clip", () => {
-		expect(() =>
-			parse(`---
+	it("keep 修饰符 >+ → 能读（旧解析器报错）", () => {
+		const doc = parse(`---
 description: >+
   内容
 ---
-x`),
-		).toThrow(/keep 修饰符/);
+x`);
+		expect(doc.frontmatter["description"]).toBe("内容\n");
+	});
+});
+
+describe("真 YAML 才能读的构造（2026-09-19 换解析器的直接动因）", () => {
+	/*
+	 * 两个真实样本：都是「技能页导入被拒」的现场。旧解析器对 `key:` 后跟缩进内容
+	 * 一律抛「值为空；本解析器不支持多行值」，而 pi 的加载器读得动 ——
+	 * 校验器比加载器弱，症状就是好端端的技能导不进来。
+	 */
+
+	it("嵌套 map：官方 easyeda-api 技能的 metadata.openclaw.requires", () => {
+		const doc = parse(`---
+name: easyeda-api
+description: >-
+  EasyEDA Pro API skill for AI agents.
+metadata:
+  author: JLCEDA
+  version: "1.1.28"
+  openclaw:
+    requires:
+      bins:
+        - node
+      env:
+        - CLAUDE_SKILL_DIR
+---
+正文`);
+
+		expect(doc.frontmatter["name"]).toBe("easyeda-api");
+		expect(doc.frontmatter["description"]).toBe("EasyEDA Pro API skill for AI agents.");
+		expect(doc.frontmatter["metadata"]).toEqual({
+			author: "JLCEDA",
+			version: "1.1.28",
+			openclaw: { requires: { bins: ["node"], env: ["CLAUDE_SKILL_DIR"] } },
+		});
+	});
+
+	it("嵌套 map + 嵌套数组：用户技能 ppt-master 的 metadata.sponsors", () => {
+		const doc = parse(`---
+name: ppt-master
+description: >
+  第一行
+  第二行
+metadata:
+  version: "6.6.0"
+  sponsors:
+    - "SPONSORS.md"
+    - "SPONSORS_CN.md"
+---
+正文`);
+
+		expect(doc.frontmatter["description"]).toBe("第一行 第二行\n");
+		expect(doc.frontmatter["metadata"]).toEqual({
+			version: "6.6.0",
+			sponsors: ["SPONSORS.md", "SPONSORS_CN.md"],
+		});
+	});
+
+	it("嵌套结构不影响其它字段的取用（技能名与描述照常拿到）", () => {
+		const doc = parse(`---
+name: ppt-master
+description: 演示文稿工作流
+metadata:
+  version: "6.6.0"
+---
+正文`);
+
+		expect(requireString(doc, "name", LABEL)).toBe("ppt-master");
+		expect(requireString(doc, "description", LABEL)).toBe("演示文稿工作流");
+		// 版本号在 metadata 里（不在顶层）：技能页那一栏读的是顶层 version，故取不到 —— 如实为 undefined。
+		expect(doc.frontmatter["version"]).toBeUndefined();
 	});
 });
 

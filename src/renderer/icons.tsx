@@ -524,31 +524,8 @@ export const IconShieldDanger = (p: IconProps): React.JSX.Element => (
 	</SvgFilled>
 );
 
-/**
- * 应用品牌徽标：彩色渐变圆角方块 + 白色星形（对标 WorkBuddy 侧栏底部的彩色标识）。
- *
- * 整套图标唯一的填充/渐变式——它承担「品牌标识」而不是「操作提示」，
- * 用 currentColor 线性风格画不出「彩色」，所以单开一档；其余图标不跟。
- * 渐变 id 全局唯一，本图标在应用里只渲染一处（侧栏底部）。
+/*
+ * 原「应用品牌徽标」（IconBrand，渐变圆角方块 + 白星）2026-09-19 删除：
+ * 品牌位改用应用 logo 本身（光栅图，见 buddy-logo.ts），由侧栏底部与回合头共用。
+ * 它当时是整套图标里唯一的填充/渐变式，删掉后这里只剩线性风格一类。
  */
-export const IconBrand = ({ size = 22, className }: IconProps): React.JSX.Element => (
-	<svg
-		width={size}
-		height={size}
-		viewBox="0 0 24 24"
-		className={className}
-		aria-hidden="true"
-	>
-		<defs>
-			<linearGradient id="kami-brand-mark" x1="0" y1="0" x2="1" y2="1">
-				<stop offset="0%" stopColor="#3ecf8e" />
-				<stop offset="100%" stopColor="#0ea5a4" />
-			</linearGradient>
-		</defs>
-		<rect x="1" y="1" width="22" height="22" rx="7" fill="url(#kami-brand-mark)" />
-		<path
-			d="M12 6.4l1.5 3.6 3.6 1.5-3.6 1.5L12 16.6l-1.5-3.6L6.9 11.5l3.6-1.5z"
-			fill="#ffffff"
-		/>
-	</svg>
-);

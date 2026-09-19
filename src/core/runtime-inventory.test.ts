@@ -120,6 +120,25 @@ describe("清单判据（磁盘事实，不 spawn）", () => {
 		expect(entry.enabled).toBe(false);
 		expect("executable" in entry).toBe(false);
 	});
+
+	/**
+	 * 2026-09-19 实测事故的回归钉子：`~/.venv-html-to-docx` 是 uv 建的空壳
+	 * （只有 `_virtualenv.py`，site-packages 一个第三方包都没有），而 classify
+	 * 原先只看「落点来源不是 pending」就报**就绪** —— 于是设置页与模型注入都说就绪、
+	 * `docx_convert` 说「已安装但当前不可用（缺 docx）」，同一个 run 里自相矛盾。
+	 */
+	it("空壳旧路径（有目录、没有引擎依赖）→ 不是就绪，也绝不把那条路径交给模型", () => {
+		mkdirSync(join(homeDir, ".venv-html-to-docx", "Lib", "site-packages"), { recursive: true });
+		const inventory = collectRuntimeInventory(overrides());
+		// 我们这份副本没有可用的 ⇒ 就如实说「未安装」（去设置页点安装），不是「就绪」。
+		expect(pythonEntry(inventory).status.kind).toBe("missing");
+
+		const text = renderRuntimeEnvSection(inventory);
+		expect(text).toContain("python 3.12 · 未安装");
+		expect(text).not.toContain("· 就绪 ·");
+		// 那条空壳路径不许作为「可用环境」出现在模型可见文本里。
+		expect(text).not.toContain(".venv-html-to-docx");
+	});
 });
 
 describe("运行时注入的生产判据（SubTask 2.1.3）", () => {

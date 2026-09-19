@@ -34,7 +34,7 @@ import {
 	writeManifest,
 } from "../runtime-store.ts";
 import { appendRuntimeEvent, readLastRuntimeFailure, renderRuntimeDiagnostics } from "./diagnostics.ts";
-import { CANCELLED_PHASE } from "./registry.ts";
+import { CANCELLED_PHASE, NOT_INSTALLED_PHASE, NOT_READY_PHASE } from "./registry.ts";
 import {
 	createPythonRuntime,
 	defaultPythonRuntimeOptions,
@@ -45,6 +45,7 @@ import {
 	resetPythonRuntime,
 	resolvePythonVenv,
 	rollbackPythonRuntime,
+	LEGACY_DOCX_VENV_DIRNAME,
 	PYTHON_RUNTIME_ID,
 	PYTHON_RUNTIME_VERSION,
 	VENV_OVERRIDE_ENV,
@@ -350,11 +351,21 @@ describe("回滚：只切 current 指针", () => {
 
 /* ── 唯一真源：override > managed > legacy ──────────────────────── */
 
+/**
+ * 造一份**像引擎环境**的旧 venv（`~/.venv-html-to-docx`）：浅判据
+ * （looksLikeEngineVenv）只认 site-packages 里有没有引擎依赖，所以这里至少放一个。
+ * 不造这个就是空壳 venv —— 那属于「未安装」，见下面的空壳用例。
+ */
+function plantLegacyVenv(homeDir: string, module = "docx"): string {
+	const legacy = join(homeDir, LEGACY_DOCX_VENV_DIRNAME);
+	mkdirSync(join(legacy, "Lib", "site-packages", module), { recursive: true });
+	return legacy;
+}
+
 describe("落点优先级（唯一真源）", () => {
 	it("只有旧路径 → 探测就地作用于它（不迁入、不删、不写 current）；安装才装进托管根", async () => {
 		const options = optionsFor("legacy-only");
-		const legacy = join(options.homeDir, ".venv-html-to-docx");
-		mkdirSync(legacy, { recursive: true });
+		const legacy = plantLegacyVenv(options.homeDir);
 
 		const resolution = resolvePythonVenv(options);
 		expect(resolution.source).toBe("legacy");
@@ -373,6 +384,56 @@ describe("落点优先级（唯一真源）", () => {
 		expect(ready(installed).venvDir).toBe(VENV(options));
 		expect(existsSync(legacy)).toBe(true);
 		expect(readCurrent(options.root, PYTHON_RUNTIME_ID)).toBe(PYTHON_RUNTIME_VERSION);
+	});
+
+	/**
+	 * 2026-09-19 实测事故的回归钉子：`~/.venv-html-to-docx` 里只有 `_virtualenv.py`
+	 * （uv 建了 venv、依赖一个没装成），而落点解析原先只判「目录存在」就复用 ——
+	 * 于是设置页与模型注入都说「就绪」，docx_convert 却说「已安装但当前不可用（缺 docx）」，
+	 * 同一个 run 里两句话自相矛盾（用户看的正是这个）。
+	 */
+	it("空壳旧路径（uv 建过、依赖一个没装成）→ 不复用：按「尚未安装」处理且零 spawn", async () => {
+		const options = optionsFor("legacy-shell");
+		const legacy = join(options.homeDir, LEGACY_DOCX_VENV_DIRNAME);
+		mkdirSync(join(legacy, "Lib", "site-packages"), { recursive: true });
+
+		const resolution = resolvePythonVenv(options);
+		expect(resolution.source).toBe("pending");
+		expect(resolution.detail).toContain("未复用它");
+		// 旧目录一个字节不动：不删、不迁入、不写任何东西进去。
+		expect(existsSync(join(legacy, "Lib", "site-packages"))).toBe(true);
+
+		// 探测路径如实报「尚未安装（去点安装）」，而不是「已安装但缺依赖」；纯按需 ⇒ 一次 spawn 都没有。
+		const { calls, spawn } = scripted([]);
+		const probed = await ensurePythonRuntime(options, spawn);
+		expect(probed.status).toBe("failed");
+		if (probed.status !== "failed") throw new Error("期望失败态");
+		expect(probed.phase).toBe(NOT_INSTALLED_PHASE);
+		expect(probed.error).toContain("尚未安装");
+		expect(calls).toEqual([]);
+	});
+
+	it("旧路径像引擎环境但深度探测不过 → 文案点名「复用的既有目录」，不再说「已安装」", async () => {
+		const options = optionsFor("legacy-broken");
+		plantLegacyVenv(options.homeDir);
+		expect(resolvePythonVenv(options).source).toBe("legacy");
+
+		// 深度探测：解释器在、版本对，但 docx 缺（浅判据放行了它，由这里兜住）。
+		const { spawn } = scripted([
+			[isVenvVersion, ok({ stdout: "Python 3.12.4" })],
+			[isDepsProbe, ok({ stdout: '{"missing": "docx"}' })],
+		]);
+		const probed = await ensurePythonRuntime(options, spawn);
+		expect(probed.status).toBe("failed");
+		if (probed.status !== "failed") throw new Error("期望失败态");
+		expect(probed.phase).toBe(NOT_READY_PHASE);
+		expect(probed.error).toContain("复用的既有目录");
+		expect(probed.error).toContain("缺 docx");
+		expect(probed.error).not.toContain("已安装但当前不可用");
+		// 三步引导仍要给全：去哪修、修哪里（装进托管根）、不删旧目录。
+		expect(probed.error).toContain("设置 → 内置运行时");
+		expect(probed.error).toContain("装进托管根");
+		expect(probed.error).toContain("不会被删除");
 	});
 
 	it("旧路径与托管实例并存 → 以托管根 current 为准（唯一真源）", () => {

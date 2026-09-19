@@ -702,7 +702,12 @@ export function App(): React.JSX.Element {
 			window.clearTimeout(settleTimer);
 		};
 	}, []);
-	/** 面板全屏态：absolute 覆盖主内容区。 */
+	/**
+	 * 面板全屏态：absolute 覆盖整个窗口（含左侧栏）。
+	 *
+	 * 它是**产物面板的属性**，不是面板位的属性 —— 面板位换人（诊断 / 来源）或收起时
+	 * 必须清掉，见下面那条清理 effect 的注释。
+	 */
 	const [panelFullscreen, setPanelFullscreen] = useState(false);
 	/** 产物面板展开/收起（收起 = 隐藏面板但保留 tab 状态，不是清空 tab）。默认关闭——用户进入对话后手动展开。 */
 	const [panelOpen, setPanelOpen] = useState(false);
@@ -750,6 +755,20 @@ export function App(): React.JSX.Element {
 		const timer = window.setTimeout(() => setPanelContent(undefined), PANEL_EXIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [panelOccupied, panelKind]);
+	/**
+	 * 全屏只在「产物面板占着面板位」时成立，其余时刻一律清掉。
+	 *
+	 * 2026-09-19 用户实测的两个症状，同一个根因（全屏是两个独立 state 之一，没人负责收）：
+	 *   ① 全屏里点「收起产物面板」→ 面板藏了但 panelFullscreen 还留着 true →
+	 *      再展开**直接回到全屏**，用户得先手动退出全屏；
+	 *   ② 全屏里切到任务诊断 / 引用来源 → 那两个面板没有全屏形态，却继承了全屏位。
+	 * 判据与渲染处的占用优先序同一份（诊断 > 来源 > 产物）：只有产物面板在前台时
+	 * 全屏才有意义。收起时也清 → 面板先播完「收回停靠位」，再随容器收 0 一起消失
+	 * （而不是从全屏态直接消失）。
+	 */
+	useEffect(() => {
+		if (!(panelOpen && !taskDiagOpen && !sourcesOpen)) setPanelFullscreen(false);
+	}, [panelOpen, taskDiagOpen, sourcesOpen]);
 	/**
 	 * 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。
 	 * 默认展开：侧栏是全局导航锚（任务历史 / 空间 / 设置入口），首页与
@@ -1708,13 +1727,15 @@ export function App(): React.JSX.Element {
 			   起点可跑），而它推开的是消息列 —— 开合只能是「整列瞬跳 + 面板闪现」。
 			   容器常驻后，宽度 0 ↔ panelWidth 的过渡能真跑起来，与左侧栏折叠（DESIGN.md
 			   §5 受控例外 ④）同一手法、同一语义：面板不是浮层，它是占布局的让位栏。
-			   全屏时宽度归零交给绝对定位的面板（它盖满主区、不占 flex 宽）。 */}
+			   全屏**不改容器宽度**（所以这里没有 panelFullscreen 这一项）：全屏的面板是
+			   abspos 覆盖、不在流里，容器保持 panelWidth，对话列就不会在面板只盖住右缘
+			   440px 的第一帧先瞬跳成全宽、再被扫过来的面板盖住（见 index.css 的
+			   .preview-panel.fullscreen 与「全屏不改容器宽度」两条注）。 */}
 			{view === "chat" && (
 				<div
 					className="panel-slot"
 					data-collapsed={!panelOccupied}
-					data-fullscreen={panelFullscreen}
-					style={{ width: `${panelOccupied && !panelFullscreen ? panelWidth : 0}px` }}
+					style={{ width: `${panelOccupied ? panelWidth : 0}px` }}
 				>
 					{panelContent === "diag" ? (
 						<TaskDiagnosticsPanel

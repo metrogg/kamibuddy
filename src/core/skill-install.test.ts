@@ -10,6 +10,9 @@
  * 第三批是**模型创建**那条链路的授权边界（对齐 WorkBuddy 的 `agent_created`）：
  * 覆盖与删除只对模型自己装的技能放行，用户导入 / 手工放置的一律拒 ——
  * 这条判反了就是「模型能改用户的技能」，所以正反两侧都要有断言。
+ *
+ * 另有一条**崩溃回归**（2026-09-19）：源路径含中文时的目录复制。原先用的 `fs.cpSync`
+ * 在这种路径下会把进程原生带走，见「文件夹导入」里那条用例的注释。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -58,6 +61,24 @@ describe("文件夹导入", () => {
 		expect(imported.filePath).toBe(join(configDir, "skills", "meeting-notes", "SKILL.md"));
 		// 同目录的辅助文件（references 机制）必须一并复制。
 		expect(existsSync(join(configDir, "skills", "meeting-notes", "helpers.md"))).toBe(true);
+	});
+
+	it("源路径含中文（非 ASCII）时照常导入，且嵌套目录一并复制", () => {
+		/*
+		 * 崩溃回归：原先用 `fs.cpSync` 复制目录，而它在 Windows 上只要**源路径含非 ASCII
+		 * 字符**就把进程原生带走（退出码 0xC0000409，无 JS 异常、try/catch 拦不住）。
+		 * 中文文件夹在用户桌面极常见，症状是「点一下导入、进程没了」。
+		 * 改回 cpSync 时这条用例会让 worker 直接死掉，而不是给一个可读的失败。
+		 */
+		const folder = join(source, "速通ing", "技能", "meeting-notes");
+		mkdirSync(join(folder, "references"), { recursive: true });
+		writeFileSync(join(folder, "SKILL.md"), "---\nname: meeting-notes\ndescription: 会议纪要\n---\n正文");
+		writeFileSync(join(folder, "references", "extra.md"), "参考资料");
+
+		const imported = importSkill(folder);
+
+		expect(imported.filePath).toBe(join(configDir, "skills", "meeting-notes", "SKILL.md"));
+		expect(existsSync(join(configDir, "skills", "meeting-notes", "references", "extra.md"))).toBe(true);
 	});
 
 	it("单 .md 文件也可导入", () => {

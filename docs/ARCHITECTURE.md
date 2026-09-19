@@ -1494,6 +1494,236 @@ unify-team-output-delivery 的 What Changes），每次注入前再扫一遍 ≤
    ⇒ 成本随挂载点**线性增长**。账本与「扫正文」判的是同一件事（账本首次用会话文件种子化后
    等价、失败口径相同），没有理由在触发点数倍增长的挂载点上再付这份重复代价。
 
+### 4.24 「就绪」必须由证据背书：空壳 venv 不许被当成可用的旧环境（2026-09-19）
+
+**现象（用户报的）**：19:23 那次会话里 `docx_convert` 报
+「Python（docx 引擎） 已安装但当前不可用（缺 docx）」，模型只好改用 Anaconda 的
+python-docx 直接拼 docx 绕过内置通道（会话 `01a0b968-1deb-7681-b373-bbe5f0c9f8e1`；
+运行时日志 `~/.kamibuddy/runtimes/python/events-2026-09-19.jsonl` 两条
+`runtime_ensure failed phase=not-ready source=legacy`）。
+
+**现场（实测取证）**：`~/.venv-html-to-docx` 是 uv 0.11.28 建过的**空壳**
+（当天 14:22 创建，`pyvenv.cfg` 记 `home = D:\anaconda`），`Lib\site-packages` 里
+**只有** `_virtualenv.py` / `.pth`，没有任何第三方包；直接跑它的
+`Scripts\python.exe -c "import docx"` → `ModuleNotFoundError`。而同一天同一时刻，
+模型侧 `python_env` 段拿到的却是
+`- python 3.12 · 就绪 · 文档转换（docx 引擎的解释器）` + 那条解释器绝对路径 ——
+**同一个 run 里两句话互相打脸**，模型据此以为那个 venv 里有引擎依赖
+（它的 thinking 原话：「环境是文档转换 venv，只有 python-docx / html-for-docx / …」）。
+
+**根因（两处，都在判定层）**：
+1. `core/runtimes/python.ts` 的落点优先级原先对 `~/.venv-html-to-docx` **只判
+   `existsSync`** 就复用 —— 空壳 venv 同样满足「存在」；
+2. `core/runtime-inventory.ts` 的 `classify`（浅判据，供设置页那一行与模型注入共用）
+   把「落点来源不是 pending」直接当成就绪，**不做证据区分**：托管实例有 manifest +
+   进位后复验背书，覆盖口是用户的显式指定，而旧路径只有「有个目录」。
+   （`ensure` 自 2026-09-18 起只探不装、不自愈是**刻意设计**，本条不动。）
+
+**决定**：
+1. 复用旧路径前先过一次**只读浅判据** `looksLikeEngineVenv`（`documents/docx-env.ts`，
+   不 spawn）：site-packages 里七个引擎依赖一个都没有 ⇒ 不是我们的环境 ⇒ 不复用，
+   落到 `pending`（对用户与模型都如实说「未安装」，下一步是去设置页点「安装」）；
+   旧目录**不删、不迁入、不写任何东西**。
+2. `not-ready` 文案按**落点来源**分写：`managed` 才说「已安装但当前不可用」，
+   `legacy` 说「当前复用的既有目录里这份环境不可用（缺 docx）：<目录>……点重置把运行时装进
+   托管根，该旧目录不会被删除」，`override` 说「覆盖口指定的目录不可用」。
+
+**已知边界（不假装解决）**：
+- 浅判据**只做一票否决，不做就绪背书**：有一项依赖就放行给转换前的深度探测
+  （`inspectVenv`）。所以「有依赖但坏掉」的旧环境在设置页仍可能显示「就绪」，
+  真话要到转换时报出来 —— 那时文案已分来源、且动作正确（点重置装进托管根）。
+  想把它并进就绪判据（读「最近一次深探 not-ready」）会先撞上
+  `installManagedRuntime` 在 `source !== "pending"` 时 early-return：那会让 legacy
+  落点上出现一个点了没反应的「重试安装」死按钮。要彻底解得先改那条 early-return，
+  **留给下一轮**。
+- `readLastRuntimeFailure` 只认落盘的 `failed`：今天那条**旧文案**的历史记录仍会让
+  设置页显示「安装失败（相位 not-ready：…已安装但当前不可用…）」。这是日志如实呈现，
+  不改写既有记录。
+
+**实证**：`npm test` 161 文件 / 2,984 通过（1 skipped）；`npm run typecheck`、
+`check:deps`、`check:invariants` 均通过。护栏「改坏 → 看红」两轮：把
+`looksLikeEngineVenv` 改回恒真 → 5 条红（浅判据 3 + 清单 1 + 落点 1）；把
+`notReadyMessage` 换回旧的单一文案 → 1 条红（`legacy` 落点文案）；均已还原。
+
+#### 否决方案
+
+1. **否决：把深度探测（spawn）搬进每次 run 的组装路径。**
+   `classify` 的存在前提就是「不 spawn」（hidden context 每 run 组装一次，几百毫秒
+   不可接受，见 `core/runtime-inventory.ts` 文件头）；而本事故用「读一次 fs」就够判别。
+2. **否决：给清单加第五种状态（`unverified` / `unusable`）。**
+   UI 的主动作与模型文案要各加一格（`RUNTIME_STATUS_LABELS`、`runtimeStatusHint`、
+   渲染分支），而它要表达的动作与「未安装」**完全一样**（去点安装）——
+   多一个状态只多一处口径漂移。
+3. **否决：干脆不再复用旧路径（一律装进托管根）。**
+   spec 对 `~/.venv-html-to-docx` 的要求是「复用或显式迁移，SHALL NOT 静默丢弃」；
+   一份**能用**的旧 venv 会因此作废，用户白下 40–100 MB 的运行时装。
+   浅判据的宽容方向（有依赖就放行）正是为守住这一条。
+4. **否决：把「最近一次 ensure 的 not-ready」并进就绪判据。**
+   会在 legacy 落点上造出死按钮（见上文已知边界）；且 `readLastRuntimeFailure` 是
+   「最后一个 failed」而非「最新一条事件」，老失败会把已修好的环境永久判死。
+5. **否决：自动删掉或自动迁入那个空壳目录。**
+   目录所有权不在我们，删/搬都可能弄丢用户自己的东西（跨卷改名失败即不可用）；
+   spec 的措辞是「不静默丢弃」。本条的处置是**原样保留 + 如实说明未复用它**。
+
+### 4.25 xlsx 预览整页崩（`sheet not found`）：不把 Workbook 的 ref 交给转换库（2026-09-19）
+
+**现象**：打开 .xlsx 产物时整页变「界面渲染出错 / sheet not found」，
+组件栈 `XlsPreview → Workbook`（`src/renderer/office-xlsx.tsx`）。
+
+**根因（两段代码赛跑，均已定位到行）**：
+1. 这条消息只有一个出处：`@fortune-sheet/core` 的 `getSheet()` 在
+   `getSheetIndex(ctx, options.id || ctx.currentSheetId)` 落空时抛 `SHEET_NOT_FOUND`
+   （`core/dist/index.esm.js:76106-76116`）。
+2. `@corbe30/fortune-excel` 解析完会挂一个 `setTimeout(1)`，在里面按
+   `{ id: sheet.id }` 调 `setColumnWidth` / `setRowHeight`
+   （`dist/common/Transform.js:134-142`）—— 这是唯一**无人操作、自动触发**的 `{ id }` 调用。
+3. 而 fortune-sheet 的 `Workbook` 是**先以空 ctx 挂载**（`useState(defaultContext(refs))`，
+   `react/dist/index.esm.js:10815`）、`data` 要等它自己那个以 `originalData` 为依赖的
+   effect 才 `produce` 进 ctx（同文件 `:11088`、deps `:11182`）⇒ 定时器与这两次 commit
+   赛跑：枪响在中间时 ctx 里还没有那些 sheet id，于是抛错；而错误发生在 React 的
+   state updater 里 ⇒ 被顶层 ErrorBoundary 接住，整页报渲染错误。
+
+**实证**（临时探针跑真实文件 `AI-EDA-Agent-Comparison.xlsx`，跑完已删）：
+同一文件的首个 sheet id `"1"`，在**空 ctx** 上调 `api.setColumnWidth(ctx, {}, {id:"1"})`
+→ 抛 `sheet not found`；在**data 灌入后的 ctx** 上同一调用 → 不抛。
+该文件每个 sheet 的数据里本来就带 `config.columnlen`（8 列）与 `config.rowlen`（5 行）。
+
+**决定**：`transformExcelToFortune` 的第 4 个参数（`sheetRef`）**显式传 `undefined`** ——
+那条 `setTimeout` 整条不执行，竞态消失。列宽/行高照旧：fortune-sheet 在 init 时就是
+从 `ctx.config.columnlen / rowlen` 算布局的（`core/dist/index.esm.js:63469-63521`），
+而这两项本来就在数据里；转换库那一步写回的是**同一批数值**（空转）。
+
+#### 否决方案
+
+1. **否决：给那次调用加 try/catch，或在我们自己转发的 ref 代理里吞掉异常。**
+   要在本组件里再包一层 ref 转发（库的签名是 `sheetRef: any`），把「竞态」变成
+   「静默吞错」；而且列宽是否被应用仍取决于那次赛跑 —— 治标、更难排查，
+   与 `AGENTS.md §7`「不写防御性兜底掩盖上游问题」相悖。
+2. **否决：等一帧（rAF）或 setTimeout 更大延迟再调。** 仍是时间赌注，只是窗口更大；
+   且延迟应用会在挂载后产生一次视觉跳变。
+3. **否决：fork / patch fortune-excel。** 为了一个空转的副作用去 fork 一条依赖，
+   维护成本远超收益（钉版本升级都要 rebase）。
+4. **否决：把 `celldata` 预转成 2D `data` 再喂给 Workbook（防另一条 `sheet.data` 断言）。**
+   实测 init 自己会从 `celldata` 建 `data`（`react/dist/index.esm.js:10848-10869`），
+   没有这个坑；多做一步只是把同一份数据抄两遍。
+
+### 4.26 frontmatter 用加载器那一份解析器：不做「比 pi 弱的子集」（2026-09-19）
+
+**现象（用户报的）**：技能页「导入技能」选 `ppt-master` 直接失败，界面红条原文
+
+> `Error invoking remote method 'skills:import': Error: …\ppt-master\SKILL.md:11:
+> 「metadata」的值为空；本解析器不支持多行值，请写成 key: [a, b] 形式`
+
+同一个根因前一天也拦下了官方 `easyeda-api` 技能（`metadata.openclaw.requires.bins`）。
+
+**根因**：真正加载技能与资源的是 pi 的 `loadSkills`（内部用真 `yaml@2.9.0`），
+而 `core/frontmatter.ts` 是自研的**子集**解析器。校验器比它校验的加载器弱 ⇒
+好端端的技能**卡在导入这一步**；而 pi 那条自动加载路径反而只是降级
+（daemon 的 `readSkillMeta` 逐文件降级为「可见、无版本号」）。同一类 bug 这是第三次：
+① WorkBuddy `equity-research` 的 `|` 块标量（当时补了 `|` / `|-` / `>` / `>-`）；
+② easyeda-api 的嵌套 map；③ ppt-master 的嵌套 map + 嵌套数组。
+
+**决定**：
+
+1. `parseFrontmatter(source, label)` 改为复用 **pi 导出的** `parseFrontmatter`
+   （`pi-coding-agent/dist/index.d.ts:31` 有该导出；零新依赖）。对外签名、`ParsedDocument`、
+   五个取值辅助与全部 7 处消费方**一个都不用改**。
+2. `FrontmatterValue` 由 `string | boolean | number | string[]` 放宽为 `unknown`：
+   真 YAML 能产出任意嵌套结构（`metadata` 即典型），旧联合类型只会让类型说谎。
+   形状判定收在取值辅助里 —— 它们本来就 `typeof` 判断并按 §7 响亮报错。
+3. **保留两处自有行为**（有意与 pi 取舍不同）：缺结束 `---` 要报错（pi 静默当「无
+   frontmatter」，还把开头的 `---` 留在正文里，对 modes/scenes 会退化成「缺少字段 name」）；
+   frontmatter 必须是映射且键名非空（`parse()` 对裸标量文档会返回一个字符串，
+   pi 那边把它断言成 `Record` —— 那份类型标注在运行时是假话）。
+4. 一并补上**第三方技能的路径占位符**：技能清单段末句规定 `${SKILL_DIR}` /
+   `${CLAUDE_SKILL_DIR}` 一律展开成**该技能** `<location>` 所在的目录。
+
+**行为变化（实测，已翻转 6 条既有测试期望）**：
+
+| 构造 | 旧（自研解析器） | 新（真 YAML） |
+|---|---|---|
+| `key:` 后跟缩进列表 | 报「不支持多行值」 | 按数组读 |
+| `\|+` / `>+`（keep） | 报错 | 能读 |
+| 值里未加引号的 `: ` | 按第一个冒号切分 | 报 YAML 错（要写就加引号） |
+| `[1, 2]` | 强制 `["1","2"]` | 保真为数字（白名单因此被 `requireStringArray` 响亮拒） |
+| 块内缩进不对齐 | 宽容取最小缩进为基准 | 报 YAML 错 |
+
+**实证**：`npm run check`（typecheck / check:deps / check:tokens / check:model-experience /
+check:invariants / check:expert-assets）六项全过；`npm test` **161 文件 / 2,987 通过
+（1 skipped）**。护栏「改坏 → 看红」：把形状守卫改成 `if (false)`、把 `fileLineSuffix`
+改成恒返回空串 → 正好 **2 条红**（「整块不是映射（裸标量）→ 报错」「报错信息带文件标识与
+行号」），已还原。行为变化本身的红证据是生产现场那条报错 —— 那正是旧实现的红。
+
+#### 否决方案
+
+1. **否决：继续给自研解析器补特例（例如只把嵌套块改成「忽略」）。**
+   这是第三次撞同一面墙（块标量 → 嵌套 map → 嵌套 map+数组），补特例等于赌下一次
+   不出新构造；而「忽略」会让 `metadata.version` 这类字段永远读不到。
+2. **否决：引 `yaml` 作直接依赖、自己写一遍解析。**
+   与 pi 同版本（2.9.0）也只是个需要持续维护的巧合；pi 一旦换解析器或调语义，
+   两份实现又分叉 —— 正是本条要消灭的偏差。复用 pi 的导出让
+   「我们的解析器 == 加载器的解析器」**结构性**成立，而不是靠人记得同步。
+3. **否决：把 `${SKILL_DIR}` 做成环境变量注入。**
+   一个会话里可以同时装多个技能、各指各的目录，而全局变量只能有一个值；
+   更糟的是 `${SKILL_DIR}` 在 PowerShell 与 bash 里**都会被 shell 展开** ——
+   没注入时不是报错，而是静默变成 `/scripts/x.py` 继续跑，比现状更危险。
+4. **否决：在 `use_skill` 返回正文时替换 `${SKILL_DIR}`。**
+   只覆盖自动路径；手动 `/skill:name` 走 pi 内建展开，我们插不进去，两条路径的正文
+   不再逐字同形 —— 违反 `extensions/use-skill-tool.ts` 明确立的同形不变量
+   （它存在的理由是不让模型对技能内相对路径的解析基准漂移）。
+5. **否决：放宽 `FrontmatterValue` 之后连形状判断一起放松。**
+   数组元素保真意味着 `[1, 2]` 不再被静默 stringify；若同时放松 `requireStringArray`，
+   白名单里就会出现数字工具名这类假值。「保真 + 响亮拒绝」必须成对，不能只取一半。
+
+### 4.27 技能导入不用 `fs.cpSync`：源路径含中文会把进程打崩（2026-09-19）
+
+**现象**：技能页「导入技能」选真实技能目录后，**进程以 `0xC0000409` 原生退出** ——
+没有 JS 异常、没有红条、没有日志，界面表现为「点了没反应 / 应用挂了」。
+发现于 §4.26 修完之后：解析那一步不再报错，才暴露出后面这一步。
+
+**现场（二分取证，node v24.11.1 / Windows）**：与文件数、文件名、目录深度全无关，
+唯一相关的是**源路径里有没有非 ASCII 字符** ——
+
+| 用例 | 结果 |
+|---|---|
+| `cpSync` 源含中文（目录里只有 2 个文件） | **崩（0xC0000409）** |
+| `cpSync` 源 ASCII、目标含中文 | 正常（写入侧无关） |
+| `copyFileSync` 从中文源 | 正常 |
+| 手写递归 `mkdir + copyFileSync` 从中文源 | 正常 |
+| `statSync` / `readdirSync` 中文源（只读） | 正常 |
+
+一致性检查：`cpSync` 全仓库只有 `core/skill-install.ts:220-221` 两处调用，都在
+`importSkill` 这条路上；用户侧触发条件极常见（`桌面\速通ing\…` 这类中文文件夹）。
+
+**决定**：`skill-install.ts` 用**手写递归复制** `copyTree`（`mkdirSync` + `readdirSync` +
+`copyFileSync`，全是上面验证正常的 API）替掉那两处 `cpSync`；并补一条**中文路径下的
+导入回归用例**（含嵌套目录），改回 `cpSync` 时该用例会让 worker 直接死掉。
+
+**已知边界**：与 `cpSync` 的行为差异只有一处 —— 符号链接按**目标内容**复制
+（`cpSync` 默认连链接本身一起复制）；指向目录的链接会抛错而不是静默跳过。技能包里的
+链接极罕见，取更宽容的一侧。上游修好之后可以回到 `cpSync`，但那时也没必要急。
+
+**实证**：`npm run check` 六项全过；`npm test` **161 文件 / 2,988 通过（1 skipped）**。
+端到端用生产入口 `importSkill` 跑真实目录（`KAMIBUDDY_CONFIG_DIR` 指向临时目录）：
+中文路径下的 PPT Master **12,995 个文件完整复制**（`templates` 12,450 个与源一致、
+`SKILL.md` 10,185 字节逐字节相同、sidecar 正常落盘），easyeda-api 422 个文件同样通过。
+
+#### 否决方案
+
+1. **否决：只报上游、我们不改。**
+   崩溃点是**我们自己的调用**，而上游修复周期不可控 —— 期间中文路径下的导入一直是
+   「进程没了」。这比报一个可读的错更糟，用户连该改什么都不知道。
+2. **否决：先把源目录复制到 ASCII 临时路径，再 `cpSync`。**
+   13k 文件的技能包等于全量 IO 抄两遍（实测单趟约 18 s），还要额外处理临时目录的清理
+   与失败回滚 —— 为了绕一个已经在手边有正解的 API。
+3. **否决：不递归复制，只落 `SKILL.md`。**
+   会打断 references 机制：技能正文按相对路径引用 `references/`、`scripts/`、`templates/`，
+   这些文件必须在磁盘上（§4.26 Part 2 的 `<location>` 展开也依赖这一点）。
+4. **否决：在 `importSkill` 外层加 try/catch 兜住。**
+   原生崩溃**不是 JS 异常**，catch 拦不住 —— 这正是本条最值得记的一点：
+   面对这类故障，「加个兜底」是假的安全感。
+
+
 ##
 
 ##

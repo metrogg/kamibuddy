@@ -15,6 +15,12 @@
  *   3. 既有 `~/.venv-html-to-docx` —— 迁移期**复用**（就地 ensure/修复，与迁入前的
  *      行为逐字相同），**不静默丢弃**：诊断会明确说「当前复用的就是它、它不在托管根下」，
  *      并给出「点重置即可迁入托管根」的下一步。
+ *      **但「目录存在」不等于「这是我们能用的那一份」**（2026-09-19 修）：空壳 venv
+ *      （uv 建过、依赖没装成，实测 site-packages 里一个第三方包都没有）同样满足
+ *      `existsSync`，原先照单全收 —— 于是「没装」被报成「已安装但缺依赖」，
+ *      设置页与模型注入都说「就绪」，与 docx_convert 的实测结论自相矛盾。
+ *      现在复用它之前先过一次只读浅判据 `looksLikeEngineVenv`（不 spawn）：
+ *      不像引擎环境就不复用，按「尚无可用实例」处理（去点安装），旧目录原样保留。
  *   4. 都没有 —— 由本次安装占位（走托管根的原子安装链路）。
  *
  * 为什么复用而不是自动搬目录：搬一个 venv 要跨目录改名（可能跨卷），失败就是
@@ -31,6 +37,7 @@ import {
 	createEnvContext,
 	initialEnvState,
 	inspectVenv,
+	looksLikeEngineVenv,
 	nextStep,
 	reduce,
 	venvPythonPath,
@@ -129,24 +136,37 @@ export function resolvePythonVenv(options: RuntimeOptions): RuntimeResolution {
 		brokenCurrent = `托管根 current 指向 ${current}，但该实例没有 manifest（未进位完成或已损坏）—— 该指针已被忽略`;
 	}
 	const legacy = join(options.homeDir, LEGACY_DOCX_VENV_DIRNAME);
+	/*
+	 * 复用旧路径之前先过**只读浅判据**（不 spawn）：`existsSync` 只说明「有个目录」，
+	 * 空壳 venv（uv 建过、依赖没装成）同样满足它。照单全收就会把「没装」说成
+	 * 「装了但缺依赖」，而设置页与模型注入都据此写「就绪」—— 同一个 run 里两句话打脸。
+	 * 判为「不像我们的环境」时落回下面的 pending（=「尚未安装」，去点安装），
+	 * 旧目录一个字节都不动（不删、不迁入：所有权不在我们）。
+	 */
+	let ignoredLegacy = "";
 	if (existsSync(legacy)) {
-		return {
-			instanceDir: instance,
-			version: PYTHON_RUNTIME_VERSION,
-			activeDir: legacy,
-			source: "legacy",
-			detail:
-				`复用托管根之外的既有目录 ${legacy}（未迁入托管根；点「重置并重新安装」可迁入，旧目录不会被删除）` +
-				brokenCurrent,
-			managed: false,
-		};
+		if (looksLikeEngineVenv(legacy, options.platform)) {
+			return {
+				instanceDir: instance,
+				version: PYTHON_RUNTIME_VERSION,
+				activeDir: legacy,
+				source: "legacy",
+				detail:
+					`复用托管根之外的既有目录 ${legacy}（未迁入托管根；点「重置并重新安装」可迁入，旧目录不会被删除）` +
+					brokenCurrent,
+				managed: false,
+			};
+		}
+		ignoredLegacy =
+			`；既有目录 ${legacy} 存在但里面没有任何引擎依赖（空壳或不是 docx 引擎环境）—— ` +
+			"未复用它（点「安装」会把运行时装进托管根，该目录不会被删除）";
 	}
 	return {
 		instanceDir: instance,
 		version: PYTHON_RUNTIME_VERSION,
 		activeDir: join(instance, PYTHON_VENV_DIRNAME),
 		source: "pending",
-		detail: `尚无可用托管实例，将由本次安装落位到 ${instance}${brokenCurrent}`,
+		detail: `尚无可用托管实例，将由本次安装落位到 ${instance}${brokenCurrent}${ignoredLegacy}`,
 		managed: true,
 	};
 }

@@ -13,12 +13,15 @@
  * 两处分工：这里管「相位表对不对」，那边管「装配链路通不通」。
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	createEnvContext,
 	initialEnvState,
 	inspectVenv,
+	looksLikeEngineVenv,
 	nextStep,
 	parsePythonVersion,
 	reduce,
@@ -375,5 +378,60 @@ describe("inspectVenv 四态（只探测）", () => {
 			[isDepsProbe, ok({ stdout: '{"missing": null}' })],
 		]);
 		await expect(inspectVenv(CTX, spawn)).resolves.toEqual({ kind: "ready" });
+	});
+});
+
+/**
+ * 浅判据（只读 fs、不 spawn）：它挡的是「空壳 venv 被当成可复用的旧环境」——
+ * 2026-09-19 实测的现场就是 `~/.venv-html-to-docx` 里只有 `_virtualenv.py`，
+ * 而落点解析只判「目录存在」，于是「没装」被说成「已安装但缺 docx」。
+ * 钉两条边界：**空壳必须被否决**、**有一项依赖就不许越权否决**（交深度探测）。
+ */
+describe("looksLikeEngineVenv（浅判据：只做一票否决）", () => {
+	let root = "";
+	beforeAll(() => {
+		root = mkdtempSync(join(tmpdir(), "kami-docx-venv-"));
+	});
+	afterAll(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	/** 造一份 venv 骨架 + 指定名字的顶层模块（目录形态或单文件形态）。 */
+	function venvWith(name: string, layout: "win32" | "posix", form: "dir" | "file"): string {
+		const venv = join(root, `${name}-${layout}-${form}`);
+		const sitePackages =
+			layout === "win32"
+				? join(venv, "Lib", "site-packages")
+				: join(venv, "lib", "python3.12", "site-packages");
+		mkdirSync(sitePackages, { recursive: true });
+		if (name !== "") {
+			if (form === "dir") mkdirSync(join(sitePackages, name), { recursive: true });
+			else writeFileSync(join(sitePackages, `${name}.py`), "", "utf8");
+		}
+		return venv;
+	}
+
+	it("空壳 venv（uv 建过、依赖一个没装成）→ 不像：这就是「未安装」而不是「就绪」", () => {
+		expect(looksLikeEngineVenv(venvWith("", "win32", "dir"), "win32")).toBe(false);
+	});
+
+	it("一个引擎依赖都没装的 site-packages → 不像", () => {
+		// 别人的 venv：有第三方包，但没有一个是我们的引擎依赖。
+		const venv = venvWith("numpy", "win32", "dir");
+		expect(looksLikeEngineVenv(venv, "win32")).toBe(false);
+	});
+
+	it("装了任一引擎依赖 → 像（放行给深度探测，浅判据不替它背书）", () => {
+		expect(looksLikeEngineVenv(venvWith("docx", "win32", "dir"), "win32")).toBe(true);
+		// 单文件形态的模块也算（不为打包形态误杀，否则会错杀一份能用的旧 venv）。
+		expect(looksLikeEngineVenv(venvWith("bs4", "win32", "file"), "win32")).toBe(true);
+	});
+
+	it("posix 布局（lib/python3.12/site-packages）同样认", () => {
+		expect(looksLikeEngineVenv(venvWith("lxml", "posix", "dir"), "posix")).toBe(true);
+	});
+
+	it("目录根本不存在 → 不像（不做任何写入）", () => {
+		expect(looksLikeEngineVenv(join(root, "nope"), "win32")).toBe(false);
 	});
 });

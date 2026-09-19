@@ -819,11 +819,21 @@ export async function formatSkillsSection(skills: readonly SkillDescriptor[]): P
  * 一句指引把模型引到对的工具上；read 作为兜底路径保留（模式白名单不一定有 use_skill）。
  * 「技能名不许凭记忆编」这条约束在约定句里明写：它同时管两条路径 ——
  * 编出来的技能名在 use_skill 会撞错、在 read 会撞一个不存在的路径。
+ *
+ * 末句是**第三方技能的路径占位符**约定（2026-09-19 加，见 §4.26）。生态里的 SKILL.md
+ * 普遍写 `${SKILL_DIR}/scripts/x.py` / `${CLAUDE_SKILL_DIR}`，并假定宿主会告知那是哪个
+ * 目录（ppt-master 正文原话：「Retain the host-provided absolute directory containing
+ * this file as SKILL_DIR」）。我们**不能**靠环境变量满足它：一个会话里可以同时装多个
+ * 技能，各指各的目录，而 SKILL_DIR 只能有一个值；更糟的是 `${SKILL_DIR}` 在
+ * PowerShell 与 bash 里都会被 shell 展开，**没注入时不是报错，而是静默变成
+ * `/scripts/x.py` 接着跑**。所以只给展开规则、让模型按每条的 <location> 现算。
  */
 const SKILL_INVOCATION_NOTE =
 	"要加载上面某个技能时：优先调用 use_skill（command 填该技能 <name> 里的技能名）；" +
 	"当前会话没有 use_skill 工具时，用 read 读取它的 <location>。" +
-	"技能名与路径都必须来自上面的清单，不要凭记忆拼写。";
+	"技能名与路径都必须来自上面的清单，不要凭记忆拼写。" +
+	"技能正文里出现 ${SKILL_DIR} 或 ${CLAUDE_SKILL_DIR} 时，一律展开成该技能 <location> 所在的目录" +
+	"—— 每个技能各有一个值，不要套用别的技能的路径，也不要当成环境变量去查。";
 
 /**
  * SkillDescriptor → pi 的 Skill。

@@ -1268,8 +1268,14 @@ function emitSessionEvent(bucket: SessionBucket<SessionHost>, event: SessionEven
 	 * bucket.sessionId：adoptHost 换桶的时序不保证两者此刻已经一致。
 	 *
 	 * 与 context_usage 同款：递归调用一次 emitSessionEvent，但事件类型已成
-	 * session_stats，不会再进本分支，无递归。session_state 每天只有几十条
-	 *（实测 87/天），不必节流。
+	 * session_stats，不会再进本分支，无递归。
+	 *
+	 * 【2026-09-19 口径更新】session_state 不再是「每天几十条」：agent_start /
+	 * agent_end 之外，session-host 现在也在助手 message_end（每步）重推一次
+	 * —— 圆环的上下文用量靠它按步刷新。这里因此变成每步多推一条 session_stats
+	 * （与台账 fold 钩子那条内容重复，只是到达顺序不同），量级与已有的
+	 * assistant_done 同阶，不节流；真嫌重复就在本分支排除「上下文用量变化」
+	 * 这一类来源，而不是把圆环的刷新回退成每 run 一次。
 	 */
 	if (event.type === "session_state") emitSessionStats(bucket, event.state.sessionId);
 }

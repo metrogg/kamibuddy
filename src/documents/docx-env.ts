@@ -45,6 +45,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DocxEnvStatus } from "../shared/ipc.ts";
 
@@ -158,7 +159,14 @@ export function uvCandidates(ctx: EnvContext): readonly string[] {
 	];
 }
 
-/* ── 依赖冒烟探针 ─────────────────────────────────────────────────── */
+/* ── 引擎依赖：清单 + 深度冒烟 + 浅判据 ───────────────────────────── */
+
+/**
+ * 引擎依赖的**顶层模块名 —— 唯一真源**：深度冒烟（DEPS_PROBE）与浅判据
+ * （looksLikeEngineVenv）都从这里取。两处各写一份必然分叉：改清单时只改一处，
+ * 另一处就悄悄验着旧清单（WB 脚本的 `htmldocx` 笔误正是这种分叉的形态）。
+ */
+export const ENGINE_DEPS_MODULES = ["docx", "html4docx", "bs4", "lxml", "httpx", "PIL", "click"] as const;
 
 /**
  * 逐个 import 冒烟，输出第一个缺失模块的 JSON（{"missing": "lxml"} 或 {"missing": null}）。
@@ -174,13 +182,48 @@ export function uvCandidates(ctx: EnvContext): readonly string[] {
  */
 const DEPS_PROBE = `import importlib, json
 missing = None
-for m in ("docx", "html4docx", "bs4", "lxml", "httpx", "PIL", "click"):
+for m in (${ENGINE_DEPS_MODULES.map((module) => `"${module}"`).join(", ")}):
     try:
         importlib.import_module(m)
     except Exception:
         missing = m
         break
 print(json.dumps({"missing": missing}))`;
+
+/** venv 的 site-packages 候选目录（Win: Lib\site-packages；posix: lib/python<X.Y>/site-packages）。 */
+function sitePackagesDirs(venvDir: string, platform: string): readonly string[] {
+	if (platform === "win32") return [join(venvDir, "Lib", "site-packages")];
+	const lib = join(venvDir, "lib");
+	if (!existsSync(lib)) return [];
+	return readdirSync(lib, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && /^python\d+\.\d+$/.test(entry.name))
+		.map((entry) => join(lib, entry.name, "site-packages"));
+}
+
+/**
+ * 浅判据：这个目录**看起来**是不是装了引擎依赖的 venv（只读 fs，**不 spawn**）。
+ *
+ * 为什么需要它：落点解析对「既有旧路径 `~/.venv-html-to-docx`」原先只判「目录存在」
+ * 就复用，而空壳 venv（uv 建过、依赖没装成）同样满足「存在」—— 于是「没装」被报成
+ * 「已安装但缺依赖」，设置页与模型注入都说「就绪」，与 docx_convert 的实测结论
+ * 自相矛盾。2026-09-19 本机实测撞上过一次：那个目录里只有 `_virtualenv.py`，
+ * site-packages 一个第三方包都没有。
+ *
+ * 语义上它只做**一票否决**，不做就绪背书：七个模块一个都没有 ⇒ 这不是我们的环境
+ * （空壳 / 别人的 venv），不算就绪；有一个以上就交给深度探测（inspectVenv）去判 ——
+ * 浅判据替不了「真跑一次 import」，它只挡「连一个模块都没有」这种一眼假。
+ * 有意宽容那一侧：宁可漏判（放行给深度探测）也不错杀 —— 错杀一份能用的旧 venv 会让
+ * 用户白下一份运行时装，而 spec 对旧路径的要求是**复用**、不静默丢弃。
+ */
+export function looksLikeEngineVenv(venvDir: string, platform: string): boolean {
+	return sitePackagesDirs(venvDir, platform).some(
+		(dir) =>
+			existsSync(dir) &&
+			ENGINE_DEPS_MODULES.some(
+				(module) => existsSync(join(dir, module)) || existsSync(join(dir, `${module}.py`)),
+			),
+	);
+}
 
 /** 从 `python --version` 输出（stdout 或 stderr）解析 "3.12.4" 这样的版本串。 */
 export function parsePythonVersion(output: string): string | undefined {

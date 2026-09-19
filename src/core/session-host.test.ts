@@ -1299,6 +1299,58 @@ describe("auto_retry / queue_update 转发与台账", () => {
 	});
 });
 
+/**
+ * 上下文用量按**步**刷新（2026-09-19 修）：此前 emitState 只挂在 run 边界与各
+ * setter 上，一次几十步的 run 里圆环（输入区左组的占用指示）从 agent_start 一路
+ * 冻到 agent_end。事件日志实证：40 步的会话只发了 4 条 context_usage。
+ *
+ * 本测试用一个「每步给新读数」的假会话 —— 只要 session-host 不再按步重推
+ * session_state，取值序列就停在开跑时的那个数上，测试必红。
+ */
+describe("上下文用量按步刷新", () => {
+	/** 假会话：getContextUsage 的返回值由测试逐段推进（模拟 pi 读 agent state 里最新的 usage）。 */
+	function createUsageSession(): { session: unknown; setUsed: (n: number) => void } {
+		const { session } = createLedgerSession();
+		let used = 100;
+		(session as { getContextUsage: () => unknown }).getContextUsage = () => ({
+			tokens: used,
+			contextWindow: 200_000,
+			percent: used / 2000,
+		});
+		return {
+			session,
+			setUsed: (n) => {
+				used = n;
+			},
+		};
+	}
+
+	it("每个助手 message_end 重推一条带最新用量的 session_state", () => {
+		const events: SessionEvent[] = [];
+		const { ledger } = createFakeLedger();
+		const { session, setUsed } = createUsageSession();
+		const host = createLedgerHost(session, (e) => events.push(e), ledger);
+
+		runStarted(host);
+		// 第 1 步
+		translate(host, { type: "turn_start" } as unknown as AgentSessionEvent);
+		assistantStart(host);
+		setUsed(140);
+		assistantEnd(host, "toolUse");
+		// 第 2 步（工具跑完后的下一次模型调用）
+		translate(host, { type: "turn_start" } as unknown as AgentSessionEvent);
+		assistantStart(host);
+		setUsed(190);
+		assistantEnd(host, "stop");
+
+		const pushed = events
+			.filter((e): e is SessionStateEvent => e.type === "session_state")
+			.map((e) => e.state.contextUsage?.usedTokens);
+		// agent_start 一条 + 每步一条；取值随步推进 —— 冻结在 run 边界的话只会是 [100, 100]。
+		expect(pushed).toEqual([100, 140, 190]);
+	});
+});
+
 describe("turn 边界 → 台账 llm_call", () => {
 	function driveTurn(host: SessionHost): void {
 		runStarted(host);

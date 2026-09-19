@@ -689,6 +689,12 @@ describe("formatSkillsSection", () => {
 		expect(section).toContain("<location>");
 		// 「技能名不许凭记忆编」的约束语义必须保留。
 		expect(section).toContain("不要凭记忆拼写");
+		// 第三方技能的路径占位符：按该技能自己的 <location> 展开，且明确不许当环境变量去查
+		// （一个会话里多个技能各有各的目录，全局变量给不出正确值 —— §4.26）。
+		expect(section).toContain("${SKILL_DIR}");
+		expect(section).toContain("${CLAUDE_SKILL_DIR}");
+		expect(section).toContain("<location> 所在的目录");
+		expect(section).toContain("不要当成环境变量去查");
 		// 约定句在 pi 的清单之后（追加，不是重写）。
 		expect(section.indexOf("</available_skills>")).toBeLessThan(section.indexOf("优先调用 use_skill"));
 	});

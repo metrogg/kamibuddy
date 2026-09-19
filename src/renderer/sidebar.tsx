@@ -15,10 +15,10 @@ import type { SessionSummary } from "@shared/ipc.ts";
 import { formatMessageTime } from "@shared/message-time.ts";
 import type { SessionGroups, SpaceGroup } from "./session-groups.ts";
 import { resolveSessionOrigin, sessionRowTitle } from "./session-origin.ts";
+import { BUDDY_LOGO } from "./buddy-logo.ts";
 import {
 	IconAssistant,
 	IconAutomation,
-	IconBrand,
 	IconBranch,
 	IconChart,
 	IconChevronDown,
@@ -762,8 +762,10 @@ export function Sidebar({
 
 			<div className="sidebar-footer">
 				{/* 品牌徽标：纯装饰的视觉锚点（对标 WorkBuddy 侧栏底部的彩色标识），
-				    不挂交互——点它没有对应动作，做成按钮反而骗点击。 */}
-				<IconBrand size={22} className="footer-brand" />
+				    不挂交互——点它没有对应动作，做成按钮反而骗点击。
+				    2026-09-19 由内置的 SVG 徽标（原 IconBrand）换成应用 logo，
+				    与回合头的 agent 头像同一张图（buddy-logo.ts）。 */}
+				<img className="footer-brand" src={BUDDY_LOGO} width={22} height={22} alt="" />
 				<span className={`link-dot link-dot-${link.kind}`} />
 				<span className="footer-text">
 					{link.kind === "connecting" && "正在启动…"}

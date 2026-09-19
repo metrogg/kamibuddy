@@ -795,10 +795,14 @@ textarea:focus-visible {
 }
 
 /* 底部品牌徽标：唯一的彩色元素，撑起左下角的视觉锚点（对标 WorkBuddy）。
-   不参与压缩，也不吃 footer 的灰字色——颜色写在图标自身的渐变里。 */
+   不参与压缩，也不吃 footer 的灰字色——颜色在图片自身里。
+   2026-09-19 由内置 SVG 徽标换成应用 logo（buddy-logo.ts）：图是方形光栅件，
+   圆角按原 SVG 的 rx=7/24（22px 下 ≈ 6px）取 --radius-sm 档，形状与换图前一致。 */
 .footer-brand {
 	flex: 0 0 auto;
 	display: block;
+	border-radius: var(--radius-sm);
+	object-fit: cover;
 }
 
 .link-dot {
@@ -2547,6 +2551,17 @@ textarea:focus-visible {
 	margin-top: 2px;
 }
 
+/* 头像图（2026-09-19 由 IconAssistant 线框图标换成应用 logo，见 buddy-logo.ts）：
+   撑满圆形内区并继承圆角；object-fit: cover 让它只在必要时裁切。
+   容器那圈 1px 描边与底色原样保留 —— 换图后它读作头像外圈，与 WB 的圆形头像同形。 */
+.turn-avatar-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border-radius: inherit;
+	object-fit: cover;
+}
+
 .turn-meta {
 	display: flex;
 	flex-direction: column;
@@ -4197,11 +4212,11 @@ textarea:focus-visible {
 	visibility: hidden;
 }
 
-/* 全屏切换时容器宽度会 440 → 0，但那一刻面板已 absolute 盖满主区、消息列被它遮住，
-   「看着它滑」既看不见也无意义 —— 停掉过渡，省掉这一串无谓的逐帧重排。 */
-.panel-slot[data-fullscreen="true"] {
-	transition: none;
-}
+/* 全屏**不改容器宽度**（2026-09-19 用户反馈「全屏没动效」时一并改的）：容器保持
+   panelWidth，对话列就停在停靠态不重排 —— 全屏的面板是 abspos 覆盖（见
+   .preview-panel.fullscreen），它在不在流里跟容器宽度无关。此前的写法是全屏时把
+   容器宽归零 + 停过渡：那会让消息列在面板仅盖住右缘 440px 的第一帧就瞬跳成全宽，
+   左半边露着一段「刚被撑开的对话列」，然后才被扫过来的面板盖住。 */
 
 /* 下面两条是**停过渡的两个高频路径**（本容器新引来的，必须与面板本体同口径，
    否则面板不追鼠标、容器却在追，滑动过程中两者宽度错拍 —— 看着像面板被拉伸）。
@@ -4227,7 +4242,10 @@ textarea:focus-visible {
 	flex-shrink: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg);
-	/* 宽度过渡：全屏切换需要（WorkBuddy 240ms 同参数，归档 --dur-base）。 */
+	/* 宽度过渡（受控例外 ③）：停靠态调宽（sash ±10px）与**全屏切换**共用它 ——
+	   全屏就是这条 width 从 panelWidth 扫到 100%（WorkBuddy 240ms 同参数，归档 --dur-base）。
+	   进出同档：全屏是同一个盒子的状态切换（面板不离开屏幕），不套 §5.8 的进出场不对称
+	   —— 左侧栏折叠（例外 ④，同一类「让位栏」的状态切换）也是对称的 --dur-base。 */
 	transition: width var(--dur-base) ease;
 }
 
@@ -4235,7 +4253,7 @@ textarea:focus-visible {
    若仍带 200ms 过渡，面板就「追不上」鼠标（黏滞感），且整个过程持续逐帧重排
    （面板内含 Monaco / PDF / Office 预览，代价更高）。标记只由 handleSashMouseDown
    的鼠标路径加/去 —— 键盘调宽是离散的 ±10px 操作，带过渡反而更顺，故不禁用。
-   全屏态 .fullscreen 本就是 transition: none（且全屏不渲染 sash），不受影响。 */
+   全屏态不渲染 sash（拖拽无意义），标记不会被加上去。 */
 .preview-panel[data-dragging="true"] {
 	transition: none;
 }
@@ -4246,22 +4264,31 @@ textarea:focus-visible {
    触到 clamp 上下限那一刻最明显。标记由 App.tsx 的 windowResizing 给出，
    松手后 RESIZE_SETTLE_MS 自动撤销。
    **过渡本身不能去掉** —— 面板全屏切换依赖它（受控例外 ③）。
-   全屏态 .fullscreen 本就是 transition: none，不受影响。 */
+   resize 期间正在全屏的话，量到的可用宽变了也不该扫 —— 与用户拖窗口边缘错拍同一个理由。 */
 .app[data-resizing="true"] .preview-panel {
 	transition: none;
 }
 
-/* 全屏：absolute 覆盖主内容区，宽由定位撑满（非 width，避免与 transition 打架）。 */
+/* 全屏：absolute 覆盖**整个窗口**（含左侧栏 —— 包含块是 .app，本容器是 static）。
+   宽度靠这条 width 从停靠位扫过去：右缘锚定在 right: 0，左缘随 width 增长向左铺开，
+   内容跟着逐帧重排（与停靠态调宽是同一条过渡，同一代价，已知并接受）。
+   ⚠️ 三个「不能改」的点（2026-09-19 修「全屏没动效」时逐条试出来的）：
+   1. **不能置 `transition: none`**：那正是「全屏瞬切」的根因 —— 类名一换，
+      width 从 panelWidth 直接跳到 100%，没有中间帧。也别改成 keyframes（本该有的
+      「入场跑一次」）：动画会压住同一属性上的过渡，停靠态调宽（sash ±10px）就哑了。
+   2. **不能写 `left: 0`**：与 `right` 同时给会让盒子过度约束，CSS 取 `left + width`、
+      丢掉 `right` —— 左缘被钉死在窗口左边，看起来是「从左边长出来」而不是「从停靠位扫过去」。
+   3. **不能靠 `width: auto` 铺满**：auto 不可插值，两端没有可过渡的值对（老写法的坑）。
+   退出方向由 artifact-panel 的「视觉相位」多留一档再摘类（退出时先摘类就变回在流的 440px
+   盒子，那一帧已到终态，同样没有起点可跑）。 */
 .preview-panel.fullscreen {
 	position: absolute;
 	top: 0;
 	right: 0;
 	bottom: 0;
-	left: 0;
 	z-index: var(--z-overlay);
 	border-left: 0;
 	box-shadow: -8px 0 24px rgb(0 0 0 / 6%);
-	transition: none;
 }
 
 /* sash 拖拽手柄：左缘 4px 热区，视觉上是 border 的一部分，hover 才显色。

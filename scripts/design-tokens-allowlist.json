@@ -59,24 +59,6 @@
       "reason": "专家身份色板之一（见 #5b8ff9 条）：8 色互异色相，非设计尺度。"
     },
     {
-      "file": "src/renderer/icons.tsx",
-      "snippet": "stopColor=\"#3ecf8e\"",
-      "rule": "color",
-      "reason": "IconBrand 品牌标记的渐变起始色：品牌图形专用色，不在设计尺度 token 覆盖范围（--brand 是状态点/品牌位用色，与此渐变不同轨）。"
-    },
-    {
-      "file": "src/renderer/icons.tsx",
-      "snippet": "stopColor=\"#0ea5a4\"",
-      "rule": "color",
-      "reason": "IconBrand 品牌标记的渐变结束色：同「品牌渐变」条，非设计尺度。"
-    },
-    {
-      "file": "src/renderer/icons.tsx",
-      "snippet": "fill=\"#ffffff\"",
-      "rule": "color",
-      "reason": "IconBrand 星形在图块上的固定白填充：是品牌图形内部色（不跟主题），语义非 --primary-text（主色底文字），不引用 token。"
-    },
-    {
       "file": "src/renderer/index.css",
       "snippet": "#c94f4f",
       "rule": "color",

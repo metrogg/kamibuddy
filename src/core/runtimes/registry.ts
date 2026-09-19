@@ -195,6 +195,45 @@ function notInstalledMessage(descriptor: RuntimeDescriptor): string {
 }
 
 /**
+ * 「装了但当前不可用」的统一文案 —— **措辞跟着落点来源走**。
+ *
+ * 为什么必须分写（2026-09-19 修）：「已安装」这句话只对托管实例成立（有 manifest
+ * 与进位复验背书）。复用的旧路径与覆盖口都不是我们装的，用同一句「已安装」会把用户
+ * 引到错误的排查方向（去找那个目录，而不是去装我们这一份）；实测现场正是
+ * 「空壳旧 venv 被说成已安装」。三者该做的事也不同：托管实例=重置这一版；
+ * 覆盖口=按你指定的目录就地重建；旧路径=装进托管根（旧目录一个字节都不动）。
+ * `pending` 那条不可达（上面已按 not-installed 返回），写全只为让 switch 穷尽。
+ */
+function notReadyMessage(
+	descriptor: RuntimeDescriptor,
+	resolution: RuntimeResolution,
+	detail: string,
+): string {
+	const tail = "运行时不随包分发、也不会自动下载。";
+	switch (resolution.source) {
+		case "managed":
+			return (
+				`${descriptor.label} 已安装但当前不可用（${detail}）。` +
+				`请到「设置 → 内置运行时」点「重置并重新安装」——${tail}`
+			);
+		case "legacy":
+			return (
+				`${descriptor.label} 当前复用的既有目录里这份环境不可用（${detail}）：${resolution.activeDir}。` +
+				"它不在托管根下（可能是别的工具留下的环境），请到「设置 → 内置运行时」点" +
+				`「重置并重新安装」把运行时装进托管根 —— 该旧目录不会被删除。${tail}`
+			);
+		case "override":
+			return (
+				`${descriptor.label} 由覆盖口（环境变量）指定的目录不可用（${detail}）：${resolution.activeDir}。` +
+				"请检查那个环境变量指向的环境，或在「设置 → 内置运行时」点「重置并重新安装」" +
+				`就地把这份环境重建——${tail}`
+			);
+		case "pending":
+			return `${descriptor.label} 尚无可用实例（${detail}）。${tail}`;
+	}
+}
+
+/**
  * 清掉上次中断留下的残留：暂存目录 + 未进位的版本目录。
  *
  * 为什么是「清掉重来」而不是「续装」：venv / 解包目录都不存在「半成品可用」的续装点
@@ -373,9 +412,7 @@ export async function ensureRuntime(
 			: inspected.kind === "wrong-version"
 				? `版本不符（当前 ${inspected.version}，需要 ${descriptor.version}）`
 				: "可执行环境不存在";
-	const error =
-		`${descriptor.label} 已安装但当前不可用（${detail}）。` +
-		"请到「设置 → 内置运行时」点「重置并重新安装」——运行时不随包分发、也不会自动下载。";
+	const error = notReadyMessage(descriptor, resolution, detail);
 	appendRuntimeEvent(descriptor, {
 		kind: "runtime_ensure",
 		outcome: "failed",
