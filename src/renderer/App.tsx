@@ -39,7 +39,7 @@ import { TaskDiagnosticsPanel } from "./task-diagnostics-panel.tsx";
 import { collectSources } from "./collect-sources.ts";
 import { collectChanges } from "@shared/artifacts.ts";
 import { PermissionDialog } from "./permission-dialog.tsx";
-import { SettingsView, type SettingsPage } from "./settings/settings-view.tsx";
+import { SettingsView, isSettingsPage, type SettingsPage } from "./settings/settings-view.tsx";
 import { SkillsView } from "./skills-view.tsx";
 import { DiagnosticsView } from "./diagnostics-view.tsx";
 import { StatsView } from "./stats-view.tsx";
@@ -58,6 +58,20 @@ const TITLE_MAX = 24;
  * 取 160ms：松手后过渡只被关住一瞬，用户感知不到。
  */
 const RESIZE_SETTLE_MS = 160;
+
+/**
+ * 右侧面板关闭时，内容延迟卸载的时长（ms）。
+ *
+ * 与 CSS 的 `--dur-base`(200) **必须一致**：容器（.panel-slot）从 panelWidth 收到 0
+ * 的过渡时长就是它。延迟卸载是为了让「面板连着内容一起滑走」跑完 —— 卸载那一刻
+ * 容器已收到 0 宽、内容早被裁掉，所以看不到「内容凭空消失」。
+ * （TSX 读不到 CSS 变量，故这里手抄一份；改 tokens.css 的 --dur-base 要同步改这里 ——
+ * 与上面 RESIZE_SETTLE_MS 同性质：TS 侧的计时窗口必须跟 CSS 的过渡时长对齐。）
+ */
+const PANEL_EXIT_MS = 200;
+
+/** 右侧面板位的三种占用者（同一时刻只渲染一个）。 */
+type PanelKind = "diag" | "sources" | "artifact";
 
 /** 产物面板开关图标（右侧栏隐喻：三条竖线，右条加粗表示面板）。随开关按钮从 chat-header 移到 App 层右上角。 */
 function IconPanelRight({ size = 16 }: { readonly size?: number }): React.JSX.Element {
@@ -707,6 +721,36 @@ export function App(): React.JSX.Element {
 	 */
 	const [sourcesOpen, setSourcesOpen] = useState(false);
 	/**
+	 * 右侧面板位是否被占用（三态任一开着）：诊断 > 来源 > 产物，优先序见渲染处。
+	 * 它既是 .panel-slot 的宽度开关（0 ↔ panelWidth），也是内容该不该挂载的依据。
+	 */
+	const panelOccupied = taskDiagOpen || panelOpen;
+	/**
+	 * 面板位上此刻该显示谁（优先序：诊断 > 来源 > 产物，与渲染处一致）。
+	 * 关闭后**保持最后那个值**到内容真正卸载 —— 不能直接用 taskDiagOpen/sourcesOpen 判：
+	 * 关闭时它们已置 false，三元会立刻落到 ArtifactPanel，滑走的过程里内容会「换脸」
+	 * 成另一个面板。
+	 */
+	const panelKind: PanelKind = taskDiagOpen ? "diag" : sourcesOpen ? "sources" : "artifact";
+	/**
+	 * 面板内容（undefined = 不渲染）。下落比 panelOccupied 晚 PANEL_EXIT_MS。
+	 *
+	 * 为什么需要延迟：「关闭」这一段要**连着内容一起滑走**。若关闭即卸载，内容在开始
+	 * 收窄的那一帧就没了，滑走的是一条空壳 —— 观感上仍是「面板凭空消失」，等于没做
+	 * 退场。留到容器收成 0 宽之后再卸载，卸载那一刻内容已被裁剪挡住，看不见。
+	 * 入场不延迟：内容挂上即出现，跟着容器一起长出来；侧内换面板（诊断↔来源）是
+	 * 同一容器里的内容替换，即时生效。
+	 */
+	const [panelContent, setPanelContent] = useState<PanelKind | undefined>(undefined);
+	useEffect(() => {
+		if (panelOccupied) {
+			setPanelContent(panelKind);
+			return;
+		}
+		const timer = window.setTimeout(() => setPanelContent(undefined), PANEL_EXIT_MS);
+		return () => window.clearTimeout(timer);
+	}, [panelOccupied, panelKind]);
+	/**
 	 * 左侧栏展开/收起（收起 = 完全隐藏，消息流左移占满宽）。
 	 * 默认展开：侧栏是全局导航锚（任务历史 / 空间 / 设置入口），首页与
 	 * 对话页都常驻（WorkBuddy 同款）—— 收起后唯一的展开入口是窗口
@@ -1326,8 +1370,15 @@ export function App(): React.JSX.Element {
 
 	const openSettings = useCallback((page?: SettingsPage) => {
 		setReturnView(view === "chat" ? "chat" : "home");
-		// 深链目标随本次打开一起记：关掉设置时清空，下次不带目标地打开仍落「通用」。
-		setSettingsPage(page);
+		/**
+		 * 深链目标随本次打开一起记：关掉设置时清空，下次不带目标地打开仍落「通用」。
+		 *
+		 * **必须过 isSettingsPage**（不是防御性冗余）：本函数的形参可选，而
+		 * `(page?: SettingsPage) => void` 可以赋值给 `() => void`，于是它被当作 onClick
+		 * 直接传进过子组件 —— React 会把事件当第一个实参送进来。不拦就会把 MouseEvent
+		 * 写成页 id，设置面板整片空白（现象与根因见 settings-view.tsx 的 isSettingsPage）。
+		 */
+		setSettingsPage(isSettingsPage(page) ? page : undefined);
 		setView("settings");
 	}, [view]);
 
@@ -1489,7 +1540,11 @@ export function App(): React.JSX.Element {
 				onRenameWorkspace={renameWorkspace}
 				onRemoveWorkspace={removeWorkspace}
 				onRevealWorkspace={revealWorkspace}
-				onOpenSettings={openSettings}
+				/* 侧栏的 prop 契约是 () => void（它把这条直接挂在设置齿轮的 onClick 上）
+				   —— 传零参闭包而不是传 openSettings 本身：后者形参可选，被当 onClick 时
+				   会吃到 MouseEvent（2026-09-19「打开设置空白」的根因，见 isSettingsPage；
+				   处理手法同 975 行的 newTask）。 */
+				onOpenSettings={() => openSettings()}
 				onOpenDiagnostics={openDiagnostics}
 				onOpenStats={openStats}
 				onOpenSkills={() => setView("skills")}
@@ -1582,7 +1637,8 @@ export function App(): React.JSX.Element {
 						// 与产物/诊断面板同位互斥：面板未展开时先展开，再翻到来源面板。
 						revealPanel("sources");
 					}}
-					onOpenSettings={openSettings}
+					/* 同侧栏：对话页这条 prop 也是 () => void，传零参闭包（见上面的根因注释）。 */
+					onOpenSettings={() => openSettings()}
 					onError={showToast}
 					branchAvailable={branchAvailable}
 					onRestartFrom={restartFromUserMessage}
@@ -1642,49 +1698,64 @@ export function App(): React.JSX.Element {
 					onToast={showToast}
 				/>
 			)}
-			{/* 右侧面板位：同一时刻只渲染一个，三个占用者按优先级排 ——
-		   任务诊断 > 引用来源 > 产物预览。
-		   面板位只在对话任务里出现（WorkBuddy：预览属于任务上下文），首页是引导页、
-		   右侧没有面板。taskDiagOpen 与 panelOpen 的差别在「切会话」：
-		   前者跟随会话（不参与 closePreviewPanel 的清理），后者随会话关闭。 */}
-			{view === "chat" && (taskDiagOpen || panelOpen) && (taskDiagOpen ? (
-				<TaskDiagnosticsPanel
-					sessionId={conversation.state.sessionId}
-					stats={conversation.sessionStats}
-					usageDetail={conversation.usageDetail}
-					axes={{
-						sceneId: conversation.state.sceneId,
-						interactionId: conversation.state.interactionId,
-						expertId: conversation.state.expertId,
-					}}
-					width={panelWidth}
-					onClose={() => setTaskDiagOpen(false)}
-				/>
-			) : sourcesOpen ? (
-				<SourcesPanel
-					sources={sources}
-					width={panelWidth}
-					onClose={() => setSourcesOpen(false)}
-				/>
-			) : (
-				<ArtifactPanel
-					artifacts={conversation.artifacts}
-					changes={changes}
-					cwd={conversation.state.cwd}
-					previewBaseUrl={previewBaseUrl}
-					tabs={previewTabs}
-					active={previewActive}
-					width={panelWidth}
-					fullscreen={panelFullscreen}
-					onWidthChange={setPanelWidth}
-					onToggleFullscreen={() => setPanelFullscreen((v) => !v)}
-					onOpen={openPreview}
-					onPin={openFile}
-					onCloseTab={closePreviewTab}
-					onOpenExternal={openArtifact}
-					onError={showToast}
-				/>
-			))}
+			{/* 右侧面板位：**容器常驻、内容条件挂载**（2026-09-19 补开合动效）。
+			   同一时刻只渲染一个占用者，优先级：任务诊断 > 引用来源 > 产物预览。
+			   面板位只在对话任务里出现（WorkBuddy：预览属于任务上下文），首页是引导页、
+			   右侧没有面板。taskDiagOpen 与 panelOpen 的差别在「切会话」：
+			   前者跟随会话（不参与 closePreviewPanel 的清理），后者随会话关闭。
+
+			   为什么套一层 .panel-slot：面板本体是条件挂载的（挂载即终态，transition 没有
+			   起点可跑），而它推开的是消息列 —— 开合只能是「整列瞬跳 + 面板闪现」。
+			   容器常驻后，宽度 0 ↔ panelWidth 的过渡能真跑起来，与左侧栏折叠（DESIGN.md
+			   §5 受控例外 ④）同一手法、同一语义：面板不是浮层，它是占布局的让位栏。
+			   全屏时宽度归零交给绝对定位的面板（它盖满主区、不占 flex 宽）。 */}
+			{view === "chat" && (
+				<div
+					className="panel-slot"
+					data-collapsed={!panelOccupied}
+					data-fullscreen={panelFullscreen}
+					style={{ width: `${panelOccupied && !panelFullscreen ? panelWidth : 0}px` }}
+				>
+					{panelContent === "diag" ? (
+						<TaskDiagnosticsPanel
+							sessionId={conversation.state.sessionId}
+							stats={conversation.sessionStats}
+							usageDetail={conversation.usageDetail}
+							axes={{
+								sceneId: conversation.state.sceneId,
+								interactionId: conversation.state.interactionId,
+								expertId: conversation.state.expertId,
+							}}
+							width={panelWidth}
+							onClose={() => setTaskDiagOpen(false)}
+						/>
+					) : panelContent === "sources" ? (
+						<SourcesPanel
+							sources={sources}
+							width={panelWidth}
+							onClose={() => setSourcesOpen(false)}
+						/>
+					) : panelContent === "artifact" ? (
+						<ArtifactPanel
+							artifacts={conversation.artifacts}
+							changes={changes}
+							cwd={conversation.state.cwd}
+							previewBaseUrl={previewBaseUrl}
+							tabs={previewTabs}
+							active={previewActive}
+							width={panelWidth}
+							fullscreen={panelFullscreen}
+							onWidthChange={setPanelWidth}
+							onToggleFullscreen={() => setPanelFullscreen((v) => !v)}
+							onOpen={openPreview}
+							onPin={openFile}
+							onCloseTab={closePreviewTab}
+							onOpenExternal={openArtifact}
+							onError={showToast}
+						/>
+					) : null}
+				</div>
+			)}
 			{/*
 			左栏开关：App 层常驻、absolute 钉在窗口左上角（WorkBuddy 同款，
 			独立于侧栏开合）。不能放进 Sidebar 组件内部 —— 侧栏收起时组件

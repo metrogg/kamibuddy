@@ -41,6 +41,27 @@ type SettingsPage = (typeof NAV_ITEMS)[number]["id"];
 /** 供深链使用（首页引导条的「去配置模型」要指名 "models"）。 */
 export type { SettingsPage };
 
+/**
+ * 页 id 白名单判定。给**外部入口**兜底（App 的 `openSettings`）。
+ *
+ * 存在的理由是一次真实事故（2026-09-19 用户报「打开设置是空白的」）：
+ * `openSettings` 的形参是可选的 `page`，而 `(page?: SettingsPage) => void` 在 TS 里
+ * **可以赋值给** `() => void` —— 类型系统放行，于是它被当作 `onClick` 直接传给了
+ * 侧栏底部的设置齿轮。React 调 onClick 时会把事件当第一个实参送进来，`page` 就此
+ * 被写成一个 **MouseEvent**：下面 9 个 `page === "xxx"` 分支全不匹配 → 面板整片空白、
+ * 左导航连高亮都没有（不报错、不 loading，纯静默，极难从界面反推）。
+ *
+ * 类型拦不住这类传参，所以入口按白名单收口：非白名单值一律当「没指定」（落「通用」）。
+ * 加页时要连这张表一起改 —— 它和上面的 NAV_ITEMS 是同一份真相。
+ *
+ * 分工：**真正的修复在调用点**（App 给侧栏/对话页传零参闭包，同 975 行 `newTask` 的
+ * 既有处理）；这道闸是不让同类传参再退化成「静默空白」——它不掩盖上游问题，
+ * 因为合法的深链值（"models" 等）照样逐字通过。
+ */
+export function isSettingsPage(value: unknown): value is SettingsPage {
+	return typeof value === "string" && NAV_ITEMS.some((item) => item.id === value);
+}
+
 interface SettingsViewProps {
 	readonly onClose: () => void;
 	/** 「关于」页的诊断入口：诊断是独立 view，跳转让 App 的 view 状态机做。 */

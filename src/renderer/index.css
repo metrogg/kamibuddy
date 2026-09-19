@@ -4162,6 +4162,64 @@ textarea:focus-visible {
 
 /* ── 产物预览面板（右侧栏） ────────────────────────────────────── */
 
+/* ── 右侧面板位（.panel-slot）：面板开合的动画载体 ─────────────────────
+ *
+ * 结构：`.panel-slot`（常驻、宽度 0 ↔ panelWidth）> 三选一的 .preview-panel（条件挂载）。
+ * 2026-09-19 加这一层，起因是用户实测反馈「右侧边栏没有动画」：面板本体是条件挂载的，
+ * 挂载即终态 —— transition 没有起点可跑，于是开合只能是「消息列瞬跳 + 面板闪现」。
+ * 左侧栏早有 flex-basis 过渡（DESIGN.md §5 受控例外 ④），右侧在此补齐，同一手法、
+ * 同一语义：面板**不是浮层**，它是占布局宽度的让位栏，`transform` 表达不了让位
+ * （transform 不改变布局宽度，只能做浮层覆盖），所以这里动 `width`。
+ *
+ * 三处附则（照抄左侧栏折叠踩过的坑）：
+ *   1. `display: flex` + 子项 `flex-shrink: 0`（.preview-panel 自带）：面板的
+ *      交叉轴高度靠拉伸拿到 100%，退化成 block 容器会让面板高度变成内容高，
+ *      面板内部的滚动区（.preview-view）就撑不满、不再滚动。
+ *   2. `visibility` 参与过渡：折叠过程中保持 visible 到动画结束（离散属性只要有一端
+ *      是 visible 就按 visible 插值），收成 0 之后才把子树移出 Tab 序与 a11y 树。
+ *   3. `overflow: hidden` 常驻：滑动期间面板仍有 panelWidth 宽（它由 props 决定，
+ *      不参与收窄），靠容器裁掉溢出部分 —— 于是「面板带着内容一起滑走」。
+ *      它**不裁全屏态**：全屏的面板是 abspos、包含块是 .app（本容器是 static），
+ *      按 CSS 规则这类后代不受本容器裁剪，全屏照旧铺满主区。
+ *
+ * 代价（与左侧栏折叠同款，已知并接受）：滑动期间消息列每帧重排 —— ChatView 的
+ * ResizeObserver 会跟着更新内容列宽，约 12 帧布局。
+ */
+.panel-slot {
+	flex: 0 0 auto;
+	display: flex;
+	overflow: hidden;
+	transition: width var(--dur-base) var(--ease-out), visibility var(--dur-base);
+}
+
+/* 收起态：只降可见性，宽度由 TSX 的内联 style 给 0（它是运行时状态，不是静态档位）。 */
+.panel-slot[data-collapsed="true"] {
+	visibility: hidden;
+}
+
+/* 全屏切换时容器宽度会 440 → 0，但那一刻面板已 absolute 盖满主区、消息列被它遮住，
+   「看着它滑」既看不见也无意义 —— 停掉过渡，省掉这一串无谓的逐帧重排。 */
+.panel-slot[data-fullscreen="true"] {
+	transition: none;
+}
+
+/* 下面两条是**停过渡的两个高频路径**（本容器新引来的，必须与面板本体同口径，
+   否则面板不追鼠标、容器却在追，滑动过程中两者宽度错拍 —— 看着像面板被拉伸）。
+
+   1) sash 拖拽中：data-dragging 由 artifact-panel 的 handleSashMouseDown 加在
+      **面板本体**上（它自己那份过渡由 .preview-panel[data-dragging] 停），
+      容器用 :has() 跟上 —— 与 .task-item-ops:focus-within 是同一手法。
+      键盘调宽（±10px 离散）不加这个标记，故仍带过渡。 */
+.panel-slot:has(> .preview-panel[data-dragging="true"]) {
+	transition: none;
+}
+
+/* 2) 窗口 resize 手势期间：App 的 resize 监听会改面板宽，带过渡会与窗口边缘错拍。
+   标记照旧挂在 .app 上（见 App.tsx 的 windowResizing）。 */
+.app[data-resizing="true"] .panel-slot {
+	transition: none;
+}
+
 .preview-panel {
 	position: relative;
 	display: flex;
@@ -4206,11 +4264,15 @@ textarea:focus-visible {
 	transition: none;
 }
 
-/* sash 拖拽手柄：左缘 4px 热区，视觉上是 border 的一部分，hover 才显色。 */
+/* sash 拖拽手柄：左缘 4px 热区，视觉上是 border 的一部分，hover 才显色。
+   热区全程压在面板内（left: 0 而非 -2px）：2026-09-19 外面套了 .panel-slot
+   （overflow: hidden，为了开合滑动时裁掉溢出），跨到容器外的那 2px 会被裁掉，
+   只剩 2px 命中区。改到内侧后 4px 完整保留，hover 显色位置与原先几乎一致
+   （原先是 4px 骑在 1px 边框上，现在是 4px 贴着面板左缘）。 */
 .preview-sash {
 	position: absolute;
 	top: 0;
-	left: -2px;
+	left: 0;
 	bottom: 0;
 	width: 4px;
 	cursor: col-resize;
