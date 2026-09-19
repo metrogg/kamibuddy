@@ -116,6 +116,7 @@ import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from ".
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
 import { readMemberTranscriptView } from "./member-transcript.ts";
+import { collectTeamOutputMembers, composeTeamOutputSnapshot } from "./team-output-snapshot.ts";
 import { TeamRegistry } from "./team-runtime.ts";
 import { TeamTaskBoard } from "../core/team-tasks.ts";
 import { readTeams, removeTeam, TEAM_STORE_VERSION, writeTeam, type StoredTeam } from "../core/team-store.ts";
@@ -2540,6 +2541,34 @@ async function createHost(
 				 * （spec: add-supersede-note-and-time-split）。
 				 */
 				composeRunTime: () => host.peekRunTime(),
+				/*
+				 * 团队产出快照通道（`kamibuddy-team-output`，spec: inject-team-output-snapshot）：
+				 * **只挂用户会话（领导）** —— 只有领导名下有团队注册表，子代理 / 定时任务
+				 * 没有团队，装配处显式传 no-op（该 option 必填就是为让漏接编译报错）。
+				 *
+				 * 门控顺序刻意先判开关与桶，再查注册表、最后才读成员会话文件（零成本优先）：
+				 * 团队关闭时这个 handler 每 run 都会跑，先读盘就白付一次 IO；开关关 / 本桶
+				 * 无团队时**一个成员会话文件都不读**。
+				 *
+				 * 为什么不用 `adoptedSessionId`：它是为「问卷/审批必须在宿主 adopt 之后发起」
+				 * 设计的**响亮断言**（空 id 说明 adopt 顺序坏了）。本回调是**读侧**降级口径 ——
+				 * 桶尚未 adopt 时名下定然没有团队，静默跳过才是对的，不该因此把一个 run 打炸。
+				 *
+				 * 不写 try/catch：`readMemberTranscriptView` 内部已 catch（读不到当没产出），
+				 * `teamRegistry.getTeam` 也不抛（AGENTS.md §7：不写防御性兜底掩盖上游问题）。
+				 */
+				composeTeamOutput: (previous) => {
+					if (!isAgentTeamsEnabled()) return undefined;
+					if (bucket.sessionId === "") return undefined;
+					const team = teamRegistry.getTeam(bucket.sessionId);
+					if (team === undefined) return undefined;
+					return composeTeamOutputSnapshot({
+						teamName: team.name,
+						previous,
+						members:
+							collectTeamOutputMembers(team, (sid) => readMemberTranscriptView(sid).output) ?? [],
+					});
+				},
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。

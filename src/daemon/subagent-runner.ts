@@ -376,6 +376,8 @@ export function buildSubagentExtensions(
 			 * 子代理自己那份 run 冻结时刻，与环境块分开去重。
 			 */
 			composeRunTime: () => getHost()?.peekRunTime(),
+			// 非团队会话（子代理没有团队注册表）：团队产出通道不接。
+			composeTeamOutput: () => undefined,
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

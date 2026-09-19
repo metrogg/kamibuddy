@@ -32,7 +32,7 @@
  * hidden context `workspace_context` 每 run 提供（pi 内置的那行 `cwd` 随整串替换
  * 一起没了，所以骨架里也不能再手写一行）。
  *
- * ## 逐 run 会变的事实怎么投递（三条快照通道，spec: persist-context-snapshots / add-supersede-note-and-time-split）
+ * ## 逐 run 会变的事实怎么投递（四条快照通道，spec: persist-context-snapshots / add-supersede-note-and-time-split / inject-team-output-snapshot）
  *
  * 投递方式是「**落盘的持久消息 + 只在内容真变时追加**」，三个判据按序：
  *   (a) 绝不改动系统提示词：provider 的前缀缓存比的是最长公共前缀，而系统
@@ -53,14 +53,19 @@
  *       「不落盘」的辩护理由，现在由去重来满足 —— 落盘与不膨胀不再互斥。
  *   (d) 每条快照正文以取代声明开头（shared/hidden-context.ts 的
  *       SNAPSHOT_SUPERSEDE_NOTE）：追加是 append-only 的，同一通道会并存多份
- *       （时间每分钟一条），必须告诉模型冲突时以最新那条为准。
+ *       （时间每分钟一条），必须告诉模型冲突时以最新那条为准。**例外是
+ *       team-output 通道**：它是增量（旧产出并不被新快照取代，且它们是不同
+ *       内容），故正文不含取代声明 —— 声明在哪条通道写由各自的 composer 决定。
  *
- * 三条通道**各自独立去重、各自追加**（不拼成一条消息）：
+ * 四条通道**各自独立去重、各自追加**（不拼成一条消息）：
  *   - runtime context（记忆内容 + 个性化）—— 变化罕见（记忆被写才变）；
  *   - hidden context（工作目录 / python_env / 记忆指针）—— 环境事实，几乎不变；
  *   - run time（当前时间）—— 按分钟变，但只在跨分钟时追加一条时间块；实测该块
  *     150 字符 / 61 estTokens，其中真新信息只有时间戳 26 字符 ≈11 est，其余是取代声明
  *     （≈26 est）与容器/标签（≈25 est）（构成与口径见 shared/hidden-context.ts 的契约段）。
+ *   - team-output（成员状态行 + 尚未注入过的成员产出）—— 只在「有还没进过领导
+ *     上下文的产出」或状态行变了时才追加；「已注入过」的判据是产出指纹在不在
+ *     上一条同通道快照里（本文件 team-output handler 把它读出来交给 composer）。
  * 合并成一条会让稳定那部分跟着时间每 run 重发（spec: persist-context-snapshots
  * 否决方案 ④）；而「时间与环境块共处一条」的形态（上一版）会让 1,046 字符里
  * 真正变的那 20 字符把整条带上 —— 按新证据改掉（spec:
@@ -79,14 +84,17 @@
  * 运行时仍只依赖注入的回调，同 permission-gate 的做法，便于脱离宿主测试。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 四个 `before_agent_start` handler —— ① 返回**整串 systemPrompt**（pi 把它写成
- * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② / ③ / ④ 三条**持久快照消息**：
+ * What the model sees: 五个 `before_agent_start` handler —— ① 返回**整串 systemPrompt**（pi 把它写成
+ * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② / ③ / ④ / ⑤ 四条**持久快照消息**：
  * 逐 run 可变事实（记忆内容 / 个性化）、hidden context 环境块（工作目录 / python_env / 记忆指针）、
- * 当前时间（`kamibuddy-run-time`），都是 role:"custom" + 具名 customType + display:false，正文以取代
- * 声明开头，落在**本轮用户消息之后**、写进会话文件，内容与上一条**同 customType** 快照逐字节相同时
- * **不追加**（注册顺序固定 ⇒ 消息在请求体里的相对顺序跨调用稳定）。
+ * 当前时间（`kamibuddy-run-time`）、团队产出增量（成员状态行 + 尚未注入过的成员产出，
+ * `kamibuddy-team-output`），都是 role:"custom" + 具名 customType + display:false，落在**本轮用户消息
+ * 之后**、写进会话文件，内容与上一条**同 customType** 快照逐字节相同时**不追加**（注册顺序固定 ⇒ 消息
+ * 在请求体里的相对顺序跨调用稳定）。前三条正文以取代声明开头；team-output 语义是**增量**、
+ * 旧产出不被新快照取代，故正文**不含**取代声明（取代声明由各通道的 composer 自己决定）。
  * Token effect: 系统提示词每请求全量付（常驻在请求头部，与历史长度无关）；每条快照每个 run 最多付一次，
- * 内容没变则一次都不付（不追加）；时间跨分钟时只有时间块重付（实测 150 字符 / 61 estTokens，
+ * 内容没变则一次都不付（不追加）—— team-output 同理：没有新产出、状态行也逐字节没变时一个字节都不付；
+ * 时间跨分钟时只有时间块重付（实测 150 字符 / 61 estTokens，
  * 其中真新信息只有时间戳 26 字符 ≈11 est），环境块不重付；沉积进历史后
  * 按普通消息参与后续每轮前缀（命中价）。
  * KV Cache effect: 系统提示词是缓存前缀的**头部** —— 它内部一个字节变化就让其后的一切（含整段历史）
@@ -100,13 +108,15 @@ import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
 	RUN_TIME_CUSTOM_TYPE,
 	RUNTIME_CONTEXT_CUSTOM_TYPE,
+	TEAM_OUTPUT_CUSTOM_TYPE,
 } from "../shared/observability.ts";
 import type { PromptContextOptions } from "../core/prompt-composer.ts";
 
 /*
- * 三条快照通道的自定义类型（pi 的 CustomMessage.customType）住在
+ * 四条快照通道的自定义类型（pi 的 CustomMessage.customType）住在
  * shared/observability.ts（`RUNTIME_CONTEXT_CUSTOM_TYPE` /
- * `HIDDEN_CONTEXT_CUSTOM_TYPE` / `RUN_TIME_CUSTOM_TYPE`）：消费点不止本扩展
+ * `HIDDEN_CONTEXT_CUSTOM_TYPE` / `RUN_TIME_CUSTOM_TYPE` /
+ * `TEAM_OUTPUT_CUSTOM_TYPE`）：消费点不止本扩展
  * （会话导出 / 翻译过滤 / request_snapshot 都按它认条目），而 core 不许 import
  * extensions（AGENTS.md §1）—— 常量放 shared 才是唯一实现处，这里 import 用。
  */
@@ -169,6 +179,14 @@ export interface PromptSwitchOptions {
 	 * 返回 undefined / 空白 = 本 run 不注入。
 	 */
 	readonly composeRunTime: () => string | undefined;
+	/**
+	 * 第四条快照通道：团队产出增量（成员状态行 + 尚未注入过的成员产出正文）。
+	 *
+	 * 与另外三条的差别：**它需要上一条同通道快照的正文**（`previous`）——
+	 * 「哪些成员产出已经注入过」的判据是产出指纹有没有出现在上一条同通道快照里，
+	 * 所以基线必须由调用方（本文件的 handler）读出来传进去。
+	 */
+	readonly composeTeamOutput: (previous: string | undefined) => string | undefined;
 }
 
 /**
@@ -234,20 +252,21 @@ export function createPromptSwitch(options: PromptSwitchOptions) {
 		});
 
 		/*
-		 * 三条快照通道各注册一个 handler。pi 的单次 before_agent_start 里每个
+		 * 四条快照通道各注册一个 handler。pi 的单次 before_agent_start 里每个
 		 * handler 只能返回**一条** message，而 runner 会遍历同一扩展注册的**全部**
 		 * before_agent_start handler、把它们各自的 message 依次收进 messages 数组
 		 * （dist/core/extensions/runner.js 的 emitBeforeAgentStart：
 		 * `for (const handler of handlers) … messages.push(result.message)`；
-		 * loader.js 的 `on` 也是 push 进数组而非覆盖）。所以「三个 handler」就是
-		 * 「三条独立快照」——不必把几块正文拼成一条（合并的代价见文件头）。
+		 * loader.js 的 `on` 也是 push 进数组而非覆盖）。所以「四个 handler」就是
+		 * 「四条独立快照」——不必把几块正文拼成一条（合并的代价见文件头）。
 		 *
 		 * **注册顺序固定**（systemPrompt → runtime-context → hidden-context →
-		 * run-time）：handler 的返回按注册序收进 messages 数组，于是三条快照在
-		 * 请求体与会话文件里的**相对顺序跨调用稳定** —— 顺序一变就是位置变化，
-		 * 缓存前缀在那里断掉。调整顺序等于改模型可见的形态，须同步本文件头的契约段。
+		 * run-time → team-output）：handler 的返回按注册序收进 messages 数组，于是
+		 * 四条快照在请求体与会话文件里的**相对顺序跨调用稳定** —— 顺序一变就是位置
+		 * 变化，缓存前缀在那里断掉。调整顺序等于改模型可见的形态，须同步本文件头的
+		 * 契约段。
 		 *
-		 * 三条通道各自去重、各自追加：各自读自己的 customType 基线，互不影响。
+		 * 四条通道各自去重、各自追加：各自读自己的 customType 基线，互不影响。
 		 */
 		pi.on("before_agent_start", (_event, ctx) =>
 			snapshotMessage(ctx, RUNTIME_CONTEXT_CUSTOM_TYPE, options.composeRuntimeContext()),
@@ -258,5 +277,23 @@ export function createPromptSwitch(options: PromptSwitchOptions) {
 		pi.on("before_agent_start", (_event, ctx) =>
 			snapshotMessage(ctx, RUN_TIME_CUSTOM_TYPE, options.composeRunTime()),
 		);
+		/*
+		 * team-output 比前三条多一步：先读出**上一条同通道快照的正文**交给 composer
+		 * —— 「哪些成员产出已经注入过」的判据是产出指纹在不在那条快照里，而这个基线
+		 * 只有 handler 手里的 ctx 读得出来（见 PromptSwitchOptions.composeTeamOutput）。
+		 * 读会话失败按「没有基线」降级（try/catch 的理由同 snapshotMessage 的注释）。
+		 */
+		pi.on("before_agent_start", (_event, ctx) => {
+			let previous: string | undefined;
+			try {
+				previous = lastSnapshotContent(
+					ctx.sessionManager.buildContextEntries(),
+					TEAM_OUTPUT_CUSTOM_TYPE,
+				);
+			} catch {
+				previous = undefined;
+			}
+			return snapshotMessage(ctx, TEAM_OUTPUT_CUSTOM_TYPE, options.composeTeamOutput(previous));
+		});
 	};
 }

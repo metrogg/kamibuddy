@@ -586,6 +586,21 @@ export const HIDDEN_CONTEXT_CUSTOM_TYPE = "kamibuddy-hidden-context";
  */
 export const RUN_TIME_CUSTOM_TYPE = "kamibuddy-run-time";
 
+/**
+ * **团队产出增量**上下文快照消息的自定义类型，即第四条通道，同样由
+ * extensions/prompt-switch.ts 的 before_agent_start handler 产出
+ * （内容来自 daemon 在 run 开始时拼装的「成员状态行 + 尚未注入过的成员产出」）。
+ *
+ * 与上面三条的差别只有一处，但正因这一处才必须单列常量：它**不写取代声明**
+ * （语义是增量、不是「以最新为准」的事实 —— 旧产出并不被新快照取代），
+ * 所以取代声明由各通道的 composer 自己决定、不在这条快照的投递机制里。
+ *
+ * 定义在这里而不是扩展里的理由同上：它是会话文件里 `custom_message` 条目的身份，
+ * 消费点与会话导出过滤 / 翻译过滤 / request_snapshot 的逐条清单一致，
+ * 而 core 不许 import extensions（AGENTS.md §1），常量放 shared 才是唯一实现处。
+ */
+export const TEAM_OUTPUT_CUSTOM_TYPE = "kamibuddy-team-output";
+
 /** 系统提示词一个分段的 provenance（source 来自 prompt-composer 的 PromptSegmentSource）。 */
 export interface SystemSegmentStat {
 	readonly source: string;

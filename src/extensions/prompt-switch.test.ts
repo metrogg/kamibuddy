@@ -2,11 +2,12 @@
  * 提示词切换扩展的胶水测试（仿 permission-gate.test 的假 ExtensionAPI）。
  *
  * 策略本体在 prompt-composer / resources 里测过了，这里钉三类东西：
- *   1. 接缝：before_agent_start 被注册四个 handler（systemPrompt + 三条快照
+ *   1. 接缝：before_agent_start 被注册五个 handler（systemPrompt + 四条快照
  *      通道）、每次触发都带「当时的两轴」去 compose、compose 的返回值原样成为
  *      systemPrompt；
- *   2. 快照通道：三条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
- *      独立追加（内容未变不返回 message ⇒ pi 不追加条目），空内容不注入；
+ *   2. 快照通道：四条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
+ *      独立追加（内容未变不返回 message ⇒ pi 不追加条目），空内容不注入
+ *      （team-output 的增量语义与 `previous` 入参另有单独一组）；
  *   3. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
  *      相等 —— 组装**走生产入口**（core/system-prompt-composer.ts 的
  *      createSystemPromptComposerFromDefaults，与 daemon 同一个函数），用**真实
@@ -31,7 +32,9 @@ import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
 	RUN_TIME_CUSTOM_TYPE,
 	RUNTIME_CONTEXT_CUSTOM_TYPE,
+	TEAM_OUTPUT_CUSTOM_TYPE,
 } from "../shared/observability.ts";
+import { SNAPSHOT_SUPERSEDE_NOTE } from "../shared/hidden-context.ts";
 import { createPromptSwitch } from "./prompt-switch.ts";
 
 type HandlerEvent = {
@@ -67,7 +70,9 @@ interface Mounted {
 	readonly hidden: Handler;
 	/** 第 4 个 handler：run-time（时间块）快照通道。 */
 	readonly runTime: Handler;
-	/** 传给三个快照 handler 的假 ctx（buildContextEntries 由用例给定）。 */
+	/** 第 5 个 handler：team-output（团队产出增量）快照通道。 */
+	readonly teamOutput: Handler;
+	/** 传给四条快照 handler 的假 ctx（buildContextEntries 由用例给定）。 */
 	readonly ctx: FakeCtx;
 }
 
@@ -79,6 +84,11 @@ const HIDDEN_BLOCK =
 /** 时间块的正文形态与 `composeHiddenBlock(…, "additional-data")` 的产物一致。 */
 const RUN_TIME_BLOCK =
 	'<system-reminder data-role="additional-data">\n<current_time>\n2026-09-18 11:01（周五，GMT+8）\n</current_time>\n</system-reminder>';
+/**
+ * 团队产出快照的正文样例（第四条通道）。形态与 daemon 侧 composer 的产物一致：
+ * 以增量语义开头，**不含**取代声明（旧产出不被新快照取代）。
+ */
+const TEAM_BLOCK = "## 团队产出增量（还没进过你上下文的成员产出）\n\n- 阿离（研究员）：已完成 1 轮\n\n### 阿离\n产出正文…";
 
 /**
  * 假 ctx 的默认基线：没有同类型快照（新会话）。
@@ -104,6 +114,7 @@ function mount(options: {
 	readonly runtimeContext?: () => string;
 	readonly hiddenContext?: () => string | undefined;
 	readonly runTime?: () => string | undefined;
+	readonly teamOutput?: (previous: string | undefined) => string | undefined;
 	readonly entries?: readonly unknown[];
 }): Mounted {
 	const handlers: Handler[] = [];
@@ -119,21 +130,23 @@ function mount(options: {
 		composeRuntimeContext: options.runtimeContext ?? (() => ""),
 		composeHiddenContext: options.hiddenContext ?? (() => undefined),
 		composeRunTime: options.runTime ?? (() => undefined),
+		composeTeamOutput: options.teamOutput ?? (() => undefined),
 	})(fakePi);
 
-	// 四个 handler 是编排契约的一部分（一个换提示词、三个各管一条快照通道）：
+	// 五个 handler 是编排契约的一部分（一个换提示词、四个各管一条快照通道）：
 	// 少了任何一个都说明「通道被并进别的 handler」或「通道被删」—— 直接炸。
-	const [handler, runtime, hidden, runTime] = handlers;
+	const [handler, runtime, hidden, runTime, teamOutput] = handlers;
 	if (
-		handlers.length !== 4 ||
+		handlers.length !== 5 ||
 		handler === undefined ||
 		runtime === undefined ||
 		hidden === undefined ||
-		runTime === undefined
+		runTime === undefined ||
+		teamOutput === undefined
 	) {
-		throw new Error(`before_agent_start 处理器注册数不对：${handlers.length}（应为 4）`);
+		throw new Error(`before_agent_start 处理器注册数不对：${handlers.length}（应为 5）`);
 	}
-	return { handler, runtime, hidden, runTime, ctx: ctxWith(options.entries ?? []) };
+	return { handler, runtime, hidden, runTime, teamOutput, ctx: ctxWith(options.entries ?? []) };
 }
 
 describe("before_agent_start 接缝", () => {
@@ -461,6 +474,94 @@ describe("快照通道：三条通道各自独立去重、各自追加", () => {
 		});
 
 		expect(await hidden(EMPTY_EVENT, ctx)).not.toBeUndefined();
+	});
+});
+
+/**
+ * 第四条快照通道：team-output（spec: inject-team-output-snapshot）。
+ *
+ * 与三条既有通道的两处差别在这里钉住：
+ *   1. 正文由 composer 决定 —— 该通道语义是**增量**（旧产出不被新快照取代），
+ *      故 prompt-switch 侧不许替它加取代声明；
+ *   2. 去重基线要交给 composer（`previous`）—— 「哪些成员产出已注入过」的判据是
+ *      产出指纹在不在上一条同通道快照里，而基线只有 handler 读得到 ctx。
+ * 其余（逐字节相同不追加、空内容不注入、按 customType 各读各的基线）沿用同一机制。
+ */
+describe("快照通道：team-output 增量注入（第四条）", () => {
+	it("回调返回非空文本 → 返回 custom 消息，正文原样、display:false 且不含取代声明", async () => {
+		const { teamOutput, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: () => TEAM_BLOCK,
+		});
+
+		const result = await teamOutput(EMPTY_EVENT, ctx);
+		expect(result).toEqual({
+			message: { customType: TEAM_OUTPUT_CUSTOM_TYPE, content: TEAM_BLOCK, display: false },
+		});
+		// 增量语义：prompt-switch 不许替这条通道加取代声明（旧产出仍有效）。
+		expect(result?.message?.content).not.toContain(SNAPSHOT_SUPERSEDE_NOTE);
+	});
+
+	it("上一条同通道快照正文与之逐字节相同 → 不返回 message（同一份产出不重复注入）", async () => {
+		const { teamOutput, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: () => TEAM_BLOCK,
+			entries: [
+				snapshotEntry(RUNTIME_CONTEXT_CUSTOM_TYPE, RUNTIME_BLOCK),
+				snapshotEntry(TEAM_OUTPUT_CUSTOM_TYPE, TEAM_BLOCK),
+			],
+		});
+
+		expect(await teamOutput(EMPTY_EVENT, ctx)).toBeUndefined();
+	});
+
+	it("回调返回 undefined / 空白 → 不返回 message（无团队 / 没有新产出时零成本）", async () => {
+		const none = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: () => undefined,
+		});
+		expect(await none.teamOutput(EMPTY_EVENT, none.ctx)).toBeUndefined();
+
+		const blank = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: () => "  \n ",
+		});
+		expect(await blank.teamOutput(EMPTY_EVENT, blank.ctx)).toBeUndefined();
+	});
+
+	it("handler 把上一条同通道快照正文作为 previous 交给回调（去重基线在 handler 侧读出）", async () => {
+		const seen: Array<string | undefined> = [];
+		const { teamOutput, ctx } = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: (previous) => {
+				seen.push(previous);
+				return undefined;
+			},
+			entries: [
+				snapshotEntry(TEAM_OUTPUT_CUSTOM_TYPE, "上一条团队产出快照"),
+				{ type: "message", message: { role: "user", content: "本轮提问" } },
+			],
+		});
+
+		await teamOutput(EMPTY_EVENT, ctx);
+		expect(seen).toEqual(["上一条团队产出快照"]);
+
+		// 没有基线（新会话）时同样把 undefined 交出去，让 composer 按「全部都是新的」处理。
+		const fresh = mount({
+			axes: { sceneId: "work", interactionId: "craft" },
+			compose: async () => "提示词",
+			teamOutput: (previous) => {
+				seen.push(previous);
+				return undefined;
+			},
+		});
+		await fresh.teamOutput(EMPTY_EVENT, fresh.ctx);
+		expect(seen).toEqual(["上一条团队产出快照", undefined]);
 	});
 });
 

@@ -265,6 +265,8 @@ function buildRunExtensions(
 			// 时间快照（`kamibuddy-run-time`）：同一次 freeze 的另一半，
 			// 与上面那条分开去重（spec: add-supersede-note-and-time-split）。
 			composeRunTime: () => getHost()?.peekRunTime(),
+			// 非团队会话（定时任务 run 没有团队注册表）：团队产出通道不接。
+			composeTeamOutput: () => undefined,
 		}),
 		createWebTools({ getSearchConfig: deps.getWebSearchConfig }),
 		/*

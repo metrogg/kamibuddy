@@ -454,6 +454,8 @@ const host = await SessionHost.create({
 			// 时间快照（`kamibuddy-run-time`）：同一次 freeze 的另一半，与上面那条分开去重
 			// （spec: add-supersede-note-and-time-split）。
 			composeRunTime: () => hostRef.current?.peekRunTime(),
+			// 非团队会话：团队产出通道不接（探针会话没有团队注册表）。
+			composeTeamOutput: () => undefined,
 		}),
 	],
 });

@@ -220,6 +220,8 @@ async function openSession(opts: {
 				composeRuntimeContext: () => opts.inputs.runtimeContext,
 				composeHiddenContext: () => opts.inputs.hiddenContext,
 				composeRunTime: () => opts.inputs.runTime,
+				// 非团队会话：团队产出通道不接（本钉子只钉前三条通道）。
+				composeTeamOutput: () => undefined,
 			}),
 		],
 	});
