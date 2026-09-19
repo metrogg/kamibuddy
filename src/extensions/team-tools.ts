@@ -30,11 +30,14 @@
  * kind 盖 "team" —— 主会话活动卡按团队成员分组呈现，渲染层零改动。
  *
  * ── 模型体验契约（scripts/check-model-experience.ts 机械校验；改行为必须同步改这里）──
- * What the model sees: 七个工具（team_create / team_send / team_status / team_read /
- * team_shutdown / team_delegate_mode / team_delete）的名称、description 与参数 schema；
+ * What the model sees: 八个工具（team_create / team_send / team_status / team_read /
+ * team_shutdown / team_plan_review / team_delegate_mode / team_delete）的名称、
+ * description 与参数 schema；
  * 返回的成员 spawn 计划、成员名单与状态摘要、以及错误文案（未知成员名 / 已有团队 /
  * 成员不许再委派 / 已关闭成员不再收消息）。**成员产出不自动送达** —— 领导用
- * team_read 主动取回（team_status 会标注「有产出可读」）。
+ * team_read 主动取回（team_status 会标注「有产出可读」）。**凡回执都不许出现
+ * 「完成时会收到回投/产出会送过来」这类推模式措辞**：2026-09-19 真机现场里，
+ * team_create 的旧回执正是这么写的，领导据此干等而从不调 team_read。
  * Token effect: 定义常驻（**八条**定义）；返回是团队规模与状态的摘要文本，
  * team_read 返回产出正文（可能很长，这是它的用途）。
  * KV Cache effect: 定义字面量会话内恒定；但 `isEnabled` 为 false 时八个工具**根本不注册** ——
@@ -277,8 +280,9 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 							type: "text" as const,
 							text:
 								`团队「${plan.name}」已建立（${acks.length} 名成员）：${names}。\n` +
-								"成员已在后台独立执行各自任务，本会话将在它们完成时收到回投消息。" +
-								"追加指示用 team_send，查进度用 team_status，解散用 team_delete。",
+								"成员已在后台独立执行各自任务。**它们完成后产出不会自动送到你这里** —— " +
+								"先 team_status 看谁「有产出可读」，再用 team_read 取回正文。" +
+								"追加指示用 team_send，解散用 team_delete。",
 						},
 					],
 					details: { teamName: plan.name, [CHILD_AGENTS_DETAILS_KEY]: projection.snapshot() },
@@ -452,9 +456,9 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 			name: "team_shutdown",
 			label: "收尾成员",
 			description:
-				"让**单个**成员收尾退出：它会把手上的工作整理成最终报告交回，然后结束。" +
+				"让**单个**成员收尾退出：它会把手上的工作整理成最终报告（写在它的会话记录里，用 team_read 取回），然后结束。" +
 				"适合收掉跑偏的成员、或某个维度已经问完不再需要它。与 team_delete 的区别：" +
-				"后者中止**整个**团队。成员交回报告后状态变 closed，不能再给它发消息；" +
+				"后者中止**整个**团队。成员交完报告后状态变 closed，不能再给它发消息；" +
 				"若它长时间不收尾，可用 force 强制中止（当前轮产出会丢弃）。",
 			promptSnippet: "team_shutdown: 让单个成员收尾退出（交回报告后关闭），区别于整队 team_delete",
 			parameters: Type.Object({
@@ -473,7 +477,7 @@ export function teamExtensionFactory(deps: TeamToolDeps): ExtensionFactory {
 		pi.registerTool({
 			name: "team_delete",
 			label: "解散团队",
-			description: "解散当前团队：中止全部成员并清理。成员未完成的任务会丢失，解散前确认产出已回投或不再需要。",
+			description: "解散当前团队：中止全部成员并清理。成员未完成的任务会丢失；解散前先用 team_read 取回还需要保留的产出。",
 			promptSnippet: "team_delete: 中止并清理全部团队成员",
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params): Promise<ToolResult> {

@@ -217,10 +217,24 @@ describe("中断恢复（spec: add-team-interrupt-diagnostics 批次 ①）", ()
 		expect(member).toMatchObject({ turns: 3, toolCalls: 77, tokens: 1324249 });
 	});
 
+	it("恢复时保留落盘的 sessionId —— 拉模式读产出只认会话文件，不认宿主（2026-09-19 回归）", () => {
+		const registry = new TeamRegistry();
+		registry.restoreTeam(LEADER, "队", [
+			{ ...stored("idle"), sessionId: "01a0b7eb-616a-76ef-8015-bbbcf29d840a" },
+		]);
+		// 丢了它，重启后 getTeamState 的 outputAvailable 与 team_read 就都读不到东西，
+		// 而 team_send 的拒绝文案仍在承诺「产出可用 team_read 取回」。
+		expect(registry.requireMember(LEADER, "谭溯源").sessionId).toBe(
+			"01a0b7eb-616a-76ef-8015-bbbcf29d840a",
+		);
+		// 但发消息那侧照样拒绝（宿主确实没了）—— 恢复 id 不等于恢复会话。
+		expect(() => registry.resolveMemberSessions(LEADER, ["谭溯源"])).toThrow(/已关闭/);
+	});
+
 	it("interrupted 成员不再接收消息（宿主已随进程消失）", () => {
 		const registry = new TeamRegistry();
 		registry.restoreTeam(LEADER, "队", [stored("running")]);
-		// 恢复的成员 sessionId 一律不恢复 → 会先撞「还在启动中」；
+		// 这条落盘快照不带 sessionId（旧文件就是如此）→ 会先撞「还在启动中」；
 		// 手动补一个会话 id 走到 interrupted 分支。
 		const member = registry.requireMember(LEADER, "谭溯源");
 		member.sessionId = "sid";
@@ -366,6 +380,22 @@ describe("recordCompletion（批次 ③.4：轮数权威回填）", () => {
 		const registry = registryWithTeam();
 		registry.recordCompletion(LEADER, "scout-a", 2, "已完成 2 轮");
 		expect(registry.requireMember(LEADER, "scout-a").lastActivity).toBe("已完成 2 轮");
+	});
+
+	it("事件增量累加与收尾绝对值收敛到同一个数（两个来源口径必须一致）", () => {
+		// 2026-09-19 实测反例：长 run 期间 team_status 显示「已完成 0 轮」，
+		// 而同一条的「最近」写着「已完成 57 轮」—— 因为 turns 只由收尾赋值。
+		// 现在成员执行器按 assistant_done 逐轮 +1（见 MemberHooks.onProgress 第三参），
+		// 收尾再用绝对值对齐；两者口径相同，所以不会顶飞也不会跳变。
+		const registry = registryWithTeam();
+		for (let round = 1; round <= 53; round += 1) {
+			registry.recordProgress(LEADER, "scout-a", 1, `已完成 ${round} 轮`);
+			expect(registry.requireMember(LEADER, "scout-a").turns).toBe(round);
+		}
+		// 收尾前（run 仍在跑）就该是真值：这正是修复的目的。
+		expect(registry.requireMember(LEADER, "scout-a").turns).toBe(53);
+		registry.recordCompletion(LEADER, "scout-a", 53, "已完成 53 轮");
+		expect(registry.requireMember(LEADER, "scout-a").turns).toBe(53);
 	});
 });
 

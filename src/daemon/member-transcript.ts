@@ -48,7 +48,15 @@
  * 守卫 —— 与 session-file.ts 同一道防线，不重写第二份。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getSessionsDir } from "../core/config-paths.ts";
 import { validateSessionFilePath } from "../core/session-rebuild.ts";
@@ -87,17 +95,118 @@ export interface MemberTranscriptRecord {
 	readonly stopReason?: string | undefined;
 }
 
-/** 会话文件路径（成员会话也是普通会话，同目录同命名）。 */
-export function memberSessionPath(sessionId: string): string {
-	return join(getSessionsDir(), `${sessionId}.jsonl`);
+/**
+ * 成员会话文件路径解析（sessionId → 磁盘文件）。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  为什么不是直接拼 `<sessionsDir>/<sessionId>.jsonl`
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * pi 的会话文件名是 **`<文件时间戳>_<sessionId>.jsonl`**
+ * （`开源项目/pi/packages/coding-agent/src/core/session-manager.ts:953`），
+ * sessionId 只是文件名的一部分。**2026-09-19 真机实测**：按 `<sessionId>.jsonl`
+ * 拼出来的路径一律不存在（`pathExists: false`），于是整条「拉模式」在最底层
+ * 静默失效 ——
+ *   - `team_status` 永远不显示「有产出可读」；
+ *   - `team_read` 永远回「暂无产出」；
+ *   - `restoreTeam` 的派生永远回落，成员状态一律按落盘字面量算。
+ * 领导因此判定「团队通道坏了」，改用子代理重做（现场会话 12:27~12:36 的
+ * 原话就是「落盘没有生效」「两轮追加指示都没唤出正文」）。
+ *
+ * 单测当时没发现，是因为它**拿本函数自己算出的路径去造文件再读回来**
+ * （自洽循环）—— 造的文件名与 pi 的真实命名无关。教训同 AGENTS.md：
+ * **证据要打真入口路径**；本次给读文件层补了「按真实命名造文件」的回归用例。
+ *
+ * 解析顺序（两条都是真实存在的形态）：
+ *   1. `<sessionId>.jsonl` —— 直命名（旧形态 / 单测直接落盘）；
+ *   2. 目录索引里按 `<任意前缀>_<sessionId>.jsonl` 反查（pi 的真实命名）。
+ *
+ * 目录索引带 TTL 缓存（键含目录，配置目录切换即失效）：命中即返回，未命中
+ * 才重建，避免「读不到」的调用每次都全目录扫一遍。找不到 → `undefined`
+ * （调用方按「读不到」处理，不抛）。
+ */
+export function memberSessionPath(sessionId: string): string | undefined {
+	if (sessionId === "") return undefined;
+	const dir = getSessionsDir();
+	const direct = join(dir, `${sessionId}.jsonl`);
+	if (existsSync(direct)) return direct;
+
+	const now = Date.now();
+	let index = sessionFileIndex;
+	if (index === undefined || index.dir !== dir || now - index.builtAt > SESSION_FILE_INDEX_TTL_MS) {
+		index = { dir, builtAt: now, byId: buildSessionFileIndex(dir) };
+		sessionFileIndex = index;
+	}
+	return index.byId.get(sessionId);
 }
 
-/** 安全读取，路径守卫失败或文件不存在都返回 undefined（调用方自行兜底）。 */
-function readLinesSafely(path: string): readonly string[] | undefined {
+/** 目录索引缓存（见 memberSessionPath 的注释）。 */
+let sessionFileIndex: { dir: string; builtAt: number; byId: Map<string, string> } | undefined;
+
+/**
+ * 索引重建的最短间隔。取 1s 是为了兼顾两端：成员会话文件在 spawn 时就已落盘，
+ * 1s 的滞后对「领导读产出」这个秒级以上的动作没有影响；而它挡住了「文件确实
+ * 不存在时每个成员事件都全目录扫一遍」的放大。
+ */
+const SESSION_FILE_INDEX_TTL_MS = 1_000;
+
+/** 扫会话目录建 `sessionId → 文件路径` 索引（`<时间戳>_<id>.jsonl` 取 `_` 之后那段）。 */
+function buildSessionFileIndex(dir: string): Map<string, string> {
+	const byId = new Map<string, string>();
+	let names: readonly string[];
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return byId; // 目录还不存在（首次使用）：空索引，读侧照常按「读不到」处置。
+	}
+	for (const name of names) {
+		if (!name.toLowerCase().endsWith(".jsonl")) continue;
+		const base = name.slice(0, -".jsonl".length);
+		const separator = base.indexOf("_");
+		const id = separator === -1 ? base : base.slice(separator + 1);
+		if (id !== "") byId.set(id, join(dir, name));
+	}
+	return byId;
+}
+
+/**
+ * 尾部读取窗口。超过它的会话文件**只读最后这一段**。
+ *
+ * 为什么必须加上界（spec 里原本就有这条，实施时被推迟了，理由是「成员产出上限
+ * 24k 字符、单轮规模可控」—— 那个前提是错的）：`emitTeamProgress` 在**成员每次
+ * 工具调用**后都要算一遍 `outputAvailable`，于是每个成员事件 × 每个成员 × 整个
+ * 文件都会被解析一次。真机会话里单个成员文件已到 1 MB（163 条消息），
+ * 一次 run 上百个工具调用 ⇒ 上千次 MB 级 JSON.parse，全部落在 daemon 主线程上。
+ * 而本模块的两个用途（最近的终态判定、最近一轮产出）**只需要文件尾部** ——
+ * WorkBuddy 同样只读尾摘要（`loadTailSummary`），不整文件读。
+ *
+ * 512 KB 是个宽松上界：它足以装下若干条完整消息（含 24k 字符量级的产出），
+ * 又让单次读的上界与文件长度无关。
+ */
+const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+
+/**
+ * 安全读取（尾部优先），路径守卫失败或文件不存在都返回 undefined（调用方自行兜底）。
+ *
+ * 超过窗口的文件从 `size - TRANSCRIPT_TAIL_BYTES` 处起读，并**丢掉首行** ——
+ * 那多半是被截断的半行（JSON 解析必失败，留着只会白跑一次 parse）。
+ */
+function readLinesSafely(path: string | undefined): readonly string[] | undefined {
+	if (path === undefined) return undefined;
 	try {
 		if (validateSessionFilePath(path, getSessionsDir()) !== undefined) return undefined;
-		if (!existsSync(path)) return undefined;
-		return readFileSync(path, "utf8").split("\n");
+		const size = statSync(path).size;
+		if (size <= TRANSCRIPT_TAIL_BYTES) return readFileSync(path, "utf8").split("\n");
+		const fd = openSync(path, "r");
+		try {
+			const buffer = Buffer.alloc(TRANSCRIPT_TAIL_BYTES);
+			const bytes = readSync(fd, buffer, 0, TRANSCRIPT_TAIL_BYTES, size - TRANSCRIPT_TAIL_BYTES);
+			const text = buffer.toString("utf8", 0, bytes);
+			const firstBreak = text.indexOf("\n");
+			return (firstBreak === -1 ? text : text.slice(firstBreak + 1)).split("\n");
+		} finally {
+			closeSync(fd);
+		}
 	} catch {
 		return undefined;
 	}
@@ -121,6 +230,9 @@ function extractTextFromContent(content: unknown): string {
 
 /**
  * 读成员会话的 message 记录（按文件顺序，含 user 与 assistant）。
+ *
+ * **读的是文件尾部**（见 TRANSCRIPT_TAIL_BYTES）：调用方只关心「最近的终态」与
+ * 「最近一轮产出」，超长会话没必要整文件解析。
  *
  * 容错口径与 WorkBuddy 的 `parseJsonl` 一致：坏行跳过不抛错；文件不存在
  * 返回空数组（**不抛**）—— 「读不到」与「读出来是空」在上层是同一处置

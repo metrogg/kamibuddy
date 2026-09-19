@@ -317,13 +317,21 @@ export class TeamRegistry {
 			/*
 			 * 拉模式（spec: add-team-pull-model 批次④）删掉了 `pendingDelivery`
 			 * 旧字段：推模式里「产出有没有送达」是个需要额外记账的问题，
-			 * 拉模式里它不再存在 —— 产出永远在 `sessions/<id>.jsonl` 里，
+			 * 拉模式里它不再存在 —— 产出永远在成员会话 JSONL 里，
 			 * 上面派生出的 `completed` 就是「有产出可读」的结论。
 			 * 旧落盘文件多出来的键会被这里忽略（不读、不报错）。
+			 *
+			 * **sessionId 要恢复**（2026-09-19 修正，原为 `undefined`）：旧注释说
+			 * 「恢复它只会指向一个死宿主」，那只对 team_send 成立 —— 拉模式下读产出
+			 * 只需要**会话文件**，不需要宿主。丢掉它，`getTeamState` 的
+			 * `outputAvailable` 与 `team_read` 就都读不到东西，而 `team_send` 的拒绝
+			 * 文案却说「产出可用 team_read 取回」—— 承诺当场落空（重启后整条拉模式
+			 * 又静默失效）。发消息那侧不受影响：`resolveMemberSessions` 对
+			 * closed / interrupted 一律响亮拒绝，永远走不到「拿这个 id 找活宿主」。
 			 */
 			team.members.set(stored.name, {
 				name: stored.name,
-				sessionId: undefined, // 旧 sessionId 不可达，不恢复（恢复它只会指向一个死宿主）
+				sessionId: stored.sessionId,
 				agentName: stored.agentName,
 				task: stored.task,
 				status,
@@ -456,15 +464,18 @@ export class TeamRegistry {
 	/**
 	 * 回填一轮的收尾结果（spec: add-team-interrupt-diagnostics 批次 ③.4）。
 	 *
-	 * 存在的理由：`recordProgress` 的 `turnsDelta` 由接线层传，而接线层
-	 * 在 `onProgress` 里**只能拿到一句文本**（`已完成 N 轮`），拿不到轮数 ——
-	 * 2026-09-19 之前那里写死传 0，导致注册表的 `turns` 永远是 0（实测反例：
-	 * `activity = 已完成 2 轮` 而 `turns = 0`）。那个恒 0 的字段还被误当成
-	 * 「一轮没收尾」的判据，推错过一次方向。
+	 * **它是轮数的对齐点，不是唯一写点**：`recordProgress` 已按事件增量
+	 * （`assistant_done` → +1）实时同步同一个数，所以长 run 期间 `team_status` 的
+	 * 「已完成 N 轮」是真的。这里在 run 收尾再用**绝对值**对齐一次 ——
+	 * 万一有事件没走那条路（重复回调、竞态），它把数字拉回真值。
 	 *
-	 * 现在轮数从两个来源收敛到一处：`onComplete` 带着权威轮数回来（成员执行器
-	 * 自己数的），这里**直接赋值**而不是累加 —— 它本来就是「这个成员共跑完几轮」
-	 * 的绝对值，累加会让重复回调把数字顶飞。
+	 * 因此这里是**直接赋值而不是累加**：它是「这个成员共跑完几轮」的绝对值，
+	 * 累加会让重复回调把数字顶飞。
+	 *
+	 * 历史（别把这段当现状读）：2026-09-19 之前接线层把 `turnsDelta` 写死传 0，
+	 * 注册表的 `turns` 永远停在 0（实测反例：`activity = 已完成 2 轮` 而 `turns = 0`），
+	 * 那个字段还被误当成「一轮没收尾」的判据、推错过一次方向。根因是 `onProgress`
+	 * 钩子只带一句文本、拿不到轮数增量 —— 已由 `MemberHooks.onProgress` 的第三参修掉。
 	 */
 	recordCompletion(leaderSessionId: string, memberName: string, turns: number, activity: string): void {
 		const member = this.requireMember(leaderSessionId, memberName);
@@ -472,7 +483,13 @@ export class TeamRegistry {
 		if (activity !== "") member.lastActivity = activity;
 	}
 
-	/** 追加轮数与动作行（接线层从成员事件计数回填）。 */
+	/**
+	 * 追加轮数与动作行（接线层从成员事件回填）。
+	 *
+	 * `turnsDelta` 是**事件级增量**（成员执行器给：`assistant_done` → 1、工具事件 → 0），
+	 * 不是绝对值 —— 所以这里是 `+=`。绝对值由 `recordCompletion`（run 收尾）负责对齐，
+	 * 两者口径相同（都只数 `assistant_done`），因此累加结果与收尾赋值不会互相顶飞。
+	 */
 	recordProgress(leaderSessionId: string, memberName: string, turnsDelta: number, activity: string): void {
 		const member = this.requireMember(leaderSessionId, memberName);
 		member.turns += turnsDelta;

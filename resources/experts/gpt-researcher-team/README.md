@@ -27,7 +27,7 @@
 - 调度语义：源包正文指挥 `TeamCreate` + `Agent(name, subagent_type)`，本产品没有这两个工具，
   照搬会导致建团必然失败（工具不存在、成员人格也不在 agents 库）。已改写为
   `team_create`（`name` 填花名、`agent` 填 Agent ID）/ `team_send` / `team_status` /
-  `team_delete`，并写明产出自动回投、并行副本必须唯一 `name`。
+  `team_delete`，并写明产出留在成员会话、主理人用 `team_read` 取回、并行副本必须唯一 `name`。
 - 成员超时表改为「软预期」注脚：本运行的成员是长会话，没有硬性 maxTurns 开关。
 - frontmatter 加 `expertType: team`（专家市场「专家团」页按它筛选）。
 - **未改**：5 阶段 Workflow A/B/C、研究参数卡、6 维审稿标准、质量规则、铁律与禁止行为。

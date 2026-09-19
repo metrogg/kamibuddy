@@ -31,6 +31,18 @@ import { buildSubagentExtensions } from "./subagent-runner.ts";
 /** 回传领导的输出上限（与子代理 24k 口径一致）。 */
 const MEMBER_OUTPUT_MAX_CHARS = 24_000;
 
+/**
+ * 一个成员会话事件对应的**轮数增量**（`assistant_done` → 1，其余 → 0）。
+ *
+ * 抽成导出纯函数是为了**可测**：这条判据被写错过一次 —— 接线层把 `turnsDelta`
+ * 恒传 0，于是长 run 期间团队注册表的 `turns` 停在 0，而同一条 `team_status` 的
+ * 「最近」却写着「已完成 57 轮」，模型据此判断进度会被误导（2026-09-19 实测）。
+ * 它内联在 emit 里也写得出来，但内联就单测不到 —— 而它正是出过事的那一处。
+ */
+export function turnsDeltaForEvent(event: SessionEvent): number {
+	return event.type === "assistant_done" ? 1 : 0;
+}
+
 export interface MemberSpawnInput {
 	/** 领导会话的工作目录（成员与领导同 cwd，产物落在用户看得见的地方）。 */
 	readonly cwd: string;
@@ -49,8 +61,18 @@ export interface MemberSpawnInput {
 }
 
 export interface MemberHooks {
-	/** 进展一行（tool_started / 轮数），供 runtime.recordProgress 回填。 */
-	readonly onProgress: (memberName: string, text: string) => void;
+	/**
+	 * 进展一行（tool_started / 轮数），供 runtime.recordProgress 回填。
+	 *
+	 * 第三参 `turnsDelta` 是**本事件的轮数增量**（`assistant_done` → 1，其余 → 0）——
+	 * 由本模块给，因为只有它看得见事件类型。接线层据此累加注册表的 `turns`：
+	 * 少了它，注册表的轮数只能等整轮跑完由 `onComplete` 一次性赋值，
+	 * 于是长 run 期间 `team_status` 会一直显示「已完成 0 轮」而 `最近：已完成 57 轮`
+	 * —— 同一个数两个说法，模型据此判断进度就会被误导（2026-09-19 实测）。
+	 * 两个来源的口径必须一致：本模块的 `turns` 与接线层的累加都只数 `assistant_done`，
+	 * 收尾时 `onComplete` 再用绝对值对齐一次。
+	 */
+	readonly onProgress: (memberName: string, text: string, turnsDelta: number) => void;
 	/**
 	 * 一轮收尾：最终输出（已 24k 截断 + 去毒）。
 	 *
@@ -162,11 +184,15 @@ export async function spawnMember(
 		if (event.type === "assistant_done") {
 			turns += 1;
 			lastText = event.message.text;
-			hooks.onProgress(memberName, `已完成 ${turns} 轮`);
+			hooks.onProgress(memberName, `已完成 ${turns} 轮`, turnsDeltaForEvent(event));
 		}
 		if (event.type === "tool_started") {
 			const { toolName, summary } = event.card;
-			hooks.onProgress(memberName, summary === "" ? `正在 ${toolName}` : `正在 ${toolName} ${summary}`);
+			hooks.onProgress(
+				memberName,
+				summary === "" ? `正在 ${toolName}` : `正在 ${toolName} ${summary}`,
+				turnsDeltaForEvent(event),
+			);
 		}
 		if (event.type === "run_error" && runError === undefined) runError = event.message;
 		if (event.type === "run_finished" && event.outcome === "cancelled") cancelled = true;

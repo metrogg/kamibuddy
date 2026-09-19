@@ -184,6 +184,7 @@ describe("readMemberTranscript · 读真实会话文件", () => {
 	beforeEach(() => {
 		configDir = mkdtempSync(join(tmpdir(), "kamibuddy-transcript-"));
 		process.env["KAMIBUDDY_CONFIG_DIR"] = configDir;
+		mkdirSync(join(configDir, "sessions"), { recursive: true });
 	});
 
 	afterEach(() => {
@@ -191,11 +192,54 @@ describe("readMemberTranscript · 读真实会话文件", () => {
 		rmSync(configDir, { recursive: true, force: true });
 	});
 
-	function writeSession(sessionId: string, lines: readonly string[]): void {
-		const path = memberSessionPath(sessionId);
-		mkdirSync(join(configDir, "sessions"), { recursive: true });
-		writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+	/**
+	 * 造一个**真实命名**的会话文件：pi 写的是 `<时间戳>_<sessionId>.jsonl`
+	 * （`开源项目/pi/.../session-manager.ts:953`）。
+	 *
+	 * 这里坚持用真实命名而不是 `memberSessionPath()` 自己算出来的路径：
+	 * 后者是自洽循环 —— 按 `<id>.jsonl` 造、再按 `<id>.jsonl` 读，永远绿，
+	 * 而线上一个成员都读不到（2026-09-19 现场）。
+	 */
+	const FILE_TIMESTAMP = "2026-09-19T04-27-31-602Z";
+
+	function writeSessionFile(fileName: string, lines: readonly string[]): void {
+		writeFileSync(join(configDir, "sessions", fileName), `${lines.join("\n")}\n`, "utf8");
 	}
+
+	function writeSession(sessionId: string, lines: readonly string[]): void {
+		writeSessionFile(`${FILE_TIMESTAMP}_${sessionId}.jsonl`, lines);
+	}
+
+	it("按 pi 的真实命名（<时间戳>_<id>.jsonl）能读到（2026-09-19 回归）", () => {
+		writeSession("s-real", [
+			messageLine("user", "去画三章大纲"),
+			assistantDone("真实命名下的产出"),
+		]);
+		expect(memberSessionPath("s-real")).toBe(
+			join(configDir, "sessions", `${FILE_TIMESTAMP}_s-real.jsonl`),
+		);
+		const view = readMemberTranscriptView("s-real");
+		expect(view.status).toBe("completed");
+		expect(view.output).toBe("真实命名下的产出");
+	});
+
+	it("直命名 <id>.jsonl 仍可读（旧形态兼容）", () => {
+		writeSessionFile("s-direct.jsonl", [assistantDone("直命名产出")]);
+		expect(readMemberTranscript("s-direct")[0]?.text).toBe("直命名产出");
+	});
+
+	it("超长会话只读尾部：早期记录不进窗口，最近产出照常取回", () => {
+		// 真机会话里单个成员文件已到 1 MB；emitTeamProgress 在每次成员工具调用后
+		// 都要读一遍，整文件解析会拖住 daemon 主线程（见 TRANSCRIPT_TAIL_BYTES）。
+		const filler = messageLine("assistant", "旧".repeat(20_000), "stop"); // 单行约 60 KB
+		writeSession("s-long", [...Array.from({ length: 20 }, () => filler), assistantDone("最新的产出")]);
+		const view = readMemberTranscriptView("s-long");
+		expect(view.output).toBe("最新的产出");
+		expect(view.status).toBe("completed");
+		// 20 条早期记录 + 1 条尾部记录，窗口只装得下一部分 ⇒ 数量必然少于 21。
+		expect(view.messages.length).toBeLessThan(21);
+		expect(view.messages.length).toBeGreaterThan(0);
+	});
 
 	it("解析 message 条目并跳过非消息条目", () => {
 		writeSession("s-1", [

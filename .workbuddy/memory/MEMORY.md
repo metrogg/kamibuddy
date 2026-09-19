@@ -107,7 +107,9 @@
 ## 专家团（agent-team）：产出走「拉」，不走「推」（2026-09-19 架构调整，§4.19）
 
 **现状（不要再按推模式理解团队产出）**：成员产出**永远只存在**于
-`~/.kamibuddy/sessions/<memberSessionId>.jsonl`，领导用 **`team_read`** 主动取回。
+`~/.kamibuddy/sessions/<文件时间戳>_<memberSessionId>.jsonl`（**pi 的文件名带时间戳前缀**，
+不是 `<id>.jsonl` —— 2026-09-19 修正，按裸 id 拼路径会让整条拉模式静默失效），
+领导用 **`team_read`** 主动取回。
 **没有任何回投/推送机制** —— 整套推模式协议（2026-09-19 批次 ④）已删除：
 `pendingDelivery` / `markPendingDelivery` / `markDeliveryPending` / `confirmDelivery` /
 `clearPendingDelivery` / `deliveryAwaiting` / `queue_changed` 销账钩子。

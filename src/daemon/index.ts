@@ -2789,12 +2789,16 @@ async function createHost(
 							memberRunnerDeps,
 							{ cwd, agent, memberName: member.name, task: member.task, ...(member.model === undefined ? {} : { modelKey: member.model }) },
 							{
-							onProgress: (name, text) => {
-								// turnsDelta 传 0：轮数由 onComplete 权威回填（批次 ③.4）。
-								// 这里原先也传 0，但当时**没有**任何地方写 turns，
-								// 于是注册表的 turns 恒为 0（实测反例：activity 写着
-								// 「已完成 2 轮」而 turns=0）。现在 onComplete 会赋值。
-								teamRegistry.recordProgress(leaderId, name, 0, text);
+							onProgress: (name, text, turnsDelta) => {
+								/*
+								 * turnsDelta 由成员执行器给（assistant_done → 1，工具事件 → 0）：
+								 * 以前这里写死 0，注册表的 turns 只能等整轮跑完由 onComplete
+								 * 一次性赋值，于是长 run 期间 team_status 显示「已完成 0 轮」，
+								 * 而同一条的「最近」却写着「已完成 57 轮」（2026-09-19 实测）——
+								 * 同一个数两个说法，模型据此判断进度会被误导。现在两侧同口径
+								 * 累加，收尾时 onComplete 再按绝对值对齐。
+								 */
+								teamRegistry.recordProgress(leaderId, name, turnsDelta, text);
 								emitTeamProgress(leaderId);
 								hooks.onProgress(name, text);
 							},
@@ -2824,8 +2828,10 @@ async function createHost(
 								// 收尾请求下成员交的是告别报告（批次 ②）：交完就关，
 								// 宿主 dispose 掉，别让它再占一个长会话。
 								const wasClosing = teamRegistry.getTeam(leaderId)?.members.get(name)?.status === "closing";
-								// 轮数权威回填（批次 ③.4）：成员执行器自己数的真值，
-								// 覆盖掉 recordProgress 那个恒 0 的旧路径。
+								// 轮数权威回填（批次 ③.4）：成员执行器自己数的绝对值。
+								// recordProgress 已按事件增量同步过同一个数（见上面 onProgress），
+								// 这里再对齐一次 —— 万一有事件没经那条路（重复回调、竞态），
+								// 收尾的绝对值把它拉回真值（所以是赋值不是累加）。
 								teamRegistry.recordCompletion(leaderId, name, turns, wasClosing ? `已收尾（${turns} 轮）` : `已完成 ${turns} 轮`);
 								teamRegistry.markStatus(leaderId, name, wasClosing ? "closed" : "idle");
 								emitTeamProgress(leaderId);

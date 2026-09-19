@@ -18,7 +18,7 @@
 1. **工具语义**：源正文指挥 `TeamCreate` + `Agent(name, subagent_type)` + `SendMessage`，
    本产品没有这三个工具。已改为 `team_create` 建团 / `team_send` 追加指示 /
    `team_status` 查进度 / `team_delete` 解散，并把「成员 SendMessage 回传」改写成
-   「成员完成一轮后产出**自动回投**到主会话」。
+   「成员完成一轮后产出留在自己的会话记录，主理人用 `team_read` 取回」。
 2. **成员 name 语义相反**：源要求 `name` 用 Agent ID、**禁止中文名**；我们反过来——
    `name` 是 `@寻址` 键（用户在输入框 @ 得到它，UI 显示用），必须用**花名**，
    `agent` 才是 Agent ID。已在「成员调度（CRITICAL）」段写明，并给出花名↔ID 对照。

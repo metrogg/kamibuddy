@@ -15,7 +15,7 @@
 ## 本地化改动（不改就跑不起来）
 
 1. **工具语义**：源的 `TeamCreate` / `SendMessage` / `subagent_type` 已改为本运行的
-   `team_create` / `team_send` / `team_status` / `team_delete`；成员产出改为**自动回投**。
+   `team_create` / `team_send` / `team_status` / `team_delete`；成员产出改为写入成员自己的会话记录，主理人用 `team_read` 取回。
 2. **成员 name 语义相反**：源要求 `name` = Agent ID 且禁止中文名（那是为了它的 UI
    用 `members[].id` 匹配 `displayName`）；我们反过来——`name` 是 `@寻址` 键，用**花名**，
    `agent` 用 Agent ID。原「✅/❌ 示例」段已替换为我们的「成员调度（CRITICAL）」段。

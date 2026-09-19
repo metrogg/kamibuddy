@@ -21,7 +21,7 @@
   下发任务**重写**，不是逐字节搬用。
 - 调度语义：源包正文指挥 `TeamCreate` + `Agent(name, subagent_type)`，本产品没有这两个工具，
   照搬会让建团必然失败。已改写为 `team_create`（`name` 填花名、`agent` 填 Agent ID）/
-  `team_send` / `team_status` / `team_delete`，并写明产出自动回投、并行副本必须唯一 `name`。
+  `team_send` / `team_status` / `team_delete`，并写明产出留在成员会话、主理人用 `team_read` 取回、并行副本必须唯一 `name`。
 - frontmatter 加 `expertType: team`（专家市场「专家团」页按它筛选）。
 - **未改**：Workflow A–F、项目参数卡、6 维审核标准、退回规则、铁律与禁止行为。
 
