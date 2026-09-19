@@ -43,6 +43,14 @@
  * 全禁读让已安装技能变成「列表里有但永不可用」的死技能。
  * 所以技能子目录对**只读工具**例外放行；写仍拒（见阶段 1 注释）。
  *
+ * 【2026-09-19 同一个误伤第三次发作】上一条只修了 read 那一半：命令通道没有例外，
+ * 而技能自带的 `scripts/` 只能靠 shell 跑（`${SKILL_DIR}` 展开后必然含 `.kamibuddy`，
+ * 被 command-guard 的「整段目录名」规则拦下）——技能于是以另一种形态又死了。
+ * 修法不是再补一处例外，而是把口径统一：配置目录里**可执行的扩展内容**
+ * （skills / experts / agents / runtimes）可读，**凭据与程序配置**（auth.json、
+ * mcp.json、permissions.rules.json、preferences.json、sessions/ …）仍禁读；
+ * command-guard 同步从「`.kamibuddy` 整段」收窄为具体文件片段。见 §4.28。
+ *
  * 【2026-09-09 事故条目】默认工作区（空目录）+ 默认权限档下，模型经提示词里的
  * 技能路径发现项目目录，自由读取项目源码与合规敏感素材后，对工作区外文件发起 edit。
  * 教训一：**读侧漫游是写越界的必经入口** —— 所以 read/find/grep/ls 出工作区
@@ -100,7 +108,7 @@ export interface ToolCallFacts {
 export interface PolicyPaths {
 	/** 会话工作目录（~/KamiBuddy）。目录内的改动免打扰。 */
 	readonly workspaceDir: string;
-	/** 配置目录（~/.kamibuddy）。存着 API Key，禁读禁写；skills/ 子目录对只读工具例外。 */
+	/** 配置目录（~/.kamibuddy）。凭据与程序配置禁读禁写；可执行的扩展内容（见 CONFIG_EXECUTABLE_SUBDIRS）对只读工具放行。 */
 	readonly configDir: string;
 	/**
 	 * 额外的受保护目录（凭据类）。**读与写都拒，且任何沙箱模式都不能越过。**
@@ -151,6 +159,21 @@ export function defaultProtectedDirs(homeDir: string): readonly string[] {
 		resolve(homeDir, ".pi", "agent"), // pi 自己的 auth.json
 	];
 }
+
+/**
+ * 配置目录内**可读**的子目录：放的是「要被执行 / 按需加载的扩展内容」，不是凭据或程序配置。
+ *
+ *   - `skills/`   用户导入的技能（自带 `scripts/`，模型要用 shell 跑）；
+ *   - `experts/`  用户级专家（私有 skills 同样要执行）；
+ *   - `agents/`   用户级人格 / 子代理定义；
+ *   - `runtimes/` 托管运行时本体（python / node / gitbash）—— 模型执行的就是这里面的解释器。
+ *                 此前它只是靠 PATH 注入让命令文本里不出现 `.kamibuddy` 才「碰巧」能用，
+ *                 一旦显式写路径就会被拦，属于同一处误伤的第三个面。
+ *
+ * 其余（`auth.json` / `mcp.json` / `permissions.rules.json` / `preferences.json` /
+ * `sessions/` / `models*.json` / `automations.json` …）维持禁读，见阶段 1 与 §4.28。
+ */
+const CONFIG_EXECUTABLE_SUBDIRS = ["skills", "experts", "agents", "runtimes"] as const;
 
 /**
  * 只读工具：不改变任何状态。两个登记来源（2026-09-16 起分层）：
@@ -412,19 +435,27 @@ function decideUnderMode(
 	if (target !== undefined) {
 		if (isInside(paths.configDir, target)) {
 			/*
-			 * 技能子目录对只读工具例外：渐进式披露的加载路径就在这里 ——
-			 * 系统提示词只放技能索引（name + description + filePath），
-			 * 全文靠模型用 read 工具按需加载（skill-install.ts 的 filePath
-			 * 与 session-host 的提示词组装都指向这个目录）。
-			 * 一刀切禁读会让用户安装的技能全部变成「列表里有但永不可用」的死技能。
+			 * 可执行的扩展内容对只读工具放行（2026-09-19 第三次收窄，见 §4.28）。
 			 *
-			 * 只放开读：写仍拒。技能正文 = 提示词，write/edit 篡改即提示注入；
-			 * 安装只走两条受校验的通道 —— 技能页的「导入技能」（IPC）与模型的
-			 * skill_install 工具（它内部调同一个 importSkill，入参是工作区里的来源路径）；
-			 * 删除同理只走 skill_uninstall（且只允许删模型自建的，见 core/skill-install.ts）。
-			 * 它们都不经这里的写判定，所以不必为写开任何口子。
+			 * 配置目录里混着两类东西：**凭据 / 程序配置**（auth.json、mcp.json、settings…）
+			 * 与**要被执行的内容**（用户导入的技能、用户级专家与人格、托管运行时本体）。
+			 * 早先一刀切「整目录禁读」把后者也切了 —— 技能装得进来、正文读得到，
+			 * 自带的 `scripts/` 却永远跑不起来。
+			 *
+			 * WorkBuddy 的做法同构：它的保护清单点的是**具体路径**
+			 * （fs-protection.js 的 getProtectedPathKeys），且注释点名 `skills/` 属合法路径。
+			 * 我们此前只给 `skills/` 开过一处例外（2026-09-08），那是同一个误伤的第二次补丁；
+			 * 这次把口径统一成「扩展内容可读、凭据与配置项仍禁读」。
+			 *
+			 * 只放开**读**：写仍拒 —— 技能正文即提示词，write/edit 篡改即提示注入；
+			 * 安装与删除只走技能页 IPC 与 skill_install / skill_uninstall 两条受校验通道
+			 * （它们不经这里的写判定，所以不必为写开口子）。
+			 * 同名前缀的兄弟目录（skills-evil 之类）不受影响：isInside 按路径分量判。
 			 */
-			if (READ_ONLY.has(toolName) && isInside(join(paths.configDir, "skills"), target)) {
+			if (
+				READ_ONLY.has(toolName) &&
+				CONFIG_EXECUTABLE_SUBDIRS.some((name) => isInside(join(paths.configDir, name), target))
+			) {
 				return { kind: "allow" };
 			}
 			/*

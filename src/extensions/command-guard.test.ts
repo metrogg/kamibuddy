@@ -81,8 +81,29 @@ describe("凭据目录访问（credential-access）", () => {
 		"Get-Content C:\\Users\\foo\\.kamibuddy\\auth.json",
 		"type ~\\.pi\\agent\\auth.json",
 		"Get-Content D:\\repo\\deploy\\auth.json",
-	])("配置目录与 auth.json：%s", (command) => {
+	])("auth.json 任意位置都算凭据文件：%s", (command) => {
 		expectBlocked(command, "credential-access");
+	});
+
+	it.each([
+		"Get-Content C:\\Users\\foo\\.kamibuddy\\mcp.json",
+		"type $env:USERPROFILE\\.kamibuddy\\permissions.rules.json",
+		"Get-Content ~/.kamibuddy/sessions/abc.jsonl",
+	])("配置目录内仍敏感的项（mcp.json / permissions.rules.json / sessions）：%s", (command) => {
+		expectBlocked(command, "credential-access");
+	});
+
+	it("配置目录里的技能 / 专家 / 运行时脚本 → 放行（2026-09-19 收窄，见 §4.28）", () => {
+		/*
+		 * 本次修复的正面证据。`${SKILL_DIR}` 展开后必然含 `.kamibuddy`，
+		 * 此前被「整段目录名」那条规则一网打尽 —— 技能装得进来、正文读得到，
+		 * 自带的 scripts/ 却永远跑不了。这几条钉住那条规则不再回来。
+		 */
+		expectAllowed(
+			'python3 "$env:USERPROFILE\\.kamibuddy\\skills\\ppt-master\\scripts\\attribution_guard.py"',
+		);
+		expectAllowed("python C:\\Users\\foo\\.kamibuddy\\runtimes\\python\\3.12.14\\python.exe x.py");
+		expectAllowed('& "$env:USERPROFILE\\.kamibuddy\\experts\\x\\skills\\a\\scripts\\b.py"');
 	});
 
 	it("同名前缀不算凭据目录（foo.ssh、.sshd 放行）", () => {

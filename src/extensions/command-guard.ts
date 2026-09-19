@@ -18,7 +18,9 @@
  *   download-execute        下载执行：DownloadString/DownloadFile，
  *                           或 curl/wget/iwr 的结果管道进 iex/powershell
  *   credential-access       凭据目录访问：与权限门凭据清单同源
- *                           （defaultProtectedDirs 派生，不另写一份）+ .kamibuddy/auth.json
+ *                           （defaultProtectedDirs 派生，不另写一份）
+ *                           + 配置目录内仍敏感的具体项（auth.json、mcp.json、
+ *                           permissions.rules.json、sessions/ —— 见 CREDENTIAL_PATTERNS）
  *   recursive-force-delete  递归强制删除：Remove-Item -Recurse -Force 及
  *                           rd /s /q、del /s 等同款语义
  *   system-damage           系统破坏：shutdown / Restart-Computer / format /
@@ -75,11 +77,30 @@ const CREDENTIAL_PATTERNS: ReadonlyArray<{ readonly label: string; readonly patt
 		label: segment.replace(/[\\/]+/g, "/"),
 		pattern: segmentPattern(segment),
 	})),
-	// 配置目录与其中的登录态：权限门按绝对路径拦（configDir 禁读禁写），
-	// 命令文本里只能按名字拦，保守处理——sessions 等非凭据内容模型本不该
-	// 用 shell 去读（有 read 工具与正常工作目录）。
-	{ label: ".kamibuddy", pattern: segmentPattern(".kamibuddy") },
+	/*
+	 * 配置目录里**仍然敏感**的那几项（2026-09-19 收窄，见 §4.28）。
+	 *
+	 * 此前这里是 `{ label: ".kamibuddy" }` —— 一条整段目录名规则。它拦得住
+	 * `Get-Content ~/.kamibuddy/auth.json`，但**同时**拦掉了 `~/.kamibuddy/skills/`
+	 * 下的技能脚本（`${SKILL_DIR}` 展开后必然含这个片段），技能于是变成
+	 * 「装得进来、正文读得到、自带的 scripts/ 跑不了」。权限门那边同一处误伤
+	 * 已收窄为「扩展内容可读」，这里同步改成**点具体文件 / 子目录**
+	 * （WorkBuddy 的 fs-protection `getProtectedPathKeys` 就是点具体路径的口径）。
+	 *
+	 * 只对配置目录内的路径生效（除 auth.json 外都带 `.kamibuddy/` 前缀）：
+	 * 裸名 `mcp.json` 之类的会误伤用户自己项目里的同名文件。
+	 * `auth.json` 保留裸名 —— 任意位置出现都算凭据文件，这是既有行为。
+	 *
+	 * 命令文本层永远不是安全边界（见文件头的已知绕过面：base64 重编码、变量拼接），
+	 * 这几条只负责把最直白的读法挡在门口；真正的路径判定在权限门阶段 1。
+	 */
 	{ label: "auth.json", pattern: segmentPattern("auth.json") },
+	{ label: ".kamibuddy/mcp.json", pattern: segmentPattern(".kamibuddy/mcp.json") },
+	{
+		label: ".kamibuddy/permissions.rules.json",
+		pattern: segmentPattern(".kamibuddy/permissions.rules.json"),
+	},
+	{ label: ".kamibuddy/sessions", pattern: segmentPattern(".kamibuddy/sessions") },
 ];
 
 /**

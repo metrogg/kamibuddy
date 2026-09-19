@@ -218,9 +218,10 @@ describe("工作目录内的写入", () => {
 	});
 });
 
-describe("配置目录：一律拒绝，且不给「允许」选项", () => {
+describe("配置目录：凭据与程序配置一律拒绝，且不给「允许」选项", () => {
 	// 为什么是 deny 而不是 ask：auth.json 存着 API Key。
 	// 若靠弹窗把关，提示注入可以编一个理由骗用户点「允许」。
+	// （可执行的扩展内容是唯一例外，见下一组用例 —— 那是 2026-09-19 §4.28 定下的口径。）
 	it("写 auth.json → 拒绝", () => {
 		const result = decide(facts({ path: join(PATHS.configDir, "auth.json") }), PATHS, CWD);
 		expect(result.kind).toBe("deny");
@@ -249,12 +250,16 @@ describe("配置目录：一律拒绝，且不给「允许」选项", () => {
 	});
 });
 
-describe("配置目录内的技能子目录：只读工具例外", () => {
+describe("配置目录内的可执行扩展内容：只读工具放行", () => {
 	/*
-	 * 这组用例钉住 2026-09-08 的第二个回归：configDir 从禁写升级为禁读时
-	 * 一刀切误伤了 skills/ —— 渐进式披露靠模型用 read 工具加载 SKILL.md 全文，
-	 * 全禁读后用户安装的技能全部变成「列表里有但永不可用」的死技能。
-	 * 89 个权限测试里没有一条覆盖「被保护目录的合法消费者」，这组就是补位。
+	 * 这组用例钉住两轮同源回归：
+	 *   - 2026-09-08：configDir 从禁写升级为禁读时一刀切误伤了 skills/ ——
+	 *     渐进式披露靠模型用 read 加载 SKILL.md 全文，全禁读后已安装技能变成
+	 *     「列表里有但永不可用」的死技能；
+	 *   - 2026-09-19：上一条只修了 read 那一半，技能自带的 scripts/ 仍跑不了
+	 *     （命令通道被 command-guard 的「.kamibuddy 整段」规则拦下，见 §4.28），
+	 *     于是把口径统一成「扩展内容可读、凭据与程序配置仍禁读」。
+	 * 被保护目录必须有覆盖「合法消费者」的用例，否则下一次收紧还会重演。
 	 */
 	const SKILLS_DIR = join(PATHS.configDir, "skills");
 	const SKILL_MD = join(SKILLS_DIR, "meeting-notes", "SKILL.md");
@@ -269,20 +274,36 @@ describe("配置目录内的技能子目录：只读工具例外", () => {
 		}
 	});
 
-	it("写技能目录仍然拒绝 —— 技能正文 = 提示词，篡改即提示注入（安装走 skill-install 校验通道）", () => {
-		expect(decide(facts({ toolName: "write", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
-		expect(decide(facts({ toolName: "edit", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
+	it("专家 / 人格 / 运行时目录同样放行 —— 它们也是「要被执行的内容」", () => {
+		// experts 与 agents 里带私有 skills；runtimes 里就是解释器本体：
+		// 模型执行 python/node 时用的正是那些路径，不该被配置目录禁读挡住。
+		for (const path of [
+			join(PATHS.configDir, "experts", "my-expert", "skills", "x", "SKILL.md"),
+			join(PATHS.configDir, "agents", "reviewer.md"),
+			join(PATHS.configDir, "runtimes", "python", "3.12.14", "python.exe"),
+		]) {
+			expect(decide(facts({ toolName: "read", path }), PATHS, CWD)).toEqual({ kind: "allow" });
+		}
 	});
 
-	it("技能目录之外的配置目录仍然禁读（auth.json / preferences）", () => {
-		for (const p of ["auth.json", "preferences.json"]) {
+	it("写扩展内容仍然拒绝 —— 技能正文 = 提示词，篡改即提示注入（安装走 skill-install 校验通道）", () => {
+		expect(decide(facts({ toolName: "write", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
+		expect(decide(facts({ toolName: "edit", path: SKILL_MD }), PATHS, CWD).kind).toBe("deny");
+		expect(
+			decide(facts({ toolName: "write", path: join(PATHS.configDir, "runtimes", "x.txt") }), PATHS, CWD).kind,
+		).toBe("deny");
+	});
+
+	it("凭据与程序配置仍然禁读（auth.json / mcp.json / permissions.rules.json / preferences / models）", () => {
+		for (const p of ["auth.json", "mcp.json", "permissions.rules.json", "preferences.json", "models.json"]) {
 			expect(decide(facts({ toolName: "read", path: join(PATHS.configDir, p) }), PATHS, CWD).kind).toBe("deny");
 		}
 	});
 
-	it("同名前缀的兄弟目录不放行（skills-evil 不是 skills）", () => {
-		const target = join(PATHS.configDir, "skills-evil", "SKILL.md");
-		expect(decide(facts({ toolName: "read", path: target }), PATHS, CWD).kind).toBe("deny");
+	it("同名前缀的兄弟目录不放行（skills-evil 不是 skills、runtimes-old 不是 runtimes）", () => {
+		for (const p of [join("skills-evil", "SKILL.md"), join("runtimes-old", "x.txt")]) {
+			expect(decide(facts({ toolName: "read", path: join(PATHS.configDir, p) }), PATHS, CWD).kind).toBe("deny");
+		}
 	});
 
 	it("只读模式下读技能同样放行（read-only 拒的是改动，不是读）", () => {

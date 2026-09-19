@@ -163,11 +163,12 @@ export function getWorkspaceDir(): string {
  *
  * 只拼路径不建目录：本文件是纯路径推导层（目录由 spill 落盘时按需建）。
  *
- * 注意取回手段只有**文件工具**（read/grep）：目录名带 `.kamibuddy` 会被
- * command-guard 的凭据段规则拦下（那条规则挡的是
- * `Get-Content ...\.kamibuddy\auth.json`）。所以 spill 提示里只教 read/grep，
- * 不教用 powershell 去 `Get-Content`。这与 cwd 下的记忆目录同一命运
- * （`<cwd>/.kamibuddy/memory/**` 的 shell 访问同样被拦），不是新引入的怪癖。
+ * 取回手段是**文件工具**（read/grep）：spill 落在会话 cwd 下、本就在工作区内，
+ * 文件工具直接放行，是最直接的路径。
+ * （2026-09-19 前这里写的是「只有文件工具」，理由是 shell 侧 `Get-Content` 会被
+ * command-guard 的「`.kamibuddy` 整段」规则拦下。那条整段规则已按 §4.28 收窄为
+ * 点具体文件/子目录，`spills` 不再被拦 —— 提示词里仍只教 read/grep，但理由从
+ * 「shell 做不到」变成「文件工具更直接」，别再把它读成前者。）
  *
  * 另一处**已知怪癖**（与记忆同源，不新增）：若用户把工作空间设成家目录，
  * `<cwd>/.kamibuddy` 就与配置目录重合 ⇒ 文件工具对它的读会被阶段 1 禁读拦下

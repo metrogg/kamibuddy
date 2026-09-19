@@ -386,7 +386,7 @@ daemon 要 `await import` 整个 pi SDK，渲染进程要加载自己的 bundle�
 | 阶段 | 目标                                                                    | 判定                                         | 理由                                                                                             |
 | -- | --------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | 1  | 凭据目录（`.ssh`/`.gnupg`/`.aws`/`.kube`/`.docker`/`.npmrc`/`~/.pi/agent`） | **禁读也禁写，任何权限档位都不能越过**                      | 泄露即账号级损失，不该由一次弹窗决定                                                                             |
-| 1  | 配置目录内（`~/.kamibuddy`）                                                 | 同上（`skills/` 子目录对只读工具例外）                   | 存着 API Key；靠弹窗把关的话，提示注入可编造理由骗用户点允许。技能例外见 permission-policy.ts 头注释 2026-09-08 第二条               |
+| 1  | 配置目录内（`~/.kamibuddy`）                                                 | 同上（**2026-09-19 收窄**：只对凭据与程序配置项；`skills/` `experts/` `agents/` `runtimes/` 对只读工具放行 —— 见 §4.28）                   | 存着 API Key；靠弹窗把关的话，提示注入可编造理由骗用户点允许。粒度为什么从「整目录」收到「点具体项」见 §4.28               |
 | 2  | 无本地路径的只读工具（web\_search / web\_fetch / present\_files）                 | 放行                                         | 不改变本地状态                                                                                        |
 | 2  | 本地只读工具（read/grep/find/ls）：工作目录内                                       | 放行                                         | 工作目录本来就是给模型看的                                                                                  |
 | 2  | 本地只读工具：工作目录外                                                          | **低风险询问**（`danger-full-access` 放行）         | 2026-09-09 事故：读侧漫游是写越界的必经入口；且有 web\_fetch 时「读任意文件 + 抓任意 URL」是数据外带路径。codex 不限读的前提是其沙箱默认禁网，我们不具备 |
@@ -1722,6 +1722,97 @@ check:invariants / check:expert-assets）六项全过；`npm test` **161 文件 
 4. **否决：在 `importSkill` 外层加 try/catch 兜住。**
    原生崩溃**不是 JS 异常**，catch 拦不住 —— 这正是本条最值得记的一点：
    面对这类故障，「加个兜底」是假的安全感。
+
+### 4.28 配置目录的保护粒度：从「整目录前缀」收窄为「凭据点具体项」（2026-09-19）
+
+**现象**：§4.26 / §4.27 修完导入之后，让模型跑 `ppt-master`，它的原话是：
+
+> 校验脚本因**运行环境禁止命令通道访问应用配置目录**而未能执行（`routing.md` 等技能文件
+> **本身可直接读取**）。… 生成路线的完整脚本管线（`scripts/` 下的 Python 工具）都在
+> 应用配置目录内，命令通道对该目录是**硬性禁读** —— 这一步无法绕过。
+
+模型没胡说。技能**装得进来、正文读得到、自带的 `scripts/` 永远跑不了**。
+
+**根因（两层都选了「目录前缀」粒度）**：
+
+1. `permission-policy.ts` 阶段 1 把**整个 `<configDir>`** 当凭据禁区（读与写都拒）——
+   本意是护 `auth.json`，实际把「住在同一个目录下的可执行扩展内容」一并切了；
+2. `command-guard.ts` 有一条 `{ label: ".kamibuddy" }` 的**命令文本**整段目录名规则，
+   而第三方技能的 `${SKILL_DIR}` 展开后**必然**含这个片段。
+
+这不是新问题：**2026-09-08 已经因为同一处误伤给只读工具开过 `skills/` 例外**（当时理由：
+一刀切会让已装技能变成「列表里有但永不可用」的死技能）。那次只修了 `read` 那一半，
+命令通道没修 —— 今天是同一处**第三次**发作。补第三处例外没有意义，粒度这个根要治。
+
+**对照（五家，均为只读调研）**：技能放配置目录这件事**各家都一样**（WorkBuddy
+`~/.workbuddy/skills/`、pi `~/.pi/agent/skills`、codex `$CODEX_HOME/skills`、dsh
+`~/.dsh/skills`），只有 opencode 做了目录分离（凭据在 XDG data、扩展在 XDG config）。
+**没有一家做「整目录禁读」** —— 保护粒度清一色是「具体凭据文件 / 目录」：
+
+- WorkBuddy `fs-protection.js:44-56` 的保护清单点的是**具体路径**
+  （`configDir`、`workbuddy.db`、`app`、`memory`、`logs`），注释**点名 `skills/` 属合法路径**；
+  目录级硬 deny 只给 `projects/`（会话/记忆逃逸），且注释强调**不注入 sandbox denyRead**；
+- WorkBuddy Win32 沙箱 `tsbx_rules.json:3` 是 `deny_write`（**读放行**），
+  只有 `.ssh` / `.gnupg` 是 `no_access`；CLI 的 `sandbox.filesystem.allowWrite`
+  **显式包含** `~/.workbuddy/skills/`、`~/.workbuddy/plugins/`；
+- codex 默认全盘可读（`protocol/src/permissions.rs:592-610`），凭据另有可配置的
+  deny-read glob 与 OS keyring；dsh 的沙箱**只约束写**，其凭据 README 自己承认
+  「模型能读它，没有沙箱模式单独拦」= **discretion, not boundary**。
+
+**决定**：
+
+1. **权限门阶段 1 收窄**：配置目录内**可执行的扩展内容**
+   （`skills/` `experts/` `agents/` `runtimes/`，见 `CONFIG_EXECUTABLE_SUBDIRS`）对只读工具放行；
+   **凭据与程序配置**（`auth.json`、`mcp.json`、`permissions.rules.json`、
+   `preferences.json`、`models*.json`、`sessions/` …）维持禁读。**写仍全禁** ——
+   技能正文即提示词，write/edit 篡改即提示注入；安装/删除继续只走技能页 IPC 与
+   `skill_install` / `skill_uninstall` 两条受校验通道。
+2. **command-guard 收窄**：删掉 `.kamibuddy` 整段规则，改为点具体项 ——
+   `auth.json`（保留裸名：任意位置的 auth.json 都算凭据文件）、
+   `.kamibuddy/mcp.json`、`.kamibuddy/permissions.rules.json`、`.kamibuddy/sessions`。
+3. **与 dsh 的有意差异**：我们**保留凭据读禁读**。dsh 把「模型能读凭据」明确归为
+   discretion 而非 boundary；我们不能跟 —— 因为**我们有 `web_fetch` 外发通道**
+   （读到密钥就能带走），AGENTS.md §「别因为'有沙箱了'就削弱检查器」写的就是这条推理链。
+
+**已知边界（不假装解决）**：
+
+- 命令文本层**永远不是安全边界**（本文件头已列：base64 重编码、变量拼接都能绕）。
+  这次只是把它从「粗拦」改成「它能做到的最精确形态」；真正的路径判定在权限门阶段 1。
+  `skills\..\auth.json` 这类穿越式写法在文本层仍可能漏，但 `auth.json` 的裸名规则兜住了
+  最要紧的那个。
+- `runtimes/` 此前是**靠 PATH 注入让命令文本不出现 `.kamibuddy` 才「碰巧」可用**，
+  现在变成显式放行 —— 这是顺带修掉的第三个面。
+- 技能**写**自己目录仍然被拒（要写产物请写工作区）。若将来有技能确实需要在自己的
+  目录下写缓存，那是下一轮的事，本轮不为它开口子。
+
+**实证**：`npm run check` 六项全过；`npm test` **161 文件 / 2,993 通过（1 skipped）**。
+护栏「改坏 → 看红」三组，均已还原：
+
+| 人为破坏 | 变红 |
+|---|---|
+| 把 `.kamibuddy` 整段规则加回 command-guard | 1 条（技能/专家/运行时脚本应放行） |
+| 把 `CONFIG_EXECUTABLE_SUBDIRS` 清空 | 4 条（权限层的放行用例） |
+| 把 `.kamibuddy/sessions` 换成不会命中的片段 | 1 条（凭据项应拦截） |
+
+#### 否决方案
+
+1. **否决：把用户技能目录搬出配置目录（本条的初版方案 A）。**
+   四家参照物都把技能放在配置目录里，说明**位置不是病根、粒度才是**；搬目录要迁移
+   已有安装、sidecar、技能页与导入/删除逻辑，却治不了 `experts/`、`runtimes/` 上
+   一模一样的误伤。
+2. **否决：照 dsh 连凭据读也一并放开（「沙箱只管写」）。**
+   前提不同：dsh 没有把「读任意文件 + 抓任意 URL」凑成外发通道，我们有 `web_fetch`。
+   这条保留是本次与 dsh 唯一实质性的偏离，值为的就是那一条推理链。
+3. **否决：保留 `.kamibuddy` 整段规则，另加「skills 子目录白名单」。**
+   文本白名单可以被 `skills\..\auth.json` 绕过，是纸糊的；而且白名单比黑名单更脆
+   （任何合法的 `.kamibuddy\...` 新路径都要记得加进去，忘了就又是「技能跑不了」）。
+4. **否决：`mcp.json` / `permissions.rules.json` 也用裸名匹配。**
+   裸名 `mcp.json` 会误伤用户自己项目里的同名文件（`type config\mcp.json` 直接被拦）。
+   只有 `auth.json` 值得裸名 —— 它出现在任何位置都算凭据文件，这是既有行为。
+5. **否决：为技能运行时开「写配置目录」的口子。**
+   写侧维持全禁。技能要落产物就落工作区（`present_files` 只认工作区内的路径），
+   缓存放临时目录；放开写等于把「技能正文即提示词」这条防线也拆了。
+
 
 
 ##
