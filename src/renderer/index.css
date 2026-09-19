@@ -710,19 +710,23 @@ textarea:focus-visible {
 	color: var(--text-secondary);
 }
 
-/* 组级操作（+ 与 ⋯）：与任务行同款的 hover 浮现模式。 */
+/* 组级操作（+ 与 ⋯）：与任务行同款的 hover 浮现模式。
+   过渡与 .task-item-ops 逐条对齐（含进出场不对称：淡回用 --dur-fast、浮现用
+   --dur-base，DESIGN.md §5.8）—— 两处是同一个交互，此前这里是硬闪、那边是渐变。 */
 .space-group-actions {
 	display: flex;
 	gap: 2px;
 	padding-right: var(--space-1);
 	opacity: 0;
 	visibility: hidden;
+	transition: opacity var(--dur-fast) var(--ease-standard), visibility var(--dur-fast);
 }
 
 .space-group-header:hover .space-group-actions,
 .space-group-actions:focus-within {
 	opacity: 1;
 	visibility: visible;
+	transition: opacity var(--dur-base) var(--ease-standard), visibility var(--dur-base);
 }
 
 /* ⋯ 弹层：卡片视觉复用 .pop-menu（圆角 = --radius-md 10px，与旧硬编码一致），向下展开。 */
@@ -888,7 +892,10 @@ textarea:focus-visible {
 	line-height: 22px;
 	font-weight: 500;
 	color: var(--text-secondary);
-	transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+	/* transform 服务于按下态（scale(.98)，见文件末尾的按下态块）：
+	   只声明变色会让「按下」形变硬跳。 */
+	transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease,
+		transform var(--dur-fast) var(--ease-standard);
 }
 
 .mode-tab.active {
@@ -1217,6 +1224,14 @@ textarea:focus-visible {
 }
 
 .ac-item.active {
+	background: var(--bg-hover);
+}
+
+/* 【2026-09-19 补】此前只有键盘选中态（.active）没有 hover 底：鼠标悬停在候选上
+   毫无反馈，而高亮还停在键盘选中的那一条（条目只用 onMouseDown 取词，没有
+   onMouseEnter 同步选中）。补 hover 与 .active 同色 —— 鼠标与键盘读作同一件事。
+   不加 :active（按下态）：取词走 onMouseDown，按下的下一帧菜单就关了，按下态看不见。 */
+.ac-item:hover {
 	background: var(--bg-hover);
 }
 
@@ -1865,7 +1880,8 @@ textarea:focus-visible {
 	font-size: var(--text-list);
 	line-height: 20px;
 	color: var(--text-secondary);
-	transition: color var(--dur-fast) ease;
+	/* transform 服务于按下态（scale(.98)，见文件末尾的按下态块）。 */
+	transition: color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-standard);
 }
 
 /*
@@ -2558,6 +2574,9 @@ textarea:focus-visible {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-1);
+	/* 行 hover 时**变的是它**（.turn-header.clickable:hover .turn-duration 那条命中
+	   子元素），过渡得声明在真正变色的元素上 —— 父级在末尾共享名单里管不到它。 */
+	transition: color var(--dur-fast) var(--ease-standard);
 }
 
 /* 可点击的回合头部（完成/取消轮的折叠开关）：宽度随内容收拢（通栏按钮
@@ -2896,12 +2915,17 @@ textarea:focus-visible {
 	padding: var(--space-6);
 	background: rgb(0 0 0 / 72%);
 	cursor: zoom-out;
+	/* 【2026-09-19 补】全屏看图此前是硬切：点缩略图 → 整个窗口「啪」地变黑。
+	   背板走 backdrop-in（与审批弹窗遮罩同一支），图片本身走 pop-layer-in
+	   （从中心放大一点进来），合起来才是「点开一张图」的观感。 */
+	animation: backdrop-in var(--dur-base) var(--ease-out);
 }
 
 .image-preview-overlay img {
 	max-width: 100%;
 	max-height: 100%;
 	border-radius: var(--radius-md);
+	animation: pop-layer-in var(--dur-base) var(--ease-out);
 }
 
 .entry.assistant {
@@ -3070,6 +3094,9 @@ textarea:focus-visible {
 	/* 纯色三级灰（WorkBuddy 完成态为纯色文字，渐隐是流式 shimmer 的事，
 	   而 shimmer 已在标题行表达）。 */
 	color: var(--text-secondary);
+	/* 条件挂载（chat-view 的 `{open && <pre>}`）：展开那刻它是终态，transition
+	   没起点可跑，入场只能走 animation（否则点标题=正文「啪」地出现）。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 /* Markdown 渲染区：模型输出的结构化排版。
@@ -3841,7 +3868,9 @@ textarea:focus-visible {
 	border-radius: var(--radius-lg);
 	background: var(--bg-raised);
 	text-align: left;
-	transition: background-color var(--dur-fast) var(--ease-out);
+	/* transform 服务于按下态（整卡可点 → scale(.98)，见文件末尾的按下态块）。 */
+	transition: background-color var(--dur-fast) var(--ease-out),
+		transform var(--dur-fast) var(--ease-standard);
 }
 
 .artifact-card:hover {
@@ -4312,6 +4341,8 @@ textarea:focus-visible {
 
 .task-diag-fold-body {
 	padding: 0 0 var(--space-2) var(--space-4);
+	/* 条件挂载（task-diagnostics-panel 的 `{open && …}`）→ 入场走 animation。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 /* 区标题：列表的标题层级，跟条目共用主文字色（同 .preview-group-title 的口径）。
@@ -6264,6 +6295,30 @@ textarea:focus-visible {
 	}
 }
 
+/*
+ * 条件挂载的**流内展开体**入场（与弹层的 pop-layer-in 分开）。
+ *
+ * 区别在 scale：弹层是浮层，2% 缩放读作「从触发点长出来」（§5 规则 9 的空间连续性），
+ * 但它套在全宽流内块上会让整块文字跟着缩、观感是「抖一下」。流内展开体只需要
+ * 「从上面那行头展开下来」这一件事：-4px 上移 + 淡入。
+ *
+ * 用在哪：`{open && …}` 挂载、内容在文档流里、挂在某个可点的头下方的那些块
+ * （思考块正文 / 定时任务运行记录 / 团队状态栏与成员列表 / 任务诊断的折叠体 /
+ * 审批详情）。条件挂载的元素**挂载即终态**，transition 没有起点可跑，只能走
+ * animation（DESIGN.md §5 规则 7：这类元素不做退场动画，入场照做）。
+ */
+@keyframes fold-in {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 /* 弹层锚点：相对定位建立包含块，自身不随 flex 行拉伸。
    mode / model / plus 菜单的触发器外壳同用；permission-menu-zone 无 flex 约束，维持原样。 */
 .menu-zone {
@@ -6875,6 +6930,9 @@ textarea:focus-visible {
 	font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+	/* 「展开详情」是条件挂载（与 .permission-preview 二选一渲染）→ 入场走 animation。
+	   在阻塞审批弹窗里，这一下是「点头确认要点开的东西」，值一个淡入。 */
+	animation: fold-in var(--dur-fast) var(--ease-out);
 }
 
 .permission-remember {
@@ -7890,6 +7948,8 @@ textarea:focus-visible {
 	margin-top: var(--space-3);
 	padding-top: var(--space-3);
 	border-top: 1px solid var(--border);
+	/* 条件挂载（automations-view 的 `{expanded && …}`）→ 入场走 animation。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 .auto-run-row {
@@ -9013,15 +9073,48 @@ textarea:focus-visible {
  *     连 hover 都没有（见 6480 行注释），更不该只有按下态。行内控件的按下反馈由
  *     .mini-btn / .mcp-switch 各自承担。
  *   - `.ac-item`（@ / 补全下拉）：它只有 .active（键盘选中）没有 :hover，
- *     单独补 :active 会出现「键盘态有底、鼠标按下才有底、悬停没反馈」的三态错位；
- *     缺 hover 是既有的四态缺口，不在本任务范围（登记在报告里）。
+ *     单独补 :active 会出现「键盘态有底、鼠标按下才有底、悬停没反馈」的三态错位。
+ *     【2026-09-19 已处置】正解是补 hover 而不是补按下态：hover 底已在 1230 行处
+ *     与 .active 同色补齐（过过渡名单里也有它），仍**不加** :active —— 取词走
+ *     onMouseDown，按下的下一帧菜单就关了，按下态根本看不见。
  */
 
-/* 图标按钮（小控件，DESIGN.md §3.1：active 叠 scale(.96)）。 */
+/* 图标按钮（小控件，DESIGN.md §3.1：active 叠 scale(.96)）。
+   【2026-09-19 补齐】名单按「命中区 ≤20-32px 且只装一个图标」的口径逐个核对后扩张：
+   关掉浮层/删除附件/移除 chip 的那些 ×（.cu-close / .attachment-remove /
+   .document-ref-remove / .skill-chip-remove / .pending-tip-close / .preview-tab-close /
+   .mode-chip-clear / .expert-chip-close）、.cu-ring（用量圆环）、.footer-btn（设置齿轮）、
+   .queued-chip-btn（定义处自己写着「与侧栏行内操作同一档」）、.team-bar-close、
+   .auto-row-expand —— 它们与已在名单里的 .task-op-btn 是完全同类的控件，此前只是漏了。 */
 .bar-btn:active:not(:disabled),
 .entry-icon-btn:active:not(:disabled),
-.task-op-btn:active:not(:disabled) {
+.task-op-btn:active:not(:disabled),
+.queued-chip-btn:active:not(:disabled),
+.cu-ring:active:not(:disabled),
+.cu-close:active:not(:disabled),
+.attachment-remove:active:not(:disabled),
+.document-ref-remove:active:not(:disabled),
+.skill-chip-remove:active:not(:disabled),
+.pending-tip-close:active:not(:disabled),
+.preview-tab-close:active:not(:disabled),
+.mode-chip-clear:active:not(:disabled),
+.expert-chip-close:active:not(:disabled),
+.footer-btn:active:not(:disabled),
+.team-bar-close:active:not(:disabled),
+.auto-row-expand:active:not(:disabled) {
 	transform: scale(0.96);
+}
+
+/* 这两个图标的 transform **兼着定位**（.jump-to-bottom 靠 translateX(-50%) 水平居中、
+   .artifact-preview-btn 靠 translateY(-50%) 垂直居中）：按下态必须把定位一并写回，
+   否则一按就跳出原位。它们不能进上面那条通用名单（同档特异性下通用名单更长、
+   会连定位一起覆盖），所以单独立两条，把两条 transform 合成一个值。 */
+.jump-to-bottom:active:not(:disabled) {
+	transform: translateX(-50%) scale(0.96);
+}
+
+.artifact-preview-btn:active:not(:disabled) {
+	transform: translateY(-50%) scale(0.96);
 }
 
 /* 发送键的按下态单独一档：WB 是 `transform: scale(0.93)`（.cr-send-button:active，
@@ -9031,15 +9124,41 @@ textarea:focus-visible {
 	transform: scale(0.93);
 }
 
-/* 常规按钮与 chip / tab 胶囊（DESIGN.md §3.1：active 叠 scale(.98)）。 */
+/* 常规按钮与 chip / tab 胶囊 / 卡片（DESIGN.md §3.1 / §3.3：active 叠 scale(.98)）。
+   【2026-09-19 补齐】这些此前连 hover 都是硬切、更没有按下态。分类口径：
+   有文字或成块的控件 → .98（与 .primary-btn / .capability-chip 同语言）；
+   .artifact-card / .case-card 是整卡可点（§3.3 可点卡片 .98）；
+   .mode-tab / .context-chip 与 .capability-chip 同为胶囊，取同一档；
+   .widget-action 是挂件里的文字按钮（放 .96 会显得它在「跳」）。 */
 .mini-btn:active:not(:disabled),
 .primary-btn:active:not(:disabled),
 .ex-card-use:active:not(:disabled),
+.new-task:active:not(:disabled),
+.task-confirm-btn:active:not(:disabled),
+.mode-tab:active,
+.context-chip:active,
 .cases-action:active,
 .capability-chip:active,
 .quick-prompt-chip:active,
 .skills-tab:active,
-.ex-cat:active {
+.ex-cat:active,
+.preview-action:active:not(:disabled),
+.code-block-copy:active:not(:disabled),
+.error-card-copy:active:not(:disabled),
+.error-card-retry:active:not(:disabled),
+.widget-action:active:not(:disabled),
+.artifacts-more:active:not(:disabled),
+.sources-btn:active:not(:disabled),
+.num-chip:active:not(:disabled),
+.permission-toggle:active:not(:disabled),
+.ex-mine:active:not(:disabled),
+.ex-back:active:not(:disabled),
+.ex-subtab:active:not(:disabled),
+.ex-create-btn:active:not(:disabled),
+.ex-modal-prompt:active:not(:disabled),
+.ex-modal-use:active:not(:disabled),
+.team-bar-toggle:active:not(:disabled),
+.error-boundary-card button:active:not(:disabled) {
 	transform: scale(0.98);
 }
 
@@ -9047,14 +9166,35 @@ textarea:focus-visible {
    .model-card 的 :not(.unavailable) 与它的 hover 守卫同口径——未配 Key 的卡
    cursor 已是 default、点击无动作（见 4363 行注释），不该有按下反馈。
    同理不含 .skill-card：它是纯展示卡（无 onClick / 无 role=button），
-   只有 hover 抬阴影，加按下态会暗示它可以点。 */
+   只有 hover 抬阴影，加按下态会暗示它可以点。
+   .case-card 的 transform 过渡早在定义处就写了（1996 行），此前是条空转声明，
+   现在有了按下态才真正生效。 */
 .ex-card:active,
-.model-card:not(.unavailable):active {
+.model-card:not(.unavailable):active,
+.artifact-card:active,
+.case-card:active {
 	transform: scale(0.98);
 }
 
-/* 列表行 / 菜单项 / 下拉 trigger：按下加深一档底色。 */
+/* 列表行 / 菜单项 / 下拉 trigger / 表格行 / 树行：按下加深一档底色。
+   【2026-09-19 补齐】此前只覆盖了弹层菜单与侧栏的一部分；同一族里
+   .nav-item（侧栏导航）/.section-title-btn（分组标题）/.source-item（来源列表）/
+   .tool-source-item（工具来源）/ .preview-item（预览下拉）/ .file-tree-row（文件树）/
+   .seg-head（设置分区头）/ .preset-item（权限预设）/ .auto-run-row / .auto-tpl-item
+   （定时任务）/ .agent-row（成员行）/ .turn-header.clickable / .metafold-row（轮折叠头）/
+   .chip-panel-item（能力胶囊下钻）/ .task-list-more（查看更多）/
+   .stat-table-clickable tbody tr / .timeline-row.clickable（诊断页）
+   全都没有按下反馈 —— 它们和已在名单里的 .space-menu-item / .provider-option
+   是同一类「整行可点」，一并补齐（底色值不变，仍是 8%，见上）。
+
+   行内嵌按钮的容器（.space-group-header / .auto-row / .preview-tab-item）只在
+   过渡名单里，**不在这里**：它们的点击目标是行内的按钮/子元素，给容器加按下态
+   会变成「按行内任一按钮时整行也变色」，与「整行是按钮」的错觉叠加（同 9009 的口径）。 */
 .task-item:active,
+.nav-item:active,
+.section-title-btn:active,
+.task-list-more:active:not(:disabled),
+.chip-panel-item:active,
 .ws-item:active:not(:disabled),
 .ws-action:active:not(:disabled),
 .settings-nav-item:active,
@@ -9069,39 +9209,134 @@ textarea:focus-visible {
 .model-menu-goto:active,
 .permission-menu-goto:active,
 .provider-select-trigger:active:not(:disabled),
-.task-diag-step-btn:active {
+.task-diag-step-btn:active,
+.source-item:active,
+.tool-source-item:active,
+.preview-item:active,
+.file-tree-row:active,
+.seg-head:active,
+.preset-item:active,
+.auto-run-row:active,
+.auto-tpl-item:active,
+.agent-row:active,
+.turn-header.clickable:active,
+.metafold-row:active,
+.stat-table-clickable tbody tr:active,
+.timeline-row.clickable:active {
 	background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
-/* 走 scale 的那批要过渡，否则形变是「啪」地跳（--dur-fast，DESIGN.md §3）。
-   走底色加深的那批（列表行 / 菜单项）**不加**过渡：它们的 hover 底本来就是瞬时的，
-   按下再叠 150ms 渐显只会让「按下去」显得迟钝。
-   .ex-card 不在这里——它本来就有 transition，已在定义处把 transform 加进那行
-   （不能在这覆盖，否则会把它原有的 border-color / background 过渡顶掉）。
+/* 有状态变化的交互类统一在这里声明过渡 —— 形变、变色、填底否则都是「啪」地跳
+   （--dur-fast，DESIGN.md §3：四态过渡统一走 --dur-fast，变色类用 --ease-standard）。
 
-   【2026-09-18 扩属性】原来这里只声明 `transform`，于是这一族的 **hover 变色/填底
-   全是硬切**：.bar-btn（`+`、图标按钮）hover 同时改 background+color、.mini-btn 改
-   background、.primary-btn 与 .send-btn 改 opacity —— 用户实测反馈「交互动画都没了，
-   很生硬」指的正是这些。现在把这一族真正会变的四个属性一次声明齐。
-   为什么加在**这里**而不是各自的定义处（我第一版就是那么写的，是错的）：
-   本条与各定义处同为 (0,1,0) 且排在其后，**会把定义处的 transition 整条顶掉** ——
-   写在定义处的 opacity/background 声明不会生效，只会让后人以为它管事。
-   改这一族的手感只改这一处；要单开例外就把该类从下面的名单里摘出去。
-   注意**不波及**列表行/菜单项（.ws-item / .model-menu-item / …）：它们不在名单里，
-   上面那条「不加过渡」的决策照旧。 */
+   【2026-09-19 扩名单 + 推翻一条旧决策】用户反馈「交互动画还有一些有了、不少没有」，
+   逐类核对后补的是两类缺口：
+   1) **同类控件漏登记**：.queued-chip-btn 与 .task-op-btn 同档同形、.new-task 与
+      .primary-btn 同为实心主按钮、.nav-item 与 .ws-item 同为整行可点…… 它们此前各自
+      硬切，唯一原因是没进这张名单（.queued-chip-btn 的定义处自己都写着「与侧栏行内
+      操作同一档」）。
+   2) **列表行 / 菜单项的 hover 底**：本文件此前明写「走底色加深的那批不加过渡，
+      按下叠 150ms 会显得迟钝」。**该结论被推翻**：DESIGN.md §3 要求四态都走
+      --dur-fast；WB 自己的侧栏行就是带过渡的（`.cb-sidebar-nav__item`
+      `transition: all .2s ease`，lib-chat-ui-Co_VI_pZ.css:45492-45505）；而 150ms
+      的渐变作用在「按下加深 5%→8%」这种 3% 差值上，并不构成可感的迟钝。
+      按下反馈的**力度**不变（仍是上面那条「加深一档底色」），变的只是时长。
+
+   为什么加在**这里**而不是各自的定义处（老坑，别再踩）：本条与各定义处同为
+   (0,1,0) 且排在其后，**会把定义处的 transition 整条顶掉** —— 写在定义处不会生效，
+   只会让后人以为它管事。改这一族的手感只改这一处；要单开例外就把该类摘出去。
+
+   **不要**把已定制过渡的类塞进来（.mode-tab / .context-chip / .case-cover / .case-card /
+   .artifact-card / .ex-card / .task-item-meta / .task-item-ops / .entry-toolbar-right /
+   .questionnaire-* / .mcp-switch-* / .preview-panel …）：它们的过渡是逐属性挑过的
+   （含进出场不对称、含非变色属性），进来会被这一条抹平。它们的按下态各自就地补。 */
+
+/* 按钮 / 图标钮 / chip / 卡片（变色 + 按下形变） */
 .bar-btn,
 .entry-icon-btn,
 .task-op-btn,
+.queued-chip-btn,
 .send-btn,
 .mini-btn,
 .primary-btn,
+.new-task,
+.task-confirm-btn,
 .cases-action,
 .capability-chip,
 .quick-prompt-chip,
 .skills-tab,
 .ex-cat,
 .ex-card-use,
-.model-card {
+.model-card,
+.preview-action,
+.preview-tab-close,
+.code-block-copy,
+.error-card-copy,
+.error-card-retry,
+.widget-action,
+.footer-btn,
+.cu-ring,
+.cu-close,
+.attachment-remove,
+.document-ref-remove,
+.skill-chip-remove,
+.mode-chip-clear,
+.expert-chip-close,
+.pending-tip-close,
+.jump-to-bottom,
+.artifact-preview-btn,
+.artifacts-more,
+.sources-btn,
+.num-chip,
+.permission-toggle,
+.ex-mine,
+.ex-back,
+.ex-subtab,
+.ex-create-btn,
+.ex-modal-prompt,
+.ex-modal-use,
+.auto-row-expand,
+.team-bar-toggle,
+.team-bar-close,
+.error-boundary-card button,
+/* 整行可点：导航行 / 列表行 / 菜单项 / 树行 / 表格行 / 时间线行（底色与字色） */
+.nav-item,
+.section-title-btn,
+.task-item,
+.space-group-header,
+.task-list-more,
+.chip-panel-item,
+.ac-item,
+.source-item,
+.tool-source-item,
+.preview-item,
+.preview-tab-item,
+.file-tree-row,
+.seg-head,
+.preset-item,
+.auto-row,
+.auto-run-row,
+.auto-tpl-item,
+.agent-row,
+.turn-header.clickable,
+.metafold-row,
+.stat-table-clickable tbody tr,
+.timeline-row.clickable,
+.space-menu-item,
+.model-menu-item,
+.model-menu-level-item,
+.permission-menu-item,
+.plus-menu-item,
+.plus-menu-mode-item,
+.provider-option,
+.model-menu-thinking,
+.model-menu-goto,
+.permission-menu-goto,
+.provider-select-trigger,
+.settings-nav-item,
+.ws-item,
+.ws-action,
+.task-diag-step-btn {
 	transition: transform var(--dur-fast) var(--ease-standard),
 		background-color var(--dur-fast) ease, color var(--dur-fast) ease,
 		border-color var(--dur-fast) ease, opacity var(--dur-fast) var(--ease-standard);
@@ -9256,6 +9491,8 @@ textarea:focus-visible {
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
 	font-size: var(--text-meta);
+	/* 条件挂载（团队开跑时才出现）→ 入场走 animation，别让输入区上方「啪」地多一块。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 .team-bar-head {
@@ -9327,6 +9564,8 @@ textarea:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
+	/* 条件挂载（team-status-bar 的 `{expanded && …}`）→ 入场走 animation。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 /* 产出已在会话记录里（spec: add-team-interrupt-diagnostics 批次 ③ 曾给整枚 chip
@@ -9523,6 +9762,8 @@ button.agent-row {
 	background: var(--bg-raised);
 	margin-bottom: var(--space-2);
 	font-size: var(--text-meta);
+	/* 条件挂载（Ctrl+T 打开任务板）→ 入场走 animation。 */
+	animation: fold-in var(--dur-base) var(--ease-out);
 }
 
 .team-tasks-head {
