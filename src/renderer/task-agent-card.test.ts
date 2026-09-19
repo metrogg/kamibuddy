@@ -1,6 +1,8 @@
 /**
  * task-agent-card 纯函数测试：分组行展示模型派生（queued/running/done/failed
- * 四态的动作行与可展开输出）、默认展开判定（运行中展开、终态折叠）。
+ * 四态的动作行与可展开输出）、默认展开判定（运行中展开、终态折叠）、
+ * 行内展示位置（2026-09-19 与团队状态栏共用 AgentRow 后的口径：计数右对齐、
+ * 动作行只在运行中当第二行）。
  *
  * renderer 无组件测试基建（只有纯函数测试先例），钉的是「每行显示什么」；
  * 开合交互（override 优先）与 ToolEntry/TodoListCard 同模式，不重复覆盖。
@@ -8,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { SubagentStatus } from "@shared/session-events.ts";
-import { defaultOpenOf, deriveAgentRow } from "./task-agent-card.tsx";
+import { agentActionPlacement, agentMetaLine, defaultOpenOf, deriveAgentRow } from "./task-agent-card-model.ts";
 
 function agent(over: Partial<SubagentStatus> = {}): SubagentStatus {
 	return {
@@ -103,6 +105,54 @@ describe("defaultOpenOf：默认展开规则", () => {
 		expect(defaultOpenOf("error")).toBe(false);
 		expect(defaultOpenOf("blocked")).toBe(false);
 		expect(defaultOpenOf("aborted")).toBe(false);
+	});
+});
+
+/*
+ * 2026-09-19：行改成与团队状态栏共用的列行表（AgentRow），这两条是「一行里
+ * 放什么」的判据 —— 计数右对齐、动作行只在运行中当第二行，最易回归。
+ */
+describe("agentMetaLine：右对齐计数", () => {
+	it("普通子代理只有轮数：非零才给（0 轮是噪音，与 teamBarRows 同口径）", () => {
+		expect(agentMetaLine(agent({ turns: 3 }))).toBe("3 轮");
+		expect(agentMetaLine(agent({ turns: 0 }))).toBeUndefined();
+	});
+
+	it("成员带计数键时保持现状（轮/工具/tok/费用一起给）", () => {
+		const meta = agentMetaLine(agent({ turns: 5, toolCalls: 12, tokens: 34560, cost: 0.1234 }));
+		expect(meta).toBe("5 轮 · 12 次工具 · 34.6k tok · $0.12");
+	});
+
+	it("成员一轮没跑也照给（保持现状：计数行是成员行的固定位）", () => {
+		expect(agentMetaLine(agent({ turns: 0, toolCalls: 0 }))).toBe("0 轮 · 0 次工具");
+	});
+});
+
+describe("agentActionPlacement：动作行按「还有没有行动价值」落位", () => {
+	it("运行中：动作行进行内第二行（它是「在做什么」的唯一可见处，不藏）", () => {
+		const row = deriveAgentRow(agent({ status: "running", activity: "正在 web_search 竞品" }));
+		expect(agentActionPlacement(row)).toEqual({ subline: "正在 web_search 竞品", detail: "" });
+	});
+
+	it("done：动作行收进展开区（「已完成 N 轮」与右对齐计数重复）", () => {
+		const row = deriveAgentRow(agent({ status: "done", turns: 7 }));
+		expect(agentActionPlacement(row)).toEqual({ detail: "已完成 7 轮" });
+	});
+
+	it("failed / interrupted：诊断**留在行内第二行**，不许藏进展开区", () => {
+		// 这两句是「要动手」的诊断（超时诊断 / 产出还在、可去取回）。收进展开区等于
+		// 把唯一的信号藏起来 —— 那正是「整卡默认折叠」时代被抱怨过的事。
+		const failed = deriveAgentRow(agent({ status: "failed", output: "子代理超时（600s）" }));
+		expect(agentActionPlacement(failed)).toEqual({ subline: "子代理超时（600s）", detail: "" });
+		const interrupted = deriveAgentRow(agent({ status: "interrupted", turns: 5 }));
+		expect(agentActionPlacement(interrupted)).toEqual({
+			subline: "上次运行中随进程中断（已跑 5 轮）",
+			detail: "",
+		});
+	});
+
+	it("queued：「等待中」与状态短词「启动中」同义，两处都不放", () => {
+		expect(agentActionPlacement(deriveAgentRow(agent({ status: "queued", activity: "" })))).toEqual({ detail: "" });
 	});
 });
 

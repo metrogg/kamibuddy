@@ -3511,84 +3511,14 @@ textarea:focus-visible {
 	gap: var(--space-3);
 }
 
-/* 分组行：glyph 列 + 主列（标题行 + 动作行）。done 带输出时整行是按钮。 */
-.task-agent-row {
-	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-	width: 100%;
-	min-width: 0;
-	text-align: left;
-}
+/* 分组行本身的样式在共用层（`.agent-row*`，见「成员行」一节）：子代理卡与团队
+   状态栏的行长得一样，这里只剩卡自己的壳（列表、展开盒、时间线、输出）。 */
 
-.task-agent-row.expandable {
-	cursor: pointer;
-}
-
-.task-agent-main {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
-
-.task-agent-title {
-	display: flex;
-	align-items: baseline;
-	gap: var(--space-3);
-	min-width: 0;
-	line-height: 1.75;
-}
-
-/* agent 名是分组标识，加粗强调；task 摘要次要色、过长截断（title 兜底在 tsx）。 */
-.task-agent-name {
-	flex: 0 0 auto;
-	font-weight: 600;
-	font-size: var(--text-emphasis);
-	color: var(--text);
-}
-
-.task-agent-task {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	color: var(--text-secondary);
-}
-
-/* 模型徽标：agent 定义声明了专用 model 时挂在名字旁（subagent-runner 按
-   声明选型）。meta 小字 + 边框胶囊，只取 modelId 段、完整 key 在 title。 */
-.task-agent-model {
-	flex: 0 0 auto;
-	max-width: 140px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	padding: 0 var(--space-2);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-full);
-	color: var(--text-secondary);
-	font-size: var(--text-meta);
-	line-height: 1.5;
-}
-
-/* 动作行：运行中是最新动作（扫光在 tsx 摘挂），失败时是诊断文本（可换行）。 */
-.task-agent-action {
-	color: var(--text-secondary);
-	font-size: var(--text-body);
-	line-height: 1.6;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-
-.task-agent-action.text-shimmer {
-	--shimmer-color: var(--text-secondary);
-}
-
-/* 展开盒（过程时间线 + 成功输出）的统一容器：缩进与主列对齐（glyph 16 + gap 8）。 */
+/* 展开盒（终态动作文本 + 过程时间线 + 成功输出）的统一容器：缩进对齐名字列
+   —— 行左内边距（--space-2）+ 头像 16px（--space-5）+ 行内间隙（--space-2），
+   三者都是既有 token，不另写像素值。 */
 .task-agent-detail {
-	margin: 2px 0 var(--space-1) var(--space-6);
+	margin: 2px 0 var(--space-1) calc(var(--space-2) + var(--space-5) + var(--space-2));
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -3615,12 +3545,8 @@ textarea:focus-visible {
 	overflow-wrap: anywhere;
 }
 
-/* 成员计数行（spec 批 8）：轮数/工具/token/费用，meta 小字次级色。 */
-.task-agent-meta {
-	color: var(--text-secondary);
-	font-size: var(--text-meta);
-	line-height: 1.5;
-}
+/* 成员计数行（spec 批 8：轮数/工具/token/费用）与动作行都在共用层：
+   前者是 `.agent-row-meta`（右对齐），后者是 `.agent-row-subline`。 */
 
 /* 成员聚焦横幅（spec 批 8）：可见会话是团队成员时钉在头部下方，
    标注 + 返回主会话。底色用抬升面与消息区分层，不造新档。 */
@@ -9337,97 +9263,6 @@ textarea:focus-visible {
 	gap: var(--space-1);
 }
 
-.team-bar-row {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	width: 100%;
-	padding: var(--space-1) var(--space-2);
-	border: 1px solid transparent;
-	border-radius: var(--radius-sm);
-	background: none;
-	color: var(--text-secondary);
-	text-align: left;
-	cursor: pointer;
-}
-
-.team-bar-row:hover:not(:disabled) {
-	background: var(--bg-hover);
-	color: var(--text);
-}
-
-.team-bar-row.active {
-	border-color: var(--primary);
-	color: var(--text);
-}
-
-.team-bar-row:disabled {
-	cursor: default;
-	opacity: 0.6;
-}
-
-.team-bar-row .expert-avatar {
-	flex-shrink: 0;
-}
-
-.team-bar-mark.st-running {
-	color: var(--primary);
-}
-
-.team-bar-mark.st-done {
-	color: var(--ok);
-}
-
-.team-bar-mark.st-failed {
-	color: var(--danger);
-}
-
-.team-bar-mark.st-queued {
-	color: var(--text-faint);
-}
-
-/* 中断态（spec: add-team-interrupt-diagnostics 批次 ①）：用 --warning 而非
-   --danger —— 成员自己没出错（danger 会误导成「它挂了」），是宿主消失导致
-   产出没回投。同 8869 行「琥珀表出错但在自愈」的既有语义。 */
-.team-bar-mark.st-interrupted {
-	color: var(--warning);
-}
-
-.team-bar-row.interrupted .team-bar-row-name {
-	color: var(--warning);
-}
-
-.team-bar-row-name {
-	/* 列行 = 列表正文档（DESIGN.md §3.5：主文字 --text-list，副行 --text-meta）。 */
-	font-size: var(--text-list);
-	color: var(--text);
-	white-space: nowrap;
-}
-
-.team-bar-row-meta {
-	/* 推到右侧：名字挨着头像，计数/状态归到行尾，扫视时列是对齐的。 */
-	margin-left: auto;
-	color: var(--text-faint);
-}
-
-/* 等待超阈值（批次 ②）：把「等了很久」从平淡灰字换成琥珀，
-   这是用户实测里最需要被看见的信号（「在等」vs「断了」）。 */
-.team-bar-row-meta.warn {
-	color: var(--warning);
-}
-
-.team-bar-row-status {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-1);
-	color: var(--text-secondary);
-	white-space: nowrap;
-}
-
-.team-bar-row-caret {
-	color: var(--text-faint);
-}
-
 /* 产出已在会话记录里（spec: add-team-interrupt-diagnostics 批次 ③ 曾给整枚 chip
    描琥珀边）。2026-09-19 撤掉视觉强调：成员跑完有产出是**常态**（产出会随
    team_* 工具结果自动送到领导），全员都亮等于没有强调；它现在只进 chip 的
@@ -9446,6 +9281,160 @@ textarea:focus-visible {
 
 .team-bar-close:hover {
 	color: var(--text);
+}
+
+/* ── 成员行（子代理卡与团队状态栏共用，组件见 agent-row.tsx）────────────
+   一行 = 头像 + 名字 +（徽标）+（摘要）+（右对齐计数）+ 状态位 + 尾部槽。
+   计数**推到右侧**是这次重排的主因：原来它挤在名字下面当第三行，行被撑高、
+   纵向扫视时列也对不齐。两处共用同一套类，改一处两处一起变。 */
+.agent-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	width: 100%;
+	padding: var(--space-1) var(--space-2);
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: none;
+	color: var(--text-secondary);
+	text-align: left;
+}
+
+/* 只有可点（渲染成 button）的行给手型：不可点的行是纯 div，点了没反应就不该有手型。 */
+button.agent-row {
+	cursor: pointer;
+}
+
+.agent-row:hover:not(:disabled) {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.agent-row.active {
+	border-color: var(--primary);
+	color: var(--text);
+}
+
+.agent-row:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+.agent-row .expert-avatar {
+	flex-shrink: 0;
+}
+
+/* 文字列：单行时随行居中；有第二行（运行中的动作行）时往下折，
+   右对齐的计数与状态位始终留在第一行上。 */
+.agent-row-body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.agent-row-main {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.agent-row-name {
+	/* 列表正文档（DESIGN.md §3.4：主文字 --text-list，副行 --text-meta）。 */
+	font-size: var(--text-list);
+	color: var(--text);
+	white-space: nowrap;
+}
+
+/* 徽标（如模型徽标）：agent 定义声明了专用 model 时挂在名字旁（subagent-runner
+   按声明选型）。meta 小字 + 边框胶囊，只取 modelId 段、完整 key 在 title。 */
+.agent-row-badge {
+	flex: 0 0 auto;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 0 var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-full);
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.5;
+}
+
+/* 摘要（如 task 文本）：占掉剩余宽度，过长截断 + title 兜底（与 tool-summary 同手法）。 */
+.agent-row-summary {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-secondary);
+}
+
+.agent-row-meta {
+	/* 推到右侧：名字挨着头像，计数/状态归到行尾，扫视时列是对齐的。 */
+	margin-left: auto;
+	color: var(--text-faint);
+}
+
+/* 等待超阈值（批次 ②）：把「等了很久」从平淡灰字换成琥珀，
+   这是用户实测里最需要被看见的信号（「在等」vs「断了」）。 */
+.agent-row-meta.warn {
+	color: var(--warning);
+}
+
+/* 状态位：团队行是「符号 + 短词」（都是纯文本），子代理行是「glyph + 短词」。
+   同一槽位、同一间距，两处行宽才一致。 */
+.agent-row-status {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	color: var(--text-secondary);
+	white-space: nowrap;
+}
+
+.agent-row-mark.st-running {
+	color: var(--primary);
+}
+
+.agent-row-mark.st-done {
+	color: var(--ok);
+}
+
+.agent-row-mark.st-failed {
+	color: var(--danger);
+}
+
+.agent-row-mark.st-queued {
+	color: var(--text-faint);
+}
+
+/* 中断态（spec: add-team-interrupt-diagnostics 批次 ①）：用 --warning 而非
+   --danger —— 成员自己没出错（danger 会误导成「它挂了」），是宿主消失导致
+   产出没回投。同 8869 行「琥珀表出错但在自愈」的既有语义。 */
+.agent-row-mark.st-interrupted {
+	color: var(--warning);
+}
+
+.agent-row.interrupted .agent-row-name {
+	color: var(--warning);
+}
+
+/* 尾部槽里的钻取箭头（团队行的 ›）；子代理行的 caret 复用 .tool-caret。 */
+.agent-row-caret {
+	color: var(--text-faint);
+}
+
+/* 第二行（运行中的动作行）；终态时同一类放进展开区显示终态文本。
+   副行走 DESIGN.md §3.4 的 --text-meta（主文字是 --text-list）。 */
+.agent-row-subline {
+	color: var(--text-secondary);
+	font-size: var(--text-meta);
+	line-height: 1.6;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* ── 团队任务面板（spec: add-team-ux-parity 批次 ③，Ctrl+T）────────────

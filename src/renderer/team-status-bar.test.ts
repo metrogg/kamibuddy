@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { SubagentStatus } from "@shared/session-events.ts";
-import { formatWaiting, nextMemberTarget, teamBarRows, teamBarStats, WAITING_ALERT_MS } from "./team-status-bar.tsx";
+import { formatWaiting, nextMemberTarget, teamBarRows, teamBarStats, WAITING_ALERT_MS } from "./team-status-bar-model.ts";
 
 function member(overrides: Partial<SubagentStatus> & { agent: string }): SubagentStatus {
 	return {
@@ -33,7 +33,8 @@ describe("teamBarRows", () => {
 		expect(rows.map((row) => row.name)).toEqual(["谭溯源"]);
 	});
 
-	it("四态各有符号与色档（… 启动中 / ● 运行中 / ✓ 已完成 / ✗ 失败）", () => {		const rows = teamBarRows(
+	it("四态各有色档（符号与短词改由 AgentRow 查共享词表，见 agent-row.test.ts）", () => {
+		const rows = teamBarRows(
 			[
 				member({ agent: "a", status: "queued" }),
 				member({ agent: "b", status: "running" }),
@@ -42,16 +43,15 @@ describe("teamBarRows", () => {
 			],
 			undefined,
 		);
-		expect(rows.map((row) => `${row.mark}${row.tone}`)).toEqual(["…queued", "●running", "✓done", "✗failed"]);
+		expect(rows.map((row) => row.tone)).toEqual(["queued", "running", "done", "failed"]);
 		expect(rows.map((row) => row.live)).toEqual([false, true, false, false]);
 	});
 
-	it("中断态有自己的符号与标记（! / interrupted），不折成 done 或 failed", () => {
+	it("中断态有自己的色档（interrupted），不折成 done 或 failed", () => {
 		const rows = teamBarRows(
 			[member({ agent: "谭溯源", status: "interrupted" })],
 			undefined,
 		);
-		expect(rows[0]?.mark).toBe("!");
 		expect(rows[0]?.tone).toBe("interrupted");
 		expect(rows[0]?.interrupted).toBe(true);
 		expect(rows[0]?.statusText).toContain("中断");
@@ -280,28 +280,13 @@ describe("统计簇（总数 + 只列非零）", () => {
 	});
 });
 
-describe("列行表的状态词（statusShort）", () => {
-	it("五态各有一个行内短词（长句留给 statusText 给 title / 读屏）", () => {
-		const rows = teamBarRows(
-			[
-				member({ agent: "a", status: "queued" }),
-				member({ agent: "b", status: "running" }),
-				member({ agent: "c", status: "done" }),
-				member({ agent: "d", status: "failed" }),
-				member({ agent: "e", status: "interrupted" }),
-			],
-			undefined,
-		);
-		expect(rows.map((row) => row.statusShort)).toEqual(["启动中", "运行中", "已完成", "失败", "已中断"]);
-	});
-
-	it("短词是行内一个词；带行动指引的长句只留给 title / 读屏", () => {
-		// 有产出可读时 statusText 会追加「产出还在…可去取回」——那类句子进不了行内。
+describe("列行表的计数与状态长句", () => {
+	it("长句仍在：带行动指引的句子只留给 title / 读屏，不进行内", () => {
+		// 有产出可读时 statusText 会追加「产出还在…可去取回」——那类句子进不了行内
+		// （行内只放共享词表里的短词，见 agent-row.test.ts）。
 		const rows = teamBarRows([member({ agent: "a", status: "done", outputAvailable: true })], undefined);
-		expect(rows[0]?.statusShort).toBe("已完成");
-		expect(rows[0]?.mark).toBe("✓");
+		expect(rows[0]?.statusText).toContain("已完成");
 		expect(rows[0]?.statusText).toContain("产出还在");
-		expect(rows[0]?.statusText).not.toBe(rows[0]?.statusShort);
 	});
 
 	it("计数在列行里始终可用（不再按状态门控 —— 空间问题由折叠解决，不靠削信息）", () => {

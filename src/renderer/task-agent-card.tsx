@@ -17,79 +17,19 @@
  *
  * 团队成员（kind:"team"，spec: add-team-foundations 批 8）：成员行带「查看」
  * 入口（聚焦成员实时对话）与实时计数行（轮数/工具/token/费用）。
+ *
+ * 行样式统一（2026-09-19）：成员行与团队状态栏的列行表共用 `AgentRow` ——
+ * 原来计数挤在名字下面当第三行（行被撑高、扫视对不齐），现在计数右对齐，
+ * 一行读完。两处行组件重复的问题一并消失。
  */
 
 import { useState } from "react";
 import type { SubagentStatus, ToolCard } from "@shared/session-events.ts";
+import { AgentRow } from "./agent-row.tsx";
+import { STATUS_SHORT } from "./agent-row-status.ts";
 import { IconCheck, IconChevronDown, IconClose } from "./icons.tsx";
 import { LoadingState, Spinner } from "./state-views.tsx";
-
-/**
- * 分组行的展示模型（从 SubagentStatus 派生的纯数据）。
- *
- * 抽成纯函数的原因：renderer 没有组件测试基建（只有纯函数测试先例），
- * 「每行显示什么字、什么状态」是这张卡最易回归的逻辑，钉在单测里。
- */
-export interface AgentRowView {
-	readonly status: SubagentStatus["status"];
-	/** 动作行文本：等待中 / 最新动作 / 已完成 N 轮 / 失败诊断。 */
-	readonly action: string;
-	/** 动作行是否扫光（仅 running —— 扫光是全局唯一「进行中」语言）。 */
-	readonly live: boolean;
-	/** done 组的可展开输出（非 done 或空输出为 undefined）。 */
-	readonly output?: string;
-}
-
-/** 单个子代理状态 → 分组行展示模型。 */
-export function deriveAgentRow(agent: SubagentStatus): AgentRowView {
-	switch (agent.status) {
-		case "queued":
-			return { status: "queued", action: "等待中", live: false };
-		case "running":
-			// activity 无进展时为空串（契约），动作行不能留白。
-			return { status: "running", action: agent.activity !== "" ? agent.activity : "执行中…", live: true };
-		case "done":
-			return {
-				status: "done",
-				action: `已完成 ${agent.turns} 轮`,
-				live: false,
-				// 空输出不挂展开入口（点了展开也是空盒，反而像坏了）。
-				output: agent.output !== undefined && agent.output !== "" ? agent.output : undefined,
-			};
-		case "failed":
-			// output 是失败诊断（契约）；类型上可选，缺席时交代一句不空行。
-			return { status: "failed", action: agent.output ?? "执行失败", live: false };
-	case "interrupted":
-		// 中断（spec: add-team-interrupt-diagnostics 批次 ①）：动作行要说清
-		// 三件事 —— 上次跑到哪、产出还在不在、下一步该做什么。只写「已中断」
-		// 用户不知道要不要去捞产出，那就是把诊断信号浪费掉了。
-		//
-		// 拉模式（spec: add-team-pull-model 批次 ④）：判据从注册表的
-		// `pendingDelivery` 标记换成**从会话文件派生的 `outputAvailable`** ——
-		// 文件在就说明产出在，这比「上次登记过一个标记」可靠得多（标记会随
-		// 进程一起没，文件不会）。
-		if (agent.outputAvailable === true) {
-			return {
-				status: "interrupted",
-				action: "上次那一轮已跑完、产出还在（在它的会话记录里）；可去取回，不必重跑",
-				live: false,
-			};
-		}
-		return {
-			status: "interrupted",
-			action:
-				agent.turns > 0
-					? `上次运行中随进程中断（已跑 ${agent.turns} 轮）`
-					: "上次运行中随进程中断",
-			live: false,
-		};
-	}
-}
-
-/** 默认展开判定：运行中（outcome 未落定）默认展开，终态默认折叠。 */
-export function defaultOpenOf(outcome: ToolCard["outcome"]): boolean {
-	return outcome === undefined;
-}
+import { agentActionPlacement, agentMetaLine, defaultOpenOf, deriveAgentRow } from "./task-agent-card-model.ts";
 
 /** 执行状态 → 状态点样式类（与 chat-view.tsx ToolEntry 的 outcomeClass 同口径）。 */
 function outcomeClass(outcome: ToolCard["outcome"]): string {
@@ -142,23 +82,16 @@ function modelBadgeText(model: string): string {
 	return slash === -1 ? model : model.slice(slash + 1);
 }
 
-/** 成员计数行：N 轮 · M 次工具 · X tok · $Y（成员投影才带计数键）。 */
-function memberMetaLine(agent: SubagentStatus): string | undefined {
-	if (agent.toolCalls === undefined && agent.tokens === undefined && agent.cost === undefined) {
-		return undefined;
-	}
-	const parts = [`${agent.turns} 轮`];
-	if (agent.toolCalls !== undefined) parts.push(`${agent.toolCalls} 次工具`);
-	if (agent.tokens !== undefined) parts.push(`${Math.round(agent.tokens / 100) / 10}k tok`);
-	if (agent.cost !== undefined && agent.cost > 0) parts.push(`$${agent.cost.toFixed(2)}`);
-	return parts.join(" · ");
-}
-
 /**
- * 一个子代理的分组行：glyph + agent 名（+模型徽标）+ task 摘要 + 动作行。
- * 有时间线或输出时整行可点：展开盒先过程时间线、后成功输出（终态默认收起，
- * 运行中展开即实时进展——Trae 透明性的等价物）。
- * 团队成员（onFocusMember + sessionId 在）额外带「查看」入口：切到成员的
+ * 一个子代理的分组行（共用 `AgentRow`）：头像 + 名字（+模型徽标）+ task 摘要 +
+ * 右对齐计数 + 状态位（glyph + 短状态词）+ 尾部（可选「查看」与展开 caret）。
+ *
+ * 状态位保留 `AgentGlyph` 而不是换成团队行的 `●/✓` 符号：glyph 有 spinner 与
+ * 空心环，「正在跑」这一态它表达得更准；两者占 `AgentRow` 的同一个槽位，行宽一致。
+ *
+ * 有可展开内容（timeline / 输出 / 终态动作文本）时整行可点：展开盒先终态动作文本、
+ * 再过程时间线、最后成功输出（终态默认收起，运行中展开即实时进展——Trae 透明性的
+ * 等价物）。团队成员（onFocusMember + sessionId 在）额外带「查看」入口：切到成员的
  * 实时会话（spec: add-team-foundations 批 8 焦点导航）。
  */
 function AgentGroup({
@@ -171,69 +104,62 @@ function AgentGroup({
 	const [detailOpen, setDetailOpen] = useState(false);
 	const row = deriveAgentRow(agent);
 	const hasTimeline = (agent.timeline?.length ?? 0) > 0;
-	const expandable = hasTimeline || row.output !== undefined;
-	const metaLine = memberMetaLine(agent);
+	const placement = agentActionPlacement(row);
+	const expandable = hasTimeline || row.output !== undefined || placement.detail !== "";
+	const metaLine = agentMetaLine(agent);
 	const viewable = onFocusMember !== undefined && agent.sessionId !== undefined;
 
-	const inner = (
-		<>
-			<AgentGlyph status={row.status} />
-			<span className="task-agent-main">
-				<span className="task-agent-title">
-					<span className="task-agent-name">{agent.agent}</span>
-					{agent.model !== undefined && (
-						<span className="task-agent-model" title={agent.model}>
-							{modelBadgeText(agent.model)}
-						</span>
-					)}
-					{/* 过长截断 + title 兜底（与 tool-summary 同手法）。 */}
-					<span className="task-agent-task" title={agent.task}>{agent.task}</span>
-				</span>
-				<span className={row.live ? "task-agent-action text-shimmer" : "task-agent-action"}>{row.action}</span>
-				{metaLine !== undefined && <span className="task-agent-meta">{metaLine}</span>}
-			</span>
-			{viewable && (
-				<span
-					role="button"
-					tabIndex={0}
-					className="task-agent-view mini-btn"
-					title="查看该成员的实时会话"
-					onClick={(e) => {
-						// 行本身是展开切换按钮：这里必须拦住冒泡，只做聚焦。
-						e.stopPropagation();
-						onFocusMember(agent.sessionId ?? "", agent.agent);
-					}}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
-							e.stopPropagation();
-							onFocusMember(agent.sessionId ?? "", agent.agent);
-						}
-					}}
-				>
-					查看
-				</span>
-			)}
-			{expandable && <IconChevronDown size={12} className={detailOpen ? "tool-caret open" : "tool-caret"} />}
-		</>
-	);
-
 	return (
-		<div className="task-agent-group">
-			{expandable ? (
-				<button
-					type="button"
-					className="task-agent-row expandable"
-					title={detailOpen ? "收起" : "展开过程与输出"}
-					onClick={() => setDetailOpen((v) => !v)}
-				>
-					{inner}
-				</button>
-			) : (
-				<div className="task-agent-row">{inner}</div>
-			)}
+		<div>
+			<AgentRow
+				avatarName={agent.agent}
+				title={agent.agent}
+				badge={agent.model === undefined ? undefined : modelBadgeText(agent.model)}
+				badgeTitle={agent.model}
+				summary={agent.task}
+				meta={metaLine}
+				status={{ node: <AgentGlyph status={row.status} />, short: STATUS_SHORT[row.status], tone: row.status }}
+				subline={placement.subline}
+				// 扫光是全局唯一的「进行中」语言；subline 只在运行中出现，两者同进同出。
+				sublineShimmer={placement.subline !== undefined}
+				rowTitle={expandable ? (detailOpen ? "收起" : "展开过程与输出") : undefined}
+				onClick={expandable ? () => setDetailOpen((v) => !v) : undefined}
+				// 尾部槽只有一个：可展开时给 caret，成员行在它前面多一个「查看」。
+				trailing={
+					<>
+						{viewable && (
+							<span
+								role="button"
+								tabIndex={0}
+								className="task-agent-view mini-btn"
+								title="查看该成员的实时会话"
+								onClick={(e) => {
+									// 行本身是展开切换按钮：这里必须拦住冒泡，只做聚焦。
+									e.stopPropagation();
+									onFocusMember(agent.sessionId ?? "", agent.agent);
+								}}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
+										e.stopPropagation();
+										onFocusMember(agent.sessionId ?? "", agent.agent);
+									}
+								}}
+							>
+								查看
+							</span>
+						)}
+						{expandable && (
+							<IconChevronDown size={12} className={detailOpen ? "tool-caret open" : "tool-caret"} />
+						)}
+					</>
+				}
+			/>
 			{expandable && detailOpen && (
 				<div className="task-agent-detail">
+					{/* 终态的动作文本（「已完成 N 轮」/失败诊断/中断文案）：行上放不下，
+					    收进这里 —— 它仍要可达，所以也算可展开内容（见 agentActionPlacement）。 */}
+					{placement.detail !== "" && <div className="agent-row-subline">{placement.detail}</div>}
 					{hasTimeline && (
 						<div className="task-agent-timeline">
 							{agent.timeline?.map((line, i) => (

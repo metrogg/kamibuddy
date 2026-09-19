@@ -403,3 +403,47 @@ function normalizeAgentOutput(value) {
 - **否决「在 emitTeamProgress 里换轻量判据（只看 mtime / 只信注册表标记）」**：
   `outputAvailable` 必须由文件内容派生（拉模式的唯一真源纪律），尾部读取已把它压到 O(窗口)。
 
+---
+
+## 实施后修正 ②（2026-09-19 真机复查：唤醒成员时状态没翻，且计划裁决那条路是坏的）
+
+用户实测报「专家在干活却显示**已完成**」。真机取证（15:05 那次 `research-ai-eda-pcb`）：
+
+- 该会话 6 次 `team_status` 里，**07:09→07:35 的 5 次 `running` 恒为 0**；同一时段成员会话文件
+  一直在写、`team_read` 能取回 7–13 KB 报告。注册表状态是 UI 与 `team_status` 的唯一来源。
+
+**根因**：成员首轮跑完是 `idle`（投影折成「已完成」），而 `team_send` 唤醒它时**没有任何东西把
+状态翻回 `running`** —— 投递与状态不成对，被唤醒的成员在「✓ 已完成」的招牌下工作几十分钟。
+
+**修法**：新增 `wakeMember(leaderSessionId, memberName, memberSessionId, text)`，把「投递」与
+「翻状态」绑成一次调用（先翻状态再投递；投递抛错则标 `failed` 并如实上报，不留假 running）。
+三处消费：`team_send`（含 `@all`）、`team_plan_review` 的 approve/reject。`team_shutdown` 不走它
+（它要的是 `closing` 这个独立态）。
+
+**同批发现的第二个 bug**：`team_plan_review` 的 approve/reject 走的是 `deliverSessionMessage`，
+而那条路按 `bucketsById` 找目标会话，**成员会话根本不在 `bucketsById` 里**（只在
+`memberHandlesBySession`）→ 每次都抛「目标会话不存在：<成员会话 id>」。也就是说**计划裁决一直是死的**。
+改用 `wakeMember` 后这条路才真正通。顺带把 `team_shutdown` 收尾语里「这条输出会自动回投给主理人」
+（推模式残留措辞）改成拉模式说法。
+
+**待清理（本批没做，避免混关注点）**：`deliverSessionMessage` 与 `teamMailbox`（`daemon/mailbox.ts`）
+在本次改动后**已无任何调用方**（只剩 `teamMessaging` 导出与注释），是推模式时代的遗留。删除它要连
+`mailbox.ts` 与其单测一起动，属独立改动。
+
+**没有单测护栏**（如实说明）：三处消费点都在 daemon 闭包内、依赖真实宿主，现有测试基建
+（`team-runtime.test.ts` 只覆盖纯注册表）够不到这条接线；本批靠真机复验（见下），
+要机械化只能先有 daemon 层集成测试基建。
+
+### 否决方案
+
+1. **否决「在 `recordProgress` 里翻 running」**：那条路是**成员事件**（正在跑时才来事件），
+   而 bug 的窗口是「消息已投、成员还没起跑」——事件还没来，翻不了。
+2. **否决「靠 UI 用文件 mtime 反推 running」**：注册表状态是 `team_status` 与投影的同一份来源，
+   UI 单独反推会让两处说的不一样（模型和用户看到不同的状态）。
+3. **否决「`sendToMembers` 保持 fire-and-forget（`void …catch(()=>{})`）只补 markStatus」**：
+   投递失败会被吞掉，而状态已经翻成 running → 留下一个假的「运行中」。改成 await + 失败标 `failed`，
+   让「成员会话丢了」这件事响亮地回到领导眼前。
+4. **否决「让 `deliverSessionMessage` 兼容成员会话（给成员也建 bucket）」**：那等于把成员会话
+   拉回用户会话的互斥链与记忆机制里，与「成员是独立长会话、由 `memberHandlesBySession` 管」
+   的现有结构冲突；正确做法是让调用方走对的那条路。
+

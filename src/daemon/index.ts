@@ -1808,6 +1808,43 @@ const memberRunnerDeps = {
 		requestApproval(request, memberSessionId),
 };
 
+/* ── 唤醒成员：投递与状态必须成对（2026-09-19 真机修） ────────────────── */
+
+/**
+ * 把一条消息投给成员，并把它的状态翻回 `running`。
+ *
+ * **为什么必须成对**（2026-09-19 真机）：成员首轮跑完是 `idle`（投影折成「已完成」），
+ * 而 `team_send` 唤醒它之后**没有任何东西把状态翻回去** —— 于是被唤醒的成员在
+ * 「✓ 已完成」的招牌下干了几十分钟活。实测证据：15:05 那次团队会话里，07:09→07:35
+ * 的 6 次 `team_status` 里 `running` 恒为 0，而同一时段成员会话文件一直在写、
+ * `team_read` 能取回 7–13 KB 报告。注册表状态是 UI 与 `team_status` 的**唯一**来源，
+ * 这也解释了用户看到的「他们在工作却显示已完成」。
+ *
+ * 先翻状态再投递：投递成功而状态没翻 = 隐形工作（上面那次的形状）；反过来若投递失败，
+ * 下面的 catch 会把它标成 `failed` 并如实上报，不会留下一个假的 running。
+ *
+ * `shutdownMember` 不走这里：它要的是 `closing`（收尾中的独立态），不是 `running`。
+ */
+async function wakeMember(
+	leaderSessionId: string,
+	memberName: string,
+	memberSessionId: string,
+	text: string,
+): Promise<void> {
+	const handle = memberHandlesBySession.get(memberSessionId);
+	if (handle === undefined) throw new Error(`成员会话丢失：${memberSessionId}`);
+	teamRegistry.markStatus(leaderSessionId, memberName, "running", "已收到新指示");
+	emitTeamProgress(leaderSessionId);
+	try {
+		await handle.prompt(text);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		teamRegistry.markStatus(leaderSessionId, memberName, "failed", `投递失败：${message}`);
+		emitTeamProgress(leaderSessionId);
+		throw error;
+	}
+}
+
 /* ── 会话间消息信箱（spec: add-team-foundations 批 3） ────────────────
    原语在 daemon/mailbox.ts（纯逻辑、有单测）。本批没有 IPC 通道也没有
    调用方：消费方是批 5 的 send_message 工具与成员路由 —— 原语先行接线，
@@ -2948,10 +2985,12 @@ async function createHost(
 						: [to.replace(/^@/, "")];
 				const sessionIds = teamRegistry.resolveMemberSessions(leaderId, names);
 				const composed = `[来自领导的消息]\n${text}`;
-				for (const sessionId of sessionIds) {
-					const handle = memberHandlesBySession.get(sessionId);
-					if (handle === undefined) throw new Error(`成员会话丢失：${sessionId}`);
-					void handle.prompt(composed).catch(() => {});
+				for (const [index, sessionId] of sessionIds.entries()) {
+					const name = names[index];
+					if (name === undefined) continue;
+					// 投递 + 状态成对（wakeMember）：少了状态那一半，被唤醒的成员会在
+					// 「已完成」的招牌下工作（2026-09-19 真机实测）。
+					await wakeMember(leaderId, name, sessionId, composed);
 				}
 				return names;
 			},
@@ -3048,7 +3087,14 @@ async function createHost(
 					decision === "approve"
 						? `[计划已批准]\n${feedback === undefined || feedback === "" ? "按你交的计划开工。" : feedback}\n\n现在开始执行；完成后把结果整理成最终报告输出。`
 						: `[计划需修改]\n${feedback ?? ""}\n\n请按上述意见调整计划后重新提交：这一轮**只交修订后的计划**，不要直接开工。`;
-				await deliverSessionMessage(leaderId, memberSessionId, text, "主理人");
+				/*
+				 * 投递走 wakeMember（成员的会话句柄），**不能走 deliverSessionMessage**：
+				 * 那条路按 `bucketsById` 找目标会话，而成员会话根本不在 bucketsById 里
+				 * （它只在 `memberHandlesBySession`）—— 所以这里以前每次都抛
+				 * 「目标会话不存在：<成员会话 id>」，「批准/驳回计划」实际是坏的
+				 * （2026-09-19 读码发现，同一批修掉）。
+				 */
+				await wakeMember(leaderId, member, memberSessionId, text);
 				return decision === "approve"
 					? `已批准成员「${member}」的计划，并已通知它开工。`
 					: `已驳回成员「${member}」的计划：反馈已发过去（状态 rejected，等它重交）。`;
@@ -3106,7 +3152,7 @@ async function createHost(
 						"",
 						"请立刻把已完成的部分整理成最终报告输出（不要再开始新的检索、不要大改），",
 						"写清三件事：已完成什么、关键结论、还剩什么没做完。",
-						"这条输出会自动回投给主理人，之后本会话即结束。",
+						"这份报告就是你本轮的最终产出，主理人会自己取回；交完这一轮本会话即结束。",
 					].join("\n"),
 				);
 				return `已向成员「${to}」发出收尾请求：它交回最终报告后会自动关闭（期间状态为 closing）。`;
