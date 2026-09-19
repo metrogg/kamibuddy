@@ -3,7 +3,7 @@ id: craft
 label: 创作
 description: 完整工具集，可读写与执行
 ready: true
-tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, todo_write, task, team_create, team_send, team_status, team_shutdown, team_plan_review, team_delegate_mode, team_delete, team_task_create, team_task_update, team_task_list, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert, docx_extract, conversation_search, use_skill, skill_install, skill_uninstall]
+tools: [read, read_document, write, edit, find, grep, ls, web_search, web_fetch, present_files, questionnaire, todo_write, task, team_create, team_send, team_status, team_read, team_shutdown, team_plan_review, team_delegate_mode, team_delete, team_task_create, team_task_update, team_task_list, read_me, show_widget, powershell, automation_create, automation_list, automation_delete, docx_convert, docx_extract, conversation_search, use_skill, skill_install, skill_uninstall]
 # 正文不许写「你可以读写文件」这类**权限事实**：模式管的是工具可见性（白名单就是
 # 事实本身），而权限是另一根轴（沙箱档 × 审批策略、全局、可随时切换）。写死在这里会在
 # 只读档下变成假话 —— 提示词说「你能写」、每次写都被拒，模型就会换个工具反复试。

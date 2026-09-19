@@ -30,10 +30,29 @@
   - [x] 依赖: Task 3
   - 另按纪律做了「护栏会变红」验证：把 `team-output-snapshot.ts` 的判据 `===` 改成 `!==` ⇒ 该文件 **24 例里 8 例失败**（含三连跑稳定性），已改回
 - [ ] Task 5: 真机取证（**用户执行**；步骤与判读口径见下，检查命令已在本机验证可用）
-  - [ ] SubTask 5.1: 建队 → 等成员产出 → 领导**不调** `team_read`；检查领导会话 JSONL 是否出现 `kamibuddy-team-output` 条目，以及领导下一轮是否引用成员产出内容
-  - [ ] SubTask 5.2: 量代价 —— 注入条数 / 字符总量 / 该会话输入 token 与缓存命中率变化（**这是决定工具面能否收敛到四件套的依据**）
-  - [ ] 依赖: Task 4
-  - 说明：本机检查流水线已用**既有**三条通道验证过（对 `kamibuddy-hidden-context` / `kamibuddy-run-time` 能正确报出条数与字符量；对 `kamibuddy-team-output` 当前 0 命中 —— 因为改动落地后还没有团队会话跑过）。这一步需要用户真跑一次团队会话，**不得以任何旁路代替**（AGENTS.md §8）。
+  - [x] SubTask 5.1（**已真机执行，结论：未通过**）：2026-09-19 13:50 那次团队运行（`research-llm-2027`，领导会话 `01a0b837-c018-…`）里，领导会话**一条 `kamibuddy-team-output` 都没有**。已排除三个可能的误判：①构建不是旧的（`out/main/daemon.mjs` 13:50:42 构建，含 `composeTeamOutput` 6 处）；②拼装层没问题（用真机落盘的团队快照 + 真实成员会话文件跑 `collectTeamOutputMembers`/`composeTeamOutputSnapshot`，6 名成员、**1,596 字符**、产出全部读到）；③开关是开的（`agentTeamsEnabled: true`，且 `team_create` 确实调成功）。**真正原因：`before_agent_start` 只在 run 开始时触发一次**，而领导那一个 run 从 13:50:56 开始、团队 13:51:32 才建 —— 那一次求值时**还没有团队**；此后领导一直在同一个 run 里循环（直到 13:56:16），再没有第二次机会 ⇒ 通路的触发点跟实际形态错位。
+  - [x] SubTask 5.2（**同一批真实数据**）：注入条数 0、字符总量 0；领导侧 `team_read` 调用 1 次（返回 `Tool team_read not found`，见 Task 6），改用「让成员落盘 → 自己 read」完成 Phase 1。缓存命中 95.5%、缓存浪费 0 tok（底部指标条）—— 即**没有任何劣化，因为压根没注入**。
+  - [x] 依赖: Task 4
+  - 说明：本机检查流水线已用既有三条通道验证过（对 `kamibuddy-hidden-context` / `kamibuddy-run-time` 能正确报出条数与字符量）。**不得以任何旁路代替真机**（AGENTS.md §8）。
+- [ ] Task 6: 修「团队工具漏登记白名单」+ 决定注入的触发点（**真机暴露的两个问题**）
+  - [x] SubTask 6.1（**已完成**）：`team_read` 在 spec: add-team-pull-model 批次③ 落地时只加了工厂注册、**忘了加进 `resources/modes/craft.md` 的模式白名单** —— pi 只激活白名单里的名字，于是领导调它得到 `Tool team_read not found`，并据此判断"工具面里没有产出回传通道"。已补进白名单（`team_status` 之后），并加护栏：`team-tools.test.ts` 新增「craft 白名单覆盖」用例（八个团队工具名逐一断言在白名单里），按纪律验证过会变红（把 `team_read` 从白名单去掉 ⇒ 1 例失败，报错文案直接给出该事故的形状）。机械核对过：`src/extensions/**` 注册的名字里，白名单**只漏过 `team_read` 这一个**（`kamibuddy` 是 MCP 客户端名的误报）。
+  - [x] SubTask 6.2（**已定案：选 (b)，并已实施**）：注入触发点与领导实际形态错位（`before_agent_start` 是 per-run，领导一个 run 有 **42 次模型调用**）⇒ 主要触发点改为「把尚未送达的成员产出一块附在**任一 `team_*` 工具的结果**上」，run 起点那条快照通道保留作窄场景兜底。两条触发点**共用同一条判据**（扫领导会话正文里的 `[fp …]`，交付事实藏在会话内容里、不引入任何账本）。三条候选的裁决与理由写进 `docs/ARCHITECTURE.md` §4.22 的「否决方案（触发点）」第 7~9 条：
+    - (a) 只靠 run 开始 —— **被真机否掉**（那次求值时团队还没建）
+    - (b) 挂到 team 工具结果 —— **采纳**（工具结果 append-only 持久记录，付一次进缓存）
+    - (c) per-request 注入 —— **否决**（瞬态 ⇒ 「不重新注入」与「模型每轮看得见」不可兼得；按 42 次/run 计 ≈4.2 万 tokens/run，上限时 ≈84 万）
+  - [x] 依赖: Task 5
+- [x] Task 7: 纯函数层（(b) 的判据与块）—— `collectFingerprintsIn` + `composePendingTeamOutput`
+  - [x] 复用既有渲染（`assembleSnapshot`/`renderStatusLine`/`renderMemberBlock`），两块**逐字节同形**（单测里加了强断言）；`members` 空或**无待送达** ⇒ `undefined`（零成本路径）
+  - [x] 单测 41 例全绿（含闭环用例：把第一次返回文本喂回 `collectFingerprintsIn` ⇒ 第二次返回 `undefined`）；护栏验红过（把 `delivered.has` 短路 ⇒ 红 3 例）
+  - [x] 依赖: Task 2
+- [x] Task 8: 接线（工具结果 + 单点包装 + 两条触发点共用一条判据）
+  - [x] `team-tools.ts`：`TeamToolDeps` 新增 `readPendingOutputs`；工厂内单点包装 `register()` 包住八个注册点（只追加 `content`、**`details` 原样**）；契约三段同步
+  - [x] `index.ts`：新增局部 `pendingTeamOutput()`（门控 → 注册表 → `collectTeamOutputMembers` → `collectFingerprintsIn(领导会话正文)` → `composePendingTeamOutput`），两条触发点共用（`composeTeamOutput` 与 `readPendingOutputs`）
+  - [x] `prompt-switch.ts`：`composeTeamOutput` 收敛为**零参**（`previous` 已无消费者；判据统一到调用方），handler 去掉手动读基线
+  - [x] 单测：`team-tools.test.ts` 覆盖「有块/无块/两个不同工具都生效/details 不变」；护栏验红过（包装短路 ⇒ 红 2 例）
+  - [x] 依赖: Task 7
+- [ ] Task 9: 真机复验（**用户执行**）：重跑一次团队任务，确认领导**没调 `team_read`** 也在 `team_status`/`team_send` 的结果里看到成员产出；并量出这次真实代价（注入块数 / 字符量 / |输入 token 与缓存命中变化）
+  - [ ] 依赖: Task 8
 
 # Task Dependencies
 

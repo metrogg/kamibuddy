@@ -63,9 +63,10 @@
  *   - run time（当前时间）—— 按分钟变，但只在跨分钟时追加一条时间块；实测该块
  *     150 字符 / 61 estTokens，其中真新信息只有时间戳 26 字符 ≈11 est，其余是取代声明
  *     （≈26 est）与容器/标签（≈25 est）（构成与口径见 shared/hidden-context.ts 的契约段）。
- *   - team-output（成员状态行 + 尚未注入过的成员产出）—— 只在「有还没进过领导
- *     上下文的产出」或状态行变了时才追加；「已注入过」的判据是产出指纹在不在
- *     上一条同通道快照里（本文件 team-output handler 把它读出来交给 composer）。
+ *   - team-output（成员状态行 + 尚未送达的成员产出）—— 只在「有还没送达的产出」
+ *     或状态行变了时才追加；**哪些产出还没送达**由调用方从领导会话正文里扫
+ *     `[fp …]` 算出（交付事实藏在会话内容本身，判据在调用方而非本文件）；本文件
+ *     只管「内容与上一条同通道快照逐字节相同 ⇒ 不追加」这条既有纪律。
  * 合并成一条会让稳定那部分跟着时间每 run 重发（spec: persist-context-snapshots
  * 否决方案 ④）；而「时间与环境块共处一条」的形态（上一版）会让 1,046 字符里
  * 真正变的那 20 字符把整条带上 —— 按新证据改掉（spec:
@@ -87,7 +88,7 @@
  * What the model sees: 五个 `before_agent_start` handler —— ① 返回**整串 systemPrompt**（pi 把它写成
  * leading system 消息 = 请求的 message 0，位于整段对话历史之前）；② / ③ / ④ / ⑤ 四条**持久快照消息**：
  * 逐 run 可变事实（记忆内容 / 个性化）、hidden context 环境块（工作目录 / python_env / 记忆指针）、
- * 当前时间（`kamibuddy-run-time`）、团队产出增量（成员状态行 + 尚未注入过的成员产出，
+ * 当前时间（`kamibuddy-run-time`）、团队产出增量（成员状态行 + 尚未送达的成员产出，
  * `kamibuddy-team-output`），都是 role:"custom" + 具名 customType + display:false，落在**本轮用户消息
  * 之后**、写进会话文件，内容与上一条**同 customType** 快照逐字节相同时**不追加**（注册顺序固定 ⇒ 消息
  * 在请求体里的相对顺序跨调用稳定）。前三条正文以取代声明开头；team-output 语义是**增量**、
@@ -180,13 +181,13 @@ export interface PromptSwitchOptions {
 	 */
 	readonly composeRunTime: () => string | undefined;
 	/**
-	 * 第四条快照通道：团队产出增量（成员状态行 + 尚未注入过的成员产出正文）。
+	 * 第四条快照通道：团队产出增量（成员状态行 + 尚未送达的成员产出正文）。
 	 *
-	 * 与另外三条的差别：**它需要上一条同通道快照的正文**（`previous`）——
-	 * 「哪些成员产出已经注入过」的判据是产出指纹有没有出现在上一条同通道快照里，
-	 * 所以基线必须由调用方（本文件的 handler）读出来传进去。
+	 * 判据不在本文件：**哪些产出还没送达**由调用方从领导会话正文里扫 `[fp …]` 算出
+	 * （交付事实藏在会话内容里，见 daemon/team-output-snapshot.ts 的 collectFingerprintsIn）。
+	 * 本文件只负责既有那条纪律：内容与上一条同通道快照逐字节相同 ⇒ 不追加。
 	 */
-	readonly composeTeamOutput: (previous: string | undefined) => string | undefined;
+	readonly composeTeamOutput: () => string | undefined;
 }
 
 /**
@@ -278,22 +279,12 @@ export function createPromptSwitch(options: PromptSwitchOptions) {
 			snapshotMessage(ctx, RUN_TIME_CUSTOM_TYPE, options.composeRunTime()),
 		);
 		/*
-		 * team-output 比前三条多一步：先读出**上一条同通道快照的正文**交给 composer
-		 * —— 「哪些成员产出已经注入过」的判据是产出指纹在不在那条快照里，而这个基线
-		 * 只有 handler 手里的 ctx 读得出来（见 PromptSwitchOptions.composeTeamOutput）。
-		 * 读会话失败按「没有基线」降级（try/catch 的理由同 snapshotMessage 的注释）。
+		 * team-output 与前三条同形：只做「内容没变不追加」。**哪些产出还没送达**
+		 * 的判据不在这里 —— 由调用方扫领导会话正文的 `[fp …]` 算出（见
+		 * PromptSwitchOptions.composeTeamOutput），故本 handler 不读 ctx 基线。
 		 */
-		pi.on("before_agent_start", (_event, ctx) => {
-			let previous: string | undefined;
-			try {
-				previous = lastSnapshotContent(
-					ctx.sessionManager.buildContextEntries(),
-					TEAM_OUTPUT_CUSTOM_TYPE,
-				);
-			} catch {
-				previous = undefined;
-			}
-			return snapshotMessage(ctx, TEAM_OUTPUT_CUSTOM_TYPE, options.composeTeamOutput(previous));
-		});
+		pi.on("before_agent_start", (_event, ctx) =>
+			snapshotMessage(ctx, TEAM_OUTPUT_CUSTOM_TYPE, options.composeTeamOutput()),
+		);
 	};
 }

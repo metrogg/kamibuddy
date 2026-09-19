@@ -2269,13 +2269,11 @@ textarea:focus-visible {
 }
 
 .turn-nav-scroller.fade-top.fade-bottom {
-	mask-image: linear-gradient(
-		to bottom,
-		transparent 0,
-		#000 24px,
-		#000 calc(100% - 24px),
-		transparent 100%
-	);
+	mask-image: linear-gradient(to bottom,
+			transparent 0,
+			#000 24px,
+			#000 calc(100% - 24px),
+			transparent 100%);
 }
 
 .turn-nav-marks {
@@ -2359,11 +2357,9 @@ textarea:focus-visible {
    再钳到轨道内，避免首尾两格的气泡被裁掉。 */
 .turn-nav-preview {
 	position: absolute;
-	top: clamp(
-		0px,
-		calc(var(--turn-nav-preview-at, 0px) - var(--turn-nav-scroll-top, 0px) - 50px),
-		calc(100% - 100px)
-	);
+	top: clamp(0px,
+			calc(var(--turn-nav-preview-at, 0px) - var(--turn-nav-scroll-top, 0px) - 50px),
+			calc(100% - 100px));
 	right: calc(100% + var(--space-3));
 	box-sizing: border-box;
 	width: min(300px, 60vw);
@@ -2408,6 +2404,7 @@ textarea:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+
 	.turn-nav-mark::before,
 	.turn-nav-preview {
 		transition: none;
@@ -9254,97 +9251,187 @@ textarea:focus-visible {
 /* ── 团队常驻状态栏（spec: add-team-ux-parity 批次 ②）──────────────────
    位置：输入区上方（WorkBuddy status bar 同位）。团队在就常驻，
    与消息流里的成员卡分工：卡片是一次性记录，这里是实时汇总。 */
+/* 两行结构（2026-09-19 用户实测反馈重排）：头部一行给「总数 + 状态簇 + 收起」，
+   第二行给成员 chip 并**换行**。原来是一行里塞摘要句 + 横滚 chip：滚动条被藏了、
+   第 4 枚被切一半，用户既看不到全部成员也不知道能滚。 */
 .team-bar {
 	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	padding: var(--space-1) var(--space-2);
+	flex-direction: column;
+	gap: var(--space-1);
+	padding: var(--space-2);
 	margin-bottom: var(--space-2);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	background: var(--bg-raised);
 	font-size: var(--text-meta);
 }
+
+.team-bar-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+
 .team-bar-lead {
 	color: var(--text-faint);
 	white-space: nowrap;
-	padding-left: var(--space-1);
 }
-.team-bar-members {
-	display: flex;
-	align-items: center;
-	gap: var(--space-1);
-	flex: 1;
-	overflow-x: auto;
-	scrollbar-width: none;
+
+/* 状态簇：只列非零项（判据在纯函数 teamBarStats，可单测）。琥珀只留给
+   「中断」与「等待超时」—— 不再给「有产出可读」：成员跑完有产出是常态
+   （产出会随 team_* 工具结果自动送到领导），全员都亮等于没有强调。 */
+.team-bar-stat {
+	white-space: nowrap;
 }
-.team-bar-chip {
+
+.team-bar-stat.live {
+	color: var(--primary);
+}
+
+.team-bar-stat.warn {
+	color: var(--warning);
+}
+
+/* 折叠态的开关：头像堆叠 + 人数 + chevron，整块可点。 */
+.team-bar-toggle {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-1);
-	padding: var(--space-1) var(--space-2);
-	border: 1px solid transparent;
-	border-radius: var(--radius-full);
-	background: var(--bg-chip);
-	color: var(--text-secondary);
-	font-size: var(--text-meta);
-	white-space: nowrap;
+	padding: 0;
+	border: none;
+	background: none;
+	color: inherit;
+	font: inherit;
 	cursor: pointer;
 }
-.team-bar-chip:hover:not(:disabled) {
+
+.team-bar-toggle:hover .team-bar-lead {
+	color: var(--text);
+}
+
+/* 头像堆叠（WorkBuddy 折叠态同款）：负外边距把相邻两枚叠起来，
+   再描一圈状态栏底色把它们分开 —— 复用既有的 1px 描边宽度，不引入新档。 */
+.team-bar-facepile {
+	display: inline-flex;
+	align-items: center;
+}
+
+.team-bar-face+.team-bar-face {
+	margin-left: calc(-1 * var(--space-1));
+}
+
+.team-bar-face {
+	border: 1px solid var(--bg-raised);
+}
+
+.team-bar-face-more {
+	background: var(--bg-chip);
+	color: var(--text-faint);
+}
+
+/* 展开后的成员列行表：一行一个成员。横向空间充裕 —— 轮数/工具数/等待时长
+   都能放下，不必再像 chip 那样削信息（上一版削掉完成态计数，就是被空间逼的）。 */
+.team-bar-members {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.team-bar-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	width: 100%;
+	padding: var(--space-1) var(--space-2);
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: none;
+	color: var(--text-secondary);
+	text-align: left;
+	cursor: pointer;
+}
+
+.team-bar-row:hover:not(:disabled) {
 	background: var(--bg-hover);
 	color: var(--text);
 }
-.team-bar-chip.active {
+
+.team-bar-row.active {
 	border-color: var(--primary);
 	color: var(--text);
 }
-.team-bar-chip:disabled {
+
+.team-bar-row:disabled {
 	cursor: default;
 	opacity: 0.6;
 }
+
+.team-bar-row .expert-avatar {
+	flex-shrink: 0;
+}
+
 .team-bar-mark.st-running {
 	color: var(--primary);
 }
+
 .team-bar-mark.st-done {
 	color: var(--ok);
 }
+
 .team-bar-mark.st-failed {
 	color: var(--danger);
 }
+
 .team-bar-mark.st-queued {
 	color: var(--text-faint);
 }
+
 /* 中断态（spec: add-team-interrupt-diagnostics 批次 ①）：用 --warning 而非
    --danger —— 成员自己没出错（danger 会误导成「它挂了」），是宿主消失导致
    产出没回投。同 8869 行「琥珀表出错但在自愈」的既有语义。 */
 .team-bar-mark.st-interrupted {
 	color: var(--warning);
 }
-.team-bar-chip.interrupted .team-bar-name {
+
+.team-bar-row.interrupted .team-bar-row-name {
 	color: var(--warning);
 }
-.team-bar-name {
+
+.team-bar-row-name {
+	/* 列行 = 列表正文档（DESIGN.md §3.5：主文字 --text-list，副行 --text-meta）。 */
+	font-size: var(--text-list);
 	color: var(--text);
+	white-space: nowrap;
 }
-.team-bar-count {
+
+.team-bar-row-meta {
+	/* 推到右侧：名字挨着头像，计数/状态归到行尾，扫视时列是对齐的。 */
+	margin-left: auto;
 	color: var(--text-faint);
 }
+
 /* 等待超阈值（批次 ②）：把「等了很久」从平淡灰字换成琥珀，
    这是用户实测里最需要被看见的信号（「在等」vs「断了」）。 */
-.team-bar-count.warn {
+.team-bar-row-meta.warn {
 	color: var(--warning);
 }
-/* 产出待捞（spec: add-team-interrupt-diagnostics 批次 ③）：比 interrupted 更进一步
-   —— 它不只是「中断了」，而是「它跑完了、产出就在会话记录里」。这是四态里唯一
-   有救的一条，所以给整枚 chip 描一道琥珀边（不只是文字变色），让它在成员行里
-   一眼可辨。仍用 --warning：语义是「需要你处理，但没有东西坏掉」。 */
-.team-bar-chip.recoverable {
-	border-color: var(--warning);
+
+.team-bar-row-status {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	color: var(--text-secondary);
+	white-space: nowrap;
 }
-.team-bar-chip.recoverable .team-bar-name {
-	color: var(--warning);
+
+.team-bar-row-caret {
+	color: var(--text-faint);
 }
+
+/* 产出已在会话记录里（spec: add-team-interrupt-diagnostics 批次 ③ 曾给整枚 chip
+   描琥珀边）。2026-09-19 撤掉视觉强调：成员跑完有产出是**常态**（产出会随
+   team_* 工具结果自动送到领导），全员都亮等于没有强调；它现在只进 chip 的
+   title（点开就能看）。琥珀只留给「中断」与「等待超时」这两类真要动手的状态。 */
 .team-bar-close {
 	border: none;
 	background: none;
@@ -9353,7 +9440,10 @@ textarea:focus-visible {
 	font-size: var(--text-list);
 	padding: 0 var(--space-1);
 	line-height: 1;
+	/* 头部右端（原来靠 flex:1 的 members 把间距撑开，两行结构后要显式推过去）。 */
+	margin-left: auto;
 }
+
 .team-bar-close:hover {
 	color: var(--text);
 }
@@ -9367,6 +9457,7 @@ textarea:focus-visible {
 	margin-bottom: var(--space-2);
 	font-size: var(--text-meta);
 }
+
 .team-tasks-head {
 	display: flex;
 	align-items: center;
@@ -9374,40 +9465,50 @@ textarea:focus-visible {
 	padding: var(--space-1) var(--space-2);
 	border-bottom: 1px solid var(--border);
 }
+
 .team-tasks-title {
 	color: var(--text);
 }
+
 .team-tasks-hint {
 	color: var(--text-faint);
 	flex: 1;
 }
+
 .team-tasks-empty {
 	margin: 0;
 	padding: var(--space-2) var(--space-3);
 	color: var(--text-faint);
 }
+
 .team-tasks-body {
 	max-height: 240px;
 	overflow-y: auto;
 	padding: var(--space-1) var(--space-2) var(--space-2);
 }
-.team-tasks-group + .team-tasks-group {
+
+.team-tasks-group+.team-tasks-group {
 	margin-top: var(--space-2);
 }
+
 .team-tasks-group-head {
 	color: var(--text-faint);
 	padding: var(--space-1) 0;
 }
+
 .team-tasks-group-head.st-ready {
 	color: var(--primary);
 }
+
 .team-tasks-group-head.st-completed {
 	color: var(--ok);
 }
+
 .team-tasks-group-head.st-cancelled {
 	color: var(--text-faint);
 	text-decoration: line-through;
 }
+
 .team-tasks-row {
 	display: flex;
 	align-items: baseline;
@@ -9415,20 +9516,25 @@ textarea:focus-visible {
 	padding: var(--space-1) var(--space-2);
 	border-radius: var(--radius-sm);
 }
+
 .team-tasks-row:hover {
 	background: var(--bg-hover);
 }
+
 .team-tasks-id {
 	color: var(--text-faint);
 	font-family: var(--font-mono);
 }
+
 .team-tasks-name {
 	color: var(--text);
 	flex: 1;
 }
+
 .team-tasks-owner {
 	color: var(--primary);
 }
+
 .team-tasks-deps,
 .team-tasks-result {
 	color: var(--text-faint);

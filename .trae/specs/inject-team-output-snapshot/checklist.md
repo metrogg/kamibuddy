@@ -25,10 +25,24 @@
 - [x] `docs/ARCHITECTURE.md` §4.22 含 `## 否决方案`（6 条），且点名「否决每请求现算的尾巴注入」并给出 2026-09-18 的实测数字（58,094 token / 28.8%）
 - [x] 门禁实跑：`typecheck` 0 错误 / `check:deps` / `check:tokens` / `check:model-experience`（22 个模块）/ `check:module-invariants`（25 个模块）/ `check:expert-assets`（4 个团队专家）/ 全量 `vitest` 159 文件 2930 例通过（1 skipped）
 
-## 真机（本 change 的最终产出）
-- [ ] 领导**未调 `team_read`** 的情况下，其会话出现 team-output 快照，且下一轮引用了成员产出内容
-- [ ] 注入代价已量出：条数 / 字符总量 / 输入 token 与缓存命中变化
-- [ ] 结论已落档：`team_read` / `team_status` 能否撤（留待后续 change），或本通路需要调整上限
+## 触发点改判后的新通路（(b) 挂 team 工具结果）
+- [x] 纯函数层：`collectFingerprintsIn`（扫正文里的 `[fp …]`，含拼在长文本中间的情形）+ `composePendingTeamOutput`（无待送达 ⇒ `undefined`）；41 例全绿，含**闭环用例**（第一次返回文本喂回 ⇒ 第二次 `undefined`）
+- [x] 两块**逐字节同形**：`composePendingTeamOutput(delivered=∅)` 与 `composeTeamOutputSnapshot(previous=undefined)` 相等（强断言钉住，避免 `[fp …]` 解析口径漂移）
+- [x] 单点包装：八个注册点统一走 `register()`；追加只动 `content`、**`details` 与不接该 dep 时逐字节一致**；`readPendingOutputs` 返回 `undefined` 时结果一字不加
+- [x] 覆盖证明是单点包装而非只挂一个工具：`team_status` 与 `team_delete` 各一例
+- [x] **一条判据、两个触发点**：run 起点快照与工具结果共用 daemon 的局部 `pendingTeamOutput()`，**没有**任何"已送达清单"这类第二真源
+- [x] `prompt-switch` 的 `composeTeamOutput` 收敛为**零参**（`previous` 无消费者），handler 不再手动读基线
+- [x] 契约三段同步（`team-tools.ts` 的 What the model sees / Token effect / KV Cache effect）；`check:model-experience` 22 个模块通过
+- [x] 护栏验红：纯函数层把 `delivered.has` 短路 ⇒ 红 3 例；工具层把包装短路 ⇒ 红 2 例（均已回滚）
+- [x] 裁决与理由落档：`docs/ARCHITECTURE.md` §4.22「否决方案（触发点）」第 7~9 条（(a) 被真机否、(c) 因瞬态+42 次/run 重付被否）
+- [x] 门禁实跑：`typecheck` 0 错误 / `check:deps` / `check:tokens` / `check:model-experience` / `check:module-invariants` / `check:expert-assets` / 全量 `vitest` **159 文件 2951 例通过（1 skipped）**
 
-> 上面三条**只能由真机团队会话产出**：改动落地后还没有团队会话跑过（本机对 `kamibuddy-team-output` 的检索当前 0 命中）。
-> 检查流水线本身已用既有两条通道验证可用（能正确报出条数与字符总量），**不得以旁路代替真机**。
+## 真机（本 change 的最终产出）
+- [x] 真机跑过一次（13:50 `research-llm-2027`）并把两件事都暴露出来：注入 **0 条**（run 起点的触发点错位）、`team_read` **未登记白名单**（`Tool team_read not found`）
+- [x] 白名单 bug 已修 + 机械护栏（`team-tools.test.ts` 的「craft 白名单覆盖」，验红过）
+- [x] 触发点已改判并实施（(b) 挂团队工具结果；见上节）
+- [ ] **复验待做**：重跑一次团队任务，确认领导**不调 `team_read`** 也能在 `team_status`/`team_send` 的结果里看到成员产出，并量出这次真实代价（块数 / 字符量 / 输入 token 与缓存命中变化）—— 见 tasks.md Task 9
+- [ ] 结论已落档：`team_read` / `team_status` 能否撤（留待后续 change）—— 需先有复验数字
+
+> 真机一次就把两件事同时暴露出来了：①通路本身**触发点错位**；②`team_read` **漏登记 craft 白名单**。
+> 两者都已处理；触发点那条是**用户在两条候选之间拍板**后改的（per-request 因瞬态与 42 次/run 的重付代价被否）。

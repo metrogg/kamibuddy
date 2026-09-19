@@ -67,6 +67,28 @@ export function outputFingerprint(output: string): string {
 	return createHash("sha256").update(normalizeMemberOutput(output)).digest("hex").slice(0, 8);
 }
 
+/**
+ * 领导会话正文里出现过的产出指纹（`[fp xxxxxxxx]`）。
+ *
+ * 为什么要从正文扫而不是另记账：工具结果本身就是持久记录，交付事实已经在会话里了；
+ * 另起一份清单就是第二真源（resume / 新进程后与文件不一致）。
+ *
+ * 为什么**不能**只认行首/行尾：这些块会随工具结果被拼进一段很长的正文（前后还有
+ * 别的消息内容），状态行不一定独立成行、指纹也可能不在行尾，所以整串扫描。
+ *
+ * 说明句里的常量示例 `[fp xxxxxxxx]` 不会被误收 —— `x` 不是十六进制字符，正则只认
+ * 8 位 `[0-9a-f]`；这正是那句示例能安全写进正文的前提。
+ */
+export function collectFingerprintsIn(historyText: string): ReadonlySet<string> {
+	const found = new Set<string>();
+	// 全局扫描（`matchAll` 需 `g`）：一处命中不够，同一段正文里可能有多份产出。
+	for (const match of historyText.matchAll(/\[fp ([0-9a-f]{8})\]/g)) {
+		const fingerprint = match[1];
+		if (fingerprint !== undefined) found.add(fingerprint);
+	}
+	return found;
+}
+
 /** 参与快照拼装的一个成员 —— 只收「快照需要的事实」，不把注册表类型漏进纯函数层。 */
 export interface TeamOutputMemberInput {
 	/** 成员名（@寻址键）。 */
@@ -212,6 +234,84 @@ export function composeTeamOutputSnapshot(input: {
 
 	const candidate = assembleSnapshot(teamName, statusLines, blocks);
 	return candidate === previous ? undefined : candidate;
+}
+
+/**
+ * 「待送达产出」块 —— 挂在 `team_*` 工具结果上的那一份。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  为什么换落点（旧快照在长 run 形态下不生效）
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `composeTeamOutputSnapshot` 只在**领导每次 run 开始**时挂一条隐藏快照。真机现场
+ * 里领导一个 run 有 42 次模型调用 —— 快照只在 run 开头求值那一次，而那次求值时团队
+ * 可能还没建起来，于是整条通路在长 run 里等于不存在。
+ *
+ * 新落点：把「尚未送达给领导的成员产出」附在 `team_*` 工具的**结果**里。工具结果是
+ * append-only 的持久记录，付一次即进缓存；而领导本来就会调 `team_status` /
+ * `team_send` / `team_read`。交付事实仍然藏在会话内容本身里（指纹 `[fp xxxxxxxx]`
+ * 写进块正文），**不引入任何进程内账本**。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  与 composeTeamOutputSnapshot 的差别只有判据
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   旧：这份产出的指纹是否出现在**上一条同通道快照**里（`previous` 状态行）；
+ *   新：这份产出的指纹是否已出现在**领导会话正文**里（`delivered`，
+ *       由 `collectFingerprintsIn` 从正文扫出）。
+ *
+ * 渲染形状、状态行口径、截断口径、不写取代声明 —— **全部与旧函数一致**，且直接复用
+ * 同一批渲染/截断/指纹工具函数。为什么必须逐字节同形：两块共享 `[fp …]` 的解析口径
+ * （`collectFingerprintsIn` 与 `parseRecordedFingerprints` 都在读它），复制第二份渲染
+ * 逻辑等于让两个解析口径各自漂移。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  已知边界（刻意不修）
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * 同一批里并行调用两个 `team_*` 工具时，两次调用看到的是同一份「未送达」集合，于是
+ * 可能各带一份相同增量。代价有界（多付一次块）、语义无害（领导看到重复信息）；而为此
+ * 引入进程内账本会破坏「单一真源」，得不偿失 —— 所以接受它。
+ *
+ * 没有任何待送达产出 ⇒ 返回 `undefined`（调用方零成本直接用工具原文）。这条与旧函数的
+ * 「候选 == previous 才 undefined」不同：这里没有 previous 可比，判据就是「有没有块要发」；
+ * 只剩状态行、没有产出块时不发，免得每调一次 `team_*` 都白付一段纯状态行。
+ */
+export function composePendingTeamOutput(input: {
+	readonly teamName: string;
+	readonly members: readonly TeamOutputMemberInput[];
+	readonly delivered: ReadonlySet<string>;
+	readonly maxChars?: number;
+}): string | undefined {
+	const { teamName, members, delivered } = input;
+	const maxChars = input.maxChars ?? TEAM_OUTPUT_MAX_CHARS;
+
+	if (members.length === 0) return undefined;
+
+	const statusLines: string[] = [];
+	const blocks: string[] = [];
+	for (const member of members) {
+		const body = normalizeMemberOutput(member.output ?? "");
+		// 空白正文视同没有产出（与旧函数同口径）：进块只会制造「有块但没内容」的噪声。
+		if (body === "") {
+			statusLines.push(renderStatusLine(member));
+			continue;
+		}
+
+		const fingerprint = outputFingerprint(body);
+		// 状态行照旧始终带当前产出的指纹：它既是「已送达」标记的载体，也是领导判断谁在跑
+		// 的依据；下一轮从正文扫指纹时，靠的就是这里留下的那一份。
+		statusLines.push(renderStatusLine(member, fingerprint));
+
+		// 指纹已在领导正文里出现过 ⇒ 交付过 ⇒ 跳过产出块（状态行照旧保留）。
+		if (delivered.has(fingerprint)) continue;
+		blocks.push(renderMemberBlock(member.name, body, maxChars));
+	}
+
+	// 没有任何待送达产出 ⇒ undefined（零成本）。这是本函数与旧函数唯一的语义差异点。
+	if (blocks.length === 0) return undefined;
+
+	return assembleSnapshot(teamName, statusLines, blocks);
 }
 
 /**

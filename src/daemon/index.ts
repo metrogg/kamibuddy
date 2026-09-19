@@ -115,8 +115,8 @@ import {
 import { ledgerFileName, listLedgerFiles, readLedgerEntries, RunLedger } from "../core/run-ledger.ts";
 import { SessionMailbox } from "./mailbox.ts";
 import { spawnMember, type MemberHandle } from "./member-runner.ts";
-import { readMemberTranscriptView } from "./member-transcript.ts";
-import { collectTeamOutputMembers, composeTeamOutputSnapshot } from "./team-output-snapshot.ts";
+import { readMemberTranscript, readMemberTranscriptView } from "./member-transcript.ts";
+import { collectFingerprintsIn, collectTeamOutputMembers, composePendingTeamOutput } from "./team-output-snapshot.ts";
 import { TeamRegistry } from "./team-runtime.ts";
 import { TeamTaskBoard } from "../core/team-tasks.ts";
 import { readTeams, removeTeam, TEAM_STORE_VERSION, writeTeam, type StoredTeam } from "../core/team-store.ts";
@@ -2323,6 +2323,49 @@ async function createHost(
 			? (bucket.conversation.state.thinkingLevel ?? readPreferences().thinkingLevel)
 			: undefined;
 
+	/*
+	 * 「待送达的成员产出」块的**唯一判据**（一条判据，两个触发点）：
+	 *   ① run 起点的隐藏快照通道（createPromptSwitch 的 composeTeamOutput，旧落点）；
+	 *   ② 每个 team 工具结果末尾（teamExtensionFactory 的 readPendingOutputs）。
+	 *
+	 * 为什么两个触发点共用它：两条通路要回答的是同一个问题 ——「有哪些成员产出领导还
+	 * 没见过」。各写一份判据就会各自漂移（一块去重准、另一块重复送）。交付事实的载体
+	 * 是**领导会话正文里已有的 `[fp …]`**（`collectFingerprintsIn` 扫出来的），不引入
+	 * 任何进程内账本 —— resume / 新进程之后仍与文件一致。
+	 *
+	 * 门控顺序刻意先判开关与桶，再查注册表，最后才读成员会话文件（零成本优先）：两条
+	 * 通路都会频繁触发，先读盘就白付 IO；开关关 / 本桶无团队时**一个文件都不读**。
+	 *
+	 * 为什么不用 `adoptedSessionId`：它是为「问卷/审批必须在宿主 adopt 之后发起」设计的
+	 * **响亮断言**（空 id 说明 adopt 顺序坏了）。本函数是**读侧**降级口径 —— 桶尚未 adopt
+	 * 时名下定然没有团队，静默跳过才是对的，不该因此把一个 run 打炸。
+	 *
+	 * 不写 try/catch：`readMemberTranscript` / `readMemberTranscriptView` 内部已 catch
+	 * （读不到当没读到），`teamRegistry.getTeam` 也不抛（AGENTS.md §7：不写防御性兜底
+	 * 掩盖上游问题）。
+	 *
+	 * **已知边界（刻意不修）**：`readMemberTranscript` 只读会话文件的**尾部窗口
+	 * （≤512KB）**。领导会话长过窗口后，早期工具结果里的 `[fp …]` 会滚出窗口 ⇒ 那些
+	 * 产出会被**再送达一次**（多付一次块，语义无害，之后又回到稳定）。这是刻意的：
+	 * 为它维护一份跨进程账本会引入第二真源，代价大于多送一块。
+	 */
+	const pendingTeamOutput = (): string | undefined => {
+		if (!isAgentTeamsEnabled()) return undefined;
+		if (bucket.sessionId === "") return undefined;
+		const team = teamRegistry.getTeam(bucket.sessionId);
+		if (team === undefined) return undefined;
+		const members =
+			collectTeamOutputMembers(team, (sid) => readMemberTranscriptView(sid).output) ?? [];
+		// 已经出现在**领导会话正文**里的指纹 = 已交付过（工具结果是 append-only 的持久
+		// 记录，交付事实已经在会话里了，不需要第二份账本）。
+		const delivered = collectFingerprintsIn(
+			readMemberTranscript(bucket.sessionId)
+				.map((message) => message.text)
+				.join("\n"),
+		);
+		return composePendingTeamOutput({ teamName: team.name, members, delivered });
+	};
+
 	const host = await SessionHost.create({
 		catalog,
 		modelKey: activeModelKey,
@@ -2546,29 +2589,14 @@ async function createHost(
 				 * **只挂用户会话（领导）** —— 只有领导名下有团队注册表，子代理 / 定时任务
 				 * 没有团队，装配处显式传 no-op（该 option 必填就是为让漏接编译报错）。
 				 *
-				 * 门控顺序刻意先判开关与桶，再查注册表、最后才读成员会话文件（零成本优先）：
-				 * 团队关闭时这个 handler 每 run 都会跑，先读盘就白付一次 IO；开关关 / 本桶
-				 * 无团队时**一个成员会话文件都不读**。
+				 * 判据与门控全在 `pendingTeamOutput`（见本装配上方的定义）：本通道与 team
+				 * 工具结果末尾的 `readPendingOutputs` **共用同一条判据** —— 「哪些产出领导
+				 * 还没见过」只该有一个答案，各写一份必然漂移。
 				 *
-				 * 为什么不用 `adoptedSessionId`：它是为「问卷/审批必须在宿主 adopt 之后发起」
-				 * 设计的**响亮断言**（空 id 说明 adopt 顺序坏了）。本回调是**读侧**降级口径 ——
-				 * 桶尚未 adopt 时名下定然没有团队，静默跳过才是对的，不该因此把一个 run 打炸。
-				 *
-				 * 不写 try/catch：`readMemberTranscriptView` 内部已 catch（读不到当没产出），
-				 * `teamRegistry.getTeam` 也不抛（AGENTS.md §7：不写防御性兜底掩盖上游问题）。
+				 * 零参箭头对旧签名 `(previous) => …` 同样合法：调用方不再需要传入上一条快照，
+				 * 判据已改成扫领导会话正文里的 `[fp …]`（不依赖 previous）。
 				 */
-				composeTeamOutput: (previous) => {
-					if (!isAgentTeamsEnabled()) return undefined;
-					if (bucket.sessionId === "") return undefined;
-					const team = teamRegistry.getTeam(bucket.sessionId);
-					if (team === undefined) return undefined;
-					return composeTeamOutputSnapshot({
-						teamName: team.name,
-						previous,
-						members:
-							collectTeamOutputMembers(team, (sid) => readMemberTranscriptView(sid).output) ?? [],
-					});
-				},
+				composeTeamOutput: () => pendingTeamOutput(),
 			}),
 			// 联网工具：所有会话都装。
 			// 配置读偏好文件；权限门里 web_search/web_fetch 已登记放行，不再弹窗。
@@ -2991,6 +3019,12 @@ async function createHost(
 								: member.status;
 				return { member: member.name, output: view.output, status };
 			},
+			/*
+			 * 「待送达的成员产出」块（spec: deliver-team-output-via-tools）：与 run 起点的
+			 * 快照通道**共用同一条判据**（见装配处上方的 `pendingTeamOutput`）—— 工具层只
+			 * 负责把它附到结果末尾（单点包装，见 extensions/team-tools.ts）。
+			 */
+			readPendingOutputs: pendingTeamOutput,
 			/*
 			 * 计划裁决（spec: add-team-collaboration-parity 批次 ④）。
 			 *

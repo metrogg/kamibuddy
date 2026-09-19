@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	collectFingerprintsIn,
 	collectTeamOutputMembers,
+	composePendingTeamOutput,
 	composeTeamOutputSnapshot,
 	outputFingerprint,
 	TEAM_OUTPUT_MAX_CHARS,
@@ -341,5 +343,199 @@ describe("collectTeamOutputMembers · 取数接缝", () => {
 		);
 		expect(result?.[0]?.output).toBeUndefined();
 		expect(result?.[1]?.output).toBeUndefined();
+	});
+});
+
+describe("collectFingerprintsIn · 从正文扫指纹", () => {
+	it("扫得到被拼在长文本中间的 [fp …]（不依赖行首/行尾）", () => {
+		const text = `${"前".repeat(200)}[fp a1b2c3d4]${"后".repeat(200)}`;
+		expect(collectFingerprintsIn(text)).toEqual(new Set(["a1b2c3d4"]));
+	});
+
+	it("多份去重：同一指纹出现两次只算一个", () => {
+		const text = "见 [fp 11111111] …… 又说了一次 [fp 11111111] …… 还有另一份 [fp 22222222]。";
+		expect(collectFingerprintsIn(text)).toEqual(new Set(["11111111", "22222222"]));
+	});
+
+	it("非 hex（大小写）/ 长度不对不命中，命中项仍被扫到", () => {
+		const text =
+			"[fp xxxxxxxx] [fp 1234] [fp 123456789] [fp ABCDEF12] [fp 1234567g] [fp deadbeef]";
+		expect(collectFingerprintsIn(text)).toEqual(new Set(["deadbeef"]));
+	});
+
+	it("说明句里的常量示例 [fp xxxxxxxx] 不命中（x 不是 hex）", () => {
+		const text =
+			"以下是你还没见过的成员产出增量；状态行末尾的 [fp xxxxxxxx] 只用于跨轮去重，你可以忽略它。";
+		expect(collectFingerprintsIn(text).size).toBe(0);
+	});
+
+	it("空串 → 空集合", () => {
+		expect(collectFingerprintsIn("").size).toBe(0);
+	});
+});
+
+describe("composePendingTeamOutput · 待送达判定", () => {
+	it("待送达的产出出现在块里；已送达的不出现（两者状态行都保留）", () => {
+		const deliveredOutput = "已经给过领导的产出";
+		const pendingOutput = "还没给过领导的产出";
+		const text = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [
+				member({ name: "谭溯源", agentName: "topic-researcher", output: deliveredOutput }),
+				member({ name: "程文成", agentName: "report-writer", output: pendingOutput }),
+			],
+			delivered: new Set([outputFingerprint(deliveredOutput)]),
+		});
+
+		expect(text).toBeDefined();
+		expect(text).toContain('<member_output member="程文成">');
+		expect(text).toContain(pendingOutput);
+		expect(text).not.toContain(deliveredOutput);
+		expect(text).not.toContain('<member_output member="谭溯源">');
+		// 状态行照旧两条都在 —— 它是「已送达」标记的载体，也是领导判断谁在跑的依据。
+		expect(text).toContain(
+			`- 谭溯源（topic-researcher）：idle，已完成 1 轮 [fp ${outputFingerprint(deliveredOutput)}]`,
+		);
+		expect(text).toContain(
+			`- 程文成（report-writer）：idle，已完成 1 轮 [fp ${outputFingerprint(pendingOutput)}]`,
+		);
+	});
+
+	it("全部已送达 → undefined（零成本，调用方直接用工具原文）", () => {
+		const output = "唯一的产出";
+		expect(
+			composePendingTeamOutput({
+				teamName: "研究队",
+				members: [member({ name: "谭溯源", output })],
+				delivered: new Set([outputFingerprint(output)]),
+			}),
+		).toBeUndefined();
+	});
+
+	it("闭环：第一次返回的文本喂回 collectFingerprintsIn ⇒ 第二次返回 undefined", () => {
+		const output = "调研结论：共 3 条。";
+		const members = [
+			member({ name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53, output }),
+		];
+
+		// 第一次：还没交付过任何东西 ⇒ 带产出块（状态行里已埋下指纹）。
+		const first = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
+		expect(first).toBeDefined();
+		expect(first).toContain("<member_output");
+
+		// 交付事实藏在正文里：从第一次的返回文本扫出「已送达」集合（模拟领导正文里出现过的指纹）。
+		const delivered = collectFingerprintsIn(first ?? "");
+		expect(delivered.has(outputFingerprint(output))).toBe(true);
+
+		// 第二次：指纹已出现 ⇒ 无待送达产出 ⇒ undefined，判据自洽。
+		const second = composePendingTeamOutput({ teamName: "研究队", members, delivered });
+		expect(second).toBeUndefined();
+	});
+
+	it("成员产出更新（指纹变了）⇒ 新指纹未送达 ⇒ 再发一次", () => {
+		const base = { name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53 };
+		const first = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [member({ ...base, output: "第一版产出" })],
+			delivered: new Set(),
+		});
+		const delivered = collectFingerprintsIn(first ?? "");
+
+		const second = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [member({ ...base, output: "第二版产出" })],
+			delivered,
+		});
+		expect(second).toBeDefined();
+		expect(second).toContain("第二版产出");
+		expect(second).not.toContain("第一版产出");
+	});
+});
+
+describe("composePendingTeamOutput · 截断 / 形状与口径", () => {
+	it("与旧函数首次拼装逐字节同形（两块必须同形，否则 [fp …] 解析口径会漂移）", () => {
+		const members = [
+			member({ name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53, output: "产出正文" }),
+		];
+		const legacy = composeTeamOutputSnapshot({ teamName: "研究队", members, previous: undefined });
+		const pending = composePendingTeamOutput({ teamName: "研究队", members, delivered: new Set() });
+		expect(pending).toBe(legacy);
+	});
+
+	it("超长正文被截到 maxChars 且带「全文用 team_read 取回」标注", () => {
+		const text = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [member({ name: "谭溯源", output: "甲".repeat(TEAM_OUTPUT_MAX_CHARS + 500) })],
+			delivered: new Set(),
+		});
+		expect(text).toBeDefined();
+		expect(text).toContain("甲".repeat(TEAM_OUTPUT_MAX_CHARS));
+		expect(text).not.toContain("甲".repeat(TEAM_OUTPUT_MAX_CHARS + 1));
+		expect(text).toContain("（已截断，全文用 team_read 取回）");
+	});
+
+	it("maxChars 可覆盖（按字符切）", () => {
+		const text = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [member({ name: "谭溯源", output: "一二三四五" })],
+			delivered: new Set(),
+			maxChars: 3,
+		});
+		expect(text).toContain("一二三");
+		expect(text).not.toContain("一二三四");
+		expect(text).toContain("（已截断，全文用 team_read 取回）");
+	});
+
+	it("状态行：有产出的成员带 ` [fp 8位]`，没产出的成员不带", () => {
+		const text = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [
+				member({ name: "谭溯源", agentName: "topic-researcher", status: "idle", turns: 53, output: "产出正文" }),
+				member({ name: "程文成", agentName: "report-writer", status: "running", turns: 2 }),
+			],
+			delivered: new Set(),
+		});
+		expect(text).toContain(
+			`- 谭溯源（topic-researcher）：idle，已完成 53 轮 [fp ${outputFingerprint("产出正文")}]`,
+		);
+		const cheng = text?.split("\n").find((line) => line.startsWith("- 程文成"));
+		expect(cheng).toBe("- 程文成（report-writer）：running，已完成 2 轮");
+	});
+
+	it("不含取代声明（本通道是增量语义）", () => {
+		const text = composePendingTeamOutput({
+			teamName: "研究队",
+			members: [member({ name: "谭溯源", output: "产出正文" })],
+			delivered: new Set(),
+		});
+		expect(text).not.toContain("本条快照取代此前所有同类快照");
+	});
+});
+
+describe("composePendingTeamOutput · 边界", () => {
+	it("members 为空 → undefined", () => {
+		expect(
+			composePendingTeamOutput({ teamName: "研究队", members: [], delivered: new Set() }),
+		).toBeUndefined();
+	});
+
+	it("成员都没有产出 → 无待送达产出 → undefined", () => {
+		expect(
+			composePendingTeamOutput({
+				teamName: "研究队",
+				members: [member({ name: "谭溯源" }), member({ name: "程文成", agentName: "report-writer" })],
+				delivered: new Set(),
+			}),
+		).toBeUndefined();
+	});
+
+	it("output 为空白 → 视同没有产出 → undefined", () => {
+		expect(
+			composePendingTeamOutput({
+				teamName: "研究队",
+				members: [member({ name: "谭溯源", output: "   \n  " })],
+				delivered: new Set(),
+			}),
+		).toBeUndefined();
 	});
 });

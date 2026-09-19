@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { SubagentStatus } from "@shared/session-events.ts";
-import { formatWaiting, nextMemberTarget, teamBarRows, WAITING_ALERT_MS } from "./team-status-bar.tsx";
+import { formatWaiting, nextMemberTarget, teamBarRows, teamBarStats, WAITING_ALERT_MS } from "./team-status-bar.tsx";
 
 function member(overrides: Partial<SubagentStatus> & { agent: string }): SubagentStatus {
 	return {
@@ -215,5 +215,99 @@ describe("nextMemberTarget（↓ 的轮转目标）", () => {
 	it("没有团队成员 → undefined（调用方不拦截该按键，保持原生 ↓）", () => {
 		expect(nextMemberTarget([], undefined)).toBeUndefined();
 		expect(nextMemberTarget([member({ agent: "无会话成员" })], undefined)).toBeUndefined();
+	});
+});
+
+/*
+ * 2026-09-19 重排（用户实测：一行里塞 20 多字的摘要句 + 横滚 chip，第 4 枚被切一半）。
+ * 头部的「总数 + 状态簇」与「计数只在运行中画」两条判据都抽成纯函数钉在这里 ——
+ * renderer 没有组件测试基建，这层是最易回归的部分。
+ */
+describe("统计簇（总数 + 只列非零）", () => {
+	const T0 = 1_700_000_000_000;
+
+	it("总数就是团队人数（摘要句不再自带文案）", () => {
+		const rows = teamBarRows([member({ agent: "a" }), member({ agent: "b" })], undefined, T0);
+		expect(teamBarStats(rows).total).toBe(2);
+	});
+
+	it("全员完成 ⇒ 一个簇都不显示（0 是噪音）", () => {
+		const rows = teamBarRows(
+			[member({ agent: "a", status: "done" }), member({ agent: "b", status: "done" })],
+			undefined,
+			T0,
+		);
+		expect(teamBarStats(rows).parts).toEqual([]);
+	});
+
+	it("运行中与中断各成一簇，次序「越需要动手越靠前」", () => {
+		const rows = teamBarRows(
+			[
+				member({ agent: "a", status: "interrupted" }),
+				member({ agent: "b", status: "running" }),
+				member({ agent: "c", status: "running" }),
+				member({ agent: "d", status: "done" }),
+			],
+			undefined,
+			T0,
+		);
+		expect(teamBarStats(rows).parts).toEqual([
+			{ text: "2 人工作中", tone: "live" },
+			{ text: "1 人已中断", tone: "warn" },
+		]);
+	});
+
+	it("等待超时只报最久的那个（不随数据顺序漂）", () => {
+		const rows = teamBarRows(
+			[
+				member({ agent: "a", waitingSince: T0 - 6 * 60_000 }),
+				member({ agent: "b", waitingSince: T0 - 40 * 60_000 }),
+			],
+			undefined,
+			T0,
+		);
+		const waitingParts = teamBarStats(rows).parts.filter((part) => part.text.startsWith("已等"));
+		expect(waitingParts).toEqual([{ text: "已等 40 分钟", tone: "warn" }]);
+	});
+
+	it("有产出可读**不进**簇 —— 跑完有产出是常态，琥珀只留给真要动手的状态", () => {
+		const rows = teamBarRows(
+			[member({ agent: "a", status: "done", outputAvailable: true })],
+			undefined,
+			T0,
+		);
+		expect(teamBarStats(rows).parts).toEqual([]);
+	});
+});
+
+describe("列行表的状态词（statusShort）", () => {
+	it("五态各有一个行内短词（长句留给 statusText 给 title / 读屏）", () => {
+		const rows = teamBarRows(
+			[
+				member({ agent: "a", status: "queued" }),
+				member({ agent: "b", status: "running" }),
+				member({ agent: "c", status: "done" }),
+				member({ agent: "d", status: "failed" }),
+				member({ agent: "e", status: "interrupted" }),
+			],
+			undefined,
+		);
+		expect(rows.map((row) => row.statusShort)).toEqual(["启动中", "运行中", "已完成", "失败", "已中断"]);
+	});
+
+	it("短词是行内一个词；带行动指引的长句只留给 title / 读屏", () => {
+		// 有产出可读时 statusText 会追加「产出还在…可去取回」——那类句子进不了行内。
+		const rows = teamBarRows([member({ agent: "a", status: "done", outputAvailable: true })], undefined);
+		expect(rows[0]?.statusShort).toBe("已完成");
+		expect(rows[0]?.mark).toBe("✓");
+		expect(rows[0]?.statusText).toContain("产出还在");
+		expect(rows[0]?.statusText).not.toBe(rows[0]?.statusShort);
+	});
+
+	it("计数在列行里始终可用（不再按状态门控 —— 空间问题由折叠解决，不靠削信息）", () => {
+		for (const status of ["running", "done", "interrupted", "failed"] as const) {
+			const rows = teamBarRows([member({ agent: "a", status, turns: 26, toolCalls: 73 })], undefined);
+			expect(rows[0]?.count).toBe("26 轮 · 73 工具");
+		}
 	});
 });

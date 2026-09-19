@@ -7,7 +7,7 @@
  *      systemPrompt；
  *   2. 快照通道：四条通道各自按 `buildContextEntries()` 的活分支基线独立去重、
  *      独立追加（内容未变不返回 message ⇒ pi 不追加条目），空内容不注入
- *      （team-output 的增量语义与 `previous` 入参另有单独一组）；
+ *      （team-output 的增量语义与「判据在调用方、composer 无参」另有单独一组）；
  *   3. 缓存前缀不变量：同一会话连续两轮、只推进墙钟时间，系统提示词必须逐字节
  *      相等 —— 组装**走生产入口**（core/system-prompt-composer.ts 的
  *      createSystemPromptComposerFromDefaults，与 daemon 同一个函数），用**真实
@@ -114,7 +114,7 @@ function mount(options: {
 	readonly runtimeContext?: () => string;
 	readonly hiddenContext?: () => string | undefined;
 	readonly runTime?: () => string | undefined;
-	readonly teamOutput?: (previous: string | undefined) => string | undefined;
+	readonly teamOutput?: () => string | undefined;
 	readonly entries?: readonly unknown[];
 }): Mounted {
 	const handlers: Handler[] = [];
@@ -480,11 +480,12 @@ describe("快照通道：三条通道各自独立去重、各自追加", () => {
 /**
  * 第四条快照通道：team-output（spec: inject-team-output-snapshot）。
  *
- * 与三条既有通道的两处差别在这里钉住：
+ * 与三条既有通道的差别在这里钉住：
  *   1. 正文由 composer 决定 —— 该通道语义是**增量**（旧产出不被新快照取代），
  *      故 prompt-switch 侧不许替它加取代声明；
- *   2. 去重基线要交给 composer（`previous`）—— 「哪些成员产出已注入过」的判据是
- *      产出指纹在不在上一条同通道快照里，而基线只有 handler 读得到 ctx。
+ *   2. 「哪些产出还没送达」的判据**在调用方**（扫领导会话正文的 `[fp …]`，见
+ *      daemon/team-output-snapshot.ts 的 collectFingerprintsIn），composer 被
+ *      **无参**调用；本文件只管「内容没变不追加」这条既有纪律。
  * 其余（逐字节相同不追加、空内容不注入、按 customType 各读各的基线）沿用同一机制。
  */
 describe("快照通道：team-output 增量注入（第四条）", () => {
@@ -533,14 +534,20 @@ describe("快照通道：team-output 增量注入（第四条）", () => {
 		expect(await blank.teamOutput(EMPTY_EVENT, blank.ctx)).toBeUndefined();
 	});
 
-	it("handler 把上一条同通道快照正文作为 previous 交给回调（去重基线在 handler 侧读出）", async () => {
-		const seen: Array<string | undefined> = [];
+	it("回调被无参调用：判据（哪些产出还没送达）在调用方，本文件不再传基线", async () => {
+		/*
+		 * 判据已改成「扫领导会话正文里的 [fp …]」，基线不再经本文件传递 —— 所以
+		 * composer 必须**零参**调用。用 `arguments.length` 钉住：谁把 previous 加回来
+		 * （哪怕返回值仍对）都会在这里红。活分支上放一条同通道快照、一个用户消息，
+		 * 证明读不读基线都与本文件的调用形态无关。
+		 */
+		const seenArgCounts: number[] = [];
 		const { teamOutput, ctx } = mount({
 			axes: { sceneId: "work", interactionId: "craft" },
 			compose: async () => "提示词",
-			teamOutput: (previous) => {
-				seen.push(previous);
-				return undefined;
+			teamOutput: (...args: unknown[]) => {
+				seenArgCounts.push(args.length);
+				return TEAM_BLOCK;
 			},
 			entries: [
 				snapshotEntry(TEAM_OUTPUT_CUSTOM_TYPE, "上一条团队产出快照"),
@@ -548,20 +555,10 @@ describe("快照通道：team-output 增量注入（第四条）", () => {
 			],
 		});
 
-		await teamOutput(EMPTY_EVENT, ctx);
-		expect(seen).toEqual(["上一条团队产出快照"]);
-
-		// 没有基线（新会话）时同样把 undefined 交出去，让 composer 按「全部都是新的」处理。
-		const fresh = mount({
-			axes: { sceneId: "work", interactionId: "craft" },
-			compose: async () => "提示词",
-			teamOutput: (previous) => {
-				seen.push(previous);
-				return undefined;
-			},
-		});
-		await fresh.teamOutput(EMPTY_EVENT, fresh.ctx);
-		expect(seen).toEqual(["上一条团队产出快照", undefined]);
+		const result = await teamOutput(EMPTY_EVENT, ctx);
+		expect(seenArgCounts).toEqual([0]);
+		// 返回值被原样采用（证明被调到的是这个回调、且走的是同一条拼装路径）。
+		expect(result?.message?.content).toBe(TEAM_BLOCK);
 	});
 });
 

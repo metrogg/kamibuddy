@@ -14,7 +14,10 @@
  * 的那层逻辑。
  */
 
+import { useState } from "react";
 import type { SubagentStatus } from "@shared/session-events.ts";
+import { ExpertAvatar } from "./expert-avatar.tsx";
+import { IconChevronDown } from "./icons.tsx";
 
 /** 一枚成员 chip 的展示模型。 */
 export interface TeamBarRow {
@@ -26,6 +29,13 @@ export interface TeamBarRow {
 	readonly statusText: string;
 	/** 计数摘要，如「3 轮 · 12 工具」；没有计数时为空串。 */
 	readonly count: string;
+	/**
+	 * 短状态词（「已完成」「运行中」…）：展开后的列行表里与状态符同显。
+	 *
+	 * 与 `statusText` 的分工：那个是给 title / 无障碍读的**长句**（含
+	 * 「产出还在会话记录里，可去取回」这类行动指引），这里是**行内一个词**。
+	 */
+	readonly statusShort: string;
 	/** 是否可点开聚焦（没有 sessionId 的成员还没建好会话）。 */
 	readonly clickable: boolean;
 	/** 状态色档（样式用；与 mark 同源，避免在 JSX 里反推符号）。 */
@@ -72,6 +82,15 @@ const STATUS_TEXT: Record<SubagentStatus["status"], string> = {
 	done: "已完成",
 	failed: "失败",
 	interrupted: "已中断（那一轮没有回音）",
+};
+
+/** 行内短状态词（展开的列行表用；长句留给 title，见 TeamBarRow.statusShort）。 */
+const STATUS_SHORT: Record<SubagentStatus["status"], string> = {
+	queued: "启动中",
+	running: "运行中",
+	done: "已完成",
+	failed: "失败",
+	interrupted: "已中断",
 };
 
 /**
@@ -138,6 +157,7 @@ export function teamBarRows(
 				mark: MARKS[member.status],
 				statusText,
 				count: parts.join(" · "),
+				statusShort: STATUS_SHORT[member.status],
 				clickable: member.sessionId !== undefined,
 				tone: member.status,
 				live: member.status === "running",
@@ -149,6 +169,55 @@ export function teamBarRows(
 				...(member.sessionId === undefined ? {} : { sessionId: member.sessionId }),
 			};
 		});
+}
+
+/** 状态簇里的一枚（渲染用；「只显示非零」这条判据在纯函数里，才可单测）。 */
+export interface TeamBarStat {
+	readonly text: string;
+	/** 样式档：live → `--primary`；warn → `--warning`。 */
+	readonly tone: "live" | "warn";
+}
+
+/**
+ * 状态栏头部的统计（纯函数，可单测）。
+ *
+ * 为什么从摘要句改成「总数 + 状态簇」：原来那句
+ * 「6 名成员 · 6 人有产出可读（在各自会话记录里）」有 20 多个字，占了近半行宽，
+ * 把 chip 挤成横向滚动；而它想传达的三件事（几人、谁在跑、谁出问题）恰恰是
+ * **状态簇**能一眼给完的。总数之外只列**非零**项 —— 0 是噪音。
+ *
+ * 次序按「越需要动手越靠前」：运行中（要等）→ 中断（要决定重跑还是取产出）→
+ * 等待超时（要去看一眼是不是断了）。**「有产出可读」不再进簇**：成员跑完有产出
+ * 是常态（产出会随 `team_*` 工具结果自动送到领导），把它当告警会让强调失效 ——
+ * 琥珀只留给「中断」与「等待超时」（见 CSS 里 recoverable 那条已被删掉的旧注释）。
+ */
+export function teamBarStats(rows: readonly TeamBarRow[]): {
+	readonly total: number;
+	readonly parts: readonly TeamBarStat[];
+} {
+	const parts: TeamBarStat[] = [];
+	const running = rows.filter((row) => row.live).length;
+	const interrupted = rows.filter((row) => row.interrupted).length;
+	if (running > 0) parts.push({ text: `${running} 人工作中`, tone: "live" });
+	if (interrupted > 0) parts.push({ text: `${interrupted} 人已中断`, tone: "warn" });
+	/*
+	 * 等待超时：多个人都在超时时只报最久的那个（`rows` 顺序即团队顺序，
+	 * 这里显式取最长，避免"谁先来报谁"这种与数据顺序耦合的偶然行为）。
+	 */
+	const alertWaiting = rows
+		.filter((row) => row.waitingAlert && row.waiting !== "")
+		.map((row) => row.waiting)
+		.sort((a, b) => waitingMs(b) - waitingMs(a))[0];
+	if (alertWaiting !== undefined) parts.push({ text: `已等 ${alertWaiting}`, tone: "warn" });
+	return { total: rows.length, parts };
+}
+
+/** 把 `formatWaiting` 的产物折回毫秒，只为上面那句排序（文案格式是「N 分钟」「N 小时」）。 */
+function waitingMs(text: string): number {
+	const match = /^(\d+) (分钟|小时)$/.exec(text);
+	if (match === null) return 0;
+	const value = Number(match[1]);
+	return (match[2] === "小时" ? value * 60 : value) * 60_000;
 }
 
 /** ↓ 轮转的目标：主理人视图、某个成员，或「没得可切」。 */
@@ -191,63 +260,101 @@ export interface TeamStatusBarProps {
 }
 
 export function TeamStatusBar({ members, currentName, onFocus, onClose }: TeamStatusBarProps): React.JSX.Element | null {
+	/*
+	 * 折叠/展开两态（2026-09-19 对齐 WorkBuddy 的成员区形态，见 add-team-ux-parity
+	 * 的实施后修正）：折叠 = 头像堆叠 + 人数 + 只列异常的簇，一行 ≈28px 不抢输入区；
+	 * 展开 = 列行表，行宽充裕，轮数/工具数/等待时长都能放下 —— 空间问题用**折叠**解决，
+	 * 而不是靠削信息（上一版削掉完成态计数就是被空间逼的）。
+	 * 本地 state：换会话重挂载即回到折叠态（与 teamBarHidden 同口径）。
+	 */
+	const [expanded, setExpanded] = useState(false);
 	const rows = teamBarRows(members, currentName);
 	if (rows.length === 0) return null;
-	const liveCount = rows.filter((row) => row.live).length;
-	const interruptedCount = rows.filter((row) => row.interrupted).length;
-	const recoverableCount = rows.filter((row) => row.outputAvailable).length;
+	const stats = teamBarStats(rows);
 	/*
-	 * 摘要行按「最需要用户注意」的事优先：
-	 *   有产出可读 > 中断 > 工作中 > 平静。
-	 *
-	 * 「有产出可读」排最前（拉模式，spec: add-team-pull-model 批次 ④）是因为它是
-	 * 四者里唯一**有救**的一条 —— 用户在它面前能立刻做对的事（把产出取回来），
-	 * 而「中断/工作中」只能让他继续等或重跑。把它埋在后面等于浪费掉最有价值的信号。
+	 * 头像堆叠最多 5 枚 + 「+N」：第 6 枚起只是重复「人数」这一个信息，
+	 * 而每多一枚都在挤压文字区（WorkBuddy 折叠态同款做法）。
 	 */
-	const summary =
-		recoverableCount > 0
-			? `${rows.length} 名成员 · ${recoverableCount} 人有产出可读（在各自会话记录里）`
-			: interruptedCount > 0
-				? `${rows.length} 名成员 · ${interruptedCount} 人中中断`
-				: liveCount > 0
-					? `${rows.length} 名成员 · ${liveCount} 人工作中`
-					: `${rows.length} 名成员`;
+	const faces = rows.slice(0, 5);
 	return (
-		<div className="team-bar" role="status" aria-label="团队成员状态">
-			<span className="team-bar-lead">{summary}</span>
-			<div className="team-bar-members">
-				{rows.map((row) => (
-					<button
-						key={row.name}
-						type="button"
-						className={`team-bar-chip${row.live ? " live" : ""}${row.current ? " active" : ""}${
-							row.interrupted ? " interrupted" : ""
-						}${row.outputAvailable ? " recoverable" : ""}${row.waitingAlert ? " waiting-alert" : ""}`}
-						title={`${row.name}｜${row.statusText}${row.count === "" ? "" : `｜${row.count}`}`}
-						disabled={!row.clickable}
-						onClick={() => {
-							if (row.sessionId !== undefined) onFocus(row.sessionId, row.name);
-						}}
-					>
-						<span className={`team-bar-mark st-${row.tone}`} aria-hidden="true">
-							{row.mark}
-						</span>
-						<span className="team-bar-name">{row.name}</span>
-						{row.count !== "" && (
-							<span className={`team-bar-count${row.waitingAlert ? " warn" : ""}`}>{row.count}</span>
+		<div className="team-bar">
+			{/* role="status" 只挂在头部：它是"实时摘要"，而展开的成员表是内容 ——
+			    把整块放进 live region 会让读屏在每次投影刷新时念完整张表。 */}
+			<div className="team-bar-head" role="status" aria-label="团队成员状态">
+				<button
+					type="button"
+					className="team-bar-toggle"
+					aria-expanded={expanded}
+					title={expanded ? "收起成员列表" : "展开成员列表"}
+					onClick={() => setExpanded((value) => !value)}
+				>
+					<span className="team-bar-facepile" aria-hidden="true">
+						{faces.map((row) => (
+							<ExpertAvatar key={row.name} displayName={row.name} className="team-bar-face" />
+						))}
+						{rows.length > faces.length && (
+							/* 复用 expert-avatar 的 16px 圆盒（尺寸/圆角/居中都在它那），
+							   只换底色与字色 —— 不另写一份尺寸值。 */
+							<span className="expert-avatar team-bar-face team-bar-face-more" aria-hidden="true">
+								+{rows.length - faces.length}
+							</span>
 						)}
-					</button>
+					</span>
+					<span className="team-bar-lead">{stats.total} 位成员</span>
+					<IconChevronDown size={12} className={expanded ? "tool-caret open" : "tool-caret"} />
+				</button>
+				{/* 状态簇常驻（折叠态也显示）—— 这是我们比 WorkBuddy 多的那点价值：
+				    它折叠时只看得到人数，把「谁在跑 / 谁中断了」一起藏了。 */}
+				{stats.parts.map((part) => (
+					<span key={part.text} className={`team-bar-stat ${part.tone}`}>
+						{part.text}
+					</span>
 				))}
+				<button
+					type="button"
+					className="team-bar-close"
+					title="隐藏状态栏（本次会话内）"
+					aria-label="隐藏团队成员状态"
+					onClick={onClose}
+				>
+					×
+				</button>
 			</div>
-			<button
-				type="button"
-				className="team-bar-close"
-				title="隐藏状态栏（本次会话内）"
-				aria-label="隐藏团队成员状态"
-				onClick={onClose}
-			>
-				×
-			</button>
+			{expanded && (
+				<div className="team-bar-members">
+					{rows.map((row) => (
+						<button
+							key={row.name}
+							type="button"
+							className={`team-bar-row${row.current ? " active" : ""}${row.interrupted ? " interrupted" : ""}`}
+							title={`${row.name}｜${row.statusText}${row.count === "" ? "" : `｜${row.count}`}${
+								row.outputAvailable ? "｜产出在它的会话记录里（点开可看）" : ""
+							}`}
+							disabled={!row.clickable}
+							onClick={() => {
+								if (row.sessionId !== undefined) onFocus(row.sessionId, row.name);
+							}}
+						>
+							<ExpertAvatar displayName={row.name} />
+							<span className="team-bar-row-name">{row.name}</span>
+							{row.count !== "" && (
+								<span className={`team-bar-row-meta${row.waitingAlert ? " warn" : ""}`}>{row.count}</span>
+							)}
+							<span className="team-bar-row-status">
+								<span className={`team-bar-mark st-${row.tone}`} aria-hidden="true">
+									{row.mark}
+								</span>
+								{row.statusShort}
+							</span>
+							{row.clickable && (
+								<span className="team-bar-row-caret" aria-hidden="true">
+									›
+								</span>
+							)}
+						</button>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }
