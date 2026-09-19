@@ -201,6 +201,8 @@
 | 侧栏折叠宽 | 0（整栏让位，`visibility: hidden` 移出 Tab 序） | 我们自己的折叠语义，见 §5 受控例外 ④ |
 | 首页内容列 | `max-width: 848px` + 左右 `--space-6`（24）；底部案例槽预留 220px、案例槽 `bottom: 56px` | WB `.wb-home-page` 的 `min-height: max(432px + var(--wb-home-slot-reserve,220px), 100%)` 可证；848 与 56 是旧注释引用值，**本地参考物中查不到出处**（见迁移文档 §12.4） |
 | 内容列最小可用宽 | 320（`artifact-panel.tsx` 的 `MAIN_MIN_WIDTH`） | 900（窗口最小宽）− 264（侧栏）− 320 = 316，面板下限 340 后恰好铺满 |
+| 菜单条高 | **30px**（主进程 `src/main/app-menu.ts` 的 `MENUBAR_HEIGHT`，不入档 —— 它是系统 chrome 尺寸，不是内容留白） | WB `MENUBAR_HEIGHT = 30`（`extracted/main/index.js:21609`）。菜单条与窗口控件共用同一条带子：`titleBarOverlay.height` 必须用同一个常量 |
+| 内容区顶角圆角 | `--radius-md`（10px，`.app` 的 `border-top-*-radius`） | 菜单条之下露出的窗口底色形成「卡片嵌在窗口里」的观感（WB 口径）。窗口外壳总述见 ARCHITECTURE.md §4.32 |
 
 改动史与证据见 [docs/design-tokens-migration.md](docs/design-tokens-migration.md) §12（含否决方案）。
 

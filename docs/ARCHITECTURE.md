@@ -1967,6 +1967,144 @@ Path.mkdir()   → 继承父目录：… + capability SID(Modify) + 用户 FullC
    实测里模型最终确实自己推断出来了 —— 但那花掉半圈思考与两次失败的工具调用，
    而把机制写进**决策点的文案**是一次性成本、且对所有技能生效（§4.16 同一条取向）。
 
+### 4.32 窗口外壳：接管菜单条，去掉系统标题栏（2026-09-19）
+
+**背景**：用户看到 WorkBuddy 的顶栏（`关于(A) 编辑(E) 窗口(W) 帮助(H)` 与窗口按钮**同排**、
+顶上**没有分隔线**、内容区顶部有圆角），要求照做。
+
+**改前的两件事都不是"样式不好看"，是默认漏出来的**：
+
+- 我们从没设过菜单 —— 全仓搜不到 `setApplicationMenu`，于是 Electron 给的是**默认英文菜单**
+  （`File/Edit/View/Window`），**里面还带着 Reload / Toggle DevTools 这类开发项**，
+  等于把开发菜单发给了用户。
+- 窗口是**系统原生边框**（`new BrowserWindow` 没有 `frame`/`titleBarStyle`）：左上角
+  「嘉立创Work」是系统画的标题，**顶上那根线是系统菜单栏的下边框** —— 都不是我们的 CSS。
+
+**WorkBuddy 的做法（照抄的机制）**：`extracted/main/index.js:21635-21643`
+
+```js
+...isWindows && {
+  frame: false,
+  titleBarOverlay: { height: MENUBAR_HEIGHT /* =30，见 :21609 */, color: "#00000000",
+                     symbolColor: dark ? "#ffffff" : "#333333" },
+  backgroundColor: ...,
+}
+```
+
+macOS 是 `titleBarStyle: "hiddenInset"`（`:21629`）；菜单由 `menu-builder.js` 用
+`Menu.setApplicationMenu` 建原生中文菜单。
+
+**决定**：
+
+1. **窗口**：Windows/Linux 走 `frame: false` + `titleBarOverlay`，**`color` 取全透明**；
+   macOS 走 `hiddenInset`（保留原生红绿灯，不自绘）。
+2. **菜单**：显式接管为三项中文菜单（**关于 / 编辑 / 窗口**），模板在
+   `src/main/app-menu.ts`（纯数据、可单测），Electron 绑定留在 `index.ts`
+   —— 同 `global-shortcut.ts` 的分工。
+3. **几何**：菜单条 30px（WB 原值；`MENUBAR_HEIGHT` 与 `titleBarOverlay.height`
+   **必须是同一个常量**，否则菜单条与窗口控件错位）；内容区顶角圆角 `--radius-md`。
+   两行都登记在 DESIGN.md §3.7。
+4. 作废 `design-tokens-migration.md` §11.6 那条「`-webkit-app-region` 确认不适用」。
+
+**为什么"顶上没有那根线"**：那根线本来是系统菜单栏的下边框。overlay 的 `color` 全透明后，
+那条 30px 带子自己不画底色，窗口控件直接浮在窗口背景上 —— 分隔感消失。内容区圆角弧里
+露出的也是同一个窗口底色（`backgroundColor` = `--bg`），两处是同一个机制。
+
+**为什么只有三项**：WorkBuddy 还有一项「帮助」，而**我们没有帮助内容可放** ——
+不发明空壳菜单（AGENTS.md §9）。
+
+**为什么「编辑」不能删**（最容易被当成装饰剪掉的一条）：**macOS 上复制粘贴的快捷键由菜单
+role 提供**，没有「编辑」菜单就按不出 Cmd+C/V。Windows 上由 Chromium 自己处理，所以那边
+删了不会坏 —— 但我们要上 mac，于是用回归断言把它钉住（`app-menu.test.ts`）。
+
+**实证**：`npm run check` 六项全过（`check:tokens` 认到的是 `--radius-md`，无新硬编码）；
+`npm test` **163 文件 / 3,009 通过（1 skipped，合计 3,010）**。护栏「改坏 → 看红」：
+把「编辑」的 copy/paste role 删掉、把三项标签改回英文 → 正好 **2 条红**，已还原。
+
+**目视验收在用户侧**（我跑不了他机器上的那个窗口）：拖拽 / 双击标题栏最大化 / 贴边分屏、
+那根线是否消失、圆角观感。
+
+#### 否决方案
+
+1. **否决：完全自绘窗口控件（自己画最小化/最大化/关闭）。**
+   那会让**贴边分屏（Snap Layouts）、双击最大化、标题栏右键系统菜单**全部要自己实现；
+   `titleBarOverlay` 让系统继续管这些，代价只是那条带子交给系统布局。WorkBuddy 选的也是它。
+2. **否决：干脆不要菜单（`setApplicationMenu(null)`），顶栏更干净。**
+   一是 macOS 上直接丢 Cmd+C/V；二是我们要的观感本来就是「菜单与窗口按钮同排」——
+   没有菜单，那条带子只剩空白，反而离 WorkBuddy 更远。
+3. **否决：照搬四项（含「帮助」）。**
+   我们没有帮助内容，塞个空菜单是装饰性界面（AGENTS.md §9）；真有帮助入口再加。
+4. **否决：只把默认菜单翻成中文、不碰窗口边框。**
+   顶上仍是一条独立菜单行 + 系统标题栏，用户要的这件事等于没做；默认菜单里的
+   Reload/DevTools 也会继续发给用户。
+5. **否决：把 30px 写成间距 token（并进 `--space-*` 档）。**
+   它是系统 chrome 的高度、不是内容留白；塞进间距档会让那个概念失真。
+   登记在 DESIGN.md §3.7 的「外壳几何」里更准。
+
+### 4.33 被唤醒的成员跑完后必须把状态翻回 idle（2026-09-19）
+
+**现象**：用户报「这几个专家没在跑了也显示运行中」—— 面板写着
+`3 位成员 · 3 人工作中 已等 6 分钟`，三行都是「运行中 · 已等 N 分钟」（6 / 6 / 3）。
+
+**证据链（现场 + 代码）**：
+
+1. 三个成员的会话文件里，最后一条都是**完整的收尾报告**（`thinking` + `text` +
+   `stopReason` + `usage`）→ 那一轮确实跑完了，不是卡住、也不是还在写。
+2. `已等 N 分钟` 由 `waitingSince` 算（`daemon/index.ts` 的 getTeamState），而
+   `waitingSince` 只在 `markStatus(…, "running")` 时起算 —— 全仓设 `running` 的只有两处：
+   spawn 与 `wakeMember`。时间是 6/6/3 分钟，而成员是 23 分钟前拉起的 →
+   说明这三个是**被 `team_send` 唤醒的**（`wakeMember` 的「已收到新指示」）。
+3. `markStatus(…, "idle")` 全仓**只有一处**（`onComplete` 收尾钩子）。而
+   `MemberHandle.prompt` 把 `host.prompt(text, "followUp")` 的返回值丢掉了 →
+   **唤醒轮跑完没有任何东西收尾**。
+
+**根因**：收尾只挂在**首轮**上。而 `host.prompt` 两个分支的语义不同
+（`core/session-host.ts` 的 `prompt`）：
+
+- 成员**正在跑** → 立刻返回 `{ queued: true }`（只是入队，没等任何一轮）；
+- 成员**已空闲** → **等这一轮真跑完**才返回 `{ queued: false }`。
+
+旧代码把两种结果都丢弃，于是「成员已空闲、被唤醒、跑完」这条最常见的路永远收不了尾：
+`wakeMember` 投递时翻成的 `running` 再没有东西翻回 `idle`。
+
+**决定**：
+
+1. 判据抽成纯函数 `roundFinishFor({ queued, runError, cancelled })`
+   （`daemon/member-runner.ts`）：**入队 → 不收尾**（那一轮的整体收尾由先前那次
+   await 兜住 —— 它等的是同一个 run 的结束；这里再收一次会把轮数与状态说两遍）；
+   未入队 → `complete`；`runError` / `cancelled` → `failed`（与首轮既有口径一致）。
+2. 首轮与唤醒轮共用**唯一出口** `settleRound(queued)`（把原先内联在首轮 `.then` 里的
+   那段搬进来）——「状态翻转只挂在一条路上」正是这个 bug 的形状。
+3. 删掉「丢弃 `queued` 返回值」那条旧注释：它当时的判据只关心回投留痕，
+   漏了状态翻转也挂在这条路上。
+
+**已知边界**：判据有单测（`member-runner.test.ts`，入队 / 未入队 / 带旧错 / 失败四例），
+但**接线那一步（谁调用 settleRound）没有测试** —— `spawnMember` 要真宿主
+（`SessionHost.create` 起 pi），单测它得先给 `MemberRunnerDeps` 加一个宿主工厂的注入缝。
+本次不动那条缝（超出修 bug 的范围），这一步靠评审 + 上面的判据断言守住。
+
+**实证**：`npm run check` 六项全过；`npm test` **163 文件 / 3,013 通过（1 skipped，合计 3,014）**。
+护栏「改坏 → 看红」：把 `if (args.queued)` 改成 `if (false)`（即把这次的真机 bug 写回去）
+→ 正好 **2 条红**，已还原。
+
+#### 否决方案
+
+1. **否决：在 `wakeMember` 里 `await handle.prompt()` 之后直接 `markStatus(idle)`。**
+   那是把记账写到接线层，而它**无从知道「这次到底有没有真跑一轮」**——
+   那个信息只有成员执行器看得到（`queued`）。写在这里等于同一个判断两处各写一遍
+   （§4 的老毛病），而且会漏掉 `recordCompletion` 对 `turns` 的绝对值回填。
+2. **否决：靠 `onEvent` 里的 `run_finished` 事件翻转状态。**
+   看着更"事件驱动"，但 `run_finished` 只说「某个 run 结束」，不区分「这次投递有没有等它」；
+   而首轮已经有 `onComplete` 在收尾，两条路并行会让「收尾」变成两处判据
+   （重复记账，`closing` 态还可能被误翻成 `idle`，打断收尾流程）。
+3. **否决：把入队的投递也当收尾（两处都调 `onComplete`）。**
+   成员**正在跑**时入队，若也收尾，就会在它还在干活的那一刻标成「已完成」——
+   正是当天早些时候 `wakeMember` 那条注释修掉的**相反** bug（成员在「✓ 已完成」的
+   招牌下干了几十分钟活）。两个方向必须由 `queued` 这一个信号分开。
+4. **否决：为了可测先给 `MemberRunnerDeps` 加宿主工厂注入缝。**
+   方向是对的（那会让整条唤醒链可测），但它是与这个 bug 无关的重构；
+   混在一起会让这次改动难以复核。留作后续。
+
 
 
 ##

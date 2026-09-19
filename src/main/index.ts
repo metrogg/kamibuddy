@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, extname, join } from "node:path";
 import {
 	BrowserWindow,
+	Menu,
 	app,
 	dialog,
 	globalShortcut,
@@ -36,6 +37,7 @@ import {
 	type GlobalShortcutStatus,
 	type SaveArtifactRequest,
 } from "../shared/ipc.ts";
+import { MENUBAR_HEIGHT, appMenuTemplate } from "./app-menu.ts";
 import { GlobalToggleShortcutController } from "./global-shortcut.ts";
 
 /** main 自己处理、不转发给 daemon 的通道（需要 Electron API 或 main 独有状态）。 */
@@ -247,6 +249,26 @@ function createWindow(): void {
 		minHeight: 600,
 		show: false,
 		title: "嘉立创Work",
+		/*
+		 * 窗口外壳（§4.32）：不用系统标题栏，改由 titleBarOverlay 提供窗口控件，
+		 * 菜单条与它共用同一条 30px 带子（WorkBuddy 口径，见 app-menu.ts）。
+		 * 关键是 color 全透明（#00000000）—— 那条带子自己不画底色，所以视觉上
+		 * 没有「顶上那根线」，内容区看起来是嵌在窗口里的一张卡。
+		 * macOS 走 hiddenInset：原生红绿灯保留，不用自绘。
+		 */
+		...(process.platform === "darwin"
+			? { titleBarStyle: "hiddenInset" as const }
+			: {
+					frame: false,
+					titleBarOverlay: {
+						height: MENUBAR_HEIGHT,
+						color: "#00000000",
+						// 窗口控件图标色。与 tokens.css 的 --text 同深（当前只有浅色主题）。
+						symbolColor: "#333333",
+					},
+				}),
+		// 透明 overlay 下露出来的就是它；与 tokens.css 的 --bg 一致。
+		backgroundColor: "#ffffff",
 		webPreferences: {
 			preload: join(import.meta.dirname, "../preload/index.mjs"),
 			// renderer 跑的是不可信内容（模型产出的 HTML 会在预览面板里渲染），
@@ -526,6 +548,20 @@ if (!app.requestSingleInstanceLock()) {
 		installCsp(process.env["ELECTRON_RENDERER_URL"] !== undefined);
 		registerIpc();
 		startDaemon();
+		/*
+		 * 应用菜单：**显式替换 Electron 的默认菜单**。不设的话给的是英文默认项
+		 * （File/Edit/View/Window），里面还带着 Reload / Toggle DevTools 这类开发项 ——
+		 * 等于把开发菜单发给了用户。模板是纯数据，见 app-menu.ts。
+		 */
+		app.setAboutPanelOptions({
+			applicationName: "嘉立创Work",
+			applicationVersion: app.getVersion(),
+		});
+		Menu.setApplicationMenu(
+			Menu.buildFromTemplate(
+				appMenuTemplate(process.platform === "darwin", () => app.showAboutPanel()),
+			),
+		);
 		createWindow();
 		setupGlobalShortcut();
 

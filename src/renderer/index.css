@@ -160,6 +160,14 @@ textarea:focus-visible {
 	   （artifact-panel.tsx 的 maxPanelWidth，含缩窗时回落），这里再兜一道，
 	   万一还有溢出也只裁边界、不把主区挤出去。 */
 	overflow: hidden;
+	/* 窗口外壳（§4.32）：菜单条由系统画在内容区之上那条 30px 带子里
+	   （main/index.ts 的 titleBarOverlay + app-menu.ts 的 MENUBAR_HEIGHT），
+	   所以这里量到的顶边就是菜单条的下沿 —— 给它两角圆角，内容区看起来就是
+	   嵌在窗口里的一张卡（WorkBuddy 口径）。圆角弧里露出的是窗口底色
+	   （main 的 backgroundColor = --bg），方角靠上面那条 overflow: hidden 裁掉。
+	   用既有档 --radius-md，不新增档位；菜单条高度不是间距，登记在 DESIGN.md §3.7。 */
+	border-top-left-radius: var(--radius-md);
+	border-top-right-radius: var(--radius-md);
 }
 
 /* ── 侧栏 ─────────────────────────────────────────────────────── */

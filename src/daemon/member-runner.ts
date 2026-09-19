@@ -43,6 +43,41 @@ export function turnsDeltaForEvent(event: SessionEvent): number {
 	return event.type === "assistant_done" ? 1 : 0;
 }
 
+/** 一次「投递」之后该做什么收尾（见 roundFinishFor 的判据）。 */
+export type RoundFinish =
+	| { readonly kind: "none" }
+	| { readonly kind: "failed"; readonly message: string }
+	| { readonly kind: "complete" };
+
+/**
+ * 投递之后该不该收尾自己的那一轮（2026-09-19 真机修，§4.33）。
+ *
+ * `host.prompt(text, "followUp")` 有两个分支（`core/session-host.ts` 的 prompt）：
+ *   - 成员**正在跑** → 立刻返回 `{ queued: true }`（只是入队，没有等任何一轮）；
+ *   - 成员**已空闲** → 等这一轮真跑完才返回 `{ queued: false }`。
+ *
+ * 判据因此按分支给：**入队的不收尾**（那一轮的整体收尾由先前那次 await 兜住 ——
+ * 它等的是同一个 run 的结束；这里再收一次会把轮数与状态说两遍），
+ * **未入队的必须收尾**。
+ *
+ * 为什么这条判据必须钉住：`markStatus(…, "idle")` 全仓只有 `onComplete` 一处
+ * （`daemon/index.ts` 的收尾钩子），而它原先**只挂在首轮**上 —— 被 `team_send`
+ * 唤醒的成员跑完那一轮后，`wakeMember` 在投递时翻成的 `running` 再没有任何东西
+ * 翻回去，界面就一直显示「运行中 · 已等 N 分钟」，而成员的会话文件里其实早已是
+ * 完整的收尾报告（用户 2026-09-19 报的 bug）。
+ */
+export function roundFinishFor(args: {
+	readonly queued: boolean;
+	readonly runError: string | undefined;
+	readonly cancelled: boolean;
+}): RoundFinish {
+	// 入队优先：这次调用不代表那一轮结束，任何收尾都会与真正那次重复。
+	if (args.queued) return { kind: "none" };
+	if (args.runError !== undefined) return { kind: "failed", message: args.runError };
+	if (args.cancelled) return { kind: "failed", message: "已被中止" };
+	return { kind: "complete" };
+}
+
 export interface MemberSpawnInput {
 	/** 领导会话的工作目录（成员与领导同 cwd，产物落在用户看得见的地方）。 */
 	readonly cwd: string;
@@ -242,6 +277,23 @@ export async function spawnMember(
 	};
 
 	/*
+	 * 一轮收尾的**唯一出口**（首轮与唤醒轮共用）。
+	 *
+	 * 为什么必须只有一条：状态从 `running` 翻回 `idle` 只发生在 `onComplete` 之后
+	 * （接线层的收尾钩子），谁少了这一步，那个成员就永远显示「运行中」。
+	 * 首轮曾独家拥有它，唤醒轮没有 —— 那就是 §4.33 修的 bug。
+	 */
+	const settleRound = async (queued: boolean): Promise<void> => {
+		const finish = roundFinishFor({ queued, runError, cancelled });
+		if (finish.kind === "none") return;
+		if (finish.kind === "failed") {
+			await hooks.onFailed(memberName, finish.message);
+			return;
+		}
+		await hooks.onComplete(memberName, finalizeOutput(lastText), turns);
+	};
+
+	/*
 	 * fire-and-forget：不 await 整轮（领导不该等成员）。收尾回调的返回值仍然
 	 * await 掉 —— 拉模式（spec: add-team-pull-model 批次 ④）删了回投之后接线层
 	 * 已不返回 Promise，但这条 await 保留：钩子契约允许返回 Promise，那么
@@ -249,17 +301,7 @@ export async function spawnMember(
 	 */
 	void host
 		.prompt(input.task)
-		.then(async () => {
-			if (runError !== undefined) {
-				await hooks.onFailed(memberName, runError);
-				return;
-			}
-			if (cancelled) {
-				await hooks.onFailed(memberName, "已被中止");
-				return;
-			}
-			await hooks.onComplete(memberName, finalizeOutput(lastText), turns);
-		})
+		.then(() => settleRound(false)) // 首轮不存在入队，恒按「真跑了一轮」收尾
 		.catch(async (error: unknown) => {
 			// 回调自身抛错也要兜住（否则 `.catch` 里再抛就成了游离 rejection）。
 			try {
@@ -272,9 +314,18 @@ export async function spawnMember(
 	return {
 		sessionId,
 		modelKey,
-		// 丢弃 prompt 的「是否仅入队」返回值：成员侧没有回投留痕要确认。
+		/*
+		 * 唤醒 / 追投一轮。
+		 *
+		 * **不能丢弃 prompt 的「是否仅入队」返回值** —— 它是「这次到底有没有等
+		 * 一轮」的唯一信号，收尾判据按它分流（§4.33）：入队 → 不收尾（那一轮
+		 * 结束时由先前那次 await 兜住）；未入队 → 必须收尾，否则被唤醒的成员
+		 * 会永远停在「运行中」。（上一版注释写的是「成员侧没有回投留痕要确认」
+		 * 所以丢弃它 —— 那时的判据只关心回投，漏了状态翻转也挂在这条路上。）
+		 */
 		prompt: async (text: string) => {
-			await host.prompt(text, "followUp");
+			const { queued } = await host.prompt(text, "followUp");
+			await settleRound(queued);
 		},
 		abort: () => host.abort(),
 		dispose: () => host.dispose(),

@@ -896,7 +896,7 @@ Electron 探针（离屏窗口）：`FontFace.status === "loaded"` —— 字体
 | 内容卡加阴影 / 引入第四档阴影 | 内容卡纯描边无阴影是 WB 口径（有意）；三档阴影语义已站得住，加第四档会撞 `DESIGN.md` §2 的档位纪律 |
 | tab 内容切换过渡 / toast 退场 / 刻度轨 hover 过渡 | 均为打磨项、收益低；本期不动，避免范围膨胀 |
 | 右键菜单 | 属**新增交互**，需先定需求 |
-| `-webkit-app-region` | **确认不适用**：`BrowserWindow` 用的是 Windows 原生标题栏（无 `frame: false`），当前实现正确 |
+| `-webkit-app-region` | **确认不适用**：`BrowserWindow` 用的是 Windows 原生标题栏（无 `frame: false`），当前实现正确。**2026-09-19 作废**：已改为 `frame: false` + `titleBarOverlay`（照 WorkBuddy），但**仍不需要** `-webkit-app-region` —— 菜单条那 30px 由 overlay 提供系统标题区行为（WorkBuddy 主壳 CSS 里也没有这条，可证）。见 ARCHITECTURE.md §4.32 |
 | `.capability-chip` 那条 2% 阴影 | 肉眼不可见，但**有 WB 原值依据**、不是违规；删它是零收益的洁癖 |
 | `office-preview` 的 `Suspense fallback` 不接骨架 | 它等的是**渲染器 chunk**，而「纸多宽、格子多高」这些几何常量正属于被等的那个 chunk —— 在这一层画同形骨架要把 docx/xlsx 的尺寸各抄一份（两份几何必然漂移，反 AGENTS.md §4）；且 pptx 解析期本就是文字浮层（`DESIGN.md` §4 豁免①），三种 format 会出现三种等待语言。文案「加载渲染器…」与子组件的「解析文档中…」是两种可区分的等待 |
 
